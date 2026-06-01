@@ -72,8 +72,25 @@ _COMMON_NODES = (
 class KernelNode(FunctionNode):
     """Node representing a CUDA kernel function (marked with __global__)"""
 
-    def __init__(self, return_type, name, params, body, attributes=None):
-        super().__init__(return_type, name, params, body, ["__global__"], attributes)
+    def __init__(
+        self,
+        return_type,
+        name,
+        params,
+        body,
+        attributes=None,
+        qualifiers=None,
+        linkage=None,
+    ):
+        super().__init__(
+            return_type,
+            name,
+            params,
+            body,
+            qualifiers or ["__global__"],
+            attributes,
+        )
+        self.linkage = linkage
 
     def __repr__(self):
         return f"KernelNode(name={self.name}, params={self.params}, body={self.body})"

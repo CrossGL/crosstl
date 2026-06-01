@@ -912,6 +912,29 @@ def test_bound_generic_resource_global_parsing():
     ]
 
 
+def test_vulkan_binding_attribute_global_resource_parsing():
+    code = """
+    [[vk::binding(0, 1)]]
+    Texture2D<float4> albedo : register(t0);
+
+    [[vk::binding(2)]]
+    SamplerState linearSampler;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    albedo = ast.global_vars[0]
+    linear_sampler = ast.global_vars[1]
+
+    assert albedo.attributes == [{"name": "vk::binding", "arguments": ["0", "1"]}]
+    assert albedo.register == "t0"
+    assert linear_sampler.attributes == [{"name": "vk::binding", "arguments": ["2"]}]
+    assert [(var.vtype, var.name) for var in ast.global_vars] == [
+        ("Texture2D<float4>", "albedo"),
+        ("SamplerState", "linearSampler"),
+    ]
+
+
 def test_bound_cbuffer_parsing():
     code = """
     cbuffer Camera : register(b0) {

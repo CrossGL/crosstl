@@ -624,6 +624,36 @@ def test_codegen_min_precision_vector_and_matrix_types():
     assert ShaderStage.FRAGMENT in shader_ast.stages
 
 
+def test_codegen_template_style_vector_matrix_types_and_constructors():
+    hlsl = textwrap.dedent("""
+        struct TemplateTypes {
+            vector<float, 3> normal : NORMAL;
+            matrix<float, 3, 3> basis;
+        };
+
+        vector<double, 4> MakeTemplateVector(
+            vector<float, 3> input : TEXCOORD0
+        ) : SV_Target0 {
+            matrix<float, 2, 3> localBasis;
+            vector<float> defaultWidth = vector<float>(1.0, 2.0, 3.0, 4.0);
+            return vector<double, 4>(input.x, input.y, input.z, 1.0);
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "vec3 normal @ Normal;" in output
+    assert "mat3 basis;" in output
+    assert "dvec4 MakeTemplateVector(vec3 input @ TexCoord0) @ gl_FragData[0]" in output
+    assert "mat2x3 localBasis;" in output
+    assert "vec4 defaultWidth = vec4(1.0, 2.0, 3.0, 4.0);" in output
+    assert "return dvec4(input.x, input.y, input.z, 1.0);" in output
+    assert "vector<" not in output
+    assert "matrix<" not in output
+
+    parse_crossgl(output)
+
+
 def test_codegen_compute_roundtrip():
     output = generate_crossgl(COMPUTE_HLSL)
     lowered = output.lower()

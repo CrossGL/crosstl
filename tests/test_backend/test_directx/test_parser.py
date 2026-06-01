@@ -7,6 +7,7 @@ from crosstl.backend.common_ast import (
     InitializerListNode,
     MemberAccessNode,
     TextureSampleNode,
+    VectorConstructorNode,
 )
 from crosstl.backend.DirectX.DirectxAst import ForNode, IfNode, VariableNode
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
@@ -430,6 +431,49 @@ def test_parse_min_precision_vector_and_matrix_types():
         if getattr(node, "name", None) == "localUv"
     )
     assert local_uv.vtype == "min10float2"
+
+
+def test_parse_template_style_vector_matrix_types_and_constructors():
+    ast = parse_code("""
+    struct TemplateTypes {
+        vector<float, 3> normal : NORMAL;
+        matrix<float, 3, 3> basis;
+    };
+
+    vector<double, 4> MakeTemplateVector(
+        vector<float, 3> input : TEXCOORD0
+    ) : SV_Target0 {
+        matrix<float, 2, 3> localBasis;
+        vector<float> defaultWidth = vector<float>(1.0, 2.0, 3.0, 4.0);
+        return vector<double, 4>(input.x, input.y, input.z, 1.0);
+    }
+    """)
+
+    struct = ast.structs[0]
+    func = ast.functions[0]
+    default_width = next(
+        node
+        for node in iter_ast_nodes(func)
+        if getattr(node, "name", None) == "defaultWidth"
+    )
+    local_basis = next(
+        node
+        for node in iter_ast_nodes(func)
+        if getattr(node, "name", None) == "localBasis"
+    )
+
+    assert [member.vtype for member in struct.members] == [
+        "vector<float, 3>",
+        "matrix<float, 3, 3>",
+    ]
+    assert func.return_type == "vector<double, 4>"
+    assert func.params[0].vtype == "vector<float, 3>"
+    assert local_basis.vtype == "matrix<float, 2, 3>"
+    assert default_width.vtype == "vector<float>"
+    assert isinstance(default_width.value, VectorConstructorNode)
+    assert default_width.value.type_name == "vector<float>"
+    assert isinstance(func.body[-1].value, VectorConstructorNode)
+    assert func.body[-1].value.type_name == "vector<double, 4>"
 
 
 def test_parse_cbuffer_preserves_buffer_and_member_bindings():

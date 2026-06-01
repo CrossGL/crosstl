@@ -1355,14 +1355,7 @@ class HLSLParser:
                 self.eat("IDENTIFIER")
                 expr = MemberAccessNode(expr, member)
             elif self.current_token[0] == "LPAREN":
-                self.eat("LPAREN")
-                args = []
-                if self.current_token[0] != "RPAREN":
-                    args.append(self.parse_expression())
-                    while self.current_token[0] == "COMMA":
-                        self.eat("COMMA")
-                        args.append(self.parse_expression())
-                self.eat("RPAREN")
+                args = self.parse_call_arguments()
 
                 if isinstance(expr, MemberAccessNode) and isinstance(expr.member, str):
                     if expr.member == "Sample" and len(args) == 2:
@@ -1382,8 +1375,51 @@ class HLSLParser:
                 break
         return expr
 
+    def parse_call_arguments(self):
+        self.eat("LPAREN")
+        args = []
+        if self.current_token[0] != "RPAREN":
+            args.append(self.parse_expression())
+            while self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                args.append(self.parse_expression())
+        self.eat("RPAREN")
+        return args
+
+    def is_template_type_constructor_start(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+        if self.current_token[1] not in {"vector", "matrix"}:
+            return False
+        if self.peek()[0] != "LESS_THAN":
+            return False
+
+        depth = 0
+        idx = self.current_index + 1
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    next_token = (
+                        self.tokens[idx + 1]
+                        if idx + 1 < len(self.tokens)
+                        else ("EOF", "")
+                    )
+                    return next_token[0] == "LPAREN"
+            elif token_type == "EOF":
+                return False
+            idx += 1
+        return False
+
     def parse_primary_expression(self):
         token_type, value = self.current_token
+        if self.is_template_type_constructor_start():
+            type_name = self.parse_type()
+            args = self.parse_call_arguments()
+            return VectorConstructorNode(type_name, args)
         if token_type == "IDENTIFIER":
             self.eat("IDENTIFIER")
             return value
@@ -1421,14 +1457,7 @@ class HLSLParser:
             type_name = value
             self.eat(token_type)
             if self.current_token[0] == "LPAREN":
-                self.eat("LPAREN")
-                args = []
-                if self.current_token[0] != "RPAREN":
-                    args.append(self.parse_expression())
-                    while self.current_token[0] == "COMMA":
-                        self.eat("COMMA")
-                        args.append(self.parse_expression())
-                self.eat("RPAREN")
+                args = self.parse_call_arguments()
                 return VectorConstructorNode(type_name, args)
             return type_name
 

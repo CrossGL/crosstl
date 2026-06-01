@@ -1208,6 +1208,27 @@ def test_codegen_function_constants_and_argument_buffers():
     assert "@function_constant(0)" in result
 
 
+def test_codegen_argument_buffer_reference_array_parameter_roundtrips():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment float4 my_fragment(
+        constant texture2d<float> & texturesAB1 [[buffer(0)]],
+        constant texture2d<float> & texturesAB2[10] [[buffer(1)]],
+        array<texture2d<float>, 10> texturesArray [[texture(0)]]) {
+        return float4(1.0);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "constant sampler2D& texturesAB1 @buffer(0)" in crossgl
+    assert "constant sampler2D& texturesAB2[10] @buffer(1)" in crossgl
+    assert "sampler2D[10] texturesArray @texture(0)" in crossgl
+    assert "sampler2D&[10] texturesAB2" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_defaulted_function_constant_preserves_attribute():
     code = """
     #include <metal_stdlib>

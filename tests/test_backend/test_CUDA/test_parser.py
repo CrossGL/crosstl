@@ -637,7 +637,35 @@ class TestCudaParser:
         assert ast.kernels[0].attributes == ["__launch_bounds__(128)"]
         assert ast.kernels[1].attributes == ["__launch_bounds__(256, 2)"]
         assert ast.kernels[0].params[0].vtype == "float2 * __restrict"
-        assert ast.kernels[1].qualifiers == ["__global__"]
+        assert ast.kernels[1].qualifiers == ["extern", "__global__"]
+        assert ast.kernels[1].linkage == "C"
+
+    def test_c_linkage_block_preserves_cuda_function_metadata(self):
+        code = """
+        extern "C" {
+        __global__ void kernel(float* out) {
+            out[threadIdx.x] = 1.0f;
+        }
+
+        __device__ float add(float a, float b) {
+            return a + b;
+        }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        kernel = ast.kernels[0]
+        device_function = ast.functions[0]
+
+        assert kernel.name == "kernel"
+        assert kernel.qualifiers == ["extern", "__global__"]
+        assert kernel.linkage == "C"
+        assert device_function.name == "add"
+        assert device_function.qualifiers == ["extern", "__device__"]
+        assert device_function.linkage == "C"
 
     def test_grid_constant_kernel_parameter_parsing(self):
         code = """

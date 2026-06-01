@@ -272,6 +272,18 @@ class CudaParser:
                     typedefs.append(aliases)
             elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
+            elif self.is_linkage_block_start():
+                for item in self.parse_linkage_block():
+                    if isinstance(item, KernelNode):
+                        kernels.append(item)
+                    elif isinstance(item, FunctionNode):
+                        functions.append(item)
+                    elif isinstance(item, StructNode):
+                        structs.append(item)
+                    elif isinstance(item, TypeAliasNode):
+                        typedefs.append(item)
+                    else:
+                        global_variables.append(item)
             elif (
                 self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]
                 or self.peek_function()
@@ -554,6 +566,56 @@ class CudaParser:
         else:
             return PreprocessorNode("other", directive_text)
 
+    def is_linkage_block_start(self):
+        return (
+            self.current_token[0] == "EXTERN"
+            and self.current_index + 2 < len(self.tokens)
+            and self.tokens[self.current_index + 1][0] == "STRING"
+            and self.tokens[self.current_index + 2][0] == "LBRACE"
+        )
+
+    def parse_linkage_block(self):
+        self.eat("EXTERN")
+        language = self.eat("STRING")[1].strip('"')
+        self.eat("LBRACE")
+        items = []
+
+        while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            if self.current_token[0] == "PREPROCESSOR":
+                items.append(self.parse_preprocessor())
+            elif self.is_type_alias_start():
+                aliases = self.parse_type_alias()
+                if isinstance(aliases, list):
+                    items.extend(aliases)
+                elif aliases is not None:
+                    items.append(aliases)
+            elif self.current_token[0] == "STRUCT":
+                items.append(self.parse_struct())
+            elif (
+                self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]
+                or self.peek_function()
+            ):
+                items.append(self.parse_function())
+            elif (
+                self.current_token[0] in ["CONSTANT", "SHARED"] or self.peek_variable()
+            ):
+                items.append(self.parse_global_variable())
+            else:
+                self.eat(self.current_token[0])
+
+        self.eat("RBRACE")
+        self.apply_linkage_to_items(items, language)
+        return items
+
+    def apply_linkage_to_items(self, items, language):
+        for item in items:
+            if hasattr(item, "qualifiers"):
+                qualifiers = getattr(item, "qualifiers", []) or []
+                if "extern" not in qualifiers:
+                    qualifiers.insert(0, "extern")
+                item.qualifiers = qualifiers
+                item.linkage = language
+
     def is_type_alias_start(self):
         return self.current_token[0] == "TYPEDEF" or self.is_identifier_value("using")
 
@@ -626,6 +688,7 @@ class CudaParser:
     def parse_function(self):
         qualifiers = []
         attributes = []
+        linkage = None
 
         while self.current_token[0] in self.FUNCTION_SPECIFIER_TOKENS:
             if self.current_token[0] == "LAUNCH_BOUNDS":
@@ -636,7 +699,7 @@ class CudaParser:
             qualifiers.append(qualifier)
             self.eat(self.current_token[0])
             if qualifier == "extern" and self.current_token[0] == "STRING":
-                qualifiers.append(self.current_token[1])
+                linkage = self.current_token[1].strip('"')
                 self.eat("STRING")
 
         return_type = self.parse_type()
@@ -652,9 +715,19 @@ class CudaParser:
             self.eat("LBRACE")
 
         if "__global__" in qualifiers:
-            return KernelNode(return_type, name, params, body, attributes)
-        else:
-            return FunctionNode(return_type, name, params, body, qualifiers, attributes)
+            return KernelNode(
+                return_type,
+                name,
+                params,
+                body,
+                attributes,
+                qualifiers=qualifiers,
+                linkage=linkage,
+            )
+
+        function = FunctionNode(return_type, name, params, body, qualifiers, attributes)
+        function.linkage = linkage
+        return function
 
     def parse_launch_bounds_attribute(self):
         self.eat("LAUNCH_BOUNDS")

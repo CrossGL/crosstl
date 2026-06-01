@@ -757,7 +757,20 @@ class MojoParser:
             self.eat("COLON")
             vtype = self.parse_type()
             attributes = self.parse_attributes(skip_trailing_newlines=False)
+            initial_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                initial_value = self.parse_expression()
+                attributes.extend(self.parse_attributes(skip_trailing_newlines=False))
             self.consume_statement_terminator()
+            if initial_value is not None:
+                return VariableDeclarationNode(
+                    vtype,
+                    name,
+                    initial_value,
+                    is_var=True,
+                    attributes=attributes,
+                )
             return VariableNode(vtype, name, attributes=attributes)
 
         statement = self.parse_assignment()

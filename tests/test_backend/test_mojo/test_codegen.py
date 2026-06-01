@@ -1050,6 +1050,24 @@ def test_typed_local_declaration_codegen_preserves_type():
     assert "var transform;" not in generated_code
 
 
+def test_bare_annotated_assignment_codegen_preserves_type_and_initializer():
+    code = """
+    def kernel(size: Int):
+        idx: UInt = global_idx.x
+        limit: Int = size
+        if idx < UInt(limit):
+            process(idx)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint idx = global_idx.x;" in generated_code
+    assert "int limit = size;" in generated_code
+    assert "var idx" not in generated_code
+    assert "let limit" not in generated_code
+
+
 def test_double_dtype_codegen():
     code = """
     struct VSInput:

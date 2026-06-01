@@ -928,17 +928,28 @@ class MetalToCrossGLConverter:
         )
         self.struct_member_types = {}
 
-    def format_array_suffix(self, var):
+    def format_array_suffix(self, var, include_declarator_arrays=True):
         array_type = self.metal_array_type_parts(getattr(var, "vtype", None))
         suffix = f"[{array_type[1]}]" if array_type else ""
-        if not hasattr(var, "array_sizes") or not var.array_sizes:
+        if not include_declarator_arrays:
             return suffix
+        return suffix + self.format_declarator_array_suffix(var)
+
+    def format_declarator_array_suffix(self, var):
+        if not hasattr(var, "array_sizes") or not var.array_sizes:
+            return ""
+        suffix = ""
         for size in var.array_sizes:
             if size is None:
                 suffix += "[]"
             else:
                 suffix += f"[{self.generate_expression(size, False)}]"
         return suffix
+
+    def use_name_array_suffix(self, mapped_type, var):
+        if not getattr(var, "array_sizes", None):
+            return False
+        return str(mapped_type).rstrip().endswith(("*", "&"))
 
     def map_variable_type(self, var):
         raw_type = getattr(var, "vtype", None)
@@ -983,7 +994,14 @@ class MetalToCrossGLConverter:
                 else:
                     parts.append(f"alignas({self.generate_expression(item, False)})")
             alignas_prefix = " ".join(parts) + " "
-        type_str = f"{self.map_variable_type(var)}{self.format_array_suffix(var)}"
+        mapped_type = self.map_variable_type(var)
+        name_array_suffix = ""
+        include_declarator_arrays = True
+        if self.use_name_array_suffix(mapped_type, var):
+            include_declarator_arrays = False
+            name_array_suffix = self.format_declarator_array_suffix(var)
+        type_array_suffix = self.format_array_suffix(var, include_declarator_arrays)
+        type_str = f"{mapped_type}{type_array_suffix}"
         const_str = "const " if hasattr(var, "is_const") and var.is_const else ""
         address_space = self.address_space_qualifier_prefix(var)
         semantic = (
@@ -997,6 +1015,8 @@ class MetalToCrossGLConverter:
             if declare_name
             else self.sanitize_identifier(var.name)
         )
+        if name_array_suffix:
+            name = f"{name}{name_array_suffix}"
         parts = [alignas_prefix + const_str + address_space + type_str, name]
         if semantic:
             parts.append(semantic)

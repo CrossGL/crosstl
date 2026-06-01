@@ -510,11 +510,31 @@ class SlangToCrossGLConverter:
 
     def generate_global_variable(self, node):
         if isinstance(node, AssignmentNode):
-            return f"    {self.generate_assignment(node, False)};\n"
+            left = self.generate_variable_declaration(node.left)
+            right = self.generate_expression(node.right, False)
+            return f"    {left} {node.operator} {right};\n"
+        return f"    {self.generate_variable_declaration(node)};\n"
+
+    def generate_variable_declaration(self, node):
         return (
-            f"    {self.map_type(node.vtype)} "
-            f"{node.name}{self.format_array_suffixes(node)};\n"
+            f"{self.map_type(node.vtype)} "
+            f"{node.name}{self.format_array_suffixes(node)}"
+            f"{self.format_variable_metadata(node)}"
         )
+
+    def format_variable_metadata(self, node):
+        metadata = []
+        for attribute in getattr(node, "attributes", []) or []:
+            name = str(attribute.get("name", "")).lower()
+            arguments = attribute.get("arguments", [])
+            if name == "vk::binding" and arguments:
+                if len(arguments) > 1:
+                    metadata.append(f"@set({arguments[1]})")
+                metadata.append(f"@binding({arguments[0]})")
+
+        if not metadata:
+            return ""
+        return " " + " ".join(metadata)
 
     def binary_precedence(self, op):
         return self.BINARY_PRECEDENCE.get(op, 0)

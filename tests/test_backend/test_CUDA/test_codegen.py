@@ -59,6 +59,28 @@ class TestCudaCodeGen:
         assert "i32 scale" in result
         assert "__grid_constant__" not in result
 
+    def test_c_linkage_block_kernel_conversion(self):
+        code = """
+        extern "C" {
+        __global__ void kernel(float* out) {
+            out[threadIdx.x] = 1.0f;
+        }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Kernel: kernel" in result
+        assert "fn kernel(" in result
+        assert "out[gl_LocalInvocationID.x] = 1.0f;" in result
+        assert "extern" not in result
+        assert '"C"' not in result
+
     def test_device_function_conversion(self):
         code = """
         __device__ float add(float a, float b) {

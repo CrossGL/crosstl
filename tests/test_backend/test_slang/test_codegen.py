@@ -810,6 +810,22 @@ def test_bound_generic_resource_global_codegen():
     assert "sampler linearSampler;" in generated_code
 
 
+def test_vulkan_binding_attribute_global_resource_codegen():
+    code = """
+    [[vk::binding(0, 1)]]
+    Texture2D<float4> albedo : register(t0);
+
+    [[vk::binding(2)]]
+    SamplerState linearSampler;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D albedo @set(1) @binding(0);" in generated_code
+    assert "sampler linearSampler @binding(2);" in generated_code
+
+
 def test_bound_cbuffer_codegen():
     code = """
     cbuffer Camera : register(b0) {

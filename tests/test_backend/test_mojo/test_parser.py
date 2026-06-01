@@ -1089,6 +1089,34 @@ def test_alias_declarations_parse_as_comptime_aliases():
     assert not local_alias.is_var
 
 
+def test_bare_annotated_assignment_with_initializer_parsing():
+    code = """
+    from std.gpu import global_idx
+
+    def kernel(size: Int):
+        idx: UInt = global_idx.x
+        limit: Int = size
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "kernel")
+
+    idx_decl = function.body[0]
+    limit_decl = function.body[1]
+
+    assert isinstance(idx_decl, VariableDeclarationNode)
+    assert idx_decl.name == "idx"
+    assert idx_decl.vtype == "UInt"
+    assert idx_decl.is_var
+    assert isinstance(idx_decl.initial_value, MemberAccessNode)
+    assert idx_decl.initial_value.object.name == "global_idx"
+    assert idx_decl.initial_value.member == "x"
+
+    assert isinstance(limit_decl, VariableDeclarationNode)
+    assert limit_decl.name == "limit"
+    assert limit_decl.vtype == "Int"
+    assert limit_decl.initial_value.name == "size"
+
+
 def test_comptime_assert_statement_parse():
     code = """
     def outer_product_acc(res: TileTensor, size: Int):

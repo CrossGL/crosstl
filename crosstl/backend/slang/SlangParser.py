@@ -110,7 +110,9 @@ class SlangParser:
                 if self.is_function():
                     functions.append(self.parse_function(attributes=pending_attributes))
                 else:
-                    global_variables.append(self.parse_global_variable())
+                    global_variables.append(
+                        self.parse_global_variable(attributes=pending_attributes)
+                    )
             else:
                 self.eat(self.current_token[0])
 
@@ -213,8 +215,7 @@ class SlangParser:
                 self.eat(self.current_token[0])
                 continue
 
-            name = self.current_token[1]
-            self.eat(self.current_token[0])
+            name = self.parse_attribute_name()
             arguments = []
             if self.current_token[0] == "LPAREN":
                 arguments = self.parse_attribute_arguments()
@@ -231,6 +232,26 @@ class SlangParser:
 
         self.eat("RBRACKET")
         return attributes
+
+    def parse_attribute_name(self):
+        name_tokens = {"IDENTIFIER", "SHADER"}
+        if self.current_token[0] not in name_tokens:
+            raise SyntaxError(f"Expected attribute name, got {self.current_token[0]}")
+
+        parts = [self.current_token[1]]
+        self.eat(self.current_token[0])
+        while (
+            self.pos + 2 < len(self.tokens)
+            and self.current_token[0] == "COLON"
+            and self.tokens[self.pos + 1][0] == "COLON"
+            and self.tokens[self.pos + 2][0] in name_tokens
+        ):
+            self.eat("COLON")
+            self.eat("COLON")
+            parts.append(self.current_token[1])
+            self.eat(self.current_token[0])
+
+        return "::".join(parts)
 
     def parse_attribute_arguments(self):
         arguments = []
@@ -369,7 +390,8 @@ class SlangParser:
         node.register = register_name
         return node
 
-    def parse_global_variable(self):
+    def parse_global_variable(self, attributes=None):
+        attributes = attributes or []
         qualifiers = self.parse_qualifiers()
         var_type = self.parse_type_name()
         var_name = self.current_token[1]
@@ -381,6 +403,7 @@ class SlangParser:
             var_name,
             qualifiers=qualifiers,
             array_sizes=array_sizes,
+            attributes=attributes,
             register=register_name,
         )
         if self.current_token[0] == "EQUALS":
@@ -411,7 +434,7 @@ class SlangParser:
         elif self.is_function():
             exported_item = self.parse_function(attributes=attributes)
         elif self.is_variable_declaration_start():
-            exported_item = self.parse_global_variable()
+            exported_item = self.parse_global_variable(attributes=attributes)
         else:
             raise SyntaxError(
                 f"Expected export declaration, got {self.current_token[0]}"

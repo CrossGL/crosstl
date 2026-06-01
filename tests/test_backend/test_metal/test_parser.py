@@ -202,6 +202,32 @@ def test_parse_argument_buffers_and_function_constants():
     parse_ok(code)
 
 
+def test_parse_argument_buffer_reference_array_parameter():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment float4 my_fragment(
+        constant texture2d<float> & texturesAB1 [[buffer(0)]],
+        constant texture2d<float> & texturesAB2[10] [[buffer(1)]],
+        array<texture2d<float>, 10> texturesArray [[texture(0)]]) {
+        return float4(1.0);
+    }
+    """
+    ast = parse_ok(code)
+    params = ast.functions[0].params
+
+    assert params[0].vtype == "texture2d<float>&"
+    assert params[0].qualifiers == ["constant"]
+    assert params[1].vtype == "texture2d<float>&"
+    assert params[1].name == "texturesAB2"
+    assert params[1].array_sizes == ["10"]
+    assert params[1].attributes[0].name == "buffer"
+    assert params[1].attributes[0].args == ["1"]
+    assert params[2].vtype == "array<texture2d<float>,10>"
+    assert params[2].name == "texturesArray"
+
+
 def test_parse_defaulted_function_constant_preserves_attribute():
     code = """
     #include <metal_stdlib>

@@ -2608,7 +2608,13 @@ class HLSLToCrossGLConverter:
         type_name = str(hlsl_type)
         if "<" in type_name and type_name.endswith(">"):
             base, generic_args = type_name.split("<", 1)
+            base = base.strip()
             generic_type = generic_args[:-1].strip()
+            vector_or_matrix_type = self.map_template_vector_or_matrix_type(
+                base, generic_type
+            )
+            if vector_or_matrix_type:
+                return vector_or_matrix_type
             rasterizer_buffer_type = self.map_rasterizer_ordered_buffer_type(
                 base, generic_type
             )
@@ -2623,7 +2629,94 @@ class HLSLToCrossGLConverter:
             if storage_image_type:
                 return storage_image_type
             type_name = base
+        default_template_type = {
+            "vector": "vec4",
+            "matrix": "mat4",
+        }.get(type_name)
+        if default_template_type:
+            return default_template_type
         return self.type_map.get(type_name, type_name)
+
+    def map_template_vector_or_matrix_type(self, base_type, generic_type):
+        args = self.split_generic_arguments(generic_type)
+        if base_type == "vector":
+            scalar_type = args[0] if args else "float"
+            components = self.parse_template_dimension(args[1]) if len(args) > 1 else 4
+            return self.map_template_vector_type(scalar_type, components)
+        if base_type == "matrix":
+            scalar_type = args[0] if args else "float"
+            rows = self.parse_template_dimension(args[1]) if len(args) > 1 else 4
+            cols = self.parse_template_dimension(args[2]) if len(args) > 2 else 4
+            return self.map_template_matrix_type(scalar_type, rows, cols)
+        return None
+
+    def split_generic_arguments(self, generic_type):
+        args = []
+        depth = 0
+        current = []
+        for char in generic_type:
+            if char == "<":
+                depth += 1
+            elif char == ">" and depth:
+                depth -= 1
+            elif char == "," and depth == 0:
+                args.append("".join(current).strip())
+                current = []
+                continue
+            current.append(char)
+        if current or generic_type.strip():
+            args.append("".join(current).strip())
+        return args
+
+    def parse_template_dimension(self, value):
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
+    def map_template_vector_type(self, scalar_type, components):
+        if components is None or components < 1 or components > 4:
+            return None
+        scalar = str(scalar_type).strip()
+        if components == 1:
+            return self.map_type(scalar)
+        prefixes = {
+            "float": "vec",
+            "half": "f16vec",
+            "min16float": "f16vec",
+            "min10float": "f16vec",
+            "float16_t": "f16vec",
+            "double": "dvec",
+            "int": "ivec",
+            "min16int": "i16vec",
+            "min12int": "i16vec",
+            "int16_t": "i16vec",
+            "uint": "uvec",
+            "min16uint": "u16vec",
+            "uint16_t": "u16vec",
+            "bool": "bvec",
+        }
+        prefix = prefixes.get(scalar)
+        if prefix is None:
+            return None
+        return f"{prefix}{components}"
+
+    def map_template_matrix_type(self, scalar_type, rows, cols):
+        if rows is None or cols is None or rows < 2 or rows > 4 or cols < 2 or cols > 4:
+            return None
+        prefixes = {
+            "float": "mat",
+            "half": "f16mat",
+            "min16float": "f16mat",
+            "min10float": "f16mat",
+            "float16_t": "f16mat",
+            "double": "dmat",
+        }
+        prefix = prefixes.get(str(scalar_type).strip())
+        if prefix is None:
+            return None
+        suffix = str(rows) if rows == cols else f"{rows}x{cols}"
+        return f"{prefix}{suffix}"
 
     def map_rasterizer_ordered_buffer_type(self, base_type, element_type):
         buffer_type = {
