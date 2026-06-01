@@ -2,7 +2,13 @@ from typing import List
 
 import pytest
 
-from crosstl.backend.common_ast import MethodCallNode, TextureSampleNode
+from crosstl.backend.common_ast import (
+    DiscardNode,
+    IfNode,
+    MemberAccessNode,
+    MethodCallNode,
+    TextureSampleNode,
+)
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 
@@ -356,6 +362,40 @@ def test_parse_sizeof_and_cast():
     }
     """
     parse_ok(code)
+
+
+def test_parse_pointer_member_access():
+    code = """
+    struct Uniforms {
+        float4x4 mvp;
+    };
+
+    void main(constant Uniforms* uniforms) {
+        float4 position = uniforms->mvp * float4(1.0);
+    }
+    """
+    ast = parse_ok(code)
+    member_accesses = [
+        node for node in iter_ast_nodes(ast) if isinstance(node, MemberAccessNode)
+    ]
+
+    assert any(node.member == "mvp" and node.is_pointer for node in member_accesses)
+
+
+def test_parse_single_statement_if_with_discard_fragment():
+    code = """
+    fragment half4 fragment_main(float4 color) {
+        if (color.a < 0.5)
+            discard_fragment();
+
+        return half4(color);
+    }
+    """
+    ast = parse_ok(code)
+    if_nodes = [node for node in iter_ast_nodes(ast) if isinstance(node, IfNode)]
+
+    assert len(if_nodes) == 1
+    assert isinstance(if_nodes[0].if_body[0], DiscardNode)
 
 
 def test_parse_alignas_and_static_assert():

@@ -234,6 +234,32 @@ def test_parse_compute_attributes_and_semantics():
     assert_parses(COMPUTE_HLSL)
 
 
+def test_parse_rootsignature_macro_adjacent_string_literals():
+    code = r"""
+    #define RootSig \
+        "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT|ALLOW_STREAM_OUTPUT)," \
+        "DescriptorTable(SRV(t0, numDescriptors=1))," \
+        "DescriptorTable(UAV(u0, numDescriptors=2))," \
+        "DescriptorTable(Sampler(s0, numDescriptors=2))"
+
+    [RootSignature(RootSig)]
+    float4 RootSignaturePS(float4 pos : SV_POSITION) : SV_TARGET {
+        return pos;
+    }
+    """
+
+    ast = parse_code(code)
+    attributes = ast.functions[0].attributes
+
+    assert attributes[0].name == "RootSignature"
+    assert attributes[0].args == [
+        '"RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT|ALLOW_STREAM_OUTPUT),'
+        "DescriptorTable(SRV(t0, numDescriptors=1)),"
+        "DescriptorTable(UAV(u0, numDescriptors=2)),"
+        'DescriptorTable(Sampler(s0, numDescriptors=2))"'
+    ]
+
+
 def test_parse_interpolation_intrinsics_keep_free_function_calls():
     code = """
     float4 main(float4 color : COLOR0, uint sampleIndex : SV_SampleIndex) : SV_Target0 {

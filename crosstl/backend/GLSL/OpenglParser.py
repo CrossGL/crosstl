@@ -202,6 +202,14 @@ class GLSLParser:
             return self.tokens[idx]
         return ("EOF", "")
 
+    def peek_non_newline(self, offset=1):
+        idx = self.index + offset
+        while idx < len(self.tokens) and self.tokens[idx][0] == "NEWLINE":
+            idx += 1
+        if idx < len(self.tokens):
+            return self.tokens[idx]
+        return ("EOF", "")
+
     def skip_newlines(self):
         while self.current_token[0] == "NEWLINE":
             self.advance()
@@ -268,7 +276,10 @@ class GLSLParser:
                 )
                 continue
 
-            if self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "LBRACE":
+            if (
+                self.current_token[0] == "IDENTIFIER"
+                and self.peek_non_newline()[0] == "LBRACE"
+            ):
                 struct_node, block_vars = self.parse_interface_block(qualifiers, layout)
                 structs.append(struct_node)
                 for var in block_vars:
@@ -552,6 +563,7 @@ class GLSLParser:
     def parse_interface_block(self, qualifiers, layout):
         block_name = self.current_token[1]
         self.eat("IDENTIFIER")
+        self.skip_newlines()
         self.eat("LBRACE")
 
         members = []
@@ -586,6 +598,7 @@ class GLSLParser:
             members.append(member_node)
 
         self.eat("RBRACE")
+        self.skip_newlines()
 
         instance_name = None
         array_size = None
@@ -599,6 +612,7 @@ class GLSLParser:
         else:
             array_sizes = []
 
+        self.skip_newlines()
         self.eat("SEMICOLON")
 
         struct_node = StructNode(block_name, members)
@@ -656,8 +670,19 @@ class GLSLParser:
     def parse_parameters(self):
         self.eat("LPAREN")
         params = []
+        self.skip_newlines()
+        if self.current_token[0] == "VOID":
+            lookahead = 1
+            while self.peek(lookahead)[0] == "NEWLINE":
+                lookahead += 1
+            if self.peek(lookahead)[0] == "RPAREN":
+                self.eat("VOID")
+                self.skip_newlines()
+                self.eat("RPAREN")
+                return params
         if self.current_token[0] != "RPAREN":
             while True:
+                self.skip_newlines()
                 qualifiers = self.parse_qualifiers()
                 param_type = self.parse_type()
                 param_name = self.current_token[1]
@@ -680,6 +705,7 @@ class GLSLParser:
                     self.eat("COMMA")
                     continue
                 break
+        self.skip_newlines()
         self.eat("RPAREN")
         return params
 
@@ -767,9 +793,11 @@ class GLSLParser:
         self.eat("LPAREN")
         condition = self.parse_expression()
         self.eat("RPAREN")
+        self.skip_newlines()
         self.eat("LBRACE")
         if_body = self.parse_block()
         self.eat("RBRACE")
+        self.skip_newlines()
 
         else_body = None
         else_if_chain = []
@@ -779,13 +807,16 @@ class GLSLParser:
             self.eat("LPAREN")
             else_if_condition = self.parse_expression()
             self.eat("RPAREN")
+            self.skip_newlines()
             self.eat("LBRACE")
             else_if_body = self.parse_block()
             self.eat("RBRACE")
             else_if_chain.append((else_if_condition, else_if_body))
+            self.skip_newlines()
 
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
+            self.skip_newlines()
             self.eat("LBRACE")
             else_body = self.parse_block()
             self.eat("RBRACE")
@@ -836,6 +867,7 @@ class GLSLParser:
                 update = AssignmentNode(update, right, op)
         self.eat("RPAREN")
 
+        self.skip_newlines()
         self.eat("LBRACE")
         body = self.parse_block()
         self.eat("RBRACE")
@@ -847,6 +879,7 @@ class GLSLParser:
         self.eat("LPAREN")
         condition = self.parse_expression()
         self.eat("RPAREN")
+        self.skip_newlines()
         self.eat("LBRACE")
         body = self.parse_block()
         self.eat("RBRACE")
@@ -854,9 +887,11 @@ class GLSLParser:
 
     def parse_do_while_loop(self):
         self.eat("DO")
+        self.skip_newlines()
         self.eat("LBRACE")
         body = self.parse_block()
         self.eat("RBRACE")
+        self.skip_newlines()
         self.eat("WHILE")
         self.eat("LPAREN")
         condition = self.parse_expression()
@@ -870,6 +905,7 @@ class GLSLParser:
         self.eat("LPAREN")
         expression = self.parse_expression()
         self.eat("RPAREN")
+        self.skip_newlines()
         self.eat("LBRACE")
 
         cases = []

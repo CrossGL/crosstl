@@ -53,7 +53,7 @@ def translate(
     with open(file_path, encoding="utf-8") as file:
         shader_code = file.read()
 
-    ast = source_spec.parse(shader_code)
+    ast = source_spec.parse(shader_code, file_path=file_path)
 
     requested_backend = backend
     normalized_backend = normalize_backend_name(requested_backend) or requested_backend

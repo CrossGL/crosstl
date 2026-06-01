@@ -715,6 +715,11 @@ class MetalParser:
         self.eat("RBRACE")
         return statements
 
+    def parse_statement_body(self):
+        if self.current_token[0] == "LBRACE":
+            return self.parse_block()
+        return [self.parse_statement()]
+
     def is_declaration_start(self):
         if self.current_token[0] == "ALIGNAS":
             return True
@@ -822,19 +827,19 @@ class MetalParser:
             self.eat("LPAREN")
             condition = self.parse_expression()
             self.eat("RPAREN")
-            body = self.parse_block()
+            body = self.parse_statement_body()
             if_chain.append((condition, body))
         while self.current_token[0] == "ELSE_IF":
             self.eat("ELSE_IF")
             self.eat("LPAREN")
             condition = self.parse_expression()
             self.eat("RPAREN")
-            body = self.parse_block()
+            body = self.parse_statement_body()
             else_if_chain.append((condition, body))
 
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
-            else_body = self.parse_block()
+            else_body = self.parse_statement_body()
 
         return IfNode(
             if_chain=if_chain, else_if_chain=else_if_chain, else_body=else_body
@@ -1127,6 +1132,21 @@ class MetalParser:
                 self.eat(self.current_token[0])
                 node = MemberAccessNode(node, member)
                 continue
+            if self.current_token[0] == "ARROW":
+                self.eat("ARROW")
+                if self.current_token[0] not in [
+                    "IDENTIFIER",
+                    "READ",
+                    "WRITE",
+                    "READ_WRITE",
+                ]:
+                    raise SyntaxError(
+                        f"Expected identifier after arrow, got {self.current_token[0]}"
+                    )
+                member = self.current_token[1]
+                self.eat(self.current_token[0])
+                node = MemberAccessNode(node, member, True)
+                continue
             if self.current_token[0] == "LBRACKET":
                 self.eat("LBRACKET")
                 index = None
@@ -1275,6 +1295,8 @@ class MetalParser:
                 return self.build_texture_sample(callee.object, args)
             return MethodCallNode(callee.object, callee.member, args)
         if isinstance(callee, VariableNode):
+            if callee.name == "discard_fragment" and not args:
+                return DiscardNode()
             return FunctionCallNode(callee.name, args)
         return CallNode(callee, args)
 

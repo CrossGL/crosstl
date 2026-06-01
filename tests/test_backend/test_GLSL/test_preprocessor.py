@@ -1,5 +1,6 @@
 import pytest
 
+from crosstl import translate
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 
 
@@ -32,6 +33,27 @@ def test_preprocessor_include(tmp_path):
     tokens = GLSLLexer(code, include_paths=[str(tmp_path)]).tokenize()
     values = [tok[1] for tok in tokens]
     assert "from_include" in values
+
+
+def test_translate_resolves_quoted_include_from_source_file_dir(tmp_path):
+    include_file = tmp_path / "blur_common.h"
+    include_file.write_text("const float INCLUDED_SCALE = 2.0;\n")
+    shader_file = tmp_path / "blur_up.comp.glsl"
+    shader_file.write_text("""
+        #version 450
+        #include "blur_common.h"
+
+        void main()
+        {
+            float value = INCLUDED_SCALE;
+        }
+        """)
+
+    cgl = translate(str(shader_file), backend="cgl", format_output=False)
+    directx = translate(str(shader_file), backend="directx", format_output=False)
+
+    assert "INCLUDED_SCALE" in cgl
+    assert "INCLUDED_SCALE" in directx
 
 
 def test_preprocessor_version_must_be_first():

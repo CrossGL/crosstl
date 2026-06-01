@@ -82,6 +82,60 @@ def test_parse_function_body_with_brace_on_next_line():
     assert any(function.name == "main" for function in ast.functions)
 
 
+def test_parse_main_with_void_parameter_list():
+    code = textwrap.dedent("""
+        #version 320 es
+        precision highp float;
+
+        void main(void)
+        {
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert main.params == []
+
+
+def test_parse_interface_block_with_newline_brace_and_instance():
+    code = textwrap.dedent("""
+        #version 450
+        layout(push_constant) uniform Registers
+        {
+            uvec2 resolution;
+            vec2 inv_resolution;
+        }
+        registers;
+
+        void main()
+        {
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+
+    assert ast.structs[0].name == "Registers"
+    assert ast.structs[0].interface_block is True
+    assert ast.uniforms[0].name == "registers"
+
+
+def test_parse_control_flow_with_brace_on_next_line():
+    code = textwrap.dedent("""
+        #version 450
+
+        void main()
+        {
+            if (true)
+            {
+                int value = 1;
+            }
+        }
+        """)
+
+    parse_ok(code, "fragment")
+
+
 def test_parse_structs_and_arrays():
     code = textwrap.dedent("""
         #version 450 core

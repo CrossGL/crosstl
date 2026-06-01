@@ -156,6 +156,9 @@ TOKENS = tuple(
         ("SCOPE", r"::"),
         ("COLON", r":"),
         ("QUESTION", r"\?"),
+        # Member access must be checked before the single-character minus token.
+        ("ARROW", r"->"),
+        ("DOT", r"\."),
         # Shift and assignment operators (multi-char first)
         ("ASSIGN_SHIFT_LEFT", r"<<="),
         ("ASSIGN_SHIFT_RIGHT", r">>="),
@@ -195,9 +198,6 @@ TOKENS = tuple(
         ("MULTIPLY", r"\*"),
         ("DIVIDE", r"/"),
         ("MOD", r"%"),
-        # Member access
-        ("ARROW", r"->"),
-        ("DOT", r"\."),
         # Whitespace (skipped)
         ("WHITESPACE", r"\s+"),
     ]

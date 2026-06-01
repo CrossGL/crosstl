@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
@@ -41,6 +42,17 @@ def _extract_tokens(lexer) -> Any:
     raise ValueError(f"Unsupported lexer interface: {type(lexer)}")
 
 
+def _accepts_keyword(callable_obj, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return False
+    return keyword in signature.parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+
+
 @dataclass(frozen=True)
 class SourceSpec:
     """Descriptor for a source language frontend.
@@ -56,10 +68,13 @@ class SourceSpec:
     reverse_codegen_factory: Callable[[], Any] | None = None
     aliases: Sequence[str] = ()
 
-    def parse(self, code: str):
+    def parse(self, code: str, file_path: str | None = None):
         """Parse source code into that source backend's AST."""
         lexer_cls, parser_cls = self.load_lexer_parser()
-        lexer = lexer_cls(code)
+        lexer_kwargs = {}
+        if file_path is not None and _accepts_keyword(lexer_cls, "file_path"):
+            lexer_kwargs["file_path"] = file_path
+        lexer = lexer_cls(code, **lexer_kwargs)
         tokens = _extract_tokens(lexer)
         parser = parser_cls(tokens)
         return parser.parse()

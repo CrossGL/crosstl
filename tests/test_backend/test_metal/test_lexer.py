@@ -200,6 +200,7 @@ def test_tokenizes_operators():
         a++;
         b--;
 
+        a = uniforms->count;
         int e = (a > b) ? a : b;
     }
     """
@@ -236,6 +237,7 @@ def test_tokenizes_operators():
             "^=",
             "++",
             "--",
+            "->",
             "?",
             ":",
         ],

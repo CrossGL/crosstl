@@ -1190,8 +1190,10 @@ class HLSLParser:
         if token_type in ["TRUE", "FALSE"]:
             self.eat(token_type)
             return token_type == "TRUE"
-        if token_type in ["STRING", "CHAR_LITERAL"]:
-            self.eat(token_type)
+        if token_type == "STRING":
+            return self.parse_string_literal()
+        if token_type == "CHAR_LITERAL":
+            self.eat("CHAR_LITERAL")
             return value
         if token_type == "LPAREN":
             self.eat("LPAREN")
@@ -1228,6 +1230,25 @@ class HLSLParser:
         raise SyntaxError(
             f"Unexpected token in primary expression: {self.current_token}"
         )
+
+    def parse_string_literal(self):
+        value = self.current_token[1]
+        self.eat("STRING")
+        while self.current_token[0] == "STRING":
+            next_value = self.current_token[1]
+            value = self.concatenate_string_literals(value, next_value)
+            self.eat("STRING")
+        return value
+
+    def concatenate_string_literals(self, left, right):
+        if (
+            len(left) >= 2
+            and len(right) >= 2
+            and left[0] == left[-1] == '"'
+            and right[0] == right[-1] == '"'
+        ):
+            return left[:-1] + right[1:]
+        return left + right
 
     def parse_numeric_literal(self, token_type, value):
         if token_type == "HEX_NUMBER":
