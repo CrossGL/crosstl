@@ -263,7 +263,7 @@ class ShaderNode(ASTNode):
         super().__init__(**kwargs)
         self.name = name
         self.execution_model = execution_model
-        self.stages = stages or {}
+        self.stages = StageMap(stages)
         self.structs = structs or []
         self.functions = functions or []
         self.global_variables = global_variables or []
@@ -303,6 +303,54 @@ class StageNode(ASTNode):
 
     def __repr__(self):
         return f"StageNode(stage={self.stage}, entry_point={self.entry_point.name})"
+
+
+class StageMap(dict):
+    """Dictionary-compatible stage collection that preserves duplicate entries."""
+
+    def __init__(self, stages=None):
+        dict.__init__(self)
+        self._stage_lists = {}
+        if stages:
+            self.update(stages)
+
+    def __setitem__(self, key, value):
+        self._stage_lists[key] = [value]
+        dict.__setitem__(self, key, value)
+
+    def append(self, key, value):
+        if key in self._stage_lists:
+            self._stage_lists[key].append(value)
+            return
+        self._stage_lists[key] = [value]
+        dict.__setitem__(self, key, value)
+
+    def update(self, other=None, **kwargs):
+        if other is not None:
+            items = other.items() if hasattr(other, "items") else other
+            for key, value in items:
+                if isinstance(value, (list, tuple)):
+                    for stage in value:
+                        self.append(key, stage)
+                else:
+                    self.append(key, value)
+        for key, value in kwargs.items():
+            self.append(key, value)
+
+    def items(self):
+        for key in dict.__iter__(self):
+            for stage in self._stage_lists.get(key, [dict.__getitem__(self, key)]):
+                yield key, stage
+
+    def values(self):
+        for _key, stage in self.items():
+            yield stage
+
+    def all_for_stage(self, key):
+        return list(self._stage_lists.get(key, []))
+
+    def copy(self):
+        return StageMap(self)
 
 
 class ImportNode(ASTNode):

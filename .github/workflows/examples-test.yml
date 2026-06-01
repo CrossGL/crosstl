@@ -87,7 +87,7 @@ jobs:
           python -c "import crosstl; crosstl.translate('advanced/ArrayTest.cgl', backend='rust', save_shader='output/advanced_array.rs')"
 
           # Cross-Platform Examples - Test only working combinations
-          python -c "import crosstl; crosstl.translate('cross_platform/UniversalPBRShader.cgl', backend='vulkan', save_shader='output/pbr_vulkan.spirv')" || echo "PBR shader failed, as expected for complex shaders"
+          python -c "import crosstl; crosstl.translate('cross_platform/UniversalPBRShader.cgl', backend='vulkan', save_shader='output/pbr_vulkan.spvasm')" || echo "PBR shader failed, as expected for complex shaders"
 
           # GPU Computing Examples
           python -c "import crosstl; crosstl.translate('gpu_computing/MatrixMultiplication.cgl', backend='hip', save_shader='output/gpu_matrix.hip')" || echo "Matrix multiplication failed, as expected for complex shaders"
@@ -126,7 +126,7 @@ jobs:
               category: "graphics",
               example: "SimpleShader",
               backend: "vulkan",
-              extension: ".spirv",
+              extension: ".spvasm",
             }
           - {
               category: "graphics",
@@ -182,7 +182,7 @@ jobs:
               category: "graphics",
               example: "PerlinNoise",
               backend: "vulkan",
-              extension: ".spirv",
+              extension: ".spvasm",
             }
           - {
               category: "graphics",
@@ -238,7 +238,7 @@ jobs:
               category: "advanced",
               example: "ArrayTest",
               backend: "vulkan",
-              extension: ".spirv",
+              extension: ".spvasm",
             }
           - {
               category: "advanced",
@@ -391,7 +391,7 @@ jobs:
               'metal': '.metal',
               'directx': '.hlsl',
               'opengl': '.glsl',
-              'vulkan': '.spirv'
+              'vulkan': '.spvasm'
           }
 
           os.makedirs('output/consistency', exist_ok=True)

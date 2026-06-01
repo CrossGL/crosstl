@@ -1,6 +1,7 @@
 """CrossGL-to-Metal code generator."""
 
 import ast as py_ast
+import re
 from hashlib import sha1
 
 from ..ast import (
@@ -68,6 +69,7 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .enum_utils import (
+    build_generic_enum_specialization,
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
     collect_enum_variant_constants,
@@ -79,16 +81,18 @@ from .enum_utils import (
     collect_generic_enum_variant_constants,
     collect_plain_enums,
     collect_struct_payload_enums,
+    enum_struct_fields,
     enum_value_expression,
+    enum_variant_constructor_name,
+    enum_variant_payload_fields,
     generate_enum_constants,
     generate_enum_constructor_call,
     generate_enum_constructor_expression,
-    generate_enum_constructor_functions,
-    generate_enum_structs,
     generate_generic_enum_constants,
-    generate_generic_enum_constructor_functions,
-    generate_generic_enum_structs,
+    generic_enum_specialized_fields,
     generic_enum_specialized_type_name,
+    generic_enum_specialized_variant_fields,
+    generic_type_parts,
     infer_enum_constructor_type,
 )
 from .generic_function_utils import (
@@ -101,14 +105,16 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
 )
 from .generic_struct_utils import (
+    build_generic_struct_specialization,
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
     format_struct_constructor_expression,
-    generate_generic_structs,
     generate_struct_constructor_expression,
+    generic_struct_specialized_fields,
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
+    normalize_specialization_type_text,
 )
 from .glsl_buffer_layout import (
     byte_offset_add,
@@ -470,6 +476,66 @@ class MetalCodeGen:
     )
     METAL_WAVE_NUMERIC_COMPONENT_TYPES = {"float", "half", "int", "uint"}
     METAL_WAVE_INTEGER_COMPONENT_TYPES = {"int", "uint"}
+    METAL_RAY_FLAG_VALUES = {
+        "RAY_FLAG_NONE": 0x00,
+        "RAY_FLAG_FORCE_OPAQUE": 0x01,
+        "RAY_FLAG_FORCE_NON_OPAQUE": 0x02,
+        "RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH": 0x04,
+        "RAY_FLAG_SKIP_CLOSEST_HIT_SHADER": 0x08,
+        "RAY_FLAG_CULL_BACK_FACING_TRIANGLES": 0x10,
+        "RAY_FLAG_CULL_FRONT_FACING_TRIANGLES": 0x20,
+        "RAY_FLAG_CULL_OPAQUE": 0x40,
+        "RAY_FLAG_CULL_NON_OPAQUE": 0x80,
+        "RAY_FLAG_SKIP_TRIANGLES": 0x100,
+        "RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES": 0x200,
+    }
+    METAL_RAY_QUERY_RETURN_TYPES = {
+        "Proceed": "bool",
+        "Abort": "void",
+        "Terminate": "void",
+        "ConfirmIntersection": "void",
+        "CommitNonOpaqueTriangleHit": "void",
+        "GenerateIntersection": "void",
+        "CommitProceduralPrimitiveHit": "void",
+        "TraceRayInline": "void",
+        "CandidateType": "uint",
+        "CommittedType": "uint",
+        "CommittedStatus": "uint",
+        "CandidatePrimitiveIndex": "uint",
+        "CommittedPrimitiveIndex": "uint",
+        "CandidateInstanceID": "uint",
+        "CommittedInstanceID": "uint",
+        "CandidateInstanceIndex": "uint",
+        "CommittedInstanceIndex": "uint",
+        "CandidateGeometryIndex": "uint",
+        "CommittedGeometryIndex": "uint",
+        "CandidateInstanceCustomIndex": "uint",
+        "CommittedInstanceCustomIndex": "uint",
+        "CandidateInstanceShaderBindingTableRecordOffset": "uint",
+        "CommittedInstanceShaderBindingTableRecordOffset": "uint",
+        "RayFlags": "uint",
+        "CandidateObjectRayOrigin": "float3",
+        "CandidateObjectRayDirection": "float3",
+        "CommittedObjectRayOrigin": "float3",
+        "CommittedObjectRayDirection": "float3",
+        "WorldRayOrigin": "float3",
+        "WorldRayDirection": "float3",
+        "CandidateRayT": "float",
+        "CommittedRayT": "float",
+        "CandidateObjectRayTMin": "float",
+        "RayTMin": "float",
+        "CandidateTriangleBarycentrics": "float2",
+        "CommittedTriangleBarycentrics": "float2",
+        "CandidateTriangleFrontFace": "bool",
+        "CommittedTriangleFrontFace": "bool",
+        "CandidateAABBOpaque": "bool",
+        "CandidateObjectToWorld3x4": "float3x4",
+        "CandidateWorldToObject3x4": "float3x4",
+        "CommittedObjectToWorld3x4": "float3x4",
+        "CommittedWorldToObject3x4": "float3x4",
+        "CandidateTriangleVertexPositions": "void",
+        "CommittedTriangleVertexPositions": "void",
+    }
 
     def __init__(self):
         """Initialize Metal type maps and per-generation resource state."""
@@ -488,6 +554,7 @@ class MetalCodeGen:
         self.structured_buffer_variables = []
         self.structured_buffer_length_variables = []
         self.structured_buffer_counter_variables = []
+        self.metal_buffer_resource_variables = []
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
         self.cbuffer_parameter_names = {}
@@ -502,6 +569,7 @@ class MetalCodeGen:
         self.function_image_access_requirements = {}
         self.function_cbuffer_dependencies = {}
         self.function_global_resource_dependencies = {}
+        self.function_stage_parameter_dependencies = {}
         self.function_metal_wave_lane_dependencies = {}
         self.function_metal_wave_lane_parameter_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
@@ -509,7 +577,9 @@ class MetalCodeGen:
         self.current_sampler_parameters = set()
         self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
+        self.texture_variable_raw_types = {}
         self.current_texture_parameters = {}
+        self.current_texture_parameter_raw_types = {}
         self.current_texture_parameter_array_sizes = {}
         self.current_texture_alias_sources = {}
         self.image_variable_formats = {}
@@ -532,6 +602,7 @@ class MetalCodeGen:
         self.struct_member_types = {}
         self.struct_member_address_spaces = {}
         self.structs_by_name = {}
+        self.metal_generated_struct_names = set()
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
         self.generic_function_definitions = {}
@@ -546,6 +617,11 @@ class MetalCodeGen:
         self.required_metal_wave_match_helper = False
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
+        self.required_metal_inverse_helpers = set()
+        self.required_metal_ray_query_runtime = False
+        self.required_metal_ray_desc_runtime = False
+        self.required_metal_ray_query_helpers = set()
+        self.current_unused_local_declaration_names = set()
         self.current_metal_wave_lane_index_parameter = None
         self.current_metal_wave_lane_count_parameter = None
         self.required_glsl_buffer_aggregate_load_helpers = {}
@@ -580,6 +656,12 @@ class MetalCodeGen:
         self.glsl_buffer_block_variables = []
         self.metal_temp_variable_index = 0
         self.generated_return_wrapper_struct_names = set()
+        self.metal_vertex_entry_input_struct_names = set()
+        self.metal_vertex_entry_output_struct_names = set()
+        self.metal_fragment_entry_input_struct_names = set()
+        self.metal_fragment_entry_output_struct_names = set()
+        self.metal_stage_io_struct_names = set()
+        self.metal_stage_io_member_lowerings = {}
         self.type_mapping = {
             # Scalar Types
             "void": "void",
@@ -901,6 +983,7 @@ class MetalCodeGen:
         self.structured_buffer_variables = []
         self.structured_buffer_length_variables = []
         self.structured_buffer_counter_variables = []
+        self.metal_buffer_resource_variables = []
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
         self.lowered_glsl_buffer_block_struct_names = set()
@@ -908,6 +991,12 @@ class MetalCodeGen:
         self.glsl_buffer_block_struct_lowering_failures = {}
         self.metal_temp_variable_index = 0
         self.generated_return_wrapper_struct_names = set()
+        self.metal_vertex_entry_input_struct_names = set()
+        self.metal_vertex_entry_output_struct_names = set()
+        self.metal_fragment_entry_input_struct_names = set()
+        self.metal_fragment_entry_output_struct_names = set()
+        self.metal_stage_io_struct_names = set()
+        self.metal_stage_io_member_lowerings = {}
         self.cbuffer_variables = getattr(ast, "cbuffers", []) or []
         self.cbuffer_binding_indices = {}
         self.cbuffers_by_name = {
@@ -955,7 +1044,9 @@ class MetalCodeGen:
         self.current_sampler_parameters = set()
         self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
+        self.texture_variable_raw_types = {}
         self.current_texture_parameters = {}
+        self.current_texture_parameter_raw_types = {}
         self.current_texture_parameter_array_sizes = {}
         self.current_texture_alias_sources = {}
         self.image_variable_formats = {}
@@ -965,11 +1056,16 @@ class MetalCodeGen:
         self.function_structured_buffer_length_dependencies = {}
         self.global_structured_buffer_length_dependencies = set()
         self.function_global_resource_dependencies = {}
+        self.function_stage_parameter_dependencies = {}
         self.function_metal_wave_lane_dependencies = {}
         self.function_metal_wave_lane_parameter_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_image_atomic_compare_helpers = set()
+        self.required_metal_inverse_helpers = set()
+        self.required_metal_ray_query_runtime = False
+        self.required_metal_ray_desc_runtime = False
+        self.required_metal_ray_query_helpers = set()
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.current_glsl_buffer_block_parameters = {}
         self.unsupported_glsl_buffer_block_variables = set()
@@ -1002,6 +1098,33 @@ class MetalCodeGen:
         self.structs_by_name = {
             node.name: node for node in structs if isinstance(node, StructNode)
         }
+        self.metal_generated_struct_names = set()
+        self.metal_vertex_entry_input_struct_names = (
+            self.collect_metal_stage_entry_parameter_struct_names(
+                ast, target_stage, "vertex"
+            )
+        )
+        self.metal_vertex_entry_output_struct_names = (
+            self.collect_metal_stage_entry_return_struct_names(
+                ast, target_stage, "vertex"
+            )
+        )
+        self.metal_fragment_entry_input_struct_names = (
+            self.collect_metal_stage_entry_parameter_struct_names(
+                ast, target_stage, "fragment"
+            )
+        )
+        self.metal_fragment_entry_output_struct_names = (
+            self.collect_metal_stage_entry_return_struct_names(
+                ast, target_stage, "fragment"
+            )
+        )
+        self.metal_stage_io_struct_names = (
+            set(self.metal_vertex_entry_input_struct_names)
+            | set(self.metal_vertex_entry_output_struct_names)
+            | set(self.metal_fragment_entry_input_struct_names)
+            | set(self.metal_fragment_entry_output_struct_names)
+        )
         self.metal_ray_payload_parameter_types = (
             self.collect_metal_ray_payload_parameter_types(getattr(ast, "stages", {}))
         )
@@ -1085,6 +1208,10 @@ class MetalCodeGen:
         self.required_metal_wave_match_helper = False
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
+        self.required_metal_inverse_helpers = set()
+        self.required_metal_ray_query_runtime = False
+        self.required_metal_ray_desc_runtime = False
+        self.required_metal_ray_query_helpers = set()
         self.local_variable_types = {}
         (
             self.lowered_glsl_buffer_blocks,
@@ -1165,6 +1292,60 @@ class MetalCodeGen:
                     generic_function_specializations.values()
                 )
             )
+            generic_specialization_roots = [
+                ast,
+                *generic_function_specializations.values(),
+            ]
+            self.generic_enum_specializations = collect_generic_enum_specializations(
+                generic_specialization_roots,
+                self.generic_enum_struct_definitions,
+                self.type_name_string,
+            )
+            self.generic_struct_specializations = (
+                collect_generic_struct_specializations(
+                    generic_specialization_roots,
+                    self.generic_struct_definitions,
+                    self.type_name_string,
+                )
+            )
+            for func in generic_function_specializations.values():
+                self.add_metal_generic_specializations_from_type_text(
+                    self.type_name_string(getattr(func, "return_type", None))
+                )
+                for parameter in getattr(
+                    func, "parameters", getattr(func, "params", [])
+                ):
+                    self.add_metal_generic_specializations_from_type_text(
+                        self.type_name_string(getattr(parameter, "param_type", None))
+                    )
+            self.enum_struct_type_names = (
+                collect_enum_type_names(self.struct_payload_enums)
+                | set(self.generic_enum_struct_definitions)
+                | {
+                    specialization["struct_name"]
+                    for specialization in self.generic_enum_specializations.values()
+                }
+            )
+            self.enum_variant_constants = {
+                **collect_enum_variant_constants(
+                    self.plain_enums + self.struct_payload_enums
+                ),
+                **collect_generic_enum_variant_constants(
+                    self.generic_enum_struct_definitions
+                ),
+            }
+            self.struct_member_types.update(
+                collect_generic_enum_specialization_member_types(
+                    self,
+                    self.generic_enum_specializations,
+                )
+            )
+            self.struct_member_types.update(
+                collect_generic_struct_specialization_member_types(
+                    self,
+                    self.generic_struct_specializations,
+                )
+            )
         wave_dependency_functions = list(all_functions) + list(
             generic_function_specializations.values()
         )
@@ -1182,6 +1363,9 @@ class MetalCodeGen:
             self.collect_function_metal_mesh_dispatch_contexts(
                 list(all_functions) + list(generic_function_specializations.values())
             )
+        )
+        self.metal_stage_io_member_lowerings = (
+            self.collect_metal_stage_io_member_lowerings(structs)
         )
         code = "\n"
         preprocessors = getattr(ast, "preprocessors", []) or []
@@ -1203,132 +1387,24 @@ class MetalCodeGen:
         if self.has_tessellation_stage(ast, target_stage):
             code += self.generate_metal_tessellation_patch_helpers()
         code += generate_enum_constants(
-            self, self.plain_enums + self.struct_payload_enums
+            self,
+            self.plain_enums + self.struct_payload_enums,
+            qualifier=self.metal_unused_declaration_qualifier("constant"),
         )
         code += generate_generic_enum_constants(
             self,
             self.generic_enum_struct_definitions,
+            qualifier=self.metal_unused_declaration_qualifier("constant"),
         )
         code += self.generate_constants(ast)
-        code += generate_generic_structs(self, self.generic_struct_specializations)
-        code += generate_enum_structs(self, self.struct_payload_enums)
-        code += generate_generic_enum_structs(self, self.generic_enum_specializations)
-        code += generate_enum_constructor_functions(self, self.struct_payload_enums)
-        code += generate_generic_enum_constructor_functions(
-            self,
-            self.generic_enum_specializations,
+        code += self.generate_metal_struct_declarations(structs)
+        code += self.generate_metal_stage_io_array_helpers()
+        code += self.generate_metal_enum_constructor_functions(
+            self.struct_payload_enums
         )
-
-        for node in structs:
-            if isinstance(node, StructNode):
-                if node.name in self.generic_enum_struct_definitions:
-                    continue
-                if node.name in self.generic_struct_definitions:
-                    continue
-                if node.name in self.lowered_glsl_buffer_block_struct_names:
-                    continue
-                if node.name in self.glsl_buffer_block_struct_names:
-                    code += self.glsl_buffer_block_diagnostic(
-                        "Metal", node.name, None, None
-                    )
-                    code += self.unsupported_glsl_buffer_block_struct_placeholder(
-                        "Metal", node.name
-                    )
-                    continue
-                self.validate_struct_member_semantic_types(node)
-                code += f"struct {node.name} {{\n"
-                members = getattr(node, "members", [])
-                for member in members:
-                    if isinstance(member, ArrayNode):
-                        resource_array_declaration = (
-                            self.format_struct_resource_array_member(member)
-                        )
-                        if resource_array_declaration is not None:
-                            code += f"    {resource_array_declaration};\n"
-                            continue
-                        # Handle array types in structs
-                        element_type = getattr(
-                            member, "element_type", getattr(member, "vtype", "float")
-                        )
-                        if member.size:
-                            code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
-                        else:
-                            # Dynamic arrays in Metal use array<type>
-                            code += f"    array<{self.map_type(element_type)}> {member.name};\n"
-                    else:
-                        semantic = self.semantic_from_node(member)
-                        if hasattr(member, "member_type"):
-                            if self.is_array_type_node(member.member_type):
-                                resource_array_declaration = (
-                                    self.format_struct_resource_array_member(member)
-                                )
-                                if resource_array_declaration is not None:
-                                    semantic_attr = (
-                                        self.map_semantic(semantic) if semantic else ""
-                                    )
-                                    code += (
-                                        f"    {resource_array_declaration}"
-                                        f"{semantic_attr};\n"
-                                    )
-                                    continue
-                            address_space_declaration = (
-                                self.format_address_space_parameter_declaration(
-                                    member.member_type,
-                                    self.map_type(
-                                        self.convert_type_node_to_string(
-                                            member.member_type
-                                        )
-                                    ),
-                                    member.name,
-                                    member,
-                                )
-                            )
-                            if address_space_declaration is not None:
-                                semantic_attr = (
-                                    self.map_semantic(semantic) if semantic else ""
-                                )
-                                code += (
-                                    f"    {address_space_declaration}"
-                                    f"{semantic_attr};\n"
-                                )
-                                continue
-                            if str(type(member.member_type)).find("ArrayType") != -1:
-                                member_type_str = self.convert_type_node_to_string(
-                                    member.member_type
-                                )
-                                member_type = self.map_type(member_type_str)
-                                declaration = format_c_style_array_declaration(
-                                    member_type, member.name
-                                )
-                                semantic_attr = (
-                                    self.map_semantic(semantic) if semantic else ""
-                                )
-                                if member.member_type.size is None:
-                                    base_type, _ = split_array_type_suffix(member_type)
-                                    code += (
-                                        f"    array<{base_type}> {member.name}"
-                                        f"{semantic_attr};\n"
-                                    )
-                                else:
-                                    code += f"    {declaration}{semantic_attr};\n"
-                                continue  # Skip the normal member_type handling
-                            else:
-                                member_type_str = self.convert_type_node_to_string(
-                                    member.member_type
-                                )
-                                member_type = self.map_resource_type_with_format(
-                                    member_type_str, member
-                                )
-                        elif hasattr(member, "vtype"):
-                            member_type = self.map_resource_type_with_format(
-                                member.vtype, member
-                            )
-                        else:
-                            member_type = "float"
-
-                        semantic_attr = self.map_semantic(semantic) if semantic else ""
-                        code += f"    {member_type} {member.name}{semantic_attr};\n"
-                code += "};\n"
+        code += self.generate_metal_generic_enum_constructor_functions(
+            self.generic_enum_specializations
+        )
 
         texture_register = 0
         sampler_register = 0
@@ -1419,6 +1495,37 @@ class MetalCodeGen:
                 code += self.unsupported_glsl_buffer_block_variable_placeholder(
                     "Metal", vtype, var_name
                 )
+                continue
+
+            metal_buffer_address_space = self.metal_buffer_resource_address_space(
+                node, vtype
+            )
+            if metal_buffer_address_space is not None:
+                binding_count = self.metal_buffer_resource_binding_count(
+                    node, array_size
+                )
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "buffer"}, ("b", "u", "t")
+                )
+                if binding is None:
+                    binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        binding_count,
+                    )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "buffer",
+                    binding,
+                    binding_count,
+                    var_name,
+                )
+                self.metal_buffer_resource_variables.append(
+                    (node, binding, vtype, array_size, metal_buffer_address_space)
+                )
+                buffer_register = max(buffer_register, binding + binding_count)
                 continue
 
             if self.is_acceleration_structure_type(vtype):
@@ -1655,6 +1762,9 @@ class MetalCodeGen:
                 )
                 self.texture_variables.append((node, binding, mapped_type, array_size))
                 self.texture_variable_types[node.name] = mapped_type
+                self.texture_variable_raw_types[node.name] = self.resource_base_type(
+                    vtype
+                )
                 record_explicit_image_metadata(
                     node.name,
                     node,
@@ -1688,6 +1798,9 @@ class MetalCodeGen:
 
         self.function_global_resource_dependencies = (
             self.collect_function_global_resource_dependencies(all_functions)
+        )
+        self.function_stage_parameter_dependencies = (
+            self.collect_function_stage_parameter_dependencies(ast, target_stage)
         )
 
         cbuffers = getattr(ast, "cbuffers", [])
@@ -1768,12 +1881,15 @@ class MetalCodeGen:
                         shader_type=stage_name,
                         execution_config=getattr(stage, "execution_config", None),
                         entry_name=stage_entry_names.get(id(stage.entry_point)),
+                        stage_local_variables=getattr(stage, "local_variables", []),
                     )
 
         code += self.generate_image_atomic_compare_helpers()
         code += self.generate_buffer_atomic_compare_helpers()
         code += self.generate_metal_wave_helpers()
+        code += self.generate_metal_ray_query_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
+        code += self.generate_metal_inverse_helpers()
         code += functions_code
         return code
 
@@ -1804,7 +1920,10 @@ class MetalCodeGen:
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
             value_code = self.generate_constant_expression(value)
-            code += f"constant {self.map_type(const_type)} {name} = {value_code};\n"
+            code += (
+                f"{self.metal_unused_declaration_qualifier('constant')} "
+                f"{self.map_type(const_type)} {name} = {value_code};\n"
+            )
 
         used_function_constant_ids = {}
         for node in getattr(ast, "global_variables", []) or []:
@@ -1831,11 +1950,32 @@ class MetalCodeGen:
                     f"'{name}' initializers are not allowed by MSL */\n"
                 )
             code += (
-                f"constant {mapped_type} {name} "
+                f"{self.metal_unused_declaration_qualifier('constant')} "
+                f"{mapped_type} {name} "
                 f"[[function_constant({function_constant_id})]];\n"
             )
 
         return f"{code}\n" if code else ""
+
+    def metal_unused_declaration_qualifier(self, qualifier):
+        return f"__attribute__((unused)) {qualifier}"
+
+    def format_unused_metal_declaration(self, declaration):
+        declaration = str(declaration).strip()
+        if declaration.startswith("__attribute__((unused)) "):
+            return declaration
+        return f"__attribute__((unused)) {declaration}"
+
+    def maybe_format_unused_local_declaration(self, declaration, name):
+        if name in self.current_unused_local_declaration_names:
+            return self.format_unused_metal_declaration(declaration)
+        return declaration
+
+    def strip_unused_metal_declaration_attribute(self, declaration):
+        return str(declaration).strip().removeprefix("__attribute__((unused)) ")
+
+    def format_match_binding_declaration(self, declaration, _binding_name):
+        return self.format_unused_metal_declaration(declaration)
 
     def metal_function_constant_attributes(self, node):
         attributes = []
@@ -1998,8 +2138,11 @@ class MetalCodeGen:
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
-                            # Dynamic arrays in buffer blocks
-                            code += f"    array<{self.map_type(element_type)}> {member.name};\n"
+                            # Metal requires a concrete element count for value arrays.
+                            code += (
+                                f"    {self.map_type(element_type)} "
+                                f"{member.name}[1024];\n"
+                            )
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
@@ -2025,8 +2168,11 @@ class MetalCodeGen:
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
-                            # Dynamic arrays in buffer blocks
-                            code += f"    array<{self.map_type(element_type)}> {member.name};\n"
+                            # Metal requires a concrete element count for value arrays.
+                            code += (
+                                f"    {self.map_type(element_type)} "
+                                f"{member.name}[1024];\n"
+                            )
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
@@ -2043,6 +2189,563 @@ class MetalCodeGen:
 
         return code
 
+    def generate_metal_struct_declarations(self, structs):
+        definitions = []
+
+        for specialization in (self.generic_struct_specializations or {}).values():
+            fields = generic_struct_specialized_fields(
+                self.type_name_string,
+                specialization,
+            )
+            definitions.append(
+                self.metal_field_struct_definition(
+                    specialization["struct_name"],
+                    fields,
+                )
+            )
+
+        for enum in self.struct_payload_enums or []:
+            fields = [("variant", "int")]
+            fields.extend(enum_struct_fields(enum) or [])
+            definitions.append(self.metal_field_struct_definition(enum.name, fields))
+
+        for specialization in (self.generic_enum_specializations or {}).values():
+            fields = [("variant", "int")]
+            fields.extend(generic_enum_specialized_fields(self, specialization))
+            definitions.append(
+                self.metal_field_struct_definition(
+                    specialization["struct_name"],
+                    fields,
+                )
+            )
+
+        for node in structs or []:
+            definition = self.metal_plain_struct_definition(node)
+            if definition is not None:
+                definitions.append(definition)
+
+        self.metal_generated_struct_names = {
+            definition["name"] for definition in definitions if definition.get("name")
+        }
+        return "".join(
+            definition["code"]
+            for definition in self.order_metal_struct_definitions(definitions)
+        )
+
+    def metal_field_struct_definition(self, name, fields):
+        code = f"struct {name} {{\n"
+        dependencies = set()
+        for field_name, field_type in fields:
+            mapped_type = self.map_type(field_type)
+            declaration = format_c_style_array_declaration(mapped_type, field_name)
+            code += f"    {declaration};\n"
+            dependencies.update(self.metal_struct_type_dependencies(mapped_type))
+        code += "};\n\n"
+        dependencies.discard(name)
+        return {"name": name, "dependencies": dependencies, "code": code}
+
+    def metal_plain_struct_definition(self, node):
+        if not isinstance(node, StructNode):
+            return None
+        if node.name in self.generic_enum_struct_definitions:
+            return None
+        if node.name in self.generic_struct_definitions:
+            return None
+        if node.name in self.lowered_glsl_buffer_block_struct_names:
+            return None
+        if node.name in self.glsl_buffer_block_struct_names:
+            code = self.glsl_buffer_block_diagnostic("Metal", node.name, None, None)
+            code += self.unsupported_glsl_buffer_block_struct_placeholder(
+                "Metal", node.name
+            )
+            return {"name": node.name, "dependencies": set(), "code": code}
+
+        self.validate_struct_member_semantic_types(node)
+        code = f"struct {node.name} {{\n"
+        dependencies = set()
+        default_member_semantics = self.metal_default_struct_member_semantics(node)
+        for member in getattr(node, "members", []) or []:
+            member_code, member_dependencies = self.metal_struct_member_declaration(
+                member,
+                default_member_semantics,
+                node.name,
+            )
+            code += member_code
+            dependencies.update(member_dependencies)
+        code += "};\n"
+        dependencies.discard(node.name)
+        return {"name": node.name, "dependencies": dependencies, "code": code}
+
+    def collect_metal_stage_io_member_lowerings(self, structs):
+        lowerings = {}
+        stage_io_names = set(getattr(self, "metal_stage_io_struct_names", set()))
+        if not stage_io_names:
+            return lowerings
+
+        for struct in structs or []:
+            struct_name = getattr(struct, "name", None)
+            if struct_name not in stage_io_names:
+                continue
+            for member in getattr(struct, "members", []) or []:
+                lowering = self.metal_stage_io_member_lowering(member)
+                if lowering is not None:
+                    lowerings.setdefault(struct_name, {})[member.name] = lowering
+        return lowerings
+
+    def metal_stage_io_member_lowering(self, member):
+        member_name = getattr(member, "name", None)
+        if not member_name:
+            return None
+
+        array_info = self.metal_stage_io_member_array_info(member)
+        if array_info is not None:
+            element_type, size = array_info
+            fields = [
+                (self.metal_stage_io_array_field_name(member_name, index), element_type)
+                for index in range(size)
+            ]
+            return {
+                "kind": "array",
+                "element_type": element_type,
+                "size": size,
+                "fields": fields,
+            }
+
+        raw_type = self.struct_member_raw_type(member)
+        mapped_type = self.map_type(raw_type)
+        dimensions = self.metal_matrix_dimensions(mapped_type)
+        if dimensions is None:
+            return None
+        component_prefix, columns, rows = dimensions
+        column_type = f"{component_prefix}{rows}"
+        fields = [
+            (self.metal_stage_io_matrix_field_name(member_name, index), column_type)
+            for index in range(columns)
+        ]
+        return {
+            "kind": "matrix",
+            "mapped_type": mapped_type,
+            "columns": columns,
+            "rows": rows,
+            "fields": fields,
+        }
+
+    def metal_stage_io_member_array_info(self, member):
+        if isinstance(member, ArrayNode):
+            resource_array_declaration = self.format_struct_resource_array_member(
+                member
+            )
+            if resource_array_declaration is not None:
+                return None
+            element_type = self.map_type(
+                getattr(member, "element_type", getattr(member, "vtype", "float"))
+            )
+            size = self.literal_int_value(member.size, self.literal_int_constants)
+            return (element_type, size) if size else None
+
+        raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+        if self.is_array_type_node(raw_type):
+            element_type = self.map_type(raw_type.element_type)
+            size = self.literal_int_value(raw_type.size, self.literal_int_constants)
+            return (element_type, size) if size else None
+
+        raw_type_name = self.type_name_string(raw_type)
+        if raw_type_name and "[" in raw_type_name and "]" in raw_type_name:
+            element_type, array_size = parse_array_type(raw_type_name)
+            size = self.literal_int_value(array_size, self.literal_int_constants)
+            return (self.map_type(element_type), size) if size else None
+        return None
+
+    def metal_matrix_dimensions(self, mapped_type):
+        mapped_type = self.map_type(mapped_type)
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix:
+            return None
+        for component_prefix in ("float", "half", "double"):
+            if not base_type.startswith(component_prefix):
+                continue
+            suffix = base_type[len(component_prefix) :]
+            if "x" not in suffix:
+                return None
+            columns, rows = suffix.split("x", 1)
+            if columns in {"2", "3", "4"} and rows in {"2", "3", "4"}:
+                return component_prefix, int(columns), int(rows)
+        return None
+
+    def generate_metal_matrix_resize_constructor(self, target_type, args):
+        target_dimensions = self.metal_matrix_dimensions(target_type)
+        if target_dimensions is None or len(args or []) != 1:
+            return None
+
+        arg_type = self.expression_result_type(args[0])
+        arg_dimensions = self.metal_matrix_dimensions(arg_type)
+        if arg_dimensions is None:
+            return None
+
+        target_prefix, target_columns, target_rows = target_dimensions
+        _arg_prefix, arg_columns, arg_rows = arg_dimensions
+        if target_columns == arg_columns and target_rows == arg_rows:
+            return None
+
+        rendered_arg = self.generate_expression_with_expected(args[0], None)
+        columns = []
+        for column in range(target_columns):
+            if column < arg_columns:
+                source_column = f"{rendered_arg}[{column}]"
+                if target_rows == arg_rows:
+                    columns.append(source_column)
+                elif target_rows < arg_rows:
+                    columns.append(
+                        f"{source_column}.{self.vector_swizzle(target_rows)}"
+                    )
+                else:
+                    fill_values = [
+                        "1.0" if row == column else "0.0"
+                        for row in range(arg_rows, target_rows)
+                    ]
+                    columns.append(
+                        f"{target_prefix}{target_rows}({source_column}, {', '.join(fill_values)})"
+                    )
+            else:
+                values = [
+                    "1.0" if row == column else "0.0" for row in range(target_rows)
+                ]
+                columns.append(f"{target_prefix}{target_rows}({', '.join(values)})")
+        return f"{target_type}({', '.join(columns)})"
+
+    def vector_swizzle(self, width):
+        return {1: "x", 2: "xy", 3: "xyz", 4: "xyzw"}[width]
+
+    def metal_stage_io_matrix_field_name(self, member_name, index):
+        return f"{member_name}_{index}"
+
+    def metal_stage_io_array_field_name(self, member_name, index):
+        return f"{member_name}_{index}"
+
+    def generate_metal_stage_io_array_helpers(self):
+        code = ""
+        for struct_name in sorted(self.metal_stage_io_member_lowerings):
+            for member_name, lowering in sorted(
+                self.metal_stage_io_member_lowerings[struct_name].items()
+            ):
+                if lowering.get("kind") != "array":
+                    continue
+                helper_name = self.metal_stage_io_array_getter_name(
+                    struct_name, member_name
+                )
+                element_type = lowering["element_type"]
+                code += (
+                    f"static inline {element_type} __attribute__((unused)) {helper_name}"
+                    f"({struct_name} value, int index) {{\n"
+                    "    switch (index) {\n"
+                )
+                for index, (field_name, _field_type) in enumerate(lowering["fields"]):
+                    code += f"    case {index}: return value.{field_name};\n"
+                code += (
+                    "    default: "
+                    f"return {self.metal_default_value_expression(element_type)};\n"
+                    "    }\n"
+                    "}\n\n"
+                )
+        return code
+
+    def metal_stage_io_array_getter_name(self, struct_name, member_name):
+        return f"__crossgl_stage_io_get_{struct_name}_{member_name}"
+
+    def metal_struct_member_declaration(
+        self, member, default_member_semantics, struct_name=None
+    ):
+        dependencies = set()
+        lowering = self.metal_stage_io_member_lowerings.get(struct_name, {}).get(
+            getattr(member, "name", None)
+        )
+        if lowering is not None:
+            code = ""
+            for field_name, field_type in lowering["fields"]:
+                code += f"    {field_type} {field_name};\n"
+                dependencies.update(self.metal_struct_type_dependencies(field_type))
+            return code, dependencies
+
+        if isinstance(member, ArrayNode):
+            semantic = self.semantic_from_node(member)
+            if semantic is None:
+                semantic = default_member_semantics.get(member.name)
+            resource_array_declaration = self.format_struct_resource_array_member(
+                member
+            )
+            if resource_array_declaration is not None:
+                semantic_attr = self.map_semantic(semantic) if semantic else ""
+                return f"    {resource_array_declaration}{semantic_attr};\n", set()
+
+            element_type = getattr(
+                member,
+                "element_type",
+                getattr(member, "vtype", "float"),
+            )
+            semantic_attr = self.map_semantic(semantic) if semantic else ""
+            mapped_type = self.map_type(element_type)
+            dependencies.update(self.metal_struct_type_dependencies(mapped_type))
+            if member.size:
+                return (
+                    f"    {mapped_type} {member.name}[{member.size}]"
+                    f"{semantic_attr};\n",
+                    dependencies,
+                )
+            return (
+                f"    {mapped_type} {member.name}[1024]{semantic_attr};\n",
+                dependencies,
+            )
+
+        semantic = self.semantic_from_node(member)
+        if semantic is None:
+            semantic = default_member_semantics.get(member.name)
+        semantic_attr = self.map_semantic(semantic) if semantic else ""
+
+        if hasattr(member, "member_type"):
+            if self.is_array_type_node(member.member_type):
+                resource_array_declaration = self.format_struct_resource_array_member(
+                    member
+                )
+                if resource_array_declaration is not None:
+                    return (
+                        f"    {resource_array_declaration}{semantic_attr};\n",
+                        set(),
+                    )
+            address_space_declaration = self.format_address_space_parameter_declaration(
+                member.member_type,
+                self.map_type(self.convert_type_node_to_string(member.member_type)),
+                member.name,
+                member,
+            )
+            if address_space_declaration is not None:
+                dependencies.update(
+                    self.metal_struct_type_dependencies(
+                        self.convert_type_node_to_string(member.member_type)
+                    )
+                )
+                return (
+                    f"    {address_space_declaration}{semantic_attr};\n",
+                    dependencies,
+                )
+            if str(type(member.member_type)).find("ArrayType") != -1:
+                member_type_str = self.convert_type_node_to_string(member.member_type)
+                member_type = self.map_type(member_type_str)
+                dependencies.update(self.metal_struct_type_dependencies(member_type))
+                declaration = format_c_style_array_declaration(member_type, member.name)
+                if member.member_type.size is None:
+                    base_type, _ = split_array_type_suffix(member_type)
+                    return (
+                        f"    {base_type} {member.name}[1024]{semantic_attr};\n",
+                        dependencies,
+                    )
+                return f"    {declaration}{semantic_attr};\n", dependencies
+
+            member_type_str = self.convert_type_node_to_string(member.member_type)
+            member_type = self.map_resource_type_with_format(member_type_str, member)
+        elif hasattr(member, "vtype"):
+            member_type = self.map_resource_type_with_format(member.vtype, member)
+        else:
+            member_type = "float"
+
+        dependencies.update(self.metal_struct_type_dependencies(member_type))
+        return f"    {member_type} {member.name}{semantic_attr};\n", dependencies
+
+    def metal_struct_type_dependencies(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return set()
+        mapped_type = self.map_type(type_name)
+        base_type, _ = split_array_type_suffix(str(mapped_type))
+        base_type = base_type.strip()
+        if base_type.startswith("array<"):
+            base_type = base_type[len("array<") :].split(",", 1)[0].rstrip(">")
+        base_type = base_type.replace("const ", "").strip()
+        for separator in ("&", "*"):
+            if separator in base_type:
+                base_type = base_type.split(separator, 1)[0].strip()
+        if "<" in base_type:
+            base_type = base_type.split("<", 1)[0].strip()
+        return {base_type}
+
+    def order_metal_struct_definitions(self, definitions):
+        generated_names = {
+            definition["name"] for definition in definitions if definition.get("name")
+        }
+        remaining = [
+            {
+                **definition,
+                "dependencies": (
+                    set(definition.get("dependencies", set())) & generated_names
+                ),
+            }
+            for definition in definitions
+        ]
+        ordered = []
+        emitted = set()
+
+        while remaining:
+            progressed = False
+            for definition in list(remaining):
+                if definition["dependencies"] <= emitted:
+                    ordered.append(definition)
+                    emitted.add(definition["name"])
+                    remaining.remove(definition)
+                    progressed = True
+            if not progressed:
+                ordered.extend(remaining)
+                break
+
+        return ordered
+
+    def add_metal_generic_specializations_from_type_text(self, type_text, visited=None):
+        type_text = normalize_specialization_type_text(type_text)
+        if not type_text:
+            return
+        visited = set(visited or set())
+        if type_text in visited:
+            return
+        visited.add(type_text)
+
+        base_name, generic_args = generic_type_parts(type_text)
+        for arg in generic_args:
+            self.add_metal_generic_specializations_from_type_text(arg, visited)
+
+        enum_definition = self.generic_enum_struct_definitions.get(base_name)
+        if enum_definition is not None and len(generic_args) == len(
+            enum_definition["generic_params"]
+        ):
+            specialization = self.generic_enum_specializations.get(type_text)
+            if specialization is None:
+                specialization = build_generic_enum_specialization(
+                    type_text,
+                    enum_definition,
+                )
+                self.generic_enum_specializations[type_text] = specialization
+            for _field_name, field_type in generic_enum_specialized_fields(
+                self,
+                specialization,
+            ):
+                self.add_metal_generic_specializations_from_type_text(
+                    field_type, visited
+                )
+            return
+
+        struct_definition = self.generic_struct_definitions.get(base_name)
+        if struct_definition is not None and len(generic_args) == len(
+            struct_definition["generic_params"]
+        ):
+            specialization = self.generic_struct_specializations.get(type_text)
+            if specialization is None:
+                specialization = build_generic_struct_specialization(
+                    type_text,
+                    struct_definition,
+                )
+                self.generic_struct_specializations[type_text] = specialization
+            for _field_name, field_type in generic_struct_specialized_fields(
+                self.type_name_string,
+                specialization,
+            ):
+                self.add_metal_generic_specializations_from_type_text(
+                    field_type, visited
+                )
+
+    def generate_metal_enum_constructor_functions(self, enums):
+        code = ""
+        for enum in enums or []:
+            all_fields = enum_struct_fields(enum) or []
+            for variant in enum.variants or []:
+                variant_fields = enum_variant_payload_fields(variant) or []
+                params = ", ".join(
+                    f"{self.map_type(field_type)} payload{index}"
+                    for index, (_field_name, field_type) in enumerate(variant_fields)
+                )
+                code += (
+                    f"{enum.name} "
+                    f"{enum_variant_constructor_name(enum.name, variant.name)}"
+                    f"({params}) {{\n"
+                )
+                code += f"    {enum.name} result;\n"
+                code += (
+                    f"    result.variant = "
+                    f"{enum_variant_constructor_name(enum.name, variant.name).rsplit('_make', 1)[0]};\n"
+                )
+                active_fields = {
+                    field_name for field_name, _field_type in variant_fields
+                }
+                for field_name, field_type in all_fields:
+                    if field_name in active_fields:
+                        continue
+                    code += (
+                        f"    result.{field_name} = "
+                        f"{self.metal_default_value_expression(field_type)};\n"
+                    )
+                for index, (field_name, _field_type) in enumerate(variant_fields):
+                    code += f"    result.{field_name} = payload{index};\n"
+                code += "    return result;\n"
+                code += "}\n\n"
+        return code
+
+    def generate_metal_generic_enum_constructor_functions(self, specializations):
+        code = ""
+        for specialization in (specializations or {}).values():
+            all_fields = generic_enum_specialized_fields(self, specialization)
+            definition = specialization["definition"]
+            for variant in definition["enum"].variants or []:
+                variant_fields = (
+                    generic_enum_specialized_variant_fields(
+                        self,
+                        specialization,
+                        variant.name,
+                    )
+                    or []
+                )
+                params = ", ".join(
+                    f"{self.map_type(field_type)} payload{index}"
+                    for index, (_field_name, field_type) in enumerate(variant_fields)
+                )
+                code += (
+                    f"{specialization['struct_name']} "
+                    f"{enum_variant_constructor_name(specialization['struct_name'], variant.name)}"
+                    f"({params}) {{\n"
+                )
+                code += f"    {specialization['struct_name']} result;\n"
+                code += (
+                    "    result.variant = "
+                    f"{enum_variant_constructor_name(definition['name'], variant.name).rsplit('_make', 1)[0]};\n"
+                )
+                active_fields = {
+                    field_name for field_name, _field_type in variant_fields
+                }
+                for field_name, field_type in all_fields:
+                    if field_name in active_fields:
+                        continue
+                    code += (
+                        f"    result.{field_name} = "
+                        f"{self.metal_default_value_expression(field_type)};\n"
+                    )
+                for index, (field_name, _field_type) in enumerate(variant_fields):
+                    code += f"    result.{field_name} = payload{index};\n"
+                code += "    return result;\n"
+                code += "}\n\n"
+        return code
+
+    def metal_default_value_expression(self, field_type):
+        mapped_type = self.map_type(field_type)
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix:
+            return f"{base_type}()"
+        if (
+            base_type in self.metal_generated_struct_names
+            or base_type in self.struct_member_types
+            or base_type in self.structs_by_name
+        ):
+            return f"{base_type}()"
+        if base_type == "bool":
+            return "false"
+        if base_type.startswith("bool") or base_type.startswith("bvec"):
+            return f"{base_type}(false)"
+        return f"{base_type}(0)"
+
     def generate_function(
         self,
         func,
@@ -2050,6 +2753,7 @@ class MetalCodeGen:
         shader_type=None,
         execution_config=None,
         entry_name=None,
+        stage_local_variables=None,
     ):
         """Render a function or stage entry point with Metal attributes."""
         code = ""
@@ -2065,6 +2769,7 @@ class MetalCodeGen:
         sampler_parameters = set()
         sampler_parameter_array_sizes = {}
         texture_parameters = {}
+        texture_parameter_raw_types = {}
         texture_parameter_array_sizes = {}
         image_format_parameters = {}
         previous_function_name = self.current_function_name
@@ -2248,6 +2953,9 @@ class MetalCodeGen:
                 texture_parameters[p.name] = self.map_resource_type_with_format(
                     self.resource_base_type(raw_param_type), p
                 )
+                texture_parameter_raw_types[p.name] = self.resource_base_type(
+                    raw_param_type
+                )
                 resource_array = self.resource_array_parameter(raw_param_type, p)
                 if resource_array is not None:
                     _, array_size = resource_array
@@ -2350,6 +3058,9 @@ class MetalCodeGen:
 
         params_str = ", ".join(params)
         if shader_type is None:
+            params_str = self.append_required_stage_parameter_parameters(
+                params_str, self.current_function_name
+            )
             params_str = self.append_required_cbuffer_parameters(
                 params_str, self.current_function_name
             )
@@ -2364,6 +3075,12 @@ class MetalCodeGen:
             params_str = self.append_required_metal_wave_lane_parameters(
                 params_str, self.current_function_name
             )
+            for parameter in self.required_function_stage_parameters(
+                self.current_function_name
+            ):
+                self.local_variable_types[parameter.name] = self.type_name_string(
+                    self.parameter_raw_type(parameter)
+                )
 
         if hasattr(func, "return_type"):
             raw_return_type = self.type_name_string(func.return_type)
@@ -2471,9 +3188,93 @@ class MetalCodeGen:
             )
             return code
 
+        body = getattr(func, "body", None)
+        if shader_type is None and body is None:
+            semantic = self.semantic_from_node(func)
+            function_name = entry_name or func.name
+            code += (
+                f"{return_type} {function_name}({params_str}) "
+                f"{self.map_semantic(semantic)};\n\n"
+            )
+            self.current_function_name = previous_function_name
+            self.current_function_return_type = previous_function_return_type
+            self.current_function_return_wrapper = previous_function_return_wrapper
+            self.local_variable_types = previous_local_variable_types
+            self.current_address_space_variables = previous_address_space_variables
+            self.current_generic_function_substitutions = (
+                previous_generic_function_substitutions
+            )
+            self.cbuffer_parameter_names = previous_cbuffer_parameter_names
+            self.cbuffer_member_references = previous_cbuffer_member_references
+            self.ambiguous_cbuffer_members = previous_ambiguous_cbuffer_members
+            self.current_glsl_buffer_block_parameters = (
+                previous_glsl_buffer_block_parameters
+            )
+            self.current_unsupported_glsl_buffer_block_parameters = (
+                previous_unsupported_glsl_buffer_block_parameters
+            )
+            self.current_unsupported_glsl_buffer_block_local_variables = (
+                previous_unsupported_glsl_buffer_block_local_variables
+            )
+            self.unsupported_metal_ray_function_table_array_variables = (
+                previous_unsupported_metal_ray_function_table_array_variables
+            )
+            self.unsupported_metal_acceleration_structure_array_variables = (
+                previous_unsupported_metal_acceleration_structure_array_variables
+            )
+            self.current_glsl_buffer_block_parameter_failures = (
+                previous_glsl_buffer_block_parameter_failures
+            )
+            self.current_glsl_buffer_block_parameter_struct_failures = (
+                previous_glsl_buffer_block_parameter_struct_failures
+            )
+            self.current_structured_buffer_length_parameters = (
+                previous_structured_buffer_length_parameters
+            )
+            self.current_structured_buffer_counter_parameters = (
+                previous_structured_buffer_counter_parameters
+            )
+            self.current_metal_mesh_output_config = previous_metal_mesh_output_config
+            self.current_metal_mesh_output_parameter = (
+                previous_metal_mesh_output_parameter
+            )
+            self.current_metal_mesh_grid_properties_parameter = (
+                previous_metal_mesh_grid_properties_parameter
+            )
+            self.current_metal_mesh_payload_parameter = (
+                previous_metal_mesh_payload_parameter
+            )
+            self.current_metal_mesh_payload_type = previous_metal_mesh_payload_type
+            self.current_metal_mesh_output_accumulators = (
+                previous_metal_mesh_output_accumulators
+            )
+            self.current_metal_non_thread_payload_parameters = (
+                previous_metal_non_thread_payload_parameters
+            )
+            self.current_readonly_metal_mesh_payload_parameters = (
+                previous_readonly_metal_mesh_payload_parameters
+            )
+            self.current_readonly_metal_mesh_payload_reasons = (
+                previous_readonly_metal_mesh_payload_reasons
+            )
+            self.current_readonly_raw_buffer_parameters = (
+                previous_readonly_raw_buffer_parameters
+            )
+            self.current_readonly_metal_parameters = previous_readonly_metal_parameters
+            self.current_readonly_metal_parameter_reasons = (
+                previous_readonly_metal_parameter_reasons
+            )
+            self.current_metal_wave_lane_index_parameter = (
+                previous_metal_wave_lane_index_parameter
+            )
+            self.current_metal_wave_lane_count_parameter = (
+                previous_metal_wave_lane_count_parameter
+            )
+            return code
+
         if shader_type == "vertex":
             params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name
+                params_str, self.current_function_name, func
             )
             function_name = entry_name or f"vertex_{func.name}"
             return_wrapper = self.function_return_semantic_wrapper(
@@ -2525,6 +3326,7 @@ class MetalCodeGen:
                 params_str, self.current_function_name
             )
             function_name = entry_name or f"kernel_{func.name}"
+            self.validate_metal_kernel_return_type(func, shader_type, raw_return_type)
             code += f"kernel {return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["mesh", "object", "task", "amplification"]:
             stage_keyword = "mesh" if shader_type == "mesh" else "object"
@@ -2615,6 +3417,7 @@ class MetalCodeGen:
             self.current_sampler_parameter_array_sizes
         )
         previous_texture_parameters = self.current_texture_parameters
+        previous_texture_parameter_raw_types = self.current_texture_parameter_raw_types
         previous_texture_parameter_array_sizes = (
             self.current_texture_parameter_array_sizes
         )
@@ -2623,9 +3426,23 @@ class MetalCodeGen:
         self.current_sampler_parameters = sampler_parameters
         self.current_sampler_parameter_array_sizes = sampler_parameter_array_sizes
         self.current_texture_parameters = texture_parameters
+        self.current_texture_parameter_raw_types = texture_parameter_raw_types
         self.current_texture_parameter_array_sizes = texture_parameter_array_sizes
         self.current_texture_alias_sources = {}
         self.current_image_format_parameters = image_format_parameters
+        self.register_metal_buffer_resource_parameter_scope(
+            self.current_function_name,
+            include_all=shader_type
+            in {
+                "vertex",
+                "fragment",
+                "geometry",
+                "tessellation_control",
+                "tessellation_evaluation",
+                "compute",
+                "ray_generation",
+            },
+        )
         if shader_type == "mesh" and self.current_metal_mesh_output_config is not None:
             self.current_metal_mesh_output_accumulators = (
                 self.collect_metal_mesh_output_accumulators(
@@ -2635,18 +3452,25 @@ class MetalCodeGen:
             code += self.generate_metal_mesh_output_accumulator_declarations()
         for diagnostic in unsupported_metal_ray_function_table_parameter_diagnostics:
             code += f"    {diagnostic}\n"
-        body = getattr(func, "body", [])
-        if hasattr(body, "statements"):
-            for stmt in body.statements:
-                code += self.generate_statement(stmt, 1)
-        elif isinstance(body, list):
-            for stmt in body:
-                code += self.generate_statement(stmt, 1)
+        stage_value_variables = [
+            local_var
+            for local_var in stage_local_variables or []
+            if not self.is_stage_local_resource_variable(local_var)
+        ]
+        code += self.generate_statement_body(stage_value_variables, 1)
+        code += self.generate_statement_body(body, 1)
+        if self.metal_needs_fallback_return(body, return_type):
+            fallback = self.metal_default_value_expression(raw_return_type)
+            code += (
+                f"    return {fallback} "
+                "/* fallback for unmatched generated control flow */;\n"
+            )
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_sampler_parameter_array_sizes = (
             previous_sampler_parameter_array_sizes
         )
         self.current_texture_parameters = previous_texture_parameters
+        self.current_texture_parameter_raw_types = previous_texture_parameter_raw_types
         self.current_texture_parameter_array_sizes = (
             previous_texture_parameter_array_sizes
         )
@@ -2727,6 +3551,19 @@ class MetalCodeGen:
 
         code += "}\n\n"
         return code
+
+    def metal_needs_fallback_return(self, body, return_type):
+        if return_type == "void":
+            return False
+        if hasattr(body, "statements"):
+            statements = list(getattr(body, "statements", []) or [])
+        elif isinstance(body, list):
+            statements = body
+        else:
+            statements = []
+        if not statements:
+            return True
+        return not isinstance(statements[-1], ReturnNode)
 
     def required_compute_builtin_parameters(
         self, func, reserved_names=None, explicit_stage_builtins=None
@@ -3201,20 +4038,51 @@ class MetalCodeGen:
             return mapped_semantic[2:-2]
         return mapped_semantic
 
-    def append_global_resource_parameters(self, params_str, func_name=None):
+    def append_global_resource_parameters(self, params_str, func_name=None, func=None):
         resource_params = []
-        dependencies = (
+        dependencies = None
+        vertex_texture_dependencies = (
+            self.entry_point_global_resource_dependencies(func)
+            if func is not None
+            else None
+        )
+        sampler_dependencies = (
             self.function_global_resource_dependencies.get(func_name, set())
             if func_name
             else None
         )
+        cbuffer_dependencies = None
         if self.cbuffer_variables:
             for cbuffer in self.cbuffer_variables:
+                cbuffer_name = getattr(cbuffer, "name", None)
+                if (
+                    cbuffer_dependencies is not None
+                    and cbuffer_name not in cbuffer_dependencies
+                ):
+                    continue
                 binding = self.cbuffer_binding_indices.get(id(cbuffer), 0)
                 parameter_name = self.cbuffer_parameter_name(cbuffer)
                 resource_params.append(
                     f"constant {cbuffer.name}& {parameter_name} [[buffer({binding})]]"
                 )
+        if self.metal_buffer_resource_variables:
+            for (
+                buffer_variable,
+                i,
+                buffer_type,
+                array_size,
+                address_space,
+            ) in self.metal_buffer_resource_variables:
+                buffer_name = getattr(buffer_variable, "name", None)
+                if dependencies is not None and buffer_name not in dependencies:
+                    continue
+                declaration = self.format_metal_buffer_resource_parameter(
+                    buffer_type,
+                    buffer_name,
+                    array_size,
+                    address_space,
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.texture_variables:
             for (
                 texture_variable,
@@ -3222,8 +4090,15 @@ class MetalCodeGen:
                 texture_type,
                 array_size,
             ) in self.texture_variables:
+                texture_name = getattr(texture_variable, "name", None)
+                if (
+                    vertex_texture_dependencies is not None
+                    and texture_name not in vertex_texture_dependencies
+                    and self.metal_texture_parameter_type_is_writable(texture_type)
+                ):
+                    continue
                 declaration = self.format_resource_parameter(
-                    texture_type, texture_variable.name, array_size
+                    texture_type, texture_name, array_size
                 )
                 resource_params.append(f"{declaration} [[texture({i})]]")
         if self.acceleration_structure_variables:
@@ -3233,9 +4108,17 @@ class MetalCodeGen:
                 acceleration_structure_type,
                 array_size,
             ) in self.acceleration_structure_variables:
+                acceleration_structure_name = getattr(
+                    acceleration_structure_variable, "name", None
+                )
+                if (
+                    dependencies is not None
+                    and acceleration_structure_name not in dependencies
+                ):
+                    continue
                 declaration = self.format_resource_parameter(
                     acceleration_structure_type,
-                    acceleration_structure_variable.name,
+                    acceleration_structure_name,
                     array_size,
                 )
                 resource_params.append(f"{declaration} [[buffer({i})]]")
@@ -3246,10 +4129,16 @@ class MetalCodeGen:
                 visible_function_table_type,
                 array_size,
             ) in self.visible_function_table_variables:
+                visible_function_table_name = getattr(
+                    visible_function_table_variable, "name", None
+                )
+                if (
+                    dependencies is not None
+                    and visible_function_table_name not in dependencies
+                ):
+                    continue
                 declaration = self.format_visible_function_table_parameter(
-                    visible_function_table_type,
-                    visible_function_table_variable.name,
-                    array_size,
+                    visible_function_table_type, visible_function_table_name, array_size
                 )
                 resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.intersection_function_table_variables:
@@ -3259,9 +4148,17 @@ class MetalCodeGen:
                 intersection_function_table_type,
                 array_size,
             ) in self.intersection_function_table_variables:
+                intersection_function_table_name = getattr(
+                    intersection_function_table_variable, "name", None
+                )
+                if (
+                    dependencies is not None
+                    and intersection_function_table_name not in dependencies
+                ):
+                    continue
                 declaration = self.format_intersection_function_table_parameter(
                     intersection_function_table_type,
-                    intersection_function_table_variable.name,
+                    intersection_function_table_name,
                     array_size,
                 )
                 resource_params.append(f"{declaration} [[buffer({i})]]")
@@ -3273,6 +4170,8 @@ class MetalCodeGen:
                 array_size,
             ) in self.structured_buffer_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if dependencies is not None and buffer_name not in dependencies:
+                    continue
                 declaration = self.format_structured_buffer_parameter(
                     buffer_type, buffer_name, array_size
                 )
@@ -3285,6 +4184,8 @@ class MetalCodeGen:
                 array_size,
             ) in self.structured_buffer_length_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if dependencies is not None and buffer_name not in dependencies:
+                    continue
                 declaration = self.format_structured_buffer_length_parameter(
                     buffer_name, array_size
                 )
@@ -3297,6 +4198,8 @@ class MetalCodeGen:
                 array_size,
             ) in self.structured_buffer_counter_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if dependencies is not None and buffer_name not in dependencies:
+                    continue
                 declaration = self.format_structured_buffer_counter_parameter(
                     buffer_name, array_size
                 )
@@ -3309,6 +4212,8 @@ class MetalCodeGen:
                 array_size,
             ) in self.glsl_buffer_block_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if dependencies is not None and buffer_name not in dependencies:
+                    continue
                 declaration = self.format_glsl_buffer_block_parameter(
                     block, buffer_name, array_size
                 )
@@ -3316,7 +4221,10 @@ class MetalCodeGen:
         if self.sampler_variables:
             for sampler_variable, i, array_size in self.sampler_variables:
                 sampler_name = getattr(sampler_variable, "name", None)
-                if dependencies is not None and sampler_name not in dependencies:
+                if (
+                    sampler_dependencies is not None
+                    and sampler_name not in sampler_dependencies
+                ):
                     continue
                 declaration = self.format_resource_parameter(
                     "sampler", sampler_name, array_size
@@ -3327,6 +4235,26 @@ class MetalCodeGen:
         if params_str:
             return f"{params_str}, {', '.join(resource_params)}"
         return ", ".join(resource_params)
+
+    def entry_point_global_resource_dependencies(self, func):
+        dependencies = set(self.direct_global_resource_dependencies(func))
+        for called_name in self.called_user_function_names(func):
+            dependencies.update(
+                self.function_global_resource_dependencies.get(called_name, set())
+            )
+        return dependencies
+
+    def entry_point_cbuffer_dependencies(self, func):
+        dependencies = set(self.direct_cbuffer_dependencies(func))
+        for called_name in self.called_user_function_names(func):
+            dependencies.update(
+                self.function_cbuffer_dependencies.get(called_name, set())
+            )
+        return dependencies
+
+    def metal_texture_parameter_type_is_writable(self, texture_type):
+        texture_type = str(texture_type or "")
+        return "access::write" in texture_type or "access::read_write" in texture_type
 
     def global_resource_parameter_names(self):
         names = set()
@@ -3360,6 +4288,9 @@ class MetalCodeGen:
         for buffer_variable, _, _, _ in self.structured_buffer_variables:
             if getattr(buffer_variable, "name", None):
                 names.add(buffer_variable.name)
+        for buffer_variable, _, _, _, _ in self.metal_buffer_resource_variables:
+            if getattr(buffer_variable, "name", None):
+                names.add(buffer_variable.name)
         for buffer_variable, _, _, _ in self.structured_buffer_length_variables:
             if getattr(buffer_variable, "name", None):
                 names.add(
@@ -3388,6 +4319,20 @@ class MetalCodeGen:
         if params_str:
             return f"{params_str}, {', '.join(cbuffer_params)}"
         return ", ".join(cbuffer_params)
+
+    def append_required_stage_parameter_parameters(self, params_str, func_name):
+        stage_params = []
+        for parameter in self.required_function_stage_parameters(func_name):
+            raw_type = self.parameter_raw_type(parameter)
+            mapped_type = self.map_type(raw_type)
+            stage_params.append(
+                format_c_style_array_declaration(mapped_type, parameter.name)
+            )
+        if not stage_params:
+            return params_str
+        if params_str:
+            return f"{params_str}, {', '.join(stage_params)}"
+        return ", ".join(stage_params)
 
     def append_required_global_resource_parameters(self, params_str, func_name):
         resource_params = []
@@ -3449,6 +4394,19 @@ class MetalCodeGen:
                         intersection_function_table_type,
                         intersection_function_table_name,
                         array_size,
+                    )
+                )
+        for (
+            buffer_variable,
+            buffer_type,
+            array_size,
+            address_space,
+        ) in self.required_function_metal_buffer_resources(func_name):
+            buffer_name = getattr(buffer_variable, "name", None)
+            if buffer_name:
+                resource_params.append(
+                    self.format_metal_buffer_resource_parameter(
+                        buffer_type, buffer_name, array_size, address_space
                     )
                 )
         for (
@@ -3547,10 +4505,17 @@ class MetalCodeGen:
                 stmt, var_type
             )
             if texture_alias_type is not None:
+                initial_raw_type = self.texture_argument_raw_resource_type(
+                    getattr(stmt, "initial_value", None)
+                )
                 var_type = self.local_variable_texture_alias_declaration_type(
                     stmt, texture_alias_type
                 )
                 self.current_texture_parameters[stmt.name] = texture_alias_type
+                if initial_raw_type is not None:
+                    self.current_texture_parameter_raw_types[stmt.name] = (
+                        self.resource_base_type(initial_raw_type)
+                    )
                 self.record_local_texture_alias_sampler_source(stmt)
                 self.record_local_image_alias_metadata(stmt)
             sampler_alias_type = self.local_variable_sampler_alias_resource_type(
@@ -3631,6 +4596,9 @@ class MetalCodeGen:
                 self.map_type(var_type), stmt.name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
+            declaration = self.maybe_format_unused_local_declaration(
+                declaration, stmt.name
+            )
             if isinstance(initial_value, MatchNode):
                 code = f"{indent_str}{declaration};\n"
                 code += generate_match_expression_assignment(
@@ -3692,9 +4660,17 @@ class MetalCodeGen:
 
             if size is None:
                 # Dynamic arrays in Metal need a size, use a large enough buffer
-                return f"{indent_str}device array<{element_type}, 1024> {stmt.name};\n"
+                declaration = self.maybe_format_unused_local_declaration(
+                    f"device array<{element_type}, 1024> {stmt.name}",
+                    stmt.name,
+                )
+                return f"{indent_str}{declaration};\n"
             else:
-                return f"{indent_str}array<{element_type}, {size}> {stmt.name};\n"
+                declaration = self.maybe_format_unused_local_declaration(
+                    f"array<{element_type}, {size}> {stmt.name}",
+                    stmt.name,
+                )
+                return f"{indent_str}{declaration};\n"
         elif isinstance(stmt, AssignmentNode):
             return self.generate_statement_code(self.generate_assignment(stmt), indent)
         elif isinstance(stmt, BlockNode):
@@ -3784,7 +4760,13 @@ class MetalCodeGen:
 
         result = ""
         for line in lines:
-            terminator = "" if line.endswith((";", "}")) else ";"
+            stripped = line.strip()
+            terminator = (
+                ""
+                if stripped.endswith((";", "{", "}", ":"))
+                or stripped.startswith(("case ", "default:"))
+                else ";"
+            )
             result += f"{indent_str}{line}{terminator}\n"
         return result
 
@@ -4330,7 +5312,10 @@ class MetalCodeGen:
             raw_type.referenced_type, node
         )
         value_declaration = format_c_style_array_declaration(referent_type, node.name)
-        return f"{address_space} {value_declaration}"
+        return self.maybe_format_unused_local_declaration(
+            f"{address_space} {value_declaration}",
+            node.name,
+        )
 
     def record_readonly_metal_mesh_payload_local_alias(self, node):
         if self.local_variable_address_space(node) != "object_data":
@@ -4491,6 +5476,62 @@ class MetalCodeGen:
             return self.convert_type_node_to_string(vtype)
         return str(vtype)
 
+    def is_metal_ray_query_type_name(self, type_name):
+        type_name = str(type_name or "").strip()
+        return (
+            type_name == "RayQuery"
+            or type_name == "rayQueryEXT"
+            or type_name.startswith("RayQuery<")
+        )
+
+    def requires_metal_builtin_ray_desc(self, type_name):
+        type_name = str(type_name or "").strip()
+        return type_name == "RayDesc" and type_name not in getattr(
+            self, "structs_by_name", {}
+        )
+
+    def require_metal_ray_query_runtime(self):
+        self.required_metal_ray_query_runtime = True
+
+    def metal_ray_query_method_return_type(self, operation):
+        return self.METAL_RAY_QUERY_RETURN_TYPES.get(str(operation))
+
+    def is_metal_ray_query_method(self, operation):
+        return self.metal_ray_query_method_return_type(operation) is not None
+
+    def metal_ray_query_helper_name(self, operation):
+        return f"cgl_ray_query_{self.metal_snake_case_name(operation)}"
+
+    def metal_snake_case_name(self, name):
+        text = str(name)
+        result = []
+        for index, char in enumerate(text):
+            if char.isupper() and index > 0:
+                previous = text[index - 1]
+                next_char = text[index + 1] if index + 1 < len(text) else ""
+                if previous.islower() or next_char.islower():
+                    result.append("_")
+            result.append(char.lower())
+        return "".join(result)
+
+    def ray_query_operation_from_function_call(self, expr):
+        if not isinstance(expr, FunctionCallNode):
+            return None
+        func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+        operation = str(getattr(func_expr, "member", ""))
+        if not self.is_metal_ray_query_method(operation):
+            return None
+        receiver_type = self.expression_result_type(
+            getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        )
+        if receiver_type is not None and self.is_metal_ray_query_type_name(
+            self.type_name_string(receiver_type)
+        ):
+            return operation
+        return None
+
     def generate_expression_with_expected(self, expr, expected_type):
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
@@ -4577,6 +5618,33 @@ class MetalCodeGen:
         if mapped_type.startswith("bool"):
             return "bool"
         return None
+
+    def vector_value_width(self, vtype):
+        mapped_type = self.map_type(vtype)
+        if not mapped_type or not mapped_type[-1:].isdigit():
+            return None
+        if self.is_matrix_value_type(mapped_type):
+            return None
+        if self.vector_component_type(mapped_type) is None:
+            return None
+        return int(mapped_type[-1])
+
+    def cast_binary_operand_to_expected_vector(self, code, operand_type, expected_type):
+        if operand_type is None:
+            return code
+        expected_mapped = self.map_type(expected_type)
+        expected_width = self.vector_value_width(expected_mapped)
+        if expected_width is None:
+            return code
+
+        operand_mapped = self.map_type(operand_type)
+        if operand_mapped == expected_mapped:
+            return code
+        if self.is_scalar_value_type(operand_mapped):
+            return f"{expected_mapped}({code})"
+        if self.vector_value_width(operand_mapped) == expected_width:
+            return f"{expected_mapped}({code})"
+        return code
 
     def expression_result_type(self, expr):
         if expr is None:
@@ -4693,10 +5761,19 @@ class MetalCodeGen:
             return infer_match_expression_result_type(self, expr)
         if isinstance(expr, WaveOpNode):
             return self.metal_wave_result_type(expr.operation, expr.arguments)
+        if isinstance(expr, RayQueryOpNode):
+            return self.metal_ray_query_method_return_type(expr.operation)
         if isinstance(expr, FunctionCallNode):
+            ray_query_operation = self.ray_query_operation_from_function_call(expr)
+            if ray_query_operation is not None:
+                return self.metal_ray_query_method_return_type(ray_query_operation)
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name == "RayDesc" and self.requires_metal_builtin_ray_desc(
+                func_name
+            ):
+                return "RayDesc"
             if func_name in self.METAL_WAVE_INTRINSIC_ARITIES:
                 return self.metal_wave_result_type(func_name, args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
@@ -4704,6 +5781,15 @@ class MetalCodeGen:
                 return numeric_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
+            if func_name == "inverse" and args:
+                return self.expression_result_type(args[0])
+            if func_name == "transpose" and args:
+                arg_type = self.expression_result_type(args[0])
+                dimensions = self.metal_matrix_dimensions(arg_type)
+                if dimensions is not None:
+                    component_prefix, columns, rows = dimensions
+                    return f"{component_prefix}{rows}x{columns}"
+                return arg_type
             if func_name == "dot" and args:
                 return (
                     self.vector_component_type(self.expression_result_type(args[0]))
@@ -4711,6 +5797,18 @@ class MetalCodeGen:
                 )
             if func_name == "cross" and args:
                 return self.expression_result_type(args[0])
+            if func_name in {"mix", "clamp", "min", "max"} and args:
+                return self.expression_result_type(args[0])
+            if is_resource_size_query_operation(func_name) and args:
+                texture_type = self.texture_argument_resource_type(args[0])
+                raw_type = self.expression_result_type(args[0])
+                descriptor = self.texture_query_size_descriptor_for_argument(
+                    texture_type, raw_type
+                )
+                if descriptor is not None:
+                    return descriptor["return_type"]
+            if is_texture_sampling_operation(func_name) and args:
+                return self.texture_sample_result_type(args[0])
             specialized_func_name = generic_function_call_name(self, func_name, args)
             if specialized_func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[specialized_func_name]
@@ -4955,6 +6053,12 @@ class MetalCodeGen:
         if reference_declaration is not None:
             return reference_declaration
 
+        stage_io_assignment = self.generate_metal_stage_io_lowered_assignment(
+            target, rhs, op
+        )
+        if stage_io_assignment is not None:
+            return stage_io_assignment
+
         mesh_output_store = self.generate_metal_mesh_output_assignment(
             target, rhs, op, getattr(node, "value", getattr(node, "right", None))
         )
@@ -4999,6 +6103,104 @@ class MetalCodeGen:
         if self.pointer_assignment_needs_address(target, value):
             rhs = f"&{rhs}"
         return f"{lhs} {op} {rhs}"
+
+    def generate_metal_stage_io_lowered_assignment(self, target, rhs, op):
+        if isinstance(target, MemberAccessNode):
+            info = self.metal_stage_io_lowered_member_info(target)
+            if info is None or info["lowering"].get("kind") != "matrix":
+                return None
+            lowering = info["lowering"]
+            temp_name = self.next_metal_temp_variable("stage_io_matrix")
+            lines = [f"{lowering['mapped_type']} {temp_name} = {rhs}"]
+            for index, (field_name, _field_type) in enumerate(lowering["fields"]):
+                lines.append(
+                    f"{info['object_code']}.{field_name} {op} {temp_name}[{index}]"
+                )
+            return "\n".join(lines)
+
+        if isinstance(target, ArrayAccessNode):
+            array_expr = getattr(target, "array", getattr(target, "array_expr", None))
+            if not isinstance(array_expr, MemberAccessNode):
+                return None
+            info = self.metal_stage_io_lowered_member_info(array_expr)
+            if info is None or info["lowering"].get("kind") != "array":
+                return None
+            lowering = info["lowering"]
+            index_expr = getattr(target, "index", None)
+            literal_index = self.literal_int_value(
+                index_expr, self.literal_int_constants
+            )
+            if literal_index is not None and 0 <= literal_index < lowering["size"]:
+                field_name = lowering["fields"][literal_index][0]
+                return f"{info['object_code']}.{field_name} {op} {rhs}"
+
+            rendered_index = self.generate_expression(index_expr)
+            temp_name = self.next_metal_temp_variable("stage_io_array")
+            lines = [f"{lowering['element_type']} {temp_name} = {rhs}"]
+            lines.append(f"switch ({rendered_index}) {{")
+            for index, (field_name, _field_type) in enumerate(lowering["fields"]):
+                lines.append(f"case {index}:")
+                lines.append(
+                    f"    {info['object_code']}.{field_name} {op} {temp_name};"
+                )
+                lines.append("    break;")
+            lines.append("default:")
+            lines.append("    break;")
+            lines.append("}")
+            return "\n".join(lines)
+
+        return None
+
+    def metal_stage_io_lowered_member_info(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return None
+        object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+        object_type = self.expression_result_type(object_expr)
+        object_type = self.member_lookup_type_name(object_type)
+        struct_name = self.type_name_string(object_type)
+        member_name = str(getattr(expr, "member", ""))
+        lowering = self.metal_stage_io_member_lowerings.get(struct_name, {}).get(
+            member_name
+        )
+        if lowering is None:
+            return None
+        return {
+            "struct_name": struct_name,
+            "member_name": member_name,
+            "object_code": self.generate_expression_with_expected(object_expr, None),
+            "lowering": lowering,
+        }
+
+    def generate_metal_stage_io_lowered_member_access(self, expr):
+        info = self.metal_stage_io_lowered_member_info(expr)
+        if info is None or info["lowering"].get("kind") != "matrix":
+            return None
+        lowering = info["lowering"]
+        columns = ", ".join(
+            f"{info['object_code']}.{field_name}"
+            for field_name, _field_type in lowering["fields"]
+        )
+        return f"{lowering['mapped_type']}({columns})"
+
+    def generate_metal_stage_io_lowered_array_access(self, expr):
+        if not isinstance(expr, ArrayAccessNode):
+            return None
+        array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
+        if not isinstance(array_expr, MemberAccessNode):
+            return None
+        info = self.metal_stage_io_lowered_member_info(array_expr)
+        if info is None or info["lowering"].get("kind") != "array":
+            return None
+        lowering = info["lowering"]
+        index_expr = getattr(expr, "index", None)
+        literal_index = self.literal_int_value(index_expr, self.literal_int_constants)
+        if literal_index is not None and 0 <= literal_index < lowering["size"]:
+            field_name = lowering["fields"][literal_index][0]
+            return f"{info['object_code']}.{field_name}"
+        helper_name = self.metal_stage_io_array_getter_name(
+            info["struct_name"], info["member_name"]
+        )
+        return f"{helper_name}({info['object_code']}, {self.generate_expression(index_expr)})"
 
     def generate_if(self, node, indent):
         indent_str = "    " * indent
@@ -5220,9 +6422,51 @@ class MetalCodeGen:
         return code
 
     def generate_match(self, node, indent):
-        if is_switch_lowerable_match(node):
+        expression_type = self.type_name_string(
+            self.expression_result_type(getattr(node, "expression", None))
+        )
+        if is_switch_lowerable_match(node) and expression_type != "bool":
             return generate_switch_match(self, node, indent)
         return generate_ordered_conditional_match(self, node, indent, "Metal")
+
+    def format_match_condition(self, condition):
+        condition = str(condition).strip()
+        if self.condition_has_single_outer_parentheses(condition):
+            return condition
+        return f"({condition})"
+
+    def match_expression_requires_fallback_assignment(self):
+        return True
+
+    def generate_match_expression_diagnostic_assignment(
+        self,
+        target_variable,
+        target_type,
+        reason,
+        indent,
+        target_name,
+    ):
+        indent_str = "    " * indent
+        fallback = self.metal_default_value_expression(target_type)
+        return (
+            f"{indent_str}{target_variable} = {fallback} "
+            f"/* fallback for generated {target_name}: {reason} */;\n"
+        )
+
+    def condition_has_single_outer_parentheses(self, condition):
+        if not (condition.startswith("(") and condition.endswith(")")):
+            return False
+        depth = 0
+        for index, char in enumerate(condition):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0 and index != len(condition) - 1:
+                    return False
+            if depth < 0:
+                return False
+        return depth == 0
 
     def statement_body_terminates(self, body):
         if hasattr(body, "statements"):
@@ -5258,16 +6502,101 @@ class MetalCodeGen:
         return code
 
     def generate_statement_body(self, body, indent):
-        code = ""
         if hasattr(body, "statements"):
-            for stmt in body.statements:
-                code += self.generate_statement(stmt, indent)
+            statements = list(body.statements)
         elif isinstance(body, list):
-            for stmt in body:
-                code += self.generate_statement(stmt, indent)
+            statements = list(body)
         elif body is not None:
-            code += self.generate_statement(body, indent)
+            statements = [body]
+        else:
+            statements = []
+
+        code = ""
+        previous_unused_declarations = self.current_unused_local_declaration_names
+        try:
+            for index, stmt in enumerate(statements):
+                self.current_unused_local_declaration_names = (
+                    self.unused_local_declaration_names_for_statement(
+                        stmt,
+                        statements[index + 1 :],
+                    )
+                )
+                code += self.generate_statement(stmt, indent)
+        finally:
+            self.current_unused_local_declaration_names = previous_unused_declarations
         return code
+
+    def unused_local_declaration_names_for_statement(self, stmt, remaining_statements):
+        name = getattr(stmt, "name", None)
+        if not name or not isinstance(stmt, (VariableNode, ArrayNode)):
+            return set()
+        if self.statement_sequence_uses_identifier(remaining_statements, name):
+            return set()
+        return {name}
+
+    def statement_sequence_uses_identifier(self, statements, name):
+        for stmt in statements:
+            if (
+                isinstance(stmt, (VariableNode, ArrayNode))
+                and getattr(stmt, "name", None) == name
+            ):
+                return False
+            if self.statement_uses_identifier(stmt, name):
+                return True
+        return False
+
+    def statement_uses_identifier(self, stmt, name):
+        if isinstance(stmt, VariableNode):
+            return self.node_uses_identifier(getattr(stmt, "initial_value", None), name)
+        if isinstance(stmt, ArrayNode):
+            return False
+        return self.node_uses_identifier(stmt, name)
+
+    def node_uses_identifier(self, node, name):
+        if node is None:
+            return False
+        if isinstance(node, str):
+            return re.search(rf"\b{re.escape(name)}\b", node) is not None
+        if isinstance(node, IdentifierNode):
+            return getattr(node, "name", None) == name
+        if isinstance(node, VariableNode):
+            if (
+                getattr(node, "initial_value", None) is not None
+                or getattr(node, "var_type", None) is not None
+                or getattr(node, "vtype", None) is not None
+            ):
+                return self.node_uses_identifier(
+                    getattr(node, "initial_value", None),
+                    name,
+                )
+            return getattr(node, "name", None) == name
+        if isinstance(node, ArrayNode):
+            return False
+        if isinstance(node, dict):
+            return any(
+                self.node_uses_identifier(value, name) for value in node.values()
+            )
+        if isinstance(node, (list, tuple, set)):
+            return any(self.node_uses_identifier(value, name) for value in node)
+        if hasattr(node, "__dict__"):
+            for key, value in vars(node).items():
+                if key in {"name", "type_name", "var_type", "vtype", "parent"}:
+                    continue
+                if key in {"body", "if_body", "else_body", "statements"}:
+                    if self.statement_body_uses_identifier(value, name):
+                        return True
+                    continue
+                if self.node_uses_identifier(value, name):
+                    return True
+            return False
+        return False
+
+    def statement_body_uses_identifier(self, body, name):
+        if hasattr(body, "statements"):
+            return self.statement_sequence_uses_identifier(body.statements, name)
+        if isinstance(body, list):
+            return self.statement_sequence_uses_identifier(body, name)
+        return self.node_uses_identifier(body, name)
 
     def generate_for_initializer(self, init):
         if init is None:
@@ -5277,7 +6606,8 @@ class MetalCodeGen:
         if isinstance(init, VariableNode) or (
             hasattr(init, "__class__") and "ExpressionStatement" in str(init.__class__)
         ):
-            return self.generate_statement(init, 0).strip().rstrip(";")
+            initializer = self.generate_statement(init, 0).strip().rstrip(";")
+            return self.strip_unused_metal_declaration_attribute(initializer)
         return self.generate_expression(init).strip().rstrip(";")
 
     def generate_expression(self, expr):
@@ -5306,13 +6636,31 @@ class MetalCodeGen:
             if unsupported_value is not None:
                 return unsupported_value
             if hasattr(expr, "name"):
+                if expr.name in self.METAL_RAY_FLAG_VALUES:
+                    return f"{self.METAL_RAY_FLAG_VALUES[expr.name]}u"
                 return enum_value_expression(self, expr.name)
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_binary_operand(expr.left)
             right = self.generate_binary_operand(expr.right)
-            return f"{left} {self.map_operator(expr.op)} {right}"
+            operator = self.map_operator(expr.op)
+            if operator in {"+", "-", "*", "/", "%"}:
+                expected_type = self.current_expression_expected_type
+                expression_width = self.vector_value_width(
+                    self.expression_result_type(expr)
+                )
+                if (
+                    expression_width is not None
+                    and expression_width == self.vector_value_width(expected_type)
+                ):
+                    left = self.cast_binary_operand_to_expected_vector(
+                        left, self.expression_result_type(expr.left), expected_type
+                    )
+                    right = self.cast_binary_operand_to_expected_vector(
+                        right, self.expression_result_type(expr.right), expected_type
+                    )
+            return f"{left} {operator} {right}"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, ArrayLiteralNode):
@@ -5335,13 +6683,18 @@ class MetalCodeGen:
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
             return f"{expr.operation}({args})"
         elif isinstance(expr, RayQueryOpNode):
-            query = self.generate_expression(expr.query_expr)
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{query}.{expr.operation}({args})"
+            return self.generate_metal_ray_query_call(
+                expr.operation,
+                expr.query_expr,
+                expr.arguments,
+            )
         elif isinstance(expr, ArrayAccessNode):
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
+            stage_io_access = self.generate_metal_stage_io_lowered_array_access(expr)
+            if stage_io_access is not None:
+                return stage_io_access
             unsupported_value = (
                 self.unsupported_metal_acceleration_structure_array_expression(expr)
             )
@@ -5369,6 +6722,11 @@ class MetalCodeGen:
             constructor_type = getattr(expr, "constructor_type", None)
             if self.is_builtin_value_constructor_type(constructor_type):
                 metal_type = self.map_type(constructor_type)
+                matrix_resize = self.generate_metal_matrix_resize_constructor(
+                    metal_type, getattr(expr, "arguments", [])
+                )
+                if matrix_resize is not None:
+                    return matrix_resize
                 args = ", ".join(
                     self.generate_expression_with_expected(arg, None)
                     for arg in getattr(expr, "arguments", [])
@@ -5404,9 +6762,30 @@ class MetalCodeGen:
             if unsupported_table_call is not None:
                 return unsupported_table_call
 
+            ray_query_operation = self.ray_query_operation_from_function_call(expr)
+            if ray_query_operation is not None and isinstance(
+                func_expr, MemberAccessNode
+            ):
+                return self.generate_metal_ray_query_call(
+                    ray_query_operation,
+                    getattr(
+                        func_expr,
+                        "object",
+                        getattr(func_expr, "object_expr", None),
+                    ),
+                    expr.args,
+                )
+
             static_generic_call = generate_static_generic_numeric_call(self, func_name)
             if static_generic_call is not None:
                 return static_generic_call
+
+            if func_name == "RayDesc" and self.requires_metal_builtin_ray_desc(
+                func_name
+            ):
+                self.required_metal_ray_desc_runtime = True
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"CglRayDesc({args})"
 
             unsupported_call = self.unsupported_glsl_buffer_block_function_call(
                 func_name
@@ -5425,6 +6804,12 @@ class MetalCodeGen:
             )
             if glsl_block_atomic_call is not None:
                 return glsl_block_atomic_call
+
+            buffer_atomic_call = self.generate_metal_buffer_resource_atomic_call(
+                func_name, expr.args
+            )
+            if buffer_atomic_call is not None:
+                return buffer_atomic_call
 
             synchronization_call = self.synchronization_function_call(
                 func_name, expr.args
@@ -5466,6 +6851,12 @@ class MetalCodeGen:
             if func_name == "normalize":
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"normalize({args})"
+            if func_name == "inverse" and len(expr.args) == 1:
+                arg_type = self.map_type(self.expression_result_type(expr.args[0]))
+                if arg_type in {"float3x3", "float4x4"}:
+                    self.required_metal_inverse_helpers.add(arg_type)
+                    arg = self.generate_expression(expr.args[0])
+                    return f"__crossgl_inverse_{arg_type}({arg})"
             if func_name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
                 # These function names are the same in GLSL and Metal
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
@@ -5644,6 +7035,11 @@ class MetalCodeGen:
             ]:
                 # Map to Metal's float2, float3, float4
                 metal_type = self.map_type(func_name)
+                matrix_resize = self.generate_metal_matrix_resize_constructor(
+                    metal_type, expr.args
+                )
+                if matrix_resize is not None:
+                    return matrix_resize
                 args = ", ".join(
                     self.generate_expression_with_expected(arg, None)
                     for arg in expr.args
@@ -5685,6 +7081,9 @@ class MetalCodeGen:
             args = self.generate_function_call_arguments(argument_func_name, expr.args)
             if func_name in self.user_function_names:
                 args.extend(
+                    self.required_function_stage_parameter_argument_names(func_name)
+                )
+                args.extend(
                     self.cbuffer_parameter_name(cbuffer)
                     for cbuffer in self.required_function_cbuffers(func_name)
                 )
@@ -5703,6 +7102,9 @@ class MetalCodeGen:
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
+            stage_io_access = self.generate_metal_stage_io_lowered_member_access(expr)
+            if stage_io_access is not None:
+                return stage_io_access
             unsupported_value = (
                 self.unsupported_metal_ray_function_table_array_expression(expr)
             )
@@ -5755,6 +7157,8 @@ class MetalCodeGen:
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
+            if name in self.METAL_RAY_FLAG_VALUES:
+                return f"{self.METAL_RAY_FLAG_VALUES[name]}u"
             if name in getattr(self, "enum_variant_constants", {}):
                 return enum_value_expression(self, name)
             if (
@@ -6161,6 +7565,134 @@ class MetalCodeGen:
             f"{self.metal_wave_default_value(operation, arguments)}"
         )
 
+    def generate_metal_ray_query_call(self, operation, query_expr, arguments):
+        self.require_metal_ray_query_runtime()
+        self.required_metal_ray_query_helpers.add(str(operation))
+        helper_name = self.metal_ray_query_helper_name(operation)
+        args = [self.generate_expression(query_expr)]
+        args.extend(self.generate_expression(arg) for arg in arguments or [])
+        return f"{helper_name}({', '.join(args)})"
+
+    def metal_ray_query_default_value(self, return_type):
+        if return_type == "bool":
+            return "false"
+        if return_type == "float":
+            return "0.0"
+        if return_type == "float2":
+            return "float2(0.0)"
+        if return_type == "float3":
+            return "float3(0.0)"
+        if return_type == "float3x4":
+            return "float3x4(0.0)"
+        return "0u"
+
+    def generate_metal_ray_query_helpers(self):
+        if not (
+            self.required_metal_ray_query_runtime
+            or self.required_metal_ray_desc_runtime
+            or self.required_metal_ray_query_helpers
+        ):
+            return ""
+
+        code = ""
+        if self.required_metal_ray_desc_runtime:
+            code += (
+                "struct CglRayDesc {\n"
+                "    float3 origin;\n"
+                "    float t_min;\n"
+                "    float3 direction;\n"
+                "    float t_max;\n"
+                "\n"
+                "    CglRayDesc() {}\n"
+                "\n"
+                "    CglRayDesc(float3 origin_value, float t_min_value, "
+                "float3 direction_value, float t_max_value)\n"
+                "        : origin(origin_value),\n"
+                "          t_min(t_min_value),\n"
+                "          direction(direction_value),\n"
+                "          t_max(t_max_value) {}\n"
+                "};\n\n"
+            )
+        if (
+            self.required_metal_ray_query_runtime
+            or self.required_metal_ray_query_helpers
+        ):
+            code += "struct CglRayQuery {\n" "    uint state;\n" "};\n\n"
+
+        for operation in sorted(self.required_metal_ray_query_helpers):
+            return_type = self.metal_ray_query_method_return_type(operation)
+            if return_type is None:
+                continue
+            helper_name = self.metal_ray_query_helper_name(operation)
+            if operation == "TraceRayInline":
+                code += (
+                    "template <typename Accel, typename Flags, typename Mask, "
+                    "typename Ray>\n"
+                    f"inline void {helper_name}(\n"
+                    "    CglRayQuery query,\n"
+                    "    Accel acceleration_structure,\n"
+                    "    Flags ray_flags,\n"
+                    "    Mask instance_mask,\n"
+                    "    Ray ray) {\n"
+                    "    (void)query;\n"
+                    "    (void)acceleration_structure;\n"
+                    "    (void)ray_flags;\n"
+                    "    (void)instance_mask;\n"
+                    "    (void)ray;\n"
+                    "}\n\n"
+                    "template <typename Accel, typename Flags, typename Mask, "
+                    "typename Origin, typename MinDistance, typename Direction, "
+                    "typename MaxDistance>\n"
+                    f"inline void {helper_name}(\n"
+                    "    CglRayQuery query,\n"
+                    "    Accel acceleration_structure,\n"
+                    "    Flags ray_flags,\n"
+                    "    Mask instance_mask,\n"
+                    "    Origin origin,\n"
+                    "    MinDistance min_distance,\n"
+                    "    Direction direction,\n"
+                    "    MaxDistance max_distance) {\n"
+                    "    (void)query;\n"
+                    "    (void)acceleration_structure;\n"
+                    "    (void)ray_flags;\n"
+                    "    (void)instance_mask;\n"
+                    "    (void)origin;\n"
+                    "    (void)min_distance;\n"
+                    "    (void)direction;\n"
+                    "    (void)max_distance;\n"
+                    "}\n\n"
+                )
+                continue
+            if operation in {
+                "GenerateIntersection",
+                "CommitProceduralPrimitiveHit",
+                "CandidateTriangleVertexPositions",
+                "CommittedTriangleVertexPositions",
+            }:
+                code += (
+                    "template <typename Arg>\n"
+                    f"inline void {helper_name}(CglRayQuery query, "
+                    "const Arg& arg) {\n"
+                    "    (void)query;\n"
+                    "    (void)arg;\n"
+                    "}\n\n"
+                )
+                continue
+            if return_type == "void":
+                code += (
+                    f"inline void {helper_name}(CglRayQuery query) {{\n"
+                    "    (void)query;\n"
+                    "}\n\n"
+                )
+                continue
+            code += (
+                f"inline {return_type} {helper_name}(CglRayQuery query) {{\n"
+                "    (void)query;\n"
+                f"    return {self.metal_ray_query_default_value(return_type)};\n"
+                "}\n\n"
+            )
+        return code
+
     def generate_metal_wave_helpers(self):
         code = ""
         if self.required_metal_wave_ballot_helper:
@@ -6259,6 +7791,72 @@ class MetalCodeGen:
                 "        if (__crossgl_metal_wave_mask_contains(mask, lane) && "
                 "__crossgl_metal_wave_mask_contains(activeMask, lane)) {\n"
                 f"            result {assignment} simd_broadcast(value, ushort(lane));\n"
+                "        }\n"
+                "    }\n"
+                "    return result;\n"
+                "}\n\n"
+            )
+        return code
+
+    def generate_metal_inverse_helpers(self):
+        code = ""
+        required = getattr(self, "required_metal_inverse_helpers", set())
+        if "float3x3" in required:
+            code += (
+                "static inline float3x3 __crossgl_inverse_float3x3(float3x3 m) {\n"
+                "    float3 c0 = m[0];\n"
+                "    float3 c1 = m[1];\n"
+                "    float3 c2 = m[2];\n"
+                "    float3 r0 = cross(c1, c2);\n"
+                "    float3 r1 = cross(c2, c0);\n"
+                "    float3 r2 = cross(c0, c1);\n"
+                "    float det = dot(c0, r0);\n"
+                "    if (abs(det) <= 1.0e-8) {\n"
+                "        return float3x3(1.0);\n"
+                "    }\n"
+                "    return transpose(float3x3(r0, r1, r2)) / det;\n"
+                "}\n\n"
+            )
+        if "float4x4" in required:
+            code += (
+                "static inline float __crossgl_det3_float4x4(\n"
+                "    float a00, float a01, float a02,\n"
+                "    float a10, float a11, float a12,\n"
+                "    float a20, float a21, float a22) {\n"
+                "    return a00 * (a11 * a22 - a12 * a21)\n"
+                "         - a01 * (a10 * a22 - a12 * a20)\n"
+                "         + a02 * (a10 * a21 - a11 * a20);\n"
+                "}\n\n"
+                "static inline float __crossgl_cofactor_float4x4(\n"
+                "    float4x4 m, int column, int row) {\n"
+                "    float values[9];\n"
+                "    int index = 0;\n"
+                "    for (int c = 0; c < 4; ++c) {\n"
+                "        if (c == column) {\n"
+                "            continue;\n"
+                "        }\n"
+                "        for (int r = 0; r < 4; ++r) {\n"
+                "            if (r == row) {\n"
+                "                continue;\n"
+                "            }\n"
+                "            values[index++] = m[c][r];\n"
+                "        }\n"
+                "    }\n"
+                "    float minor_det = __crossgl_det3_float4x4(\n"
+                "        values[0], values[1], values[2],\n"
+                "        values[3], values[4], values[5],\n"
+                "        values[6], values[7], values[8]);\n"
+                "    return ((column + row) & 1) ? -minor_det : minor_det;\n"
+                "}\n\n"
+                "static inline float4x4 __crossgl_inverse_float4x4(float4x4 m) {\n"
+                "    float det = determinant(m);\n"
+                "    if (abs(det) <= 1.0e-8) {\n"
+                "        return float4x4(1.0);\n"
+                "    }\n"
+                "    float4x4 result;\n"
+                "    for (int c = 0; c < 4; ++c) {\n"
+                "        for (int r = 0; r < 4; ++r) {\n"
+                "            result[c][r] = __crossgl_cofactor_float4x4(m, r, c) / det;\n"
                 "        }\n"
                 "    }\n"
                 "    return result;\n"
@@ -6545,6 +8143,8 @@ class MetalCodeGen:
             "callabledatainext",
         }:
             return "callable_data"
+        if compact in {"ray", "rayext", "objectray", "objectrayext"}:
+            return "ray"
         return None
 
     def is_metal_ray_stage(self, shader_type):
@@ -6567,8 +8167,127 @@ class MetalCodeGen:
             return
 
         self.validate_metal_ray_hit_attribute_parameters(func, shader_type)
+        if shader_type == "ray_generation":
+            self.validate_metal_ray_generation_parameters(func, shader_type)
         if shader_type in {"ray_intersection", "intersection"}:
+            self.validate_metal_ray_intersection_parameters(func, shader_type)
             self.validate_metal_ray_intersection_return_type(func, raw_return_type)
+
+    def validate_metal_ray_generation_parameters(self, func, shader_type):
+        parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
+        for parameter in parameters:
+            parameter_name = getattr(parameter, "name", "<unnamed>")
+            if self.metal_ray_semantic_role(parameter, shader_type) == "ray":
+                raise ValueError(
+                    f"Metal ray_generation parameter '{parameter_name}' cannot "
+                    "use @ray; construct Metal ray values inside the kernel"
+                )
+
+            raw_type = self.parameter_raw_type(parameter)
+            if not self.is_plain_metal_ray_value_parameter_type(raw_type):
+                continue
+            type_name = self.type_name_string(raw_type) or str(raw_type)
+            raise ValueError(
+                f"Metal ray_generation parameter '{parameter_name}' has "
+                f"unsupported ray value type '{type_name}'; construct ray "
+                "values inside the kernel or pass data through an explicitly "
+                "bound buffer"
+            )
+
+    def validate_metal_ray_intersection_parameters(self, func, shader_type):
+        parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
+        for parameter in parameters:
+            ray_semantic_role = self.metal_ray_semantic_role(parameter, shader_type)
+            if ray_semantic_role == "payload":
+                continue
+            if ray_semantic_role != "ray":
+                if self.is_metal_ray_intersection_builtin_parameter(parameter):
+                    continue
+                if self.is_metal_ray_intersection_buffer_parameter(
+                    parameter, shader_type
+                ):
+                    continue
+                parameter_name = getattr(parameter, "name", "<unnamed>")
+                raise ValueError(
+                    f"Metal ray_intersection parameter '{parameter_name}' is not "
+                    "a supported intersection parameter; use @payload, a Metal "
+                    "intersection builtin semantic, or an explicitly bound "
+                    "device/constant buffer"
+                )
+                continue
+            parameter_name = getattr(parameter, "name", "<unnamed>")
+            raise ValueError(
+                f"Metal ray_intersection parameter '{parameter_name}' cannot use "
+                "@ray; Metal intersection functions do not accept ray input "
+                "parameters"
+            )
+
+    def is_plain_metal_ray_value_parameter_type(self, raw_type):
+        if isinstance(
+            raw_type, (PointerType, ReferenceType)
+        ) or self.is_array_type_node(raw_type):
+            return False
+
+        type_name = self.type_name_string(raw_type)
+        if type_name is None:
+            return False
+        type_name = str(type_name).strip()
+        if not type_name:
+            return False
+        return (
+            type_name == "ray"
+            or self.requires_metal_builtin_ray_desc(type_name)
+            or self.is_metal_ray_query_type_name(type_name)
+        )
+
+    def is_metal_ray_intersection_builtin_parameter(self, parameter):
+        semantic = self.semantic_from_node(parameter)
+        metal_semantic = self.canonical_metal_semantic(semantic)
+        if metal_semantic is None:
+            return False
+        normalized = str(metal_semantic).strip().lower()
+        return normalized in {
+            "origin",
+            "direction",
+            "min_distance",
+            "max_distance",
+            "geometry_id",
+            "primitive_id",
+            "instance_id",
+            "world_space_origin",
+            "world_space_direction",
+            "barycentric_coord",
+            "object_to_world_transform",
+            "world_to_object_transform",
+        }
+
+    def is_metal_ray_intersection_buffer_parameter(self, parameter, shader_type):
+        raw_type = self.parameter_raw_type(parameter)
+        if not (
+            isinstance(raw_type, (PointerType, ReferenceType))
+            or self.is_array_type_node(raw_type)
+        ):
+            return False
+        if self.explicit_buffer_binding_index(parameter) is None:
+            return False
+        address_space = self.normalized_address_space(
+            self.effective_parameter_address_space(
+                raw_type,
+                parameter,
+                shader_type,
+                default_for_stage_binding=False,
+            )
+        )
+        return address_space in {"device", "constant"}
+
+    def validate_metal_kernel_return_type(self, func, shader_type, raw_return_type):
+        if self.map_type(raw_return_type) == "void":
+            return
+        function_name = getattr(func, "name", "<entry>")
+        raise ValueError(
+            f"Metal {shader_type} entry point '{function_name}' must return void; "
+            "kernel functions cannot return values"
+        )
 
     def validate_metal_ray_hit_attribute_parameters(self, func, shader_type):
         allowed_stages = {"ray_any_hit", "ray_closest_hit", "anyhit", "closesthit"}
@@ -7171,6 +8890,70 @@ class MetalCodeGen:
                 rendered_args[1] = f"&{rendered_args[1]}"
         return (
             f"{self.metal_atomic_intrinsic_name(func_name)}({', '.join(rendered_args)})"
+        )
+
+    def generate_metal_buffer_resource_atomic_call(self, func_name, args):
+        if func_name in self.user_function_names:
+            return None
+        operation_info = self.buffer_atomic_operations().get(func_name)
+        if operation_info is None:
+            return None
+
+        operation, expected_arity = operation_info
+        if len(args) != expected_arity:
+            return self.unsupported_metal_buffer_resource_atomic_call(
+                func_name,
+                args[0] if args else None,
+                f"requires {expected_arity} argument(s), got {len(args)}",
+            )
+        if operation == "compare_exchange":
+            return self.unsupported_metal_buffer_resource_atomic_call(
+                func_name,
+                args[0],
+                "compare-exchange requires explicit Metal atomic storage",
+            )
+
+        target = args[0]
+        target_type = self.expression_result_type(target)
+        mapped_target_type = self.map_type(target_type)
+        if mapped_target_type not in {"int", "uint"}:
+            return self.unsupported_metal_buffer_resource_atomic_call(
+                func_name,
+                target,
+                (
+                    "requires a scalar int or uint device/threadgroup target, "
+                    f"got {mapped_target_type or 'unknown'}"
+                ),
+            )
+
+        address_space = self.argument_address_space(target)
+        if address_space not in {"device", "threadgroup"}:
+            return self.unsupported_metal_buffer_resource_atomic_call(
+                func_name,
+                target,
+                "requires a device or threadgroup target",
+            )
+
+        target_expr = self.generate_expression(target)
+        if not self.is_metal_address_expression(target, target_expr):
+            target_expr = f"&{target_expr}"
+        value = self.generate_expression_with_expected(args[1], mapped_target_type)
+        atomic_type = f"atomic_{mapped_target_type}"
+        atomic_target = (
+            f"reinterpret_cast<{address_space} {atomic_type}*>({target_expr})"
+        )
+        return (
+            f"atomic_{operation}_explicit("
+            f"{atomic_target}, {value}, memory_order_relaxed)"
+        )
+
+    def unsupported_metal_buffer_resource_atomic_call(self, func_name, target, reason):
+        return_type = (
+            self.expression_result_type(target) or self.current_expression_expected_type
+        )
+        zero_value = self.diagnostic_zero_value_for_type(return_type or "int")
+        return (
+            f"/* unsupported Metal buffer atomic: {func_name} {reason} */ {zero_value}"
         )
 
     def strip_metal_atomic_memory_scope_argument(self, func_name, args, rendered_args):
@@ -8260,6 +10043,8 @@ class MetalCodeGen:
             "tessellation_control",
             "tessellation_evaluation",
             "ray_generation",
+            "ray_intersection",
+            "intersection",
             "object",
             "task",
             "amplification",
@@ -8433,6 +10218,21 @@ class MetalCodeGen:
                 "buffer",
                 binding,
                 self.global_resource_shape(buffer_variable)[1],
+                getattr(buffer_variable, "name", "<anonymous>"),
+            )
+        for (
+            buffer_variable,
+            binding,
+            _,
+            array_size,
+            _,
+        ) in self.metal_buffer_resource_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.metal_buffer_resource_binding_count(buffer_variable, array_size),
                 getattr(buffer_variable, "name", "<anonymous>"),
             )
         for buffer_variable, binding, _, _ in self.structured_buffer_length_variables:
@@ -9784,6 +11584,194 @@ class MetalCodeGen:
             ast, target_stage, stage_entry_types
         )
         return assign_stage_entry_names(entries, used_names, self.stage_entry_base_name)
+
+    def metal_stage_entry_functions(self, ast, expected_stage_name, target_stage=None):
+        if not stage_matches(target_stage, expected_stage_name):
+            return []
+
+        functions = []
+        for func in getattr(ast, "functions", []) or []:
+            qualifier = (
+                func.qualifiers[0]
+                if getattr(func, "qualifiers", None)
+                else getattr(func, "qualifier", None)
+            )
+            if normalize_stage_name(qualifier) == expected_stage_name:
+                functions.append(func)
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            if normalize_stage_name(stage_type) != expected_stage_name:
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                functions.append(entry_point)
+        return functions
+
+    def collect_metal_stage_entry_parameter_struct_names(
+        self, ast, target_stage, expected_stage_name
+    ):
+        struct_names = set()
+        for func in self.metal_stage_entry_functions(
+            ast, expected_stage_name, target_stage
+        ):
+            for parameter in (
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            ):
+                struct_name = self.metal_parameter_user_struct_type(parameter)
+                if struct_name is not None:
+                    struct_names.add(struct_name)
+        return struct_names
+
+    def collect_metal_stage_entry_return_struct_names(
+        self, ast, target_stage, expected_stage_name
+    ):
+        struct_names = set()
+        for func in self.metal_stage_entry_functions(
+            ast, expected_stage_name, target_stage
+        ):
+            struct_node = self.metal_return_struct(func)
+            if struct_node is not None:
+                struct_names.add(struct_node.name)
+        return struct_names
+
+    def metal_parameter_user_struct_type(self, parameter):
+        param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        type_name = self.type_name_string(param_type)
+        if not type_name:
+            return None
+        mapped_type = self.map_type(type_name)
+        base_type, _array_suffix = split_array_type_suffix(str(mapped_type))
+        struct_name = base_type.split("<", 1)[0].strip()
+        if struct_name not in self.structs_by_name:
+            return None
+        return struct_name
+
+    def metal_return_struct(self, func):
+        return_type = self.type_name_string(
+            getattr(func, "return_type", getattr(func, "vtype", None))
+        )
+        if not return_type:
+            return None
+        base_type = return_type.split("<", 1)[0].split("[", 1)[0].strip()
+        return self.structs_by_name.get(base_type)
+
+    def metal_default_struct_member_semantics(self, struct_node):
+        struct_name = getattr(struct_node, "name", None)
+        if struct_name in self.metal_vertex_entry_input_struct_names:
+            return self.metal_default_vertex_input_member_semantics(struct_node)
+        if struct_name in self.metal_vertex_entry_output_struct_names:
+            return self.metal_default_vertex_output_member_semantics(struct_node)
+        if struct_name in self.metal_fragment_entry_output_struct_names:
+            return self.metal_default_fragment_output_member_semantics(struct_node)
+        return {}
+
+    def metal_default_vertex_input_member_semantics(self, struct_node):
+        used_attributes = set()
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            attribute_index = self.metal_attribute_index_from_semantic(semantic)
+            if attribute_index is not None:
+                used_attributes.add(attribute_index)
+
+        defaults = {}
+        next_attribute = 0
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name or self.semantic_from_node(member) is not None:
+                continue
+            if not self.metal_can_default_stage_io_semantic(
+                self.struct_member_raw_type(member)
+            ):
+                continue
+
+            while next_attribute in used_attributes:
+                next_attribute += 1
+            defaults[member_name] = f"attribute({next_attribute})"
+            used_attributes.add(next_attribute)
+            next_attribute += 1
+        return defaults
+
+    def metal_default_vertex_output_member_semantics(self, struct_node):
+        defaults = {}
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            normalized_name = str(member_name).replace("_", "").lower()
+            if normalized_name not in {
+                "position",
+                "clipposition",
+                "glposition",
+            }:
+                continue
+            if self.semantic_from_node(member) is not None:
+                continue
+            if self.map_type(self.struct_member_raw_type(member)) != "float4":
+                continue
+            defaults[member_name] = "position"
+        return defaults
+
+    def metal_default_fragment_output_member_semantics(self, struct_node):
+        defaults = {}
+        used_color_indices = set()
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            color_index = self.metal_color_index_from_semantic(semantic)
+            if color_index is not None:
+                used_color_indices.add(color_index)
+
+        next_color_index = 0
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name or self.semantic_from_node(member) is not None:
+                continue
+            mapped_type = self.map_type(self.struct_member_raw_type(member))
+            normalized_name = str(member_name).replace("_", "").lower()
+            if normalized_name in {"depth", "fragdepth", "glfragdepth"}:
+                if mapped_type in {"float", "half"}:
+                    defaults[member_name] = "depth(any)"
+                continue
+            if mapped_type != "float4":
+                continue
+            while next_color_index in used_color_indices:
+                next_color_index += 1
+            defaults[member_name] = f"color({next_color_index})"
+            used_color_indices.add(next_color_index)
+            next_color_index += 1
+        return defaults
+
+    def metal_can_default_stage_io_semantic(self, member_type):
+        type_name = self.type_name_string(member_type)
+        if not type_name:
+            return False
+
+        base_type, _array_size = parse_array_type(str(type_name))
+        mapped_type = self.map_type(base_type)
+        if mapped_type in self.structs_by_name:
+            return False
+        return not self.is_resource_parameter_type(mapped_type)
+
+    def metal_color_index_from_semantic(self, semantic):
+        if semantic is None:
+            return None
+        mapped_semantic = self.semantic_map.get(semantic, semantic)
+        mapped_semantic = str(mapped_semantic)
+        if not mapped_semantic.startswith("color("):
+            return None
+        if not mapped_semantic.endswith(")"):
+            return None
+        index = mapped_semantic[len("color(") : -1]
+        return int(index) if index.isdigit() else None
+
+    def metal_attribute_index_from_semantic(self, semantic):
+        if semantic is None:
+            return None
+        mapped_semantic = self.semantic_map.get(semantic, semantic)
+        mapped_semantic = str(mapped_semantic)
+        if not mapped_semantic.startswith("attribute("):
+            return None
+        if not mapped_semantic.endswith(")"):
+            return None
+        index = mapped_semantic[len("attribute(") : -1]
+        return int(index) if index.isdigit() else None
 
     def uses_metal_raytracing_namespace(self, ast, global_vars, functions):
         for stage_type in getattr(ast, "stages", {}) or {}:
@@ -11929,9 +13917,74 @@ class MetalCodeGen:
         vtype = self.type_name_string(
             getattr(node, "var_type", getattr(node, "vtype", "float"))
         )
-        return self.is_resource_parameter_type(
-            vtype
-        ) or self.is_glsl_buffer_block_variable(node, vtype)
+        return (
+            self.metal_buffer_resource_address_space(node, vtype) is not None
+            or self.is_resource_parameter_type(vtype)
+            or self.is_glsl_buffer_block_variable(node, vtype)
+        )
+
+    def metal_buffer_resource_address_space(self, node, vtype=None):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if not qualifiers & {"uniform", "buffer"}:
+            return None
+
+        type_name = self.type_name_string(
+            vtype if vtype is not None else getattr(node, "var_type", None)
+        )
+        if (
+            self.is_resource_parameter_type(type_name)
+            or self.is_structured_buffer_type(type_name)
+            or self.is_glsl_buffer_block_variable(node, type_name)
+        ):
+            return None
+
+        if "uniform" in qualifiers:
+            return "constant"
+        return "device"
+
+    def metal_buffer_resource_binding_count(self, node, array_size=None):
+        return 1
+
+    def format_metal_buffer_resource_parameter(
+        self, raw_type, name, array_size=None, address_space="device"
+    ):
+        mapped_type = self.map_resource_type_with_format(raw_type)
+        if array_size is not None:
+            return f"{address_space} {mapped_type}* {name}"
+        return f"{address_space} {mapped_type}& {name}"
+
+    def register_metal_buffer_resource_parameter_scope(
+        self, func_name, include_all=False
+    ):
+        if include_all:
+            resources = [
+                (node, buffer_type, address_space)
+                for node, _, buffer_type, _, address_space in (
+                    self.metal_buffer_resource_variables
+                )
+            ]
+        else:
+            resources = [
+                (node, buffer_type, address_space)
+                for node, buffer_type, _, address_space in (
+                    self.required_function_metal_buffer_resources(func_name)
+                )
+            ]
+
+        for node, buffer_type, address_space in resources:
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            if not name:
+                continue
+            self.local_variable_types[name] = self.type_name_string(buffer_type)
+            self.current_address_space_variables[name] = address_space
+            if address_space == "constant":
+                self.current_readonly_metal_parameters.add(name)
+                self.current_readonly_metal_parameter_reasons[name] = (
+                    "constant address space"
+                )
 
     def validate_global_resource_shadows(self, ast):
         conflicts = collect_non_resource_global_resource_shadows(
@@ -12014,6 +14067,100 @@ class MetalCodeGen:
                 called_names.add(func_name)
         return called_names
 
+    def collect_function_stage_parameter_dependencies(self, ast, target_stage):
+        direct_dependencies = {}
+        function_calls = {}
+        parameter_nodes = {}
+
+        for func in self.all_functions(ast):
+            func_name = getattr(func, "name", None)
+            if func_name:
+                direct_dependencies.setdefault(func_name, set())
+                function_calls.setdefault(
+                    func_name, self.called_user_function_names(func)
+                )
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if not stage_matches(target_stage, stage_name):
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            stage_parameters = {
+                parameter.name: parameter
+                for parameter in (
+                    getattr(
+                        entry_point, "parameters", getattr(entry_point, "params", [])
+                    )
+                    or []
+                )
+                if getattr(parameter, "name", None)
+            }
+            for parameter in stage_parameters.values():
+                parameter_nodes[parameter.name] = parameter
+
+            stage_functions = list(getattr(stage, "local_functions", []) or [])
+            if entry_point is not None:
+                stage_functions.append(entry_point)
+            for func in stage_functions:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+                direct_dependencies[func_name] = (
+                    self.direct_stage_parameter_dependencies(func, stage_parameters)
+                )
+                function_calls[func_name] = self.called_user_function_names(func)
+
+        dependencies = {name: set(deps) for name, deps in direct_dependencies.items()}
+        changed = True
+        while changed:
+            changed = False
+            for func_name, calls in function_calls.items():
+                before = set(dependencies.get(func_name, set()))
+                for called_name in calls:
+                    dependencies.setdefault(func_name, set()).update(
+                        dependencies.get(called_name, set())
+                    )
+                if dependencies.get(func_name, set()) != before:
+                    changed = True
+
+        return {
+            func_name: [
+                parameter_nodes[name]
+                for name in sorted(dependency_names)
+                if name in parameter_nodes
+            ]
+            for func_name, dependency_names in dependencies.items()
+            if dependency_names
+        }
+
+    def direct_stage_parameter_dependencies(self, func, stage_parameters):
+        local_names = {
+            getattr(param, "name", None)
+            for param in getattr(func, "parameters", getattr(func, "params", []))
+            if getattr(param, "name", None)
+        }
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if isinstance(node, VariableNode) and getattr(node, "name", None):
+                local_names.add(node.name)
+
+        dependencies = set()
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not (hasattr(node, "__class__") and "Identifier" in str(node.__class__)):
+                continue
+            name = getattr(node, "name", None)
+            if name and name in stage_parameters and name not in local_names:
+                dependencies.add(name)
+        return dependencies
+
+    def required_function_stage_parameters(self, func_name):
+        return self.function_stage_parameter_dependencies.get(func_name, [])
+
+    def required_function_stage_parameter_argument_names(self, func_name):
+        return [
+            parameter.name
+            for parameter in self.required_function_stage_parameters(func_name)
+        ]
+
     def required_function_cbuffers(self, func_name):
         dependencies = self.function_cbuffer_dependencies.get(func_name, set())
         return [
@@ -12066,6 +14213,7 @@ class MetalCodeGen:
         )
         buffer_names = (
             self.global_structured_buffer_names()
+            | self.global_metal_buffer_resource_names()
             | self.global_glsl_buffer_block_names()
         )
         sampler_names = self.global_sampler_names()
@@ -12435,6 +14583,13 @@ class MetalCodeGen:
             if getattr(buffer_variable, "name", None)
         }
 
+    def global_metal_buffer_resource_names(self):
+        return {
+            buffer_variable.name
+            for buffer_variable, _, _, _, _ in self.metal_buffer_resource_variables
+            if getattr(buffer_variable, "name", None)
+        }
+
     def structured_buffer_requires_length(self, name):
         return bool(name and name in self.global_structured_buffer_length_dependencies)
 
@@ -12549,6 +14704,20 @@ class MetalCodeGen:
             if getattr(buffer_variable, "name", None) in dependencies
         ]
 
+    def required_function_metal_buffer_resources(self, func_name):
+        dependencies = self.function_global_resource_dependencies.get(func_name, set())
+        return [
+            (buffer_variable, buffer_type, array_size, address_space)
+            for (
+                buffer_variable,
+                _,
+                buffer_type,
+                array_size,
+                address_space,
+            ) in self.metal_buffer_resource_variables
+            if getattr(buffer_variable, "name", None) in dependencies
+        ]
+
     def required_function_glsl_buffer_blocks(self, func_name):
         dependencies = self.function_global_resource_dependencies.get(func_name, set())
         return [
@@ -12649,6 +14818,15 @@ class MetalCodeGen:
                 self.required_function_intersection_function_tables(func_name)
             )
         )
+        for (
+            buffer_variable,
+            buffer_type,
+            _array_size,
+            _address_space,
+        ) in self.required_function_metal_buffer_resources(func_name):
+            buffer_name = getattr(buffer_variable, "name", None)
+            if buffer_name:
+                names.append(buffer_name)
         for (
             buffer_variable,
             buffer_type,
@@ -14214,6 +16392,18 @@ class MetalCodeGen:
         )
         return texture_type or self.struct_member_texture_resource_type(texture_arg)
 
+    def texture_sample_result_type(self, texture_arg):
+        texture_type = self.resource_base_type(self.texture_resource_type(texture_arg))
+        if not texture_type:
+            return None
+        if texture_type.startswith("depth"):
+            return "float"
+        component_type = "float"
+        if "<" in texture_type and ">" in texture_type:
+            component_type = texture_type.split("<", 1)[1].split(">", 1)[0]
+            component_type = component_type.split(",", 1)[0].strip() or "float"
+        return f"{component_type}4"
+
     def struct_member_texture_resource_type(self, texture_arg):
         member = self.struct_resource_member_node(texture_arg)
         if member is None:
@@ -14302,6 +16492,26 @@ class MetalCodeGen:
         if arg_type is None or not self.is_texture_or_image_resource_type(arg_type):
             return None
         return self.map_resource_type_with_format(self.resource_base_type(arg_type))
+
+    def texture_argument_raw_resource_type(self, texture_arg):
+        texture_name = self.expression_name(texture_arg)
+        if texture_name:
+            raw_type = self.current_texture_parameter_raw_types.get(
+                texture_name, self.texture_variable_raw_types.get(texture_name)
+            )
+            if raw_type is not None:
+                return raw_type
+
+        member = self.struct_resource_member_node(texture_arg)
+        if member is not None:
+            raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+            if raw_type is None and isinstance(member, ArrayNode):
+                raw_type = getattr(member, "element_type", None)
+            if self.is_array_type_node(raw_type):
+                raw_type = raw_type.element_type
+            return self.resource_base_type(self.type_name_string(raw_type))
+
+        return self.expression_result_type(texture_arg)
 
     def validate_texture_resource_argument(self, func_name, args):
         if not args or func_name not in self.texture_resource_operation_names():
@@ -15998,6 +18208,7 @@ class MetalCodeGen:
 
     def texture_query_resource_descriptor(self, texture_arg):
         texture_type = self.texture_argument_resource_type(texture_arg)
+        raw_type = self.texture_argument_raw_resource_type(texture_arg)
         return {
             "texture_type": texture_type,
             "storage_image": self.is_storage_image_resource(texture_type),
@@ -16005,7 +18216,9 @@ class MetalCodeGen:
                 self.is_multisample_texture_resource(texture_type)
                 or self.is_multisample_storage_image_resource(texture_type)
             ),
-            "size_descriptor": self.texture_query_size_descriptor(texture_type),
+            "size_descriptor": self.texture_query_size_descriptor_for_argument(
+                texture_type, raw_type
+            ),
         }
 
     def texture_query_size_expression(self, texture_arg, lod_arg=None):
@@ -16053,6 +18266,14 @@ class MetalCodeGen:
         if self.is_storage_image_resource(texture_type):
             return self.storage_image_size_descriptor(texture_type)
         return self.sampled_texture_size_descriptor(texture_type)
+
+    def texture_query_size_descriptor_for_argument(self, texture_type, raw_type=None):
+        raw_base_type = self.resource_base_type(raw_type)
+        if raw_base_type == "imageCube":
+            return resource_query_method_size_descriptor(
+                "int2", (("get_width", False), ("get_height", False))
+            )
+        return self.texture_query_size_descriptor(texture_type)
 
     def storage_image_size_descriptor(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
@@ -16906,8 +19127,8 @@ class MetalCodeGen:
                 return self.unsupported_texture_query_lod_call(texture_type)
             lod_coord = self.texture_query_lod_coordinate(texture_type, coord)
             return (
-                f"float2({texture_name}.calculate_unclamped_lod({sampler_arg}, {lod_coord}), "
-                f"{texture_name}.calculate_clamped_lod({sampler_arg}, {lod_coord}))"
+                f"float2({texture_name}.calculate_clamped_lod({sampler_arg}, {lod_coord}), "
+                f"{texture_name}.calculate_unclamped_lod({sampler_arg}, {lod_coord}))"
             )
         if is_texel_fetch_basic_operation(func_name) and len(args) >= 3:
             if self.is_cube_texture_resource(texture_type):
@@ -17103,6 +19324,14 @@ class MetalCodeGen:
         geometry_stream_type = self.metal_geometry_stream_mapped_type(vtype)
         if geometry_stream_type is not None:
             return geometry_stream_type
+
+        if self.is_metal_ray_query_type_name(vtype_str):
+            self.require_metal_ray_query_runtime()
+            return "CglRayQuery"
+
+        if self.requires_metal_builtin_ray_desc(vtype_str):
+            self.required_metal_ray_desc_runtime = True
+            return "CglRayDesc"
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, array_suffix = split_array_type_suffix(vtype_str)

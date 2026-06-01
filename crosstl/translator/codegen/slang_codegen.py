@@ -97,7 +97,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
-from .stage_utils import compute_local_size
+from .stage_utils import compute_local_size, normalize_stage_name
 
 
 class SlangCodeGen:
@@ -198,6 +198,7 @@ class SlangCodeGen:
         self.user_structs_by_name = {}
         self.structs_by_name = {}
         self.struct_member_types = {}
+        self.slang_lowered_struct_resource_members = {}
         self.user_enum_nodes = []
         self.plain_enums = []
         self.struct_payload_enums = []
@@ -209,6 +210,10 @@ class SlangCodeGen:
         self.enum_variant_constructors = {}
         self.enum_variant_constructor_fields = {}
         self.enum_variant_constants = {}
+        self.vertex_entry_input_struct_names = set()
+        self.vertex_entry_output_struct_names = set()
+        self.fragment_entry_input_struct_names = set()
+        self.fragment_entry_output_struct_names = set()
         self.literal_int_constants = {}
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -222,9 +227,15 @@ class SlangCodeGen:
         self.slang_callable_data_parameter_types = set()
         self.slang_hit_attribute_parameter_types = set()
         self.stage_entry_name_overrides = {}
+        self.explicit_sampler_texture_names = set()
+        self.explicit_comparison_sampler_names = set()
         self.identifier_aliases = {}
         self.slang_resource_register_cursors = {}
         self.slang_used_resource_registers = {}
+        self.slang_vk_binding_cursors = {}
+        self.slang_used_vk_bindings = {}
+        self.slang_global_declaration_signatures = {}
+        self.function_stage_parameter_dependencies = {}
         self.expression_prelude_stack = []
         self.expression_prelude_result_stack = []
         self.expression_temp_names = set()
@@ -283,6 +294,7 @@ class SlangCodeGen:
         """Generate Slang source for a CrossGL AST or AST fragment."""
         outermost = not self._generating
         if outermost:
+            self.reject_unsupported_generic_functions(ast)
             self._generating = True
             self.variable_types = {}
             self.image_resource_types = {}
@@ -313,6 +325,18 @@ class SlangCodeGen:
                 if getattr(struct, "name", None)
             }
             self.structs_by_name = dict(self.user_structs_by_name)
+            self.vertex_entry_input_struct_names = (
+                self.collect_slang_vertex_entry_input_struct_names(ast)
+            )
+            self.vertex_entry_output_struct_names = (
+                self.collect_slang_vertex_entry_output_struct_names(ast)
+            )
+            self.fragment_entry_input_struct_names = (
+                self.collect_slang_fragment_entry_input_struct_names(ast)
+            )
+            self.fragment_entry_output_struct_names = (
+                self.collect_slang_fragment_entry_output_struct_names(ast)
+            )
             self.user_enum_nodes = self.collect_user_enums(ast)
             self.generic_enum_struct_definitions = (
                 collect_generic_enum_struct_definitions(user_structs)
@@ -355,6 +379,9 @@ class SlangCodeGen:
             self.struct_member_types = collect_struct_member_types(
                 user_structs, self.type_name_string
             )
+            self.slang_lowered_struct_resource_members = (
+                self.collect_slang_lowered_struct_resource_members(user_structs)
+            )
             self.struct_member_types.update(
                 self.collect_enum_struct_member_types(self.struct_payload_enums)
             )
@@ -375,9 +402,19 @@ class SlangCodeGen:
             self.slang_callable_data_parameter_types = set()
             self.slang_hit_attribute_parameter_types = set()
             self.stage_entry_name_overrides = {}
+            (
+                self.explicit_sampler_texture_names,
+                self.explicit_comparison_sampler_names,
+            ) = self.collect_explicit_sampler_resource_names(ast)
             self.identifier_aliases = {}
             self.slang_resource_register_cursors = {}
             self.slang_used_resource_registers = {}
+            self.slang_vk_binding_cursors = {}
+            self.slang_used_vk_bindings = {}
+            self.slang_global_declaration_signatures = {}
+            self.function_stage_parameter_dependencies = (
+                self.collect_slang_function_stage_parameter_dependencies(ast)
+            )
             self.expression_prelude_stack = []
             self.expression_prelude_result_stack = []
             self.expression_temp_names = set()
@@ -406,11 +443,13 @@ class SlangCodeGen:
                 struct_code = self.generate_struct(struct)
                 if struct_code:
                     result += struct_code + "\n\n"
+            result += self.generate_constants(ast)
             result += self.slang_struct_dependent_helper_marker()
 
             global_vars = getattr(ast, "global_variables", [])
             for node in global_vars:
                 result += self.generate_global_variable(node)
+            result += self.generate_slang_lowered_struct_resource_member_globals()
 
             cbuffers = getattr(ast, "cbuffers", [])
             for node in cbuffers:
@@ -468,6 +507,30 @@ class SlangCodeGen:
         helpers = self.emit_helper_functions()
         self._generating = False
         return helpers + struct_helpers + result
+
+    def reject_unsupported_generic_functions(self, ast_node):
+        """Reject generic functions before emitting non-compilable Slang code."""
+        functions = list(getattr(ast_node, "functions", []) or [])
+        for stage in (getattr(ast_node, "stages", {}) or {}).values():
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                functions.append(entry_point)
+            functions.extend(getattr(stage, "local_functions", []) or [])
+
+        for func in functions:
+            generic_params = getattr(func, "generic_params", []) or []
+            if not generic_params:
+                continue
+            names = [
+                getattr(param, "name", str(param))
+                for param in generic_params
+                if getattr(param, "name", str(param))
+            ]
+            suffix = f" ({', '.join(names)})" if names else ""
+            raise ValueError(
+                f"Slang codegen does not support generic functions{suffix}; "
+                "specialize the function before Slang generation"
+            )
 
     def emit_helper_functions(self):
         helpers = ""
@@ -658,6 +721,116 @@ class SlangCodeGen:
                 names.append(None)
         return names
 
+    def slang_called_function_names(self, func):
+        called_names = set()
+        current_name = getattr(func, "name", None)
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            func_name = self.function_call_simple_callee_name(node)
+            if (
+                func_name
+                and func_name != current_name
+                and func_name in self.user_function_names
+            ):
+                called_names.add(func_name)
+        return called_names
+
+    def direct_slang_stage_parameter_dependencies(self, func, stage_parameters):
+        local_names = {
+            getattr(param, "name", None)
+            for param in getattr(func, "parameters", getattr(func, "params", [])) or []
+            if getattr(param, "name", None)
+        }
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if isinstance(node, VariableNode) and getattr(node, "name", None):
+                local_names.add(node.name)
+
+        dependencies = set()
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, IdentifierNode):
+                continue
+            name = getattr(node, "name", None)
+            if name and name in stage_parameters and name not in local_names:
+                dependencies.add(name)
+        return dependencies
+
+    def collect_slang_function_stage_parameter_dependencies(self, ast):
+        direct_dependencies = {}
+        function_calls = {}
+        parameter_nodes = {}
+
+        for func in getattr(ast, "functions", []) or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            direct_dependencies.setdefault(func_name, set())
+            function_calls.setdefault(func_name, self.slang_called_function_names(func))
+
+        stages = getattr(ast, "stages", {}) or {}
+        if isinstance(stages, dict):
+            for _stage_type, stage in stages.items():
+                entry_point = getattr(stage, "entry_point", None)
+                stage_parameters = {
+                    parameter.name: parameter
+                    for parameter in (
+                        getattr(
+                            entry_point,
+                            "parameters",
+                            getattr(entry_point, "params", []),
+                        )
+                        or []
+                    )
+                    if getattr(parameter, "name", None)
+                }
+                parameter_nodes.update(stage_parameters)
+
+                stage_functions = list(getattr(stage, "local_functions", []) or [])
+                if entry_point is not None:
+                    stage_functions.append(entry_point)
+                for func in stage_functions:
+                    func_name = getattr(func, "name", None)
+                    if not func_name:
+                        continue
+                    direct_dependencies[func_name] = (
+                        self.direct_slang_stage_parameter_dependencies(
+                            func, stage_parameters
+                        )
+                    )
+                    function_calls[func_name] = self.slang_called_function_names(func)
+
+        dependencies = {name: set(deps) for name, deps in direct_dependencies.items()}
+        changed = True
+        while changed:
+            changed = False
+            for func_name, calls in function_calls.items():
+                before = set(dependencies.get(func_name, set()))
+                for called_name in calls:
+                    dependencies.setdefault(func_name, set()).update(
+                        dependencies.get(called_name, set())
+                    )
+                if dependencies.get(func_name, set()) != before:
+                    changed = True
+
+        return {
+            func_name: [
+                parameter_nodes[name]
+                for name in sorted(dependency_names)
+                if name in parameter_nodes
+            ]
+            for func_name, dependency_names in dependencies.items()
+            if dependency_names
+        }
+
+    def required_slang_stage_parameters(self, func_name):
+        return self.function_stage_parameter_dependencies.get(func_name, [])
+
+    def slang_stage_parameter_dependency_declaration(self, parameter):
+        param_type_name = self.slang_parameter_type_name(parameter) or "float"
+        param_type = self.map_resource_type_with_format(param_type_name, parameter)
+        declaration = format_c_style_array_declaration(param_type, parameter.name)
+        return self.slang_parameter_qualifier_prefix(parameter) + declaration
+
     def collect_user_structs(self, node):
         structs = []
         seen = set()
@@ -688,6 +861,148 @@ class SlangCodeGen:
 
         collect(node)
         return structs
+
+    def slang_stage_entry_functions(self, ast, expected_stage_name):
+        functions = []
+        for func in getattr(ast, "functions", []) or []:
+            qualifier = (
+                func.qualifiers[0]
+                if getattr(func, "qualifiers", None)
+                else getattr(func, "qualifier", None)
+            )
+            if normalize_stage_name(qualifier) == expected_stage_name:
+                functions.append(func)
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            if normalize_stage_name(stage_type) != expected_stage_name:
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                functions.append(entry_point)
+        return functions
+
+    def collect_slang_vertex_entry_output_struct_names(self, ast):
+        struct_names = set()
+        for func in self.slang_stage_entry_functions(ast, "vertex"):
+            return_type = self.type_name_string(
+                getattr(func, "return_type", getattr(func, "vtype", None))
+            )
+            if not return_type:
+                continue
+            base_type = return_type.split("<", 1)[0].split("[", 1)[0].strip()
+            if base_type in self.structs_by_name:
+                struct_names.add(base_type)
+        return struct_names
+
+    def collect_slang_vertex_entry_input_struct_names(self, ast):
+        struct_names = set()
+        for func in self.slang_stage_entry_functions(ast, "vertex"):
+            for parameter in (
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            ):
+                struct_name = self.slang_parameter_user_struct_type(parameter)
+                if struct_name is not None:
+                    struct_names.add(struct_name)
+        return struct_names
+
+    def collect_slang_fragment_entry_input_struct_names(self, ast):
+        struct_names = set()
+        for func in self.slang_stage_entry_functions(ast, "fragment"):
+            for parameter in (
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            ):
+                struct_name = self.slang_parameter_user_struct_type(parameter)
+                if struct_name is not None:
+                    struct_names.add(struct_name)
+        return struct_names
+
+    def collect_slang_fragment_entry_output_struct_names(self, ast):
+        struct_names = set()
+        for func in self.slang_stage_entry_functions(ast, "fragment"):
+            return_type_name = self.type_name_string(
+                getattr(func, "return_type", getattr(func, "vtype", None))
+            )
+            if not return_type_name:
+                continue
+            base_type = return_type_name.split("<", 1)[0].split("[", 1)[0].strip()
+            if base_type in self.user_structs_by_name:
+                struct_names.add(base_type)
+        return struct_names
+
+    def collect_slang_lowered_struct_resource_members(self, structs):
+        lowered_members = {}
+        for struct in structs or []:
+            struct_name = getattr(struct, "name", None)
+            if not struct_name:
+                continue
+            for member in getattr(struct, "members", []) or []:
+                raw_type = self.slang_struct_member_type_name(member)
+                if not self.slang_struct_member_is_resource(raw_type):
+                    continue
+                member_name = getattr(member, "name", None)
+                if not member_name:
+                    continue
+                lowered_members.setdefault(struct_name, {})[member_name] = {
+                    "member": member,
+                    "type": raw_type,
+                    "mapped_type": self.map_resource_type_with_format(raw_type, member),
+                    "global_name": member_name,
+                }
+        return lowered_members
+
+    def slang_struct_member_is_resource(self, raw_type):
+        if not raw_type:
+            return False
+        mapped_type = self.map_resource_type_with_format(raw_type)
+        return (
+            self.is_sampled_texture_resource_type(raw_type)
+            or self.is_storage_image_type(raw_type)
+            or self.is_sampler_state_type(raw_type)
+            or self.is_buffer_resource_type(mapped_type)
+        )
+
+    def slang_lowered_struct_resource_member_info(self, struct_name, member_name):
+        if not struct_name or not member_name:
+            return None
+        return self.slang_lowered_struct_resource_members.get(struct_name, {}).get(
+            member_name
+        )
+
+    def slang_should_lower_struct_resource_member(self, struct_name, member_name):
+        return (
+            self.slang_lowered_struct_resource_member_info(struct_name, member_name)
+            is not None
+        )
+
+    def generate_slang_lowered_struct_resource_member_globals(self):
+        declarations = []
+        seen = {}
+        for members in self.slang_lowered_struct_resource_members.values():
+            for member_info in members.values():
+                global_name = member_info["global_name"]
+                raw_type = member_info["type"]
+                mapped_type = member_info["mapped_type"]
+                previous_type = seen.get(global_name)
+                if previous_type is not None:
+                    if previous_type != mapped_type:
+                        raise ValueError(
+                            "Conflicting Slang lowered struct resource member "
+                            f"'{global_name}' has both {previous_type} and "
+                            f"{mapped_type}"
+                        )
+                    continue
+                seen[global_name] = mapped_type
+                self.register_variable_type(
+                    global_name, raw_type, member_info["member"]
+                )
+                declaration = self.format_declaration(
+                    raw_type, global_name, member_info["member"]
+                )
+                declaration = self.apply_slang_resource_binding_decorations(
+                    declaration, member_info["member"], raw_type, auto_assign=True
+                )
+                declarations.append(f"{declaration};\n")
+        return "".join(declarations)
 
     def collect_user_enums(self, node):
         enums = []
@@ -783,6 +1098,130 @@ class SlangCodeGen:
 
         collect(node)
         return declarations
+
+    def collect_declared_type_names(self, node):
+        type_names = {}
+        visited = set()
+
+        def collect(current):
+            if current is None or isinstance(current, (str, int, float, bool)):
+                return
+            if isinstance(current, type):
+                return
+            if isinstance(current, dict):
+                for value in current.values():
+                    collect(value)
+                return
+            if isinstance(current, (list, tuple, set)):
+                for item in current:
+                    collect(item)
+                return
+            current_id = id(current)
+            if current_id in visited:
+                return
+            visited.add(current_id)
+
+            name = getattr(current, "name", getattr(current, "variable_name", None))
+            type_name = None
+            for attr in ("var_type", "param_type"):
+                type_node = getattr(current, attr, None)
+                if type_node is not None:
+                    type_name = self.convert_type_node_to_string(type_node)
+                    break
+            if type_name is None:
+                type_name = getattr(current, "vtype", None)
+            if type_name and name:
+                type_names[name] = type_name
+
+            if hasattr(current, "__dict__"):
+                for child in vars(current).values():
+                    collect(child)
+
+        collect(node)
+        return type_names
+
+    def expression_root_identifier_name(self, node):
+        if isinstance(node, IdentifierNode):
+            return node.name
+        if isinstance(node, ArrayAccessNode):
+            return self.expression_root_identifier_name(
+                getattr(node, "array", getattr(node, "array_expr", None))
+            )
+        if isinstance(node, MemberAccessNode):
+            return self.expression_root_identifier_name(node.object)
+        return None
+
+    def collect_explicit_sampler_resource_names(self, node):
+        declared_types = self.collect_declared_type_names(node)
+        explicit_texture_names = set()
+        implicit_texture_names = set()
+        explicit_comparison_pairs = []
+        sampled_calls = {
+            "texture",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "textureGather",
+            "textureGatherOffset",
+            "textureGatherOffsets",
+            "textureQueryLod",
+        }
+        compare_calls = {
+            "textureCompare",
+            "textureCompareLod",
+            "textureCompareGrad",
+            "textureCompareOffset",
+            "textureGatherCompare",
+            "textureGatherCompareOffset",
+        }
+
+        for current in self.walk_ast(node):
+            if not isinstance(current, FunctionCallNode):
+                continue
+            func_expr = getattr(current, "function", None)
+            if func_expr is None:
+                func_expr = getattr(current, "name", None)
+            if hasattr(func_expr, "name") and getattr(func_expr, "name", None):
+                callee = func_expr.name
+            else:
+                callee = func_expr if isinstance(func_expr, str) else None
+            if callee not in sampled_calls and callee not in compare_calls:
+                continue
+
+            args = getattr(current, "args", [])
+            if len(args) < 2:
+                continue
+            texture_name = self.expression_root_identifier_name(args[0])
+            sampler_name = self.expression_root_identifier_name(args[1])
+            has_explicit_sampler = self.is_sampler_state_type(
+                declared_types.get(sampler_name)
+            )
+            if not has_explicit_sampler:
+                if texture_name:
+                    implicit_texture_names.add(texture_name)
+                continue
+            if len(args) < 3:
+                continue
+            if texture_name:
+                explicit_texture_names.add(texture_name)
+            if callee in compare_calls and sampler_name:
+                explicit_comparison_pairs.append((texture_name, sampler_name))
+
+        separated_texture_names = explicit_texture_names - implicit_texture_names
+        comparison_sampler_names = {
+            sampler_name
+            for texture_name, sampler_name in explicit_comparison_pairs
+            if texture_name in separated_texture_names
+        }
+        return separated_texture_names, comparison_sampler_names
 
     def collect_slang_glsl_buffer_blocks(self, node):
         declarations = self.collect_slang_resource_declaration_nodes(node)
@@ -1197,11 +1636,13 @@ class SlangCodeGen:
             struct_code = self.generate_struct(struct)
             if struct_code:
                 result += struct_code + "\n\n"
+        result += self.generate_constants(node)
         result += self.slang_struct_dependent_helper_marker()
 
         global_vars = getattr(node, "global_variables", [])
         for global_var in global_vars:
             result += self.generate_global_variable(global_var)
+        result += self.generate_slang_lowered_struct_resource_member_globals()
 
         cbuffers = getattr(node, "cbuffers", [])
         for cbuffer in cbuffers:
@@ -1256,6 +1697,34 @@ class SlangCodeGen:
             self.generic_enum_specializations,
         )
         return code
+
+    def generate_constants(self, ast):
+        """Emit CrossGL compile-time constants as Slang static constants."""
+        code = ""
+        for node in getattr(ast, "constants", []) or []:
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+
+            const_type_name = self.convert_type_node_to_string(
+                getattr(node, "const_type", getattr(node, "vtype", "float"))
+            )
+            self.register_variable_type(name, const_type_name, node)
+            value_code = self.generate_constant_expression(getattr(node, "value", None))
+            code += (
+                f"static const {self.convert_type(const_type_name)} "
+                f"{name} = {value_code};\n"
+            )
+
+        return f"{code}\n" if code else ""
+
+    def generate_constant_expression(self, expr):
+        value_code = self.generate_expression(expr)
+        if value_code == "True":
+            return "true"
+        if value_code == "False":
+            return "false"
+        return value_code
 
     def get_stage_name(self, stage_type):
         if hasattr(stage_type, "value"):
@@ -1639,8 +2108,7 @@ class SlangCodeGen:
         for attr_name in self.slang_stage_attribute_names(func):
             if attr_name not in allowed_attributes:
                 raise ValueError(
-                    f"Slang {stage_name} stage does not support "
-                    f"{attr_name} attribute"
+                    f"Slang {stage_name} stage does not support {attr_name} attribute"
                 )
 
     def validate_slang_stage_attribute_uniqueness(self, func, stage_name):
@@ -1763,7 +2231,7 @@ class SlangCodeGen:
             )
             if not arguments:
                 raise ValueError(
-                    "Slang tessellation_control stage requires " "outputcontrolpoints"
+                    "Slang tessellation_control stage requires outputcontrolpoints"
                 )
             if (
                 self.slang_stage_attribute_int_argument(func, "outputcontrolpoints")
@@ -1779,7 +2247,7 @@ class SlangCodeGen:
             domain = self.normalized_slang_stage_attribute_argument(func, "domain")
             if not domain:
                 raise ValueError(
-                    "Slang tessellation_evaluation stage requires a domain " "attribute"
+                    "Slang tessellation_evaluation stage requires a domain attribute"
                 )
 
     def validate_slang_patch_constant_function(self, func, stage_name):
@@ -1816,8 +2284,7 @@ class SlangCodeGen:
             return
         if len(arguments) > 3:
             raise ValueError(
-                f"Slang {stage_name} stage numthreads requires at most "
-                "three arguments"
+                f"Slang {stage_name} stage numthreads requires at most three arguments"
             )
 
         for argument in arguments:
@@ -1940,8 +2407,7 @@ class SlangCodeGen:
             )
         if len(stream_parameters) > 1:
             raise ValueError(
-                "Slang geometry stage must declare at most one stream output "
-                "parameter"
+                "Slang geometry stage must declare at most one stream output parameter"
             )
 
         stream_parameter = stream_parameters[0]
@@ -2017,8 +2483,7 @@ class SlangCodeGen:
                 semantic = self.semantic_from_node(member)
                 member_name = getattr(member, "name", "<anonymous>")
                 context = (
-                    f"output stream struct '{stream_type_name}.{member_name}' "
-                    "semantic"
+                    f"output stream struct '{stream_type_name}.{member_name}' semantic"
                 )
                 self.validate_slang_builtin_semantic_type(
                     semantic,
@@ -2403,15 +2868,13 @@ class SlangCodeGen:
         for role, role_params in role_parameters.items():
             if len(role_params) > 1:
                 raise ValueError(
-                    f"Slang mesh stage must declare at most one {role} "
-                    "output parameter"
+                    f"Slang mesh stage must declare at most one {role} output parameter"
                 )
             self.validate_slang_mesh_output_array_parameter(role_params[0], role)
 
         if "vertices" not in role_parameters:
             raise ValueError(
-                "Slang mesh stage output signature must declare an out vertices "
-                "array"
+                "Slang mesh stage output signature must declare an out vertices array"
             )
         if "indices" not in role_parameters:
             raise ValueError(
@@ -2661,8 +3124,7 @@ class SlangCodeGen:
 
         if shader_type:
             raise ValueError(
-                f"Slang {shader_type} stage cannot declare mesh {role} "
-                "output parameter"
+                f"Slang {shader_type} stage cannot declare mesh {role} output parameter"
             )
 
         return f"{self.slang_parameter_qualifier_prefix(parameter)}{declaration}"
@@ -2863,6 +3325,243 @@ class SlangCodeGen:
         mapped_type = self.convert_type(base_type)
         if mapped_type in self.user_struct_names:
             return mapped_type
+        return None
+
+    def slang_semantic_key(self, semantic):
+        if semantic is None:
+            return None
+        return str(self.map_semantic(semantic)).lower()
+
+    def slang_struct_member_declared_semantic(self, member):
+        return self.semantic_from_node(member)
+
+    def slang_struct_member_type_name(self, member):
+        member_type = getattr(member, "member_type", getattr(member, "vtype", None))
+        if member_type is None and hasattr(member, "element_type"):
+            member_type = member.element_type
+        return self.type_name_string(member_type)
+
+    def slang_can_default_io_semantic(self, member_type):
+        type_name = self.type_name_string(member_type)
+        if not type_name:
+            return False
+
+        base_type, _array_suffix = split_array_type_suffix(str(type_name))
+        mapped_type = self.map_resource_type_with_format(base_type)
+        if mapped_type in self.user_struct_names:
+            return False
+        if mapped_type == "RaytracingAccelerationStructure":
+            return False
+        return not (
+            self.is_storage_image_type(mapped_type)
+            or self.is_sampled_texture_resource_type(mapped_type)
+            or self.is_buffer_resource_type(mapped_type)
+        )
+
+    def slang_default_vertex_input_member_semantics(self, struct_node):
+        if (
+            getattr(struct_node, "name", None)
+            not in self.vertex_entry_input_struct_names
+        ):
+            return {}
+
+        used_semantics = set()
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.slang_struct_member_declared_semantic(member)
+            if semantic is not None:
+                used_semantics.add(self.slang_semantic_key(semantic))
+
+        defaults = {}
+        position_names = {"position", "vertexposition", "vertex_position", "pos"}
+        if self.slang_semantic_key("POSITION") not in used_semantics:
+            for member in getattr(struct_node, "members", []) or []:
+                member_name = getattr(member, "name", None)
+                if not member_name or member_name.lower() not in position_names:
+                    continue
+                if self.slang_struct_member_declared_semantic(member) is not None:
+                    continue
+                if not self.slang_can_default_io_semantic(
+                    self.slang_struct_member_type_name(member)
+                ):
+                    continue
+                defaults[member_name] = "POSITION"
+                used_semantics.add(self.slang_semantic_key("POSITION"))
+                break
+
+        next_texcoord = 0
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name or member_name in defaults:
+                continue
+            if self.slang_struct_member_declared_semantic(member) is not None:
+                continue
+            if not self.slang_can_default_io_semantic(
+                self.slang_struct_member_type_name(member)
+            ):
+                continue
+
+            while self.slang_semantic_key(f"TEXCOORD{next_texcoord}") in used_semantics:
+                next_texcoord += 1
+            semantic = f"TEXCOORD{next_texcoord}"
+            defaults[member_name] = semantic
+            used_semantics.add(self.slang_semantic_key(semantic))
+            next_texcoord += 1
+        return defaults
+
+    def slang_default_vertex_output_member_semantics(self, struct_node):
+        if (
+            getattr(struct_node, "name", None)
+            not in self.vertex_entry_output_struct_names
+        ):
+            return {}
+
+        used_semantics = set()
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.slang_struct_member_declared_semantic(member)
+            if semantic is not None:
+                used_semantics.add(self.slang_semantic_key(semantic))
+
+        defaults = {}
+        position_names = {"position", "clipposition", "clip_position"}
+        if self.slang_semantic_key("SV_Position") not in used_semantics:
+            for member in getattr(struct_node, "members", []) or []:
+                member_name = getattr(member, "name", None)
+                if not member_name or member_name.lower() not in position_names:
+                    continue
+                if self.slang_struct_member_declared_semantic(member) is not None:
+                    continue
+                if (
+                    self.convert_type(self.slang_struct_member_type_name(member))
+                    != "float4"
+                ):
+                    continue
+                defaults[member_name] = "SV_Position"
+                used_semantics.add(self.slang_semantic_key("SV_Position"))
+                break
+
+        next_texcoord = 0
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name or member_name in defaults:
+                continue
+            if self.slang_struct_member_declared_semantic(member) is not None:
+                continue
+            if not self.slang_can_default_io_semantic(
+                self.slang_struct_member_type_name(member)
+            ):
+                continue
+
+            while self.slang_semantic_key(f"TEXCOORD{next_texcoord}") in used_semantics:
+                next_texcoord += 1
+            semantic = f"TEXCOORD{next_texcoord}"
+            defaults[member_name] = semantic
+            used_semantics.add(self.slang_semantic_key(semantic))
+            next_texcoord += 1
+        return defaults
+
+    def slang_default_fragment_input_member_semantics(self, struct_node, defaults):
+        if (
+            getattr(struct_node, "name", None)
+            not in self.fragment_entry_input_struct_names
+        ):
+            return defaults
+
+        used_semantics = {
+            self.slang_semantic_key(semantic)
+            for semantic in defaults.values()
+            if semantic is not None
+        }
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.slang_struct_member_declared_semantic(member)
+            if semantic is not None:
+                used_semantics.add(self.slang_semantic_key(semantic))
+
+        next_texcoord = 0
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name or member_name in defaults:
+                continue
+            if self.slang_struct_member_declared_semantic(member) is not None:
+                continue
+            if not self.slang_can_default_io_semantic(
+                self.slang_struct_member_type_name(member)
+            ):
+                continue
+
+            while self.slang_semantic_key(f"TEXCOORD{next_texcoord}") in used_semantics:
+                next_texcoord += 1
+            semantic = f"TEXCOORD{next_texcoord}"
+            defaults[member_name] = semantic
+            used_semantics.add(self.slang_semantic_key(semantic))
+            next_texcoord += 1
+        return defaults
+
+    def slang_default_fragment_output_member_semantics(self, struct_node, defaults):
+        if (
+            getattr(struct_node, "name", None)
+            not in self.fragment_entry_output_struct_names
+        ):
+            return defaults
+
+        used_semantics = {
+            self.slang_semantic_key(semantic)
+            for semantic in defaults.values()
+            if semantic is not None
+        }
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.slang_struct_member_declared_semantic(member)
+            if semantic is not None:
+                used_semantics.add(self.slang_semantic_key(semantic))
+
+        next_target = 0
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name or member_name in defaults:
+                continue
+            if self.slang_struct_member_declared_semantic(member) is not None:
+                continue
+
+            mapped_type = self.convert_type(self.slang_struct_member_type_name(member))
+            normalized_name = str(member_name).replace("_", "").lower()
+            if normalized_name in {"depth", "fragdepth", "glfragdepth"}:
+                if (
+                    mapped_type == "float"
+                    and self.slang_semantic_key("SV_Depth") not in used_semantics
+                ):
+                    defaults[member_name] = "SV_Depth"
+                    used_semantics.add(self.slang_semantic_key("SV_Depth"))
+                continue
+
+            if mapped_type != "float4":
+                continue
+            while self.slang_semantic_key(
+                f"SV_Target{next_target}"
+            ) in used_semantics or (
+                next_target == 0
+                and self.slang_semantic_key("SV_Target") in used_semantics
+            ):
+                next_target += 1
+            semantic = "SV_Target" if next_target == 0 else f"SV_Target{next_target}"
+            defaults[member_name] = semantic
+            used_semantics.add(self.slang_semantic_key(semantic))
+            next_target += 1
+        return defaults
+
+    def slang_default_struct_member_semantics(self, struct_node):
+        defaults = self.slang_default_vertex_input_member_semantics(struct_node)
+        defaults.update(self.slang_default_vertex_output_member_semantics(struct_node))
+        defaults = self.slang_default_fragment_input_member_semantics(
+            struct_node, defaults
+        )
+        return self.slang_default_fragment_output_member_semantics(
+            struct_node, defaults
+        )
+
+    def default_slang_stage_return_semantic(self, shader_type, return_type):
+        if shader_type == "vertex" and return_type == "float4":
+            return "gl_Position"
+        if shader_type == "fragment" and return_type == "float4":
+            return "gl_FragColor"
         return None
 
     def slang_shader_stage_marker_name(self, name):
@@ -3300,7 +3999,12 @@ class SlangCodeGen:
         patch_constant_function_names = self.slang_stage_patch_constant_function_names(
             entry_point, stage_name
         )
+        forward_declaration_ids = self.slang_forward_declaration_function_ids(
+            local_functions
+        )
         for func in local_functions:
+            if id(func) in forward_declaration_ids:
+                continue
             if getattr(func, "name", None) in patch_constant_function_names:
                 result += (
                     self.generate_function(
@@ -3327,6 +4031,24 @@ class SlangCodeGen:
             result += "\n\n"
 
         return result
+
+    def slang_forward_declaration_function_ids(self, functions):
+        """Return prototype-only stage functions that have a real definition."""
+        body_function_names = {
+            getattr(func, "name", None)
+            for func in functions or []
+            if getattr(func, "name", None)
+            and self.get_statements(getattr(func, "body", []))
+        }
+        if not body_function_names:
+            return set()
+
+        return {
+            id(func)
+            for func in functions or []
+            if getattr(func, "name", None) in body_function_names
+            and not self.get_statements(getattr(func, "body", []))
+        }
 
     def slang_stage_interface_local_variables(self, stage_name, local_variables):
         """Return stage-local declarations that lower to Slang entry parameters."""
@@ -3706,7 +4428,19 @@ class SlangCodeGen:
 
     def format_declaration(self, type_name, name, node=None):
         mapped_type = self.map_resource_type_with_format(type_name, node)
+        if self.slang_needs_fixed_unsized_value_array(mapped_type):
+            mapped_type = mapped_type.replace("[]", "[1024]", 1)
         return format_c_style_array_declaration(mapped_type, name)
+
+    def slang_needs_fixed_unsized_value_array(self, mapped_type):
+        if not isinstance(mapped_type, str) or "[]" not in mapped_type:
+            return False
+        base_type = self.resource_base_type(mapped_type)
+        if not isinstance(base_type, str):
+            return False
+        if base_type in self.user_struct_names:
+            return False
+        return self.slang_register_prefix_for_type(mapped_type) is None
 
     def map_type(self, type_name):
         return self.convert_type(type_name)
@@ -3718,6 +4452,8 @@ class SlangCodeGen:
             normalized = str(qualifier).lower()
             if normalized in {"groupshared", "shared", "threadgroup", "workgroup"}:
                 mapped = "groupshared"
+            elif normalized == "uniform":
+                mapped = "uniform"
             else:
                 mapped = None
             if mapped and mapped not in seen:
@@ -3936,7 +4672,7 @@ class SlangCodeGen:
         base_type = self.resource_base_type(mapped_type)
         if not isinstance(base_type, str):
             return None
-        if base_type == "SamplerState":
+        if base_type in {"SamplerState", "SamplerComparisonState"}:
             return "s"
         if base_type.startswith(
             (
@@ -4117,23 +4853,31 @@ class SlangCodeGen:
             node, explicit_binding, register_binding, explicit_set, register_space
         )
         binding = explicit_binding if explicit_binding is not None else register_binding
-        if binding is None:
-            return
+        resource_count = self.slang_resource_array_count(node, type_name)
 
         prefix = self.slang_register_prefix_for_type(
             type_name, node, register_prefix or forced_register_prefix
         )
-        if prefix is None:
-            return
-
         space_key = self.slang_resource_register_space_key(explicit_set, register_space)
-        self.reserve_slang_resource_register_range(
-            prefix,
-            binding,
-            self.slang_resource_array_count(node, type_name),
-            self.slang_resource_name(node),
-            space_key,
-        )
+        if binding is not None and prefix is not None:
+            self.reserve_slang_resource_register_range(
+                prefix,
+                binding,
+                resource_count,
+                self.slang_resource_name(node),
+                space_key,
+            )
+        if explicit_binding is not None:
+            descriptor_set = (
+                explicit_set if explicit_set is not None else register_space
+            )
+            descriptor_set = descriptor_set or 0
+            self.reserve_slang_vk_binding_range(
+                descriptor_set,
+                explicit_binding,
+                resource_count,
+                self.slang_resource_name(node),
+            )
 
     def slang_resource_name(self, node):
         return getattr(node, "name", getattr(node, "variable_name", "<anonymous>"))
@@ -4170,11 +4914,51 @@ class SlangCodeGen:
                 return space, binding
             space += 1
 
+    def next_available_slang_vk_binding(self, descriptor_set, count, preferred=None):
+        count = 1 if count is None else max(count, 1)
+        ranges = self.slang_used_vk_bindings.get(descriptor_set, [])
+        candidates = []
+        if preferred is not None:
+            candidates.append(preferred)
+        candidates.append(self.slang_vk_binding_cursors.get(descriptor_set, 0))
+
+        for candidate in candidates:
+            binding = candidate
+            while True:
+                end = None if count is None else binding + max(count, 1) - 1
+                conflict_end = None
+                for used_start, used_end, _used_name in ranges:
+                    if not self.slang_resource_register_ranges_overlap(
+                        binding, end, used_start, used_end
+                    ):
+                        continue
+                    if used_end is None:
+                        break
+                    conflict_end = (
+                        used_end
+                        if conflict_end is None
+                        else max(conflict_end, used_end)
+                    )
+                else:
+                    if conflict_end is None:
+                        return binding
+                    binding = conflict_end + 1
+                    continue
+                break
+        return None
+
     def advance_slang_resource_register(self, register_prefix, space, start, count):
         count = 1 if count is None else max(count, 1)
         key = (register_prefix, space)
         self.slang_resource_register_cursors[key] = max(
             self.slang_resource_register_cursors.get(key, 0), start + count
+        )
+
+    def advance_slang_vk_binding(self, descriptor_set, start, count):
+        count = 1 if count is None else max(count, 1)
+        self.slang_vk_binding_cursors[descriptor_set] = max(
+            self.slang_vk_binding_cursors.get(descriptor_set, 0),
+            start + count,
         )
 
     def reserve_slang_resource_register_range(
@@ -4197,6 +4981,34 @@ class SlangCodeGen:
                 f"{self.slang_resource_range_label(register_prefix, used_start, used_end, space)}"
             )
         ranges.append((start, end, name))
+
+    def reserve_slang_vk_binding_range(self, descriptor_set, start, count, name):
+        count = 1 if count is None else max(count, 1)
+        end = start + count - 1
+        ranges = self.slang_used_vk_bindings.setdefault(descriptor_set, [])
+        for used_start, used_end, used_name in ranges:
+            if not self.slang_resource_register_ranges_overlap(
+                start, end, used_start, used_end
+            ):
+                continue
+            if used_start == start and used_end == end and used_name == name:
+                return
+            raise ValueError(
+                f"Conflicting Slang Vulkan resource binding for '{name}': "
+                f"{self.slang_vk_binding_range_label(start, end, descriptor_set)} "
+                f"overlaps '{used_name}' "
+                f"{self.slang_vk_binding_range_label(used_start, used_end, descriptor_set)}"
+            )
+        ranges.append((start, end, name))
+
+    def slang_vk_binding_range_label(self, start, end, descriptor_set):
+        if end is None:
+            label = f"binding {start}+"
+        elif start == end:
+            label = f"binding {start}"
+        else:
+            label = f"bindings {start}-{end}"
+        return f"{label}, set {descriptor_set}"
 
     def slang_resource_register_ranges_overlap(self, start, end, used_start, used_end):
         end_value = float("inf") if end is None else end
@@ -4264,20 +5076,23 @@ class SlangCodeGen:
         if register_prefix is None:
             return "", ""
 
-        binding = explicit_binding if explicit_binding is not None else register_binding
-        binding_expr = explicit_binding_expr or register_binding_expr
         descriptor_set = explicit_set if explicit_set is not None else register_space
         descriptor_set_expr = explicit_set_expr or register_space_expr
+        has_explicit_vk_set = explicit_set is not None or register_space is not None
         space_key = self.slang_resource_register_space_key(
             descriptor_set, register_space
         )
         resource_count = self.slang_resource_array_count(node, type_name)
 
-        if binding is None and binding_expr is None and auto_assign:
-            binding = self.next_available_slang_resource_register(
+        if register_binding is None and explicit_binding is not None:
+            register_binding = explicit_binding
+            register_binding_expr = explicit_binding_expr
+
+        if register_binding is None and register_binding_expr is None and auto_assign:
+            register_binding = self.next_available_slang_resource_register(
                 register_prefix, space_key, resource_count
             )
-            if binding is None:
+            if register_binding is None:
                 if descriptor_set is not None or descriptor_set_expr is not None:
                     raise ValueError(
                         "Unable to assign Slang resource binding for "
@@ -4285,26 +5100,67 @@ class SlangCodeGen:
                         f"{descriptor_set_expr or descriptor_set}: "
                         "unbounded resource array occupies the remaining range"
                     )
-                space_key, binding = self.next_available_slang_resource_register_space(
-                    register_prefix, space_key, resource_count
+                space_key, register_binding = (
+                    self.next_available_slang_resource_register_space(
+                        register_prefix, space_key, resource_count
+                    )
                 )
                 if space_key:
                     descriptor_set = space_key
                     descriptor_set_expr = str(space_key)
-            binding_expr = str(binding)
+            register_binding_expr = str(register_binding)
 
-        if binding_expr is None and binding is not None:
-            binding_expr = str(binding)
         if descriptor_set_expr is None and descriptor_set is not None:
             descriptor_set_expr = str(descriptor_set)
 
-        prefix = ""
-        if binding_expr is not None:
-            vk_set_expr = descriptor_set_expr or "0"
-            prefix = f"[[vk::binding({binding_expr}, {vk_set_expr})]] "
+        vk_binding = explicit_binding
+        vk_binding_expr = explicit_binding_expr
+        vk_descriptor_set = descriptor_set if descriptor_set is not None else 0
+        vk_descriptor_set_expr = descriptor_set_expr or str(vk_descriptor_set)
+        if (
+            not auto_assign
+            and vk_binding is None
+            and vk_binding_expr is None
+            and register_binding_expr is not None
+        ):
+            vk_binding = register_binding if isinstance(register_binding, int) else None
+            vk_binding_expr = register_binding_expr
+        if vk_binding is None and vk_binding_expr is None and auto_assign:
+            preferred_vk_binding = (
+                register_binding if isinstance(register_binding, int) else None
+            )
+            vk_binding = self.next_available_slang_vk_binding(
+                vk_descriptor_set,
+                resource_count,
+                preferred=preferred_vk_binding,
+            )
+            if vk_binding is None:
+                if has_explicit_vk_set:
+                    raise ValueError(
+                        "Unable to assign Slang Vulkan resource binding for "
+                        f"'{self.slang_resource_name(node)}' in set "
+                        f"{descriptor_set_expr or descriptor_set}: "
+                        "unbounded resource array occupies the remaining range"
+                    )
+                vk_descriptor_set = 0
+                while vk_binding is None:
+                    vk_descriptor_set += 1
+                    vk_binding = self.next_available_slang_vk_binding(
+                        vk_descriptor_set,
+                        resource_count,
+                        preferred=preferred_vk_binding,
+                    )
+                vk_descriptor_set_expr = str(vk_descriptor_set)
+            vk_binding_expr = str(vk_binding)
 
-        if register_binding is None and binding is not None:
-            register_binding = binding
+        prefix = ""
+        if vk_binding_expr is not None:
+            prefix = f"[[vk::binding({vk_binding_expr}, {vk_descriptor_set_expr})]] "
+
+        if register_binding is None and explicit_binding is not None:
+            register_binding = explicit_binding
+        if register_binding is None and register_binding_expr is not None:
+            register_binding = register_binding_expr
         register_space_suffix = ""
         if descriptor_set is not None:
             register_space_suffix = f", space{descriptor_set}"
@@ -4317,16 +5173,28 @@ class SlangCodeGen:
                 f" : register({register_prefix}{register_binding}"
                 f"{register_space_suffix})"
             )
-        if binding is not None:
+        if register_binding is not None and isinstance(register_binding, int):
             self.reserve_slang_resource_register_range(
                 register_prefix,
-                binding,
+                register_binding,
                 resource_count,
                 self.slang_resource_name(node),
                 space_key,
             )
             self.advance_slang_resource_register(
-                register_prefix, space_key, binding, resource_count
+                register_prefix, space_key, register_binding, resource_count
+            )
+        if auto_assign and vk_binding is not None:
+            self.reserve_slang_vk_binding_range(
+                vk_descriptor_set,
+                vk_binding,
+                resource_count,
+                self.slang_resource_name(node),
+            )
+            self.advance_slang_vk_binding(
+                vk_descriptor_set,
+                vk_binding,
+                resource_count,
             )
         return prefix, suffix
 
@@ -4366,10 +5234,59 @@ class SlangCodeGen:
         result += "};"
         return result
 
+    def slang_attribute_signature(self, node):
+        attributes = []
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", ""))
+            arguments = tuple(
+                self.attribute_value_to_string(argument)
+                for argument in getattr(attr, "arguments", []) or []
+            )
+            attributes.append((attr_name, arguments))
+        return tuple(attributes)
+
+    def canonical_slang_compile_time_type_text(self, type_text):
+        type_text = str(type_text)
+        for name, value in sorted(self.literal_int_constants.items()):
+            type_text = type_text.replace(f"[{name}]", f"[{value}]")
+        return type_text
+
+    def slang_global_variable_signature(self, node, declaration_type):
+        initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+        return (
+            self.canonical_slang_compile_time_type_text(
+                self.type_name_string(declaration_type)
+            ),
+            tuple(
+                str(qualifier) for qualifier in getattr(node, "qualifiers", []) or []
+            ),
+            self.slang_attribute_signature(node),
+            self.semantic_from_node(node),
+            repr(initial_value) if initial_value is not None else None,
+        )
+
+    def skip_duplicate_slang_global_variable(self, node, declaration_type):
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        if not name:
+            return False
+
+        signature = self.slang_global_variable_signature(node, declaration_type)
+        existing_signature = self.slang_global_declaration_signatures.get(name)
+        if existing_signature is None:
+            self.slang_global_declaration_signatures[name] = signature
+            return False
+        if existing_signature == signature:
+            return True
+        raise ValueError(
+            f"Duplicate Slang global declaration with incompatible definitions: {name}"
+        )
+
     def generate_global_variable(self, node):
         direct_buffer_type = self.slang_glsl_buffer_array_resource_type(node)
         if direct_buffer_type is not None:
             self.register_variable_type(node.name, direct_buffer_type, node)
+            if self.skip_duplicate_slang_global_variable(node, direct_buffer_type):
+                return ""
             declaration = format_c_style_array_declaration(
                 direct_buffer_type, node.name
             )
@@ -4383,6 +5300,8 @@ class SlangCodeGen:
             original_type = self.type_name_string(glsl_buffer_block_node_type(node))
             self.variable_types[node.name] = original_type
             self.local_variable_types[node.name] = original_type
+            if self.skip_duplicate_slang_global_variable(node, lowered_block_type):
+                return ""
             declaration = format_c_style_array_declaration(
                 lowered_block_type, node.name
             )
@@ -4404,6 +5323,11 @@ class SlangCodeGen:
             self.register_variable_type(node.name, node.element_type)
             element_type = self.convert_type(node.element_type)
             size = get_array_size_from_node(node)
+            declaration_type = (
+                f"{element_type}[]" if size is None else f"{element_type}[{size}]"
+            )
+            if self.skip_duplicate_slang_global_variable(node, declaration_type):
+                return ""
             prefix = self.slang_declaration_qualifier_prefix(node)
             if size is None:
                 return f"{prefix}{element_type} {node.name}[];\n"
@@ -4413,6 +5337,8 @@ class SlangCodeGen:
         vtype = self.variable_declaration_type(node, initial_value)
         self.register_variable_type(node.name, vtype, node)
         mapped_type = self.map_resource_type_with_format(vtype, node)
+        if self.skip_duplicate_slang_global_variable(node, mapped_type):
+            return ""
         declaration = self.format_declaration(vtype, node.name, node)
         declaration = (
             self.slang_declaration_qualifier_prefix(node)
@@ -4441,7 +5367,10 @@ class SlangCodeGen:
         self.indent_level += 1
 
         members = getattr(node, "members", [])
+        default_member_semantics = self.slang_default_struct_member_semantics(node)
         for member in members:
+            if self.slang_should_lower_struct_resource_member(node.name, member.name):
+                continue
             if hasattr(member, "member_type"):
                 member_type = self.convert_type(
                     self.convert_type_node_to_string(member.member_type)
@@ -4452,6 +5381,8 @@ class SlangCodeGen:
                 member_type = "float"
 
             semantic = self.semantic_from_node(member)
+            if semantic is None:
+                semantic = default_member_semantics.get(member.name)
             self.validate_slang_builtin_semantic_type(
                 semantic,
                 self.slang_tess_factor_member_type_name(member),
@@ -4509,6 +5440,8 @@ class SlangCodeGen:
             ret_type = "void"
 
         semantic = self.function_return_semantic(node)
+        if shader_type is not None and semantic is None:
+            semantic = self.default_slang_stage_return_semantic(shader_type, ret_type)
         body = getattr(node, "body", [])
         body_statements = self.get_statements(body)
         param_list = getattr(node, "parameters", getattr(node, "params", []))
@@ -4652,6 +5585,24 @@ class SlangCodeGen:
         ):
             self.register_variable_type(param_name, param_type)
             params.append(f"{self.convert_type(param_type)} {param_name} : {semantic}")
+
+        if shader_type is None:
+            existing_param_names = {
+                getattr(param, "name", None) for param in effective_param_list or []
+            }
+            for parameter in self.required_slang_stage_parameters(
+                getattr(node, "name", None)
+            ):
+                name = getattr(parameter, "name", None)
+                if not name or name in existing_param_names:
+                    continue
+                existing_param_names.add(name)
+                self.register_variable_type(
+                    name, self.slang_parameter_type_name(parameter), parameter
+                )
+                params.append(
+                    self.slang_stage_parameter_dependency_declaration(parameter)
+                )
 
         params_str = ", ".join(params)
         identifier_aliases = self.slang_stage_system_value_aliases(
@@ -4862,8 +5813,7 @@ class SlangCodeGen:
                 and id(node) not in indexed_identifier_ids
             ):
                 raise ValueError(
-                    "Slang hull stage gl_out must be indexed as "
-                    "gl_out[gl_InvocationID]"
+                    "Slang hull stage gl_out must be indexed as gl_out[gl_InvocationID]"
                 )
 
         output_type_name = None
@@ -6967,6 +7917,42 @@ class SlangCodeGen:
             )
         return False
 
+    def matrix_value_info(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+        mapped_type = self.convert_type(type_name)
+        if not isinstance(mapped_type, str):
+            return None
+        for component_type in ("double", "float"):
+            if not mapped_type.startswith(component_type):
+                continue
+            suffix = mapped_type[len(component_type) :]
+            if (
+                len(suffix) == 3
+                and suffix[0] in "234"
+                and suffix[1] == "x"
+                and suffix[2] in "234"
+            ):
+                return {
+                    "type": mapped_type,
+                    "component_type": component_type,
+                    "rows": int(suffix[0]),
+                    "columns": int(suffix[2]),
+                }
+        return None
+
+    def binary_requires_slang_mul(self, left_type, right_type):
+        left_matrix = self.matrix_value_info(left_type)
+        right_matrix = self.matrix_value_info(right_type)
+        if left_matrix is not None and right_matrix is not None:
+            return True
+        if left_matrix is not None and self.vector_value_info(right_type) is not None:
+            return True
+        if right_matrix is not None and self.vector_value_info(left_type) is not None:
+            return True
+        return False
+
     def vector_component_type(self, type_name):
         mapped_type = self.convert_type(type_name)
         if mapped_type.startswith("double"):
@@ -7044,6 +8030,79 @@ class SlangCodeGen:
         true_value = self.generate_expression(true_expr)
         false_value = self.generate_expression(false_expr)
         return f"{helper_name}({condition}, {true_value}, {false_value})"
+
+    def generate_slang_matrix_inverse_call(self, arg):
+        arg_type = self.expression_result_type(arg)
+        matrix_info = self.matrix_value_info(arg_type)
+        arg_expr = self.generate_expression(arg)
+        if matrix_info is None:
+            fallback_type = self.current_expression_expected_type or arg_type or "float"
+            return (
+                "/* unsupported Slang inverse: requires a matrix argument */ "
+                f"{self.zero_value_for_type(fallback_type)}"
+            )
+        if matrix_info["rows"] != matrix_info["columns"]:
+            return (
+                "/* unsupported Slang inverse: requires a square matrix */ "
+                f"{self.zero_value_for_type(matrix_info['type'])}"
+            )
+        helper_name = self.require_slang_matrix_inverse_helper(matrix_info)
+        return f"{helper_name}({arg_expr})"
+
+    def require_slang_matrix_inverse_helper(self, matrix_info):
+        matrix_type = matrix_info["type"]
+        helper_name = self.helper_function_name(f"_crossgl_inverse_{matrix_type}")
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        size = matrix_info["rows"]
+        component_type = matrix_info["component_type"]
+        vector_type = f"{component_type}{size}"
+        helper = (
+            f"{matrix_type} {helper_name}({matrix_type} m)\n"
+            "{\n"
+            f"    {matrix_type} a = m;\n"
+            f"    {matrix_type} inv = {matrix_type}(1.0);\n"
+            f"    for (int i = 0; i < {size}; i++)\n"
+            "    {\n"
+            "        int pivotRow = i;\n"
+            f"        {component_type} pivotAbs = abs(a[i][i]);\n"
+            f"        for (int row = i + 1; row < {size}; row++)\n"
+            "        {\n"
+            f"            {component_type} candidateAbs = abs(a[row][i]);\n"
+            "            if (candidateAbs > pivotAbs)\n"
+            "            {\n"
+            "                pivotAbs = candidateAbs;\n"
+            "                pivotRow = row;\n"
+            "            }\n"
+            "        }\n"
+            "        if (pivotRow != i)\n"
+            "        {\n"
+            f"            {vector_type} tmpA = a[i];\n"
+            "            a[i] = a[pivotRow];\n"
+            "            a[pivotRow] = tmpA;\n"
+            f"            {vector_type} tmpInv = inv[i];\n"
+            "            inv[i] = inv[pivotRow];\n"
+            "            inv[pivotRow] = tmpInv;\n"
+            "        }\n"
+            f"        {component_type} invPivot = 1.0 / a[i][i];\n"
+            "        a[i] = a[i] * invPivot;\n"
+            "        inv[i] = inv[i] * invPivot;\n"
+            f"        for (int row = 0; row < {size}; row++)\n"
+            "        {\n"
+            "            if (row != i)\n"
+            "            {\n"
+            f"                {component_type} factor = a[row][i];\n"
+            "                a[row] = a[row] - factor * a[i];\n"
+            "                inv[row] = inv[row] - factor * inv[i];\n"
+            "            }\n"
+            "        }\n"
+            "    }\n"
+            "    return inv;\n"
+            "}"
+        )
+        self.register_helper_function(helper_name, helper)
+        return helper_name
 
     def require_vector_select_helper(self, result_info, condition_info):
         result_type = result_info["type"]
@@ -7323,6 +8382,8 @@ class SlangCodeGen:
                 "bool4",
             }:
                 return str(func_name)
+            if isinstance(func_name, str) and self.matrix_value_info(func_name):
+                return str(func_name)
             return self.user_function_return_types.get(func_name)
         return None
 
@@ -7357,9 +8418,19 @@ class SlangCodeGen:
 
     def generate_user_function_arguments(self, function_name, args):
         expected_types = self.user_function_argument_types(function_name)
-        return self.generate_call_arguments(args, expected_types)
+        generated_args = self.generate_call_argument_list(args, expected_types)
+        existing_param_names = set()
+        for parameter in self.required_slang_stage_parameters(function_name):
+            name = getattr(parameter, "name", None)
+            if not name or name in existing_param_names:
+                continue
+            generated_args.append(name)
+        return ", ".join(generated_args)
 
     def generate_call_arguments(self, args, expected_types):
+        return ", ".join(self.generate_call_argument_list(args, expected_types))
+
+    def generate_call_argument_list(self, args, expected_types):
         generated_args = []
         for index, arg in enumerate(args or []):
             expected_type = (
@@ -7371,7 +8442,7 @@ class SlangCodeGen:
                 generated_args.append(
                     self.generate_expression_with_expected(arg, expected_type)
                 )
-        return ", ".join(generated_args)
+        return generated_args
 
     def generate_literal(self, node):
         value = node.value
@@ -7440,6 +8511,11 @@ class SlangCodeGen:
             right = f"({right})"
         if node.op == "%" and self.modulo_requires_fmod(node.left, node.right):
             return f"fmod({left}, {right})"
+        if node.op == "*" and self.binary_requires_slang_mul(
+            self.expression_result_type(node.left),
+            self.expression_result_type(node.right),
+        ):
+            return f"mul({left}, {right})"
         return f"{left} {node.op} {right}"
 
     def generate_expression(self, node):
@@ -7494,7 +8570,13 @@ class SlangCodeGen:
             block_load = self.generate_glsl_buffer_block_member_load(node)
             if block_load is not None:
                 return block_load
-            obj = self.generate_expression(node.object)
+            object_type = self.expression_result_type(node.object)
+            member_info = self.slang_lowered_struct_resource_member_info(
+                object_type, node.member
+            )
+            if member_info is not None:
+                return member_info["global_name"]
+            obj = self.generate_expression_without_expected(node.object)
             return f"{obj}.{node.member}"
         elif isinstance(node, PointerAccessNode):
             pointer = self.generate_expression(node.pointer_expr)
@@ -7568,6 +8650,14 @@ class SlangCodeGen:
                 bool_mix = self.generate_bool_mix_call(node.args)
                 if bool_mix is not None:
                     return bool_mix
+            if callee == "inverse" and callee not in self.user_function_names:
+                if len(node.args) != 1:
+                    fallback_type = self.current_expression_expected_type or "float"
+                    return (
+                        "/* unsupported Slang inverse: requires one argument */ "
+                        f"{self.zero_value_for_type(fallback_type)}"
+                    )
+                return self.generate_slang_matrix_inverse_call(node.args[0])
             if callee == "lambda":
                 lambda_expr = self.generate_lambda_expression(node.args)
                 if lambda_expr is not None:
@@ -7826,9 +8916,7 @@ class SlangCodeGen:
             if value_type is not None and not self.is_slang_wave_integer_value_type(
                 value_type
             ):
-                return (
-                    "value must be scalar or vector int or uint, " f"got {value_type}"
-                )
+                return f"value must be scalar or vector int or uint, got {value_type}"
 
         if operation in {
             "WaveActiveAllTrue",
@@ -8925,25 +10013,31 @@ class SlangCodeGen:
             "sampler2DArrayShadow": "Sampler2DArrayShadow",
             "samplerCubeShadow": "SamplerCubeShadow",
             "samplerCubeArrayShadow": "SamplerCubeArrayShadow",
-            "iimage1D": "RWTexture1D<int>",
-            "iimage1DArray": "RWTexture1DArray<int>",
-            "iimage2D": "RWTexture2D<int>",
-            "iimage3D": "RWTexture3D<int>",
-            "iimage2DArray": "RWTexture2DArray<int>",
-            "iimage2DMS": "RWTexture2DMS<int>",
-            "iimage2DMSArray": "RWTexture2DMSArray<int>",
-            "uimage1D": "RWTexture1D<uint>",
-            "uimage1DArray": "RWTexture1DArray<uint>",
-            "uimage2D": "RWTexture2D<uint>",
-            "uimage3D": "RWTexture3D<uint>",
-            "uimage2DArray": "RWTexture2DArray<uint>",
-            "uimage2DMS": "RWTexture2DMS<uint>",
-            "uimage2DMSArray": "RWTexture2DMSArray<uint>",
+            "iimage1D": "RWTexture1D<int4>",
+            "iimage1DArray": "RWTexture1DArray<int4>",
+            "iimage2D": "RWTexture2D<int4>",
+            "iimage3D": "RWTexture3D<int4>",
+            "iimageCube": "RWTexture2DArray<int4>",
+            "iimage2DArray": "RWTexture2DArray<int4>",
+            "iimageCubeArray": "RWTexture2DArray<int4>",
+            "iimage2DMS": "RWTexture2DMS<int4>",
+            "iimage2DMSArray": "RWTexture2DMSArray<int4>",
+            "uimage1D": "RWTexture1D<uint4>",
+            "uimage1DArray": "RWTexture1DArray<uint4>",
+            "uimage2D": "RWTexture2D<uint4>",
+            "uimage3D": "RWTexture3D<uint4>",
+            "uimageCube": "RWTexture2DArray<uint4>",
+            "uimage2DArray": "RWTexture2DArray<uint4>",
+            "uimageCubeArray": "RWTexture2DArray<uint4>",
+            "uimage2DMS": "RWTexture2DMS<uint4>",
+            "uimage2DMSArray": "RWTexture2DMSArray<uint4>",
             "image1D": "RWTexture1D<float4>",
             "image1DArray": "RWTexture1DArray<float4>",
             "image2D": "RWTexture2D<float4>",
             "image3D": "RWTexture3D<float4>",
+            "imageCube": "RWTexture2DArray<float4>",
             "image2DArray": "RWTexture2DArray<float4>",
+            "imageCubeArray": "RWTexture2DArray<float4>",
             "image2DMS": "RWTexture2DMS<float4>",
             "image2DMSArray": "RWTexture2DMSArray<float4>",
             "accelerationStructureEXT": "RaytracingAccelerationStructure",
@@ -9158,8 +10252,38 @@ class SlangCodeGen:
         return self.map_resource_base_type_with_format(type_name, node)
 
     def map_resource_base_type_with_format(self, type_name, node=None):
-        mapped_type = self.map_image_base_type_with_format(type_name, node)
+        mapped_type = self.map_explicit_sampler_base_type(type_name, node)
+        if mapped_type is None:
+            mapped_type = self.map_image_base_type_with_format(type_name, node)
         return self.map_buffer_base_type_with_access(mapped_type, node)
+
+    def map_explicit_sampler_base_type(self, type_name, node=None):
+        node_name = getattr(node, "name", getattr(node, "variable_name", None))
+        base_type = self.resource_base_type(type_name)
+        if (
+            node_name in self.explicit_comparison_sampler_names
+            and base_type == "sampler"
+        ):
+            return "SamplerComparisonState"
+        if node_name not in self.explicit_sampler_texture_names:
+            return None
+        return self.separated_slang_texture_type(base_type)
+
+    def separated_slang_texture_type(self, base_type):
+        texture_types = {
+            "sampler1D": "Texture1D<float4>",
+            "sampler1DArray": "Texture1DArray<float4>",
+            "sampler2D": "Texture2D<float4>",
+            "sampler2DArray": "Texture2DArray<float4>",
+            "sampler3D": "Texture3D<float4>",
+            "samplerCube": "TextureCube<float4>",
+            "samplerCubeArray": "TextureCubeArray<float4>",
+            "sampler2DShadow": "Texture2D<float>",
+            "sampler2DArrayShadow": "Texture2DArray<float>",
+            "samplerCubeShadow": "TextureCube<float>",
+            "samplerCubeArrayShadow": "TextureCubeArray<float>",
+        }
+        return texture_types.get(base_type)
 
     def map_image_base_type_with_format(self, type_name, node=None):
         base_type = self.resource_base_type(type_name)
@@ -9177,12 +10301,18 @@ class SlangCodeGen:
             "image3D": "RWTexture3D",
             "iimage3D": "RWTexture3D",
             "uimage3D": "RWTexture3D",
+            "imageCube": "RWTexture2DArray",
+            "iimageCube": "RWTexture2DArray",
+            "uimageCube": "RWTexture2DArray",
             "image1DArray": "RWTexture1DArray",
             "iimage1DArray": "RWTexture1DArray",
             "uimage1DArray": "RWTexture1DArray",
             "image2DArray": "RWTexture2DArray",
             "iimage2DArray": "RWTexture2DArray",
             "uimage2DArray": "RWTexture2DArray",
+            "imageCubeArray": "RWTexture2DArray",
+            "iimageCubeArray": "RWTexture2DArray",
+            "uimageCubeArray": "RWTexture2DArray",
             "image2DMS": "RWTexture2DMS",
             "iimage2DMS": "RWTexture2DMS",
             "uimage2DMS": "RWTexture2DMS",
@@ -9235,12 +10365,18 @@ class SlangCodeGen:
             "image3D",
             "iimage3D",
             "uimage3D",
+            "imageCube",
+            "iimageCube",
+            "uimageCube",
             "image1DArray",
             "iimage1DArray",
             "uimage1DArray",
             "image2DArray",
             "iimage2DArray",
             "uimage2DArray",
+            "imageCubeArray",
+            "iimageCubeArray",
+            "uimageCubeArray",
             "image2DMS",
             "iimage2DMS",
             "uimage2DMS",
@@ -9312,9 +10448,15 @@ class SlangCodeGen:
             "image2DMS": 2,
             "iimage2DMS": 2,
             "uimage2DMS": 2,
+            "imageCube": 3,
+            "iimageCube": 3,
+            "uimageCube": 3,
             "image2DArray": 3,
             "iimage2DArray": 3,
             "uimage2DArray": 3,
+            "imageCubeArray": 3,
+            "iimageCubeArray": 3,
+            "uimageCubeArray": 3,
             "image2DMSArray": 3,
             "iimage2DMSArray": 3,
             "uimage2DMSArray": 3,
@@ -10660,7 +11802,7 @@ class SlangCodeGen:
 
     def buffer_dimensions_helper_name(self, buffer_type):
         helper_name = self.helper_function_name(
-            "cgl_bufferDimensions_" f"{self.resource_helper_type_suffix(buffer_type)}"
+            f"cgl_bufferDimensions_{self.resource_helper_type_suffix(buffer_type)}"
         )
         self.register_helper_function(
             helper_name,
@@ -11117,6 +12259,13 @@ class SlangCodeGen:
             image_type = self.resource_base_type(self.image_resource_type(resource_arg))
             if image_type:
                 return image_type
+        resource_name = self.expression_root_identifier_name(resource_arg)
+        if resource_name in self.explicit_sampler_texture_names:
+            separated_type = self.separated_slang_texture_type(
+                self.resource_base_type(resource_type)
+            )
+            if separated_type is not None:
+                return separated_type
         return self.convert_type(resource_type)
 
     def resource_query_helper_name(self, func_name, resource_type, resource_slang_type):
@@ -11206,7 +12355,9 @@ class SlangCodeGen:
                             func_name, expected_reason
                         )
                     bias = self.generate_expression(extra_args[0])
-                    return f"{texture_name}.SampleBias({coord}, {bias})"
+                    return self.slang_texture_method_call(
+                        texture_name, "SampleBias", args, coord, bias
+                    )
                 expected_reason = self.texture_result_expected_type_unsupported_reason(
                     func_name, "float4"
                 )
@@ -11214,7 +12365,9 @@ class SlangCodeGen:
                     return self.unsupported_sampled_texture_call(
                         func_name, expected_reason
                     )
-                return f"{texture_name}.Sample({coord})"
+                return self.slang_texture_method_call(
+                    texture_name, "Sample", args, coord
+                )
 
             if func_name == "textureLod" and extra_args:
                 lod_reason = self.scalar_texture_lod_unsupported_reason(extra_args[0])
@@ -11228,7 +12381,9 @@ class SlangCodeGen:
                         func_name, expected_reason
                     )
                 lod = self.generate_expression(extra_args[0])
-                return f"{texture_name}.SampleLevel({coord}, {lod})"
+                return self.slang_texture_method_call(
+                    texture_name, "SampleLevel", args, coord, lod
+                )
 
             if func_name == "textureGrad" and len(extra_args) >= 2:
                 grad_reason = self.texture_gradient_rank_unsupported_reason(
@@ -11247,7 +12402,9 @@ class SlangCodeGen:
                     )
                 ddx = self.generate_expression(extra_args[0])
                 ddy = self.generate_expression(extra_args[1])
-                return f"{texture_name}.SampleGrad({coord}, {ddx}, {ddy})"
+                return self.slang_texture_method_call(
+                    texture_name, "SampleGrad", args, coord, ddx, ddy
+                )
 
             return self.unsupported_sampled_texture_call(
                 func_name,
@@ -11573,11 +12730,35 @@ class SlangCodeGen:
             return "requires lod/sample and offset arguments"
         return "has unsupported arguments"
 
+    def explicit_sampler_expression(self, args):
+        if not self.is_explicit_sampler_argument(args):
+            return None
+        if not self.explicit_sampler_call_uses_separated_texture(args[0]):
+            return None
+        return self.generate_expression(args[1])
+
+    def explicit_sampler_call_uses_separated_texture(self, texture_arg):
+        texture_name = self.expression_root_identifier_name(texture_arg)
+        if texture_name in self.explicit_sampler_texture_names:
+            return True
+        mapped_type = self.convert_type(self.get_expression_type(texture_arg))
+        base_type = self.resource_base_type(mapped_type)
+        return isinstance(base_type, str) and base_type.startswith("Texture")
+
+    def slang_texture_method_args(self, args, *method_args):
+        sampler = self.explicit_sampler_expression(args)
+        if sampler is None:
+            return list(method_args)
+        return [sampler, *method_args]
+
+    def slang_texture_method_call(self, texture_name, method, args, *method_args):
+        rendered_args = ", ".join(self.slang_texture_method_args(args, *method_args))
+        return f"{texture_name}.{method}({rendered_args})"
+
     def unsupported_sampled_texture_call(self, func_name, reason):
         fallback = self.texture_result_diagnostic_fallback("float4")
         return (
-            f"/* unsupported Slang sampled texture: "
-            f"{func_name} {reason} */ {fallback}"
+            f"/* unsupported Slang sampled texture: {func_name} {reason} */ {fallback}"
         )
 
     def generate_texture_offset(self, func_name, args):
@@ -11623,8 +12804,12 @@ class SlangCodeGen:
             offset = self.generate_expression(extra_args[0])
             if len(extra_args) == 2:
                 bias = self.generate_expression(extra_args[1])
-                return f"{texture_name}.SampleBias({coord}, {bias}, {offset})"
-            return f"{texture_name}.Sample({coord}, {offset})"
+                return self.slang_texture_method_call(
+                    texture_name, "SampleBias", args, coord, bias, offset
+                )
+            return self.slang_texture_method_call(
+                texture_name, "Sample", args, coord, offset
+            )
 
         if func_name == "textureLodOffset":
             if len(extra_args) != 2:
@@ -11646,7 +12831,9 @@ class SlangCodeGen:
                 return self.unsupported_texture_offset_call(func_name, expected_reason)
             lod = self.generate_expression(extra_args[0])
             offset = self.generate_expression(extra_args[1])
-            return f"{texture_name}.SampleLevel({coord}, {lod}, {offset})"
+            return self.slang_texture_method_call(
+                texture_name, "SampleLevel", args, coord, lod, offset
+            )
 
         if len(extra_args) != 3:
             return self.unsupported_texture_offset_call(
@@ -11670,13 +12857,14 @@ class SlangCodeGen:
         ddx = self.generate_expression(extra_args[0])
         ddy = self.generate_expression(extra_args[1])
         offset = self.generate_expression(extra_args[2])
-        return f"{texture_name}.SampleGrad({coord}, {ddx}, {ddy}, {offset})"
+        return self.slang_texture_method_call(
+            texture_name, "SampleGrad", args, coord, ddx, ddy, offset
+        )
 
     def unsupported_texture_offset_call(self, func_name, reason):
         fallback = self.texture_result_diagnostic_fallback("float4")
         return (
-            f"/* unsupported Slang texture offset: {func_name} {reason} */ "
-            f"{fallback}"
+            f"/* unsupported Slang texture offset: {func_name} {reason} */ {fallback}"
         )
 
     def texture_result_expected_type_unsupported_reason(self, func_name, result_type):
@@ -11735,7 +12923,9 @@ class SlangCodeGen:
                     return self.unsupported_texture_projected_call(
                         func_name, expected_reason
                     )
-                return f"{texture_name}.Sample({projected_coord})"
+                return self.slang_texture_method_call(
+                    texture_name, "Sample", args, projected_coord
+                )
             if len(extra_args) == 1:
                 bias_reason = self.scalar_texture_bias_unsupported_reason(extra_args[0])
                 if bias_reason:
@@ -11750,7 +12940,9 @@ class SlangCodeGen:
                         func_name, expected_reason
                     )
                 bias = self.generate_expression(extra_args[0])
-                return f"{texture_name}.SampleBias({projected_coord}, {bias})"
+                return self.slang_texture_method_call(
+                    texture_name, "SampleBias", args, projected_coord, bias
+                )
             return self.unsupported_texture_projected_call(
                 func_name, "accepts at most one bias argument"
             )
@@ -11772,7 +12964,9 @@ class SlangCodeGen:
                         func_name, expected_reason
                     )
                 offset = self.generate_expression(extra_args[0])
-                return f"{texture_name}.Sample({projected_coord}, {offset})"
+                return self.slang_texture_method_call(
+                    texture_name, "Sample", args, projected_coord, offset
+                )
             if len(extra_args) == 2:
                 offset_reason = self.texture_offset_rank_unsupported_reason(
                     args[0], extra_args[0]
@@ -11795,7 +12989,9 @@ class SlangCodeGen:
                     )
                 offset = self.generate_expression(extra_args[0])
                 bias = self.generate_expression(extra_args[1])
-                return f"{texture_name}.SampleBias({projected_coord}, {bias}, {offset})"
+                return self.slang_texture_method_call(
+                    texture_name, "SampleBias", args, projected_coord, bias, offset
+                )
             return self.unsupported_texture_projected_call(
                 func_name, "requires offset and optional bias arguments"
             )
@@ -11816,7 +13012,9 @@ class SlangCodeGen:
                     func_name, expected_reason
                 )
             lod = self.generate_expression(extra_args[0])
-            return f"{texture_name}.SampleLevel({projected_coord}, {lod})"
+            return self.slang_texture_method_call(
+                texture_name, "SampleLevel", args, projected_coord, lod
+            )
 
         if func_name == "textureProjLodOffset":
             if len(extra_args) != 2:
@@ -11840,7 +13038,9 @@ class SlangCodeGen:
                 )
             lod = self.generate_expression(extra_args[0])
             offset = self.generate_expression(extra_args[1])
-            return f"{texture_name}.SampleLevel({projected_coord}, {lod}, {offset})"
+            return self.slang_texture_method_call(
+                texture_name, "SampleLevel", args, projected_coord, lod, offset
+            )
 
         if func_name == "textureProjGrad":
             if len(extra_args) != 2:
@@ -11861,7 +13061,9 @@ class SlangCodeGen:
                 )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
-            return f"{texture_name}.SampleGrad({projected_coord}, {ddx}, {ddy})"
+            return self.slang_texture_method_call(
+                texture_name, "SampleGrad", args, projected_coord, ddx, ddy
+            )
 
         if len(extra_args) != 3:
             return self.unsupported_texture_projected_call(
@@ -11885,7 +13087,9 @@ class SlangCodeGen:
         ddx = self.generate_expression(extra_args[0])
         ddy = self.generate_expression(extra_args[1])
         offset = self.generate_expression(extra_args[2])
-        return f"{texture_name}.SampleGrad({projected_coord}, {ddx}, {ddy}, {offset})"
+        return self.slang_texture_method_call(
+            texture_name, "SampleGrad", args, projected_coord, ddx, ddy, offset
+        )
 
     def projected_texture_accepts_resource(self, texture_node):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
@@ -11992,9 +13196,11 @@ class SlangCodeGen:
         if component_reason:
             return self.unsupported_texture_gather_call(func_name, component_reason)
 
-        method_args = [coord] + [
-            self.generate_expression(offset_arg) for offset_arg in offset_args
-        ]
+        method_args = self.slang_texture_method_args(
+            args,
+            coord,
+            *[self.generate_expression(offset_arg) for offset_arg in offset_args],
+        )
         method = self.texture_gather_method(component_arg)
         if method is not None:
             expected_reason = self.texture_result_expected_type_unsupported_reason(
@@ -12079,8 +13285,7 @@ class SlangCodeGen:
     def unsupported_texture_gather_call(self, func_name, reason):
         fallback = self.texture_result_diagnostic_fallback("float4")
         return (
-            f"/* unsupported Slang texture gather: {func_name} {reason} */ "
-            f"{fallback}"
+            f"/* unsupported Slang texture gather: {func_name} {reason} */ {fallback}"
         )
 
     def generate_texture_compare(self, func_name, args):
@@ -12121,7 +13326,9 @@ class SlangCodeGen:
                 return self.unsupported_texture_compare_call(
                     func_name, "accepts no extra arguments"
                 )
-            return f"{texture_name}.SampleCmp({coord}, {compare})"
+            return self.slang_texture_method_call(
+                texture_name, "SampleCmp", args, coord, compare
+            )
 
         if func_name == "textureCompareOffset":
             if len(extra_args) != 1:
@@ -12134,7 +13341,9 @@ class SlangCodeGen:
             if offset_reason:
                 return self.unsupported_texture_compare_call(func_name, offset_reason)
             offset = self.generate_expression(extra_args[0])
-            return f"{texture_name}.SampleCmp({coord}, {compare}, {offset})"
+            return self.slang_texture_method_call(
+                texture_name, "SampleCmp", args, coord, compare, offset
+            )
 
         if func_name == "textureCompareLod":
             if len(extra_args) != 1:
@@ -12147,7 +13356,9 @@ class SlangCodeGen:
             if lod_reason:
                 return self.unsupported_texture_compare_call(func_name, lod_reason)
             lod = self.generate_expression(extra_args[0])
-            return f"{texture_name}.SampleCmpLevel({coord}, {compare}, {lod})"
+            return self.slang_texture_method_call(
+                texture_name, "SampleCmpLevel", args, coord, compare, lod
+            )
 
         if len(extra_args) != 2:
             return self.unsupported_texture_compare_call(
@@ -12162,7 +13373,9 @@ class SlangCodeGen:
             return self.unsupported_texture_compare_call(func_name, grad_reason)
         ddx = self.generate_expression(extra_args[0])
         ddy = self.generate_expression(extra_args[1])
-        return f"{texture_name}.SampleCmpGrad({coord}, {compare}, {ddx}, {ddy})"
+        return self.slang_texture_method_call(
+            texture_name, "SampleCmpGrad", args, coord, compare, ddx, ddy
+        )
 
     def generate_texture_gather_compare(self, func_name, args):
         compare_args = self.texture_compare_args(func_name, args)
@@ -12204,7 +13417,9 @@ class SlangCodeGen:
                 return self.unsupported_texture_gather_compare_call(
                     func_name, "accepts no extra arguments"
                 )
-            return f"{texture_name}.GatherCmp({coord}, {compare})"
+            return self.slang_texture_method_call(
+                texture_name, "GatherCmp", args, coord, compare
+            )
 
         if len(extra_args) != 1:
             return self.unsupported_texture_gather_compare_call(
@@ -12218,7 +13433,9 @@ class SlangCodeGen:
                 func_name, offset_reason
             )
         offset = self.generate_expression(extra_args[0])
-        return f"{texture_name}.GatherCmp({coord}, {compare}, {offset})"
+        return self.slang_texture_method_call(
+            texture_name, "GatherCmp", args, coord, compare, offset
+        )
 
     def texture_compare_args(self, func_name, args):
         coord_index = 2 if self.is_explicit_sampler_argument(args) else 1
@@ -12567,8 +13784,7 @@ class SlangCodeGen:
 
     def unsupported_texture_compare_call(self, func_name, reason, fallback="0.0"):
         return (
-            f"/* unsupported Slang shadow compare: {func_name} {reason} */ "
-            f"{fallback}"
+            f"/* unsupported Slang shadow compare: {func_name} {reason} */ {fallback}"
         )
 
     def unsupported_texture_gather_compare_call(
@@ -12643,8 +13859,7 @@ class SlangCodeGen:
 
     def unsupported_resource_query_call(self, func_name, reason, fallback="0"):
         return (
-            f"/* unsupported Slang resource query: {func_name} {reason} */ "
-            f"{fallback}"
+            f"/* unsupported Slang resource query: {func_name} {reason} */ {fallback}"
         )
 
     def generate_texture_query_lod(self, args):
@@ -12669,9 +13884,10 @@ class SlangCodeGen:
                 expected_reason,
                 self.zero_value_for_type(self.current_expression_expected_type),
             )
-        unclamped = f"{texture_name}.CalculateLevelOfDetailUnclamped({coord})"
-        clamped = f"{texture_name}.CalculateLevelOfDetail({coord})"
-        return f"float2({unclamped}, {clamped})"
+        lod_args = ", ".join(self.slang_texture_method_args(args, coord))
+        clamped = f"{texture_name}.CalculateLevelOfDetail({lod_args})"
+        unclamped = f"{texture_name}.CalculateLevelOfDetailUnclamped({lod_args})"
+        return f"float2({clamped}, {unclamped})"
 
     def texture_query_lod_args(self, args):
         coord_index = self.texture_query_lod_coord_index(args)
@@ -12811,7 +14027,10 @@ class SlangCodeGen:
         return ", ".join(args)
 
     def texture_query_levels_args(self, spec):
-        args = list(spec["dimensions"])
+        args = []
+        if spec["mip"]:
+            args.append("0u")
+        args.extend(spec["dimensions"])
         args.append("levels")
         return ", ".join(args)
 

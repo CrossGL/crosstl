@@ -64,7 +64,7 @@ class FakeClient:
             raise error
         return self.json_files[(repo, path, ref)]
 
-    def list_open_support_issues(self):
+    def list_support_issues(self):
         return list(self.support_issues)
 
 
@@ -647,7 +647,7 @@ def test_sync_audit_reports_missing_managed_issue_for_removed_backlog_row(
     captured = capsys.readouterr()
     assert "missing_closure_links=1" in captured.out
     assert (
-        "::warning::Support backlog rows were removed without open managed support issues"
+        "::warning::Support backlog rows were removed without managed support issues"
         in captured.out
     )
     assert "backlog:metal:language.wave_intrinsics" in captured.out
@@ -1012,6 +1012,34 @@ def test_github_client_lists_pull_files_across_pages():
         "README.md"
     ]
     assert pages == [1, 2]
+
+
+def test_github_client_lists_support_issues_across_open_and_closed_states():
+    module = load_sync_module()
+    client = module.GitHubClient("CrossGL/crosstl", "token")
+    queries = []
+
+    def fake_request(method, path, payload=None, query=None):
+        assert method == "GET"
+        assert path == "/repos/CrossGL/crosstl/issues"
+        assert payload is None
+        queries.append(query)
+        return [
+            {"number": 10, "body": "managed"},
+            {"number": 11, "body": "pull", "pull_request": {}},
+        ], {}
+
+    client.request = fake_request
+
+    assert client.list_support_issues() == [{"number": 10, "body": "managed"}]
+    assert queries == [
+        {
+            "labels": "support:matrix",
+            "state": "all",
+            "per_page": 100,
+            "page": 1,
+        }
+    ]
 
 
 def test_traceability_policy_passes_with_valid_closing_issue_for_support_files():

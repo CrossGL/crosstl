@@ -71,7 +71,7 @@
       "id": "vulkan",
       "name": "Vulkan SPIR-V",
       "aliases": ["spirv", "spv"],
-      "target_extension": ".spirv",
+      "target_extension": ".spvasm",
       "translator_codegen": "crosstl/translator/codegen/SPIRV_codegen.py",
       "native_backend": "crosstl/backend/SPIRV",
       "tests": [

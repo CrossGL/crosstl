@@ -1298,6 +1298,52 @@ def test_metal_shared_local_variables_use_threadgroup_address_space():
     assert "\n    int scratch[4];" not in generated_code
 
 
+def test_metal_stage_local_shared_variables_emit_inside_kernel():
+    shader = """
+    shader StageLocalSharedStorage {
+        compute {
+            shared vec3 positions[64];
+            shared bool active[64];
+
+            void main(uvec3 tid @ gl_LocalInvocationID) {
+                positions[tid.x] = vec3(0.0);
+                active[tid.x] = true;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "kernel void kernel_main" in generated_code
+    assert "threadgroup float3 positions[64];" in generated_code
+    assert "threadgroup bool active[64];" in generated_code
+    assert generated_code.index(
+        "threadgroup float3 positions[64];"
+    ) > generated_code.index("kernel void kernel_main")
+    assert "positions[tid.x] = float3(0.0);" in generated_code
+    assert "active[tid.x] = true;" in generated_code
+
+
+def test_metal_compute_entry_points_reject_non_void_returns():
+    shader = """
+    shader BadComputeReturn {
+        compute {
+            float main() {
+                return 1.0;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError, match="Metal compute entry point 'main' must return void"
+    ):
+        MetalCodeGen().generate_stage(parse_code(tokenize_code(shader)), "compute")
+
+
 def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers():
     shader = """
     shader ThreadgroupHelperArray {
@@ -2406,6 +2452,27 @@ def test_metal_simd_aliases_map_to_standard_metal_types():
     assert "float3x2 passMatrix(float3x2 input)" in generated_code
     assert "float3x2 m = float3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
     assert "simd_" not in generated_code
+
+
+def test_metal_matrix_vector_binary_operands_are_not_cast_to_vectors():
+    shader = """
+    shader MetalMatrixVectorOperands {
+        vec4 worldPos(mat4 model, vec3 position) {
+            return model * vec4(position, 1.0);
+        }
+
+        vec3 worldNormal(mat3 normalMatrix, vec3 normal) {
+            return normalMatrix * normal;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return model * float4(position, 1.0);" in generated_code
+    assert "return normalMatrix * normal;" in generated_code
+    assert "float4(model)" not in generated_code
+    assert "float3(normalMatrix)" not in generated_code
 
 
 def test_metal_fixed_width_scalar_aliases_map_to_valid_metal_scalars():
@@ -4332,6 +4399,53 @@ def test_match_return_arms_do_not_emit_extra_breaks():
     assert "MatchNode(" not in generated_code
 
 
+def test_bool_match_lowers_to_if_chain_for_metal():
+    shader = """
+    shader BoolMatch {
+        int helper(bool enabled) {
+            match enabled {
+                true => { return 1; }
+                false => { return 0; }
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (enabled)" not in generated_code
+    assert "if (enabled == true)" in generated_code
+    assert "else if (enabled == false)" in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_non_void_match_return_paths_emit_fallback_return_for_metal_compiler():
+    shader = """
+    shader MatchReturnFallback {
+        enum Mode {
+            Add,
+            Multiply
+        }
+
+        int helper(Mode mode) {
+            match mode {
+                Mode::Add => { return 1; }
+                Mode::Multiply => { return 2; }
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "if (mode == Mode_Add)" in generated_code
+    assert "else if (mode == Mode_Multiply)" in generated_code
+    assert "return int(0) /* fallback for unmatched generated control flow */;" in (
+        generated_code
+    )
+    assert "MatchNode(" not in generated_code
+
+
 def test_match_guarded_literal_and_wildcard_arms_lower_to_if_chain():
     shader = """
     shader MatchGuardPattern {
@@ -4351,9 +4465,9 @@ def test_match_guarded_literal_and_wildcard_arms_lower_to_if_chain():
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "switch (mode)" not in generated_code
-    assert "if (((mode == 0) &&" in generated_code
+    assert "if ((mode == 0) &&" in generated_code
     assert "mode > 0" in generated_code
-    assert "else if ((mode == 0))" in generated_code
+    assert "else if (mode == 0)" in generated_code
     assert "else if" in generated_code
     assert "mode < 10" in generated_code
     assert "else {" in generated_code
@@ -4381,7 +4495,7 @@ def test_match_identifier_binding_arm_lowers_to_scoped_else_body():
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "switch (mode)" not in generated_code
-    assert "if ((mode == 0))" in generated_code
+    assert "if (mode == 0)" in generated_code
     assert "else {" in generated_code
     assert "int other = mode;" in generated_code
     assert "value = other;" in generated_code
@@ -4406,7 +4520,7 @@ def test_match_guarded_identifier_binding_falls_through_to_later_arm():
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "switch (mode)" not in generated_code
-    assert "if ((mode == 0))" in generated_code
+    assert "if (mode == 0)" in generated_code
     assert "else {" in generated_code
     assert "int candidate = mode;" in generated_code
     assert "candidate > 2" in generated_code
@@ -4464,14 +4578,14 @@ def test_match_enum_path_pattern_lowers_to_integer_constants():
 
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "static const int Mode_Add = 0;" in generated_code
-    assert "static const int Mode_Multiply = 4;" in generated_code
-    assert "static const int Mode_Divide = 5;" in generated_code
+    assert "constant int Mode_Add = 0;" in generated_code
+    assert "constant int Mode_Multiply = 4;" in generated_code
+    assert "constant int Mode_Divide = 5;" in generated_code
     assert "int helper(int mode)" in generated_code
     assert "int value = Mode_Divide;" in generated_code
     assert "switch (mode)" not in generated_code
-    assert "if ((mode == Mode_Add))" in generated_code
-    assert "else if ((mode == Mode_Multiply))" in generated_code
+    assert "if (mode == Mode_Add)" in generated_code
+    assert "else if (mode == Mode_Multiply)" in generated_code
     assert "value = 3;" in generated_code
     assert "MatchNode(" not in generated_code
 
@@ -4508,15 +4622,15 @@ def test_match_struct_enum_pattern_binds_named_payload_fields():
 
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "static const int LightingModel_Phong = 0;" in generated_code
-    assert "static const int LightingModel_Toon = 1;" in generated_code
+    assert "constant int LightingModel_Phong = 0;" in generated_code
+    assert "constant int LightingModel_Toon = 1;" in generated_code
     assert "struct LightingModel {" in generated_code
     assert "int variant;" in generated_code
     assert "float3 ambient;" in generated_code
     assert "float3 base_color;" in generated_code
     assert "float3 shade(LightingModel model)" in generated_code
-    assert "if ((model.variant == LightingModel_Phong))" in generated_code
-    assert "else if ((model.variant == LightingModel_Toon))" in generated_code
+    assert "if (model.variant == LightingModel_Phong)" in generated_code
+    assert "else if (model.variant == LightingModel_Toon)" in generated_code
     assert "float3 ambient = model.ambient;" in generated_code
     assert "float shininess = model.shininess;" in generated_code
     assert "float3 base_color = model.base_color;" in generated_code
@@ -4553,17 +4667,17 @@ def test_match_tuple_enum_pattern_binds_payload_fields():
 
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "static const int MaybeInt_Value = 0;" in generated_code
-    assert "static const int MaybeInt_Pair = 1;" in generated_code
-    assert "static const int MaybeInt_Missing = 2;" in generated_code
+    assert "constant int MaybeInt_Value = 0;" in generated_code
+    assert "constant int MaybeInt_Pair = 1;" in generated_code
+    assert "constant int MaybeInt_Missing = 2;" in generated_code
     assert "struct MaybeInt {" in generated_code
     assert "int Value_0;" in generated_code
     assert "int Pair_0;" in generated_code
     assert "float Pair_1;" in generated_code
     assert "MaybeInt MaybeInt_Value_make(int payload0)" in generated_code
     assert "MaybeInt MaybeInt_Missing_make()" in generated_code
-    assert "if ((item.variant == MaybeInt_Value))" in generated_code
-    assert "else if ((item.variant == MaybeInt_Pair))" in generated_code
+    assert "if (item.variant == MaybeInt_Value)" in generated_code
+    assert "else if (item.variant == MaybeInt_Pair)" in generated_code
     assert "int value = item.Value_0;" in generated_code
     assert "int left = item.Pair_0;" in generated_code
     assert "float scale = item.Pair_1;" in generated_code
@@ -4674,8 +4788,8 @@ def test_generic_enum_struct_concrete_match_and_constructors():
 
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "static const int Option_Some = 0;" in generated_code
-    assert "static const int Result_Ok = 0;" in generated_code
+    assert "constant int Option_Some = 0;" in generated_code
+    assert "constant int Result_Ok = 0;" in generated_code
     assert "struct Option_int {" in generated_code
     assert "struct Result_int_MathError {" in generated_code
     assert "struct Option {" not in generated_code
@@ -4701,10 +4815,10 @@ def test_generic_enum_struct_concrete_match_and_constructors():
         "return Result_int_MathError_Err_make(MathError_DivisionByZero);"
         in generated_code
     )
-    assert "if ((item.variant == Option_Some))" in generated_code
-    assert "else if ((item.variant == Option_None))" in generated_code
-    assert "if ((item.variant == Result_Ok))" in generated_code
-    assert "else if ((item.variant == Result_Err))" in generated_code
+    assert "if (item.variant == Option_Some)" in generated_code
+    assert "else if (item.variant == Option_None)" in generated_code
+    assert "if (item.variant == Result_Ok)" in generated_code
+    assert "else if (item.variant == Result_Err)" in generated_code
     assert "int value = item.Some_0;" in generated_code
     assert "int value = item.Ok_0;" in generated_code
     assert "Option<" not in generated_code
@@ -4749,10 +4863,8 @@ def test_generic_enum_function_call_match_infers_result_type_once():
         in generated_code
     )
     assert generated_code.count("make_result(ok)") == 1
-    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
-    assert (
-        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
-    )
+    assert "if (__crossgl_match_subject_0.variant == Result_Ok)" in generated_code
+    assert "else if (__crossgl_match_subject_0.variant == Result_Err)" in generated_code
     assert "int value = __crossgl_match_subject_0.Ok_0;" in generated_code
     assert "Result::" not in generated_code
     assert "MatchNode(" not in generated_code
@@ -4791,8 +4903,8 @@ def test_generic_enum_local_function_call_type_infers_match_subject():
 
     assert "Result_int_MathError item = make_result(ok);" in generated_code
     assert "float item = make_result(ok);" not in generated_code
-    assert "if ((item.variant == Result_Ok))" in generated_code
-    assert "else if ((item.variant == Result_Err))" in generated_code
+    assert "if (item.variant == Result_Ok)" in generated_code
+    assert "else if (item.variant == Result_Err)" in generated_code
     assert "int value = item.Ok_0;" in generated_code
     assert "Result<" not in generated_code
     assert "ConstructorNode(" not in generated_code
@@ -4837,13 +4949,15 @@ def test_generic_enum_match_expression_initializes_vector_local():
         "Result_float3_MathError __crossgl_match_subject_0 = make_result(ok);"
         in generated_code
     )
-    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
-    assert (
-        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
-    )
+    assert "if (__crossgl_match_subject_0.variant == Result_Ok)" in generated_code
+    assert "else if (__crossgl_match_subject_0.variant == Result_Err)" in generated_code
     assert "float3 actual = __crossgl_match_subject_0.Ok_0;" in generated_code
     assert "value = actual;" in generated_code
     assert "value = fallback;" in generated_code
+    assert (
+        "value = float3(0) /* fallback for generated Metal: no wildcard arm "
+        "handles remaining cases */;" in generated_code
+    )
     assert "float value = MatchNode" not in generated_code
     assert "MatchNode(" not in generated_code
 
@@ -4936,6 +5050,37 @@ def test_stage_tail_struct_constructor_returns_stage_output():
         in generated_code
     )
     assert "ConstructorNode(" not in generated_code
+
+
+def test_vertex_entry_structs_infer_metal_stage_io_attributes():
+    shader = """
+    shader InferredStageIO {
+        struct VertexInput {
+            vec3 position;
+            vec2 texCoord;
+        };
+
+        struct VertexOutput {
+            vec2 uv;
+            vec4 position;
+        };
+
+        vertex {
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.uv = input.texCoord;
+                output.position = vec4(input.position, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float3 position [[attribute(0)]];" in generated_code
+    assert "float2 texCoord [[attribute(1)]];" in generated_code
+    assert "float4 position [[position]];" in generated_code
 
 
 def test_trait_self_return_does_not_emit_generic_enum_specialization():
@@ -7435,6 +7580,123 @@ def test_ray_intersection_stage_accepts_triangle_result_struct():
         "intersection_main(ray_data Payload& payload [[payload]])"
     ) in generated
     assert "return TriangleHit{true};" in generated
+
+
+def test_ray_intersection_stage_rejects_ray_parameter_semantic():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+        ray_intersection {
+            bool main(ray r @ ray, Payload payload @ payload) @triangle {
+                payload.color = r.origin;
+                return true;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Metal ray_intersection parameter 'r' cannot use @ray",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_ray_intersection_stage_rejects_plain_input_parameters():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+        ray_intersection {
+            bool main(float t, Payload payload @ payload) @triangle {
+                payload.color = vec3(t, 0.0, 0.0);
+                return true;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Metal ray_intersection parameter 't' is not a supported intersection parameter",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_ray_intersection_stage_allows_builtins_payload_and_device_buffers():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+        struct Sphere {
+            vec3 origin;
+            float radius;
+        };
+        struct BoundsHit {
+            bool accept @ accept_intersection;
+            float distance @ distance;
+        };
+        ray_intersection {
+            BoundsHit main(
+                vec3 origin @ origin,
+                vec3 direction @ direction,
+                uint primitiveIndex @ primitive_id,
+                float minDistance @ min_distance,
+                float maxDistance @ max_distance,
+                Sphere* spheres @device @buffer(0),
+                Payload payload @ payload
+            ) @bounding_box {
+                payload.color = spheres[primitiveIndex].origin + direction;
+                return BoundsHit { accept: true, distance: minDistance };
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float3 origin [[origin]]" in generated
+    assert "float3 direction [[direction]]" in generated
+    assert "uint primitiveIndex [[primitive_id]]" in generated
+    assert "float minDistance [[min_distance]]" in generated
+    assert "float maxDistance [[max_distance]]" in generated
+    assert "device Sphere* spheres [[buffer(0)]]" in generated
+    assert "ray_data Payload& payload [[payload]]" in generated
+
+
+@pytest.mark.parametrize(
+    ("parameter_decl", "match"),
+    [
+        (
+            "ray r @ray",
+            "Metal ray_generation parameter 'r' cannot use @ray",
+        ),
+        (
+            "RayDesc rd",
+            "Metal ray_generation parameter 'rd' has unsupported ray value type 'RayDesc'",
+        ),
+        (
+            "RayQuery<RAY_FLAG_NONE> rq",
+            "Metal ray_generation parameter 'rq' has unsupported ray value type "
+            "'RayQuery<RAY_FLAG_NONE>'",
+        ),
+    ],
+)
+def test_ray_generation_stage_rejects_ray_value_parameters(parameter_decl, match):
+    code = f"""
+    shader rt {{
+        ray_generation {{
+            void main({parameter_decl}) {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 @pytest.mark.parametrize(
@@ -12290,13 +12552,17 @@ def test_metal_vector_type_conversions():
         assert "int3 ivec3Field" in generated_code
         assert "int4 ivec4Field" in generated_code
 
-        # Check matrix type conversions
-        assert "float2x2 mat2Field" in generated_code
-        assert "float3x3 mat3Field" in generated_code
-        assert "float4x4 mat4Field" in generated_code
-        assert "output.mat2Field = float2x2(1.0, 0.0, 0.0, 1.0);" in generated_code
-        assert "output.mat3Field = float3x3(1.0);" in generated_code
-        assert "output.mat4Field = float4x4(1.0);" in generated_code
+        # Matrix stage-output members are split into legal Metal varyings.
+        assert "float2 mat2Field_0" in generated_code
+        assert "float2 mat2Field_1" in generated_code
+        assert "float3 mat3Field_0" in generated_code
+        assert "float3 mat3Field_2" in generated_code
+        assert "float4 mat4Field_0" in generated_code
+        assert "float4 mat4Field_3" in generated_code
+        assert "float2x2 __crossgl_stage_io_matrix_" in generated_code
+        assert "output.mat2Field_0 = __crossgl_stage_io_matrix_" in generated_code
+        assert "output.mat3Field_2 = __crossgl_stage_io_matrix_" in generated_code
+        assert "output.mat4Field_3 = __crossgl_stage_io_matrix_" in generated_code
     except SyntaxError as e:
         pytest.fail(f"Metal vector type conversion failed: {e}")
 
@@ -13001,7 +13267,7 @@ def test_metal_array_member_semantics():
     generated_code = MetalCodeGen().generate(ast)
 
     assert "float weights[4] [[attribute(5)]];" in generated_code
-    assert "array<float3> colors [[COLOR]];" in generated_code
+    assert "float3 colors[1024] [[COLOR]];" in generated_code
 
 
 def test_metal_local_array_declarations_use_c_style_order():
@@ -14626,6 +14892,59 @@ def test_metal_storage_image_load_store():
     assert "kernel void kernel_main(," not in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
+
+
+def test_metal_stage_entries_only_bind_used_global_resources():
+    shader = """
+    shader StageScopedResources {
+        struct VertexInput {
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        };
+        struct VertexOutput {
+            vec4 position @ gl_Position;
+            vec2 uv;
+        };
+
+        sampler2D colorMap;
+        image2D outputImage;
+
+        vertex {
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv;
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(VertexOutput input) {
+                vec4 color = texture(colorMap, input.uv);
+                imageStore(outputImage, ivec2(0, 0), color);
+                return color;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    vertex_signature = re.search(
+        r"vertex VertexOutput vertex_main\((.*?)\) \{", generated_code, re.S
+    )
+    fragment_signature = re.search(
+        r"fragment float4 fragment_main\((.*?)\) \{", generated_code, re.S
+    )
+
+    assert vertex_signature is not None
+    assert fragment_signature is not None
+    assert "texture2d<float> colorMap [[texture(0)]]" in vertex_signature.group(1)
+    assert "outputImage" not in vertex_signature.group(1)
+    assert "texture2d<float> colorMap [[texture(0)]]" in fragment_signature.group(1)
+    assert (
+        "texture2d<float, access::read_write> outputImage [[texture(1)]]"
+        in fragment_signature.group(1)
+    )
 
 
 def test_metal_unsigned_constructor_image_coordinates_are_not_rewrapped():
@@ -22933,7 +23252,7 @@ def test_metal_nested_implicit_shadow_compare_lod_grad_uses_depth_overloads():
         in generated_code
     )
     assert (
-        f"float2 lod = float2(tex.calculate_unclamped_lod({default_sampler}, uv), tex.calculate_clamped_lod({default_sampler}, uv));"
+        f"float2 lod = float2(tex.calculate_clamped_lod({default_sampler}, uv), tex.calculate_unclamped_lod({default_sampler}, uv));"
         in generated_code
     )
     assert (
@@ -23571,7 +23890,7 @@ def test_metal_texture_query_functions():
     )
     assert "int levels = int(tex.get_num_mip_levels());" in generated_code
     assert (
-        "float2 lod = float2(tex.calculate_unclamped_lod(s, uv), tex.calculate_clamped_lod(s, uv));"
+        "float2 lod = float2(tex.calculate_clamped_lod(s, uv), tex.calculate_unclamped_lod(s, uv));"
         in generated_code
     )
     assert (
@@ -23634,7 +23953,7 @@ def test_metal_struct_resource_array_queries_use_constant_index_metadata():
         "int levels = int(pack.textures[LAYER].get_num_mip_levels());" in generated_code
     )
     assert (
-        f"float2 lod = float2(pack.layers[LAYER].calculate_unclamped_lod({default_sampler}, uvLayer.xy), pack.layers[LAYER].calculate_clamped_lod({default_sampler}, uvLayer.xy));"
+        f"float2 lod = float2(pack.layers[LAYER].calculate_clamped_lod({default_sampler}, uvLayer.xy), pack.layers[LAYER].calculate_unclamped_lod({default_sampler}, uvLayer.xy));"
         in generated_code
     )
     assert (
@@ -23744,7 +24063,7 @@ def test_metal_implicit_texture_query_lod_helper_threads_declared_sampler():
         "float2 query(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
         in generated_code
     )
-    assert "colorMap.calculate_unclamped_lod(colorMapSampler, uv)" in generated_code
+    assert "colorMap.calculate_clamped_lod(colorMapSampler, uv)" in generated_code
     assert (
         "fragment float4 fragment_main(FSInput input [[stage_in]], texture2d<float> colorMap [[texture(0)]], sampler colorMapSampler [[sampler(0)]])"
         in generated_code
@@ -24860,23 +25179,23 @@ def test_metal_direct_stage_texture_queries_mix_size_levels_and_lod():
     assert "int colorLevels = int(colorMap.get_num_mip_levels());" in generated_code
     assert "int shadowLevels = int(shadowArray.get_num_mip_levels());" in generated_code
     assert (
-        "float2 colorLod = float2(colorMap.calculate_unclamped_lod(linearSampler, input.uv), colorMap.calculate_clamped_lod(linearSampler, input.uv));"
+        "float2 colorLod = float2(colorMap.calculate_clamped_lod(linearSampler, input.uv), colorMap.calculate_unclamped_lod(linearSampler, input.uv));"
         in generated_code
     )
     assert (
-        "float2 layerLod = float2(layerMap.calculate_unclamped_lod(linearSampler, input.uvLayer.xy), layerMap.calculate_clamped_lod(linearSampler, input.uvLayer.xy));"
+        "float2 layerLod = float2(layerMap.calculate_clamped_lod(linearSampler, input.uvLayer.xy), layerMap.calculate_unclamped_lod(linearSampler, input.uvLayer.xy));"
         in generated_code
     )
     assert (
-        "float2 cubeLod = float2(cubeArray.calculate_unclamped_lod(linearSampler, input.cubeLayer.xyz), cubeArray.calculate_clamped_lod(linearSampler, input.cubeLayer.xyz));"
+        "float2 cubeLod = float2(cubeArray.calculate_clamped_lod(linearSampler, input.cubeLayer.xyz), cubeArray.calculate_unclamped_lod(linearSampler, input.cubeLayer.xyz));"
         in generated_code
     )
     assert (
-        f"float2 implicitLayerLod = float2(layerMap.calculate_unclamped_lod({default_sampler}, input.uvLayer.xy), layerMap.calculate_clamped_lod({default_sampler}, input.uvLayer.xy));"
+        f"float2 implicitLayerLod = float2(layerMap.calculate_clamped_lod({default_sampler}, input.uvLayer.xy), layerMap.calculate_unclamped_lod({default_sampler}, input.uvLayer.xy));"
         in generated_code
     )
     assert (
-        f"float2 implicitCubeShadowLod = float2(cubeShadowArray.calculate_unclamped_lod({default_sampler}, input.cubeLayer.xyz), cubeShadowArray.calculate_clamped_lod({default_sampler}, input.cubeLayer.xyz));"
+        f"float2 implicitCubeShadowLod = float2(cubeShadowArray.calculate_clamped_lod({default_sampler}, input.cubeLayer.xyz), cubeShadowArray.calculate_unclamped_lod({default_sampler}, input.cubeLayer.xyz));"
         in generated_code
     )
     assert "textureQueryLod(" not in generated_code
@@ -24939,20 +25258,16 @@ def test_metal_array_texture_query_lod_uses_non_layer_coordinates():
         "float2 queryArrayLod(texture2d_array<float> tex, sampler s, float3 uvLayer)"
         in generated_code
     )
-    assert "tex.calculate_unclamped_lod(s, uvLayer.xy)" in generated_code
     assert "tex.calculate_clamped_lod(s, uvLayer.xy)" in generated_code
+    assert "tex.calculate_unclamped_lod(s, uvLayer.xy)" in generated_code
     assert (
         "float2 queryCubeArrayLod(texturecube_array<float> tex, sampler s, float4 cubeLayer)"
         in generated_code
     )
-    assert "tex.calculate_unclamped_lod(s, cubeLayer.xyz)" in generated_code
     assert "tex.calculate_clamped_lod(s, cubeLayer.xyz)" in generated_code
+    assert "tex.calculate_unclamped_lod(s, cubeLayer.xyz)" in generated_code
     assert (
         "float2 queryArrayElementLod(array<texture2d_array<float>, 4> layerMaps, array<sampler, 4> linearSamplers, float3 uvLayer)"
-        in generated_code
-    )
-    assert (
-        "layerMaps[2].calculate_unclamped_lod(linearSamplers[2], uvLayer.xy)"
         in generated_code
     )
     assert (
@@ -24960,18 +25275,24 @@ def test_metal_array_texture_query_lod_uses_non_layer_coordinates():
         in generated_code
     )
     assert (
-        "float2 queryCubeArrayElementLod(array<texturecube_array<float>, 4> cubeArrays, array<sampler, 4> linearSamplers, float4 cubeLayer)"
+        "layerMaps[2].calculate_unclamped_lod(linearSamplers[2], uvLayer.xy)"
         in generated_code
     )
     assert (
-        "cubeArrays[3].calculate_unclamped_lod(linearSamplers[3], cubeLayer.xyz)"
+        "float2 queryCubeArrayElementLod(array<texturecube_array<float>, 4> cubeArrays, array<sampler, 4> linearSamplers, float4 cubeLayer)"
         in generated_code
     )
     assert (
         "cubeArrays[3].calculate_clamped_lod(linearSamplers[3], cubeLayer.xyz)"
         in generated_code
     )
+    assert (
+        "cubeArrays[3].calculate_unclamped_lod(linearSamplers[3], cubeLayer.xyz)"
+        in generated_code
+    )
+    assert "calculate_clamped_lod(s, uvLayer)" not in generated_code
     assert "calculate_unclamped_lod(s, uvLayer)" not in generated_code
+    assert "calculate_clamped_lod(s, cubeLayer)" not in generated_code
     assert "calculate_unclamped_lod(s, cubeLayer)" not in generated_code
 
 
@@ -25034,7 +25355,7 @@ def test_metal_nested_array_texture_query_lod_threads_resource_arrays():
     )
     assert "return explicitLeaf(uvLayer, layerMaps, linearSamplers);" in generated_code
     assert (
-        "layerMaps[2].calculate_unclamped_lod(linearSamplers[2], uvLayer.xy)"
+        "layerMaps[2].calculate_clamped_lod(linearSamplers[2], uvLayer.xy)"
         in generated_code
     )
     assert (
@@ -25050,7 +25371,7 @@ def test_metal_nested_array_texture_query_lod_threads_resource_arrays():
         in generated_code
     )
     assert (
-        "cubeArrays[3].calculate_unclamped_lod(cubeArraysSampler, cubeLayer.xyz)"
+        "cubeArrays[3].calculate_clamped_lod(cubeArraysSampler, cubeLayer.xyz)"
         in generated_code
     )
     assert "explicitMid(input.uvLayer, layerMaps, linearSamplers)" in generated_code
@@ -25120,20 +25441,16 @@ def test_metal_shadow_array_texture_query_lod_uses_non_layer_coordinates():
         "float2 queryArrayLod(depth2d_array<float> tex, sampler s, float3 uvLayer)"
         in generated_code
     )
-    assert "tex.calculate_unclamped_lod(s, uvLayer.xy)" in generated_code
     assert "tex.calculate_clamped_lod(s, uvLayer.xy)" in generated_code
+    assert "tex.calculate_unclamped_lod(s, uvLayer.xy)" in generated_code
     assert (
         "float2 queryCubeArrayLod(depthcube_array<float> tex, sampler s, float4 cubeLayer)"
         in generated_code
     )
-    assert "tex.calculate_unclamped_lod(s, cubeLayer.xyz)" in generated_code
     assert "tex.calculate_clamped_lod(s, cubeLayer.xyz)" in generated_code
+    assert "tex.calculate_unclamped_lod(s, cubeLayer.xyz)" in generated_code
     assert (
         "float2 queryArrayElementLod(array<depth2d_array<float>, 4> shadowArrays, array<sampler, 4> linearSamplers, float3 uvLayer)"
-        in generated_code
-    )
-    assert (
-        "shadowArrays[2].calculate_unclamped_lod(linearSamplers[2], uvLayer.xy)"
         in generated_code
     )
     assert (
@@ -25141,18 +25458,24 @@ def test_metal_shadow_array_texture_query_lod_uses_non_layer_coordinates():
         in generated_code
     )
     assert (
-        "float2 queryCubeArrayElementLod(array<depthcube_array<float>, 4> cubeShadowArrays, array<sampler, 4> linearSamplers, float4 cubeLayer)"
+        "shadowArrays[2].calculate_unclamped_lod(linearSamplers[2], uvLayer.xy)"
         in generated_code
     )
     assert (
-        "cubeShadowArrays[3].calculate_unclamped_lod(linearSamplers[3], cubeLayer.xyz)"
+        "float2 queryCubeArrayElementLod(array<depthcube_array<float>, 4> cubeShadowArrays, array<sampler, 4> linearSamplers, float4 cubeLayer)"
         in generated_code
     )
     assert (
         "cubeShadowArrays[3].calculate_clamped_lod(linearSamplers[3], cubeLayer.xyz)"
         in generated_code
     )
+    assert (
+        "cubeShadowArrays[3].calculate_unclamped_lod(linearSamplers[3], cubeLayer.xyz)"
+        in generated_code
+    )
+    assert "calculate_clamped_lod(s, uvLayer)" not in generated_code
     assert "calculate_unclamped_lod(s, uvLayer)" not in generated_code
+    assert "calculate_clamped_lod(s, cubeLayer)" not in generated_code
     assert "calculate_unclamped_lod(s, cubeLayer)" not in generated_code
 
 
@@ -25238,7 +25561,7 @@ def test_metal_mixed_cube_shadow_query_lod_and_compare_keep_coordinate_shapes():
         in generated_code
     )
     assert (
-        "float2 lodValue = float2(tex.calculate_unclamped_lod(s, direction), tex.calculate_clamped_lod(s, direction));"
+        "float2 lodValue = float2(tex.calculate_clamped_lod(s, direction), tex.calculate_unclamped_lod(s, direction));"
         in generated_code
     )
     assert "float cmp = tex.sample_compare(s, direction, depth);" in generated_code
@@ -25255,7 +25578,7 @@ def test_metal_mixed_cube_shadow_query_lod_and_compare_keep_coordinate_shapes():
         in generated_code
     )
     assert (
-        "float2 lodValue = float2(tex.calculate_unclamped_lod(s, cubeLayer.xyz), tex.calculate_clamped_lod(s, cubeLayer.xyz));"
+        "float2 lodValue = float2(tex.calculate_clamped_lod(s, cubeLayer.xyz), tex.calculate_unclamped_lod(s, cubeLayer.xyz));"
         in generated_code
     )
     assert (
@@ -25342,34 +25665,31 @@ def test_metal_implicit_shadow_array_texture_query_lod_uses_default_sampler():
     assert "linearSamplers" not in generated_code
     default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
     assert (
-        f"shadowArray.calculate_unclamped_lod({default_sampler}, input.uvLayer.xy)"
+        f"shadowArray.calculate_clamped_lod({default_sampler}, input.uvLayer.xy)"
         in generated_code
     )
     assert (
-        f"cubeShadowArray.calculate_unclamped_lod({default_sampler}, input.cubeLayer.xyz)"
+        f"cubeShadowArray.calculate_clamped_lod({default_sampler}, input.cubeLayer.xyz)"
+        in generated_code
+    )
+    assert f"tex.calculate_clamped_lod({default_sampler}, uvLayer.xy)" in generated_code
+    assert (
+        f"tex.calculate_clamped_lod({default_sampler}, cubeLayer.xyz)" in generated_code
+    )
+    assert (
+        f"shadowArrays[2].calculate_clamped_lod({default_sampler}, uvLayer.xy)"
         in generated_code
     )
     assert (
-        f"tex.calculate_unclamped_lod({default_sampler}, uvLayer.xy)" in generated_code
-    )
-    assert (
-        f"tex.calculate_unclamped_lod({default_sampler}, cubeLayer.xyz)"
+        f"cubeShadowArrays[3].calculate_clamped_lod({default_sampler}, cubeLayer.xyz)"
         in generated_code
     )
     assert (
-        f"shadowArrays[2].calculate_unclamped_lod({default_sampler}, uvLayer.xy)"
-        in generated_code
-    )
-    assert (
-        f"cubeShadowArrays[3].calculate_unclamped_lod({default_sampler}, cubeLayer.xyz)"
-        in generated_code
-    )
-    assert (
-        "calculate_unclamped_lod(sampler(mag_filter::linear, min_filter::linear), uvLayer)"
+        "calculate_clamped_lod(sampler(mag_filter::linear, min_filter::linear), uvLayer)"
         not in generated_code
     )
     assert (
-        "calculate_unclamped_lod(sampler(mag_filter::linear, min_filter::linear), cubeLayer)"
+        "calculate_clamped_lod(sampler(mag_filter::linear, min_filter::linear), cubeLayer)"
         not in generated_code
     )
 
@@ -25929,8 +26249,8 @@ def test_metal_resource_array_helper_alias_texture_ops_preserve_metadata():
     ) in generated_code
     assert "int levels = int(texAlias.get_num_mip_levels());" in generated_code
     assert (
-        "float2 lod = float2(texAlias.calculate_unclamped_lod(sampAlias, uv), "
-        "texAlias.calculate_clamped_lod(sampAlias, uv));"
+        "float2 lod = float2(texAlias.calculate_clamped_lod(sampAlias, uv), "
+        "texAlias.calculate_unclamped_lod(sampAlias, uv));"
     ) in generated_code
     assert "float4 lodColor = texAlias.sample(sampAlias, uv, level(1.0));" in (
         generated_code
@@ -26159,8 +26479,8 @@ def test_metal_struct_member_resource_array_alias_texture_ops_preserve_metadata(
     ) in generated_code
     assert "int levels = int(texAlias.get_num_mip_levels());" in generated_code
     assert (
-        "float2 lod = float2(texAlias.calculate_unclamped_lod(sampAlias, uv), "
-        "texAlias.calculate_clamped_lod(sampAlias, uv));"
+        "float2 lod = float2(texAlias.calculate_clamped_lod(sampAlias, uv), "
+        "texAlias.calculate_unclamped_lod(sampAlias, uv));"
     ) in generated_code
     assert "float4 lodColor = texAlias.sample(sampAlias, uv, level(1.0));" in (
         generated_code
@@ -27435,6 +27755,32 @@ def test_metal_image_1d_and_1d_array_storage_operations():
         "return imageAtomicCompSwap_uimage1DArray(image, coord, expected, value);"
         in generated_code
     )
+
+
+def test_metal_image_cube_size_query_uses_cube_dimensions():
+    shader = """
+    shader MetalImageCubeSize {
+        uniform layout(rgba16f) imageCube irradiance;
+
+        compute {
+            void main() {
+                ivec2 size = imageSize(irradiance);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "texture2d_array<float, access::read_write> irradiance [[texture(0)]]"
+        in generated_code
+    )
+    assert (
+        "int2 size = int2(irradiance.get_width(), irradiance.get_height());"
+        in generated_code
+    )
+    assert "irradiance.get_array_size()" not in generated_code
 
 
 def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics():
@@ -28792,14 +29138,16 @@ def test_metal_ray_tracing_ignore_and_accept_hit_emit_diagnostics():
     assert "IgnoreHit();" not in generated
 
 
-def test_metal_ray_query_operations_lower_to_method_calls():
+def test_metal_ray_query_operations_lower_to_compile_safe_helpers():
     code = """
     shader rt {
         accelerationStructureEXT topLevelAS @binding(0);
 
         compute {
             void main() {
+                RayDesc ray = RayDesc(vec3(0.0), 0.001, vec3(0.0, 0.0, 1.0), 100.0);
                 RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(topLevelAS, RAY_FLAG_NONE, 255, ray);
                 bool advanced = rq.Proceed();
                 float hitT = rq.CommittedRayT();
                 float candidateT = rq.CandidateRayT();
@@ -28810,9 +29158,21 @@ def test_metal_ray_query_operations_lower_to_method_calls():
     generated = generate_code(parse_code(tokenize_code(code)))
 
     assert "using namespace metal::raytracing;" in generated
-    assert "rq.Proceed()" in generated
-    assert "rq.CommittedRayT()" in generated
-    assert "rq.CandidateRayT()" in generated
+    assert "struct CglRayDesc" in generated
+    assert "struct CglRayQuery" in generated
+    assert (
+        "CglRayDesc ray = CglRayDesc(float3(0.0), 0.001, "
+        "float3(0.0, 0.0, 1.0), 100.0);" in generated
+    )
+    assert "CglRayQuery rq;" in generated
+    assert "cgl_ray_query_trace_ray_inline(rq, topLevelAS, 0u, 255, ray);" in generated
+    assert "bool advanced = cgl_ray_query_proceed(rq);" in generated
+    assert "float hitT = cgl_ray_query_committed_ray_t(rq);" in generated
+    assert "float candidateT = cgl_ray_query_candidate_ray_t(rq);" in generated
+    assert "RayDesc ray = RayDesc" not in generated
+    assert "RayQuery<RAY_FLAG_NONE>" not in generated
+    assert "RAY_FLAG_NONE" not in generated
+    assert "rq.Proceed()" not in generated
     assert "RayQueryOpNode" not in generated
 
 
@@ -29139,6 +29499,44 @@ def test_metal_rw_structured_buffer_maps_to_device_pointer():
     assert "const device" not in generated_code
     assert "int prev = counters[tid.x];" in generated_code
     assert "counters[tid.x] = prev + 1;" in generated_code
+
+
+def test_metal_stage_local_uniform_and_buffer_structs_become_kernel_resources():
+    code = """
+    shader StageLocalResourceStructs {
+        struct Physics {
+            int max_particles;
+        };
+
+        struct Counters {
+            int active_count;
+        };
+
+        compute {
+            uniform Physics physics;
+            buffer Counters counters;
+
+            void main() {
+                if (counters.active_count >= physics.max_particles) {
+                    return;
+                }
+                atomicAdd(counters.active_count, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert "constant Physics& physics [[buffer(0)]]" in generated_code
+    assert "device Counters& counters [[buffer(1)]]" in generated_code
+    assert (
+        "atomic_fetch_add_explicit(reinterpret_cast<device atomic_int*>"
+        "(&counters.active_count), 1, memory_order_relaxed);"
+    ) in generated_code
+    assert "atomicAdd(" not in generated_code
 
 
 def test_metal_multiple_cbuffers_produce_separate_buffer_arguments():

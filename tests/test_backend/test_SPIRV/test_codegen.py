@@ -247,18 +247,28 @@ def test_typed_local_array_declaration_codegen():
 def test_translate_api_accepts_spirv_source(tmp_path):
     import crosstl
 
-    shader_path = tmp_path / "fragment.spirv"
+    shader_path = tmp_path / "fragment.spvasm"
     shader_path.write_text(FRAGMENT_SHADER, encoding="utf-8")
 
     generated_code = crosstl.translate(
         str(shader_path), backend="rust", format_output=False
     )
 
-    assert "#[fragment_shader]" in generated_code
+    assert '#[cfg_attr(feature = "crossgl_gpu", fragment_shader)]' in generated_code
     assert "pub fn main()" in generated_code
     assert (
         "let color: Vec4<f32> = Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);" in generated_code
     )
+
+
+def test_translate_api_rejects_binary_spv_source_with_clear_error(tmp_path):
+    import crosstl
+
+    shader_path = tmp_path / "fragment.spv"
+    shader_path.write_bytes(b"\x03\x02\x23\x07")
+
+    with pytest.raises(ValueError, match="Unsupported shader file type"):
+        crosstl.translate(str(shader_path), backend="rust", format_output=False)
 
 
 def test_vulkan_layout_blocks_emit_crossgl_resources():
@@ -1137,7 +1147,7 @@ def test_vulkan_layout_precision_after_in_codegen():
 def test_translate_api_accepts_spirv_layout_source(tmp_path):
     import crosstl
 
-    shader_path = tmp_path / "layout_vertex.spirv"
+    shader_path = tmp_path / "layout_vertex.spvasm"
     shader_path.write_text(LAYOUT_SHADER, encoding="utf-8")
 
     generated_code = crosstl.translate(
@@ -1161,13 +1171,13 @@ def test_translate_api_accepts_spirv_layout_source(tmp_path):
         "gl_Position = Vec4::<f32>::new((*POSITION).x, (*POSITION).y, "
         "(*POSITION).z, 1.0);" in generated_code
     )
-    assert "#[vertex_shader]" in generated_code
+    assert '#[cfg_attr(feature = "crossgl_gpu", vertex_shader)]' in generated_code
 
 
 def test_translate_api_accepts_spirv_push_constant_layout_source(tmp_path):
     import crosstl
 
-    shader_path = tmp_path / "push_constant_vertex.spirv"
+    shader_path = tmp_path / "push_constant_vertex.spvasm"
     shader_path.write_text(
         """
         layout(push_constant) uniform PushConstants {
@@ -1195,7 +1205,7 @@ def test_translate_api_accepts_spirv_push_constant_layout_source(tmp_path):
         "static MODEL: std::sync::LazyLock<float4x4> = "
         "std::sync::LazyLock::new(|| Default::default());" in generated_rust
     )
-    assert "#[vertex_shader]" in generated_rust
+    assert '#[cfg_attr(feature = "crossgl_gpu", vertex_shader)]' in generated_rust
 
 
 def test_vulkan_bitwise_shift_precedence_codegen():

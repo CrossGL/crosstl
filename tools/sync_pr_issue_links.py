@@ -283,7 +283,7 @@ class GitHubClient:
         raw = base64.b64decode(content)
         return json.loads(raw.decode("utf-8"))
 
-    def list_open_support_issues(self) -> list[dict[str, Any]]:
+    def list_support_issues(self) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []
         page = 1
         while True:
@@ -292,7 +292,7 @@ class GitHubClient:
                 f"/repos/{self.repo}/issues",
                 query={
                     "labels": "support:matrix",
-                    "state": "open",
+                    "state": "all",
                     "per_page": 100,
                     "page": page,
                 },
@@ -685,7 +685,7 @@ def support_matrix_issue_numbers(
             reference_keys=(),
         )
 
-    support_issues = client.list_open_support_issues()
+    support_issues = client.list_support_issues()
     numbers_by_key = support_issue_number_lookup(support_issues)
     closure_links = support_issue_links_for_keys(
         numbers_by_key,
@@ -1368,12 +1368,12 @@ def emit_support_link_audit(summary: dict[str, Any]) -> None:
     missing_reference_keys = audit.get("missing_reference_keys") or []
     if missing_closure_keys:
         print(
-            "::warning::Support backlog rows were removed without open managed "
+            "::warning::Support backlog rows were removed without managed "
             "support issues: " + format_support_link_keys(missing_closure_keys)
         )
     if missing_reference_keys:
         print(
-            "::warning::Support backlog rows changed without open managed "
+            "::warning::Support backlog rows changed without managed "
             "support issues: " + format_support_link_keys(missing_reference_keys)
         )
     if (

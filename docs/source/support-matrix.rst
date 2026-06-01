@@ -22,28 +22,28 @@ implicitly supported.
 .. csv-table:: Backend inventory
    :header: "Backend", "Ext", "Target generator", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
-   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "741", "289", "Microsoft Learn HLSL reference; HLSL specification project"
-   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "889", "176", "GLSL 4.60 specification; OpenGL registry"
-   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "666", "465", "Apple Metal resources; Metal Shading Language specification"
-   "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "654", "30", "SPIR-V unified specification; Khronos SPIR-V registry"
-   "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "461", "163", "CUDA C++ programming guide"
-   "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "513", "98", "ROCm HIP documentation"
-   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "582", "94", "Mojo manual"
-   "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "665", "69", "Rust reference"
-   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "505", "390", "Slang user guide"
+   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "761", "293", "Microsoft Learn HLSL reference; HLSL specification project"
+   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "898", "176", "GLSL 4.60 specification; OpenGL registry"
+   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "679", "480", "Apple Metal resources; Metal Shading Language specification"
+   "Vulkan SPIR-V", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "667", "30", "SPIR-V unified specification; Khronos SPIR-V registry"
+   "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "464", "166", "CUDA C++ programming guide"
+   "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "520", "103", "ROCm HIP documentation"
+   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "588", "97", "Mojo manual"
+   "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "682", "69", "Rust reference"
+   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "517", "396", "Slang user guide"
 
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
    "DirectX / HLSL", "43", "0", "0", "0", "0", "0"
    "OpenGL / GLSL", "43", "0", "0", "0", "0", "0"
-   "Metal", "43", "0", "0", "0", "0", "0"
+   "Metal", "41", "0", "2", "0", "0", "0"
    "Vulkan SPIR-V", "43", "0", "0", "0", "0", "0"
-   "CUDA", "43", "0", "0", "0", "0", "0"
-   "HIP", "43", "0", "0", "0", "0", "0"
-   "Mojo", "43", "0", "0", "0", "0", "0"
-   "Rust", "43", "0", "0", "0", "0", "0"
-   "Slang", "43", "0", "0", "0", "0", "0"
+   "CUDA", "38", "0", "5", "0", "0", "0"
+   "HIP", "38", "0", "5", "0", "0", "0"
+   "Mojo", "40", "0", "3", "0", "0", "0"
+   "Rust", "40", "0", "3", "0", "0", "0"
+   "Slang", "42", "0", "1", "0", "0", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -56,7 +56,7 @@ scope for graphics backend completion work.
 
    "DirectX / HLSL", "43", "0", "0", "0", "0", "0"
    "OpenGL / GLSL", "43", "0", "0", "0", "0", "0"
-   "Metal", "43", "0", "0", "0", "0", "0"
+   "Metal", "41", "0", "2", "0", "0", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -85,9 +85,9 @@ Each category below uses the status codes from the legend.
    "Vertex stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Fragment/pixel stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Compute stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Geometry stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Tessellation stages", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Mesh/task/amplification stages", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Geometry stage", "Y", "Y", "D", "Y", "D", "D", "D", "D", "Y"
+   "Tessellation stages", "Y", "Y", "D", "Y", "D", "D", "D", "D", "Y"
+   "Mesh/task/amplification stages", "Y", "Y", "Y", "Y", "D", "D", "D", "D", "D"
    "Ray tracing stages", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: stage I/O
@@ -115,7 +115,7 @@ Each category below uses the status codes from the legend.
    "Texture LOD, gradient, and offset operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Projected texture operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Texture gather operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Shadow compare texture operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Shadow compare texture operations", "Y", "Y", "Y", "Y", "D", "D", "Y", "Y", "Y"
    "Texture query operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Texel fetch operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Multisample texture operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
@@ -125,7 +125,7 @@ Each category below uses the status codes from the legend.
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
    "Storage image load/store", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Image atomics", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Image atomics", "Y", "Y", "Y", "Y", "D", "D", "Y", "Y", "Y"
    "Multisample storage images", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: language

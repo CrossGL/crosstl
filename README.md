@@ -517,7 +517,7 @@ deployment_targets = {
     'metal': '.metal',      # Apple ecosystems
     'directx': '.hlsl',     # Windows/Xbox
     'opengl': '.glsl',      # Cross-platform
-    'vulkan': '.spirv',     # High-performance
+    'vulkan': '.spvasm',     # High-performance
 
     # Systems languages
     'rust': '.rs',          # Memory safety

@@ -15,15 +15,60 @@
       "name": "CrossGL to target code generation",
       "description": "Emit target-language source or target representation from CrossGL.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_"]},
-        "vulkan": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_"]},
-        "cuda": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_"]},
-        "hip": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_"]},
-        "mojo": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_"]},
-        "rust": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_"]},
-        "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_"]}
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_"
+          ]
+        }
       }
     },
     {
@@ -32,15 +77,60 @@
       "name": "Native source to CrossGL",
       "description": "Parse backend source language and regenerate CrossGL.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_backend/test_directx/test_parser.py::def test_"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_backend/test_GLSL/test_parser.py::def test_"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_backend/test_metal/test_parser.py::def test_"]},
-        "vulkan": {"status": "supported", "evidence": ["tests/test_backend/test_SPIRV/test_parser.py::def test_"]},
-        "cuda": {"status": "supported", "evidence": ["tests/test_backend/test_CUDA/test_parser.py::def test_"]},
-        "hip": {"status": "supported", "evidence": ["tests/test_backend/test_HIP/test_parser.py::def test_"]},
-        "mojo": {"status": "supported", "evidence": ["tests/test_backend/test_mojo/test_parser.py::def test_"]},
-        "rust": {"status": "supported", "evidence": ["tests/test_backend/test_rust/test_parser.py::def test_"]},
-        "slang": {"status": "supported", "evidence": ["tests/test_backend/test_slang/test_parser.py::def test_"]}
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_directx/test_parser.py::def test_"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_parser.py::def test_"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_metal/test_parser.py::def test_"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_SPIRV/test_parser.py::def test_"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_CUDA/test_parser.py::def test_"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_HIP/test_parser.py::def test_"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_mojo/test_parser.py::def test_"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_rust/test_parser.py::def test_"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_slang/test_parser.py::def test_"
+          ]
+        }
       }
     },
     {
@@ -49,15 +139,60 @@
       "name": "Native lexer coverage",
       "description": "Tokenize backend source language constructs used by the native parser.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_backend/test_directx/test_lexer.py::def test_"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_backend/test_GLSL/test_lexer.py::def test_"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_backend/test_metal/test_lexer.py::def test_"]},
-        "vulkan": {"status": "supported", "evidence": ["tests/test_backend/test_SPIRV/test_lexer.py::def test_"]},
-        "cuda": {"status": "supported", "evidence": ["tests/test_backend/test_CUDA/test_lexer.py::def test_"]},
-        "hip": {"status": "supported", "evidence": ["tests/test_backend/test_HIP/test_lexer.py::def test_"]},
-        "mojo": {"status": "supported", "evidence": ["tests/test_backend/test_mojo/test_lexer.py::def test_"]},
-        "rust": {"status": "supported", "evidence": ["tests/test_backend/test_rust/test_lexer.py::def test_"]},
-        "slang": {"status": "supported", "evidence": ["tests/test_backend/test_slang/test_lexer.py::def test_"]}
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_directx/test_lexer.py::def test_"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_lexer.py::def test_"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_metal/test_lexer.py::def test_"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_SPIRV/test_lexer.py::def test_"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_CUDA/test_lexer.py::def test_"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_HIP/test_lexer.py::def test_"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_mojo/test_lexer.py::def test_"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_rust/test_lexer.py::def test_"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_slang/test_lexer.py::def test_"
+          ]
+        }
       }
     },
     {
@@ -171,10 +306,30 @@
       "name": "Vertex stage",
       "description": "CrossGL vertex entry point lowering.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_vertex_value_parameter_emits_stage_input_declaration"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"]},
-        "vulkan": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_vertex_stage_entry_point_has_no_fragment_execution_mode"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_vertex_value_parameter_emits_stage_input_declaration"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_vertex_stage_entry_point_has_no_fragment_execution_mode"
+          ]
+        },
         "cuda": {
           "status": "supported",
           "notes": "CUDA has no native raster vertex stage, so CrossGL vertex entry points lower to CUDA device functions with deterministic CrossGL stage metadata. Vertex return semantics such as gl_Position/SV_Position and vertex input semantics such as gl_VertexID/SV_InstanceID are preserved as metadata comments with stage/type/direction validation, and optional nvcc smoke coverage verifies the generated device signatures when nvcc is available.",
@@ -223,7 +378,12 @@
             "tests/test_backend/test_rust/test_codegen.py::def test_translate_api_accepts_rust_source_preserves_stage_entry"
           ]
         },
-        "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_only_shader_emits_slang_entry_point"]}
+        "slang": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_only_shader_emits_slang_entry_point"
+          ]
+        }
       }
     },
     {
@@ -232,10 +392,30 @@
       "name": "Fragment/pixel stage",
       "description": "CrossGL fragment entry point lowering.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_fragment_value_parameter_emits_stage_input_declaration"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"]},
-        "vulkan": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_fragment_stage_execution_mode_uses_entry_function_id"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_fragment_value_parameter_emits_stage_input_declaration"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_fragment_stage_execution_mode_uses_entry_function_id"
+          ]
+        },
         "cuda": {
           "status": "supported",
           "notes": "CUDA has no native raster fragment stage, so CrossGL fragment entry points lower to CUDA device functions with deterministic CrossGL stage metadata. Fragment return semantics such as gl_FragColor/SV_Target and gl_FragDepth, fragment input semantics such as gl_FragCoord/SV_Position and gl_FrontFacing/SV_IsFrontFace, and struct-member render-target/depth semantics are preserved as metadata comments with stage/type/direction validation. Optional nvcc smoke coverage verifies representative generated fragment device signatures when nvcc is available.",
@@ -282,7 +462,12 @@
             "tests/test_backend/test_rust/test_codegen.py::def test_fragment_shader_conversion"
           ]
         },
-        "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_output_assignments_rewrite_to_slang_return_semantics"]}
+        "slang": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_output_assignments_rewrite_to_slang_return_semantics"
+          ]
+        }
       }
     },
     {
@@ -291,14 +476,54 @@
       "name": "Compute stage",
       "description": "CrossGL compute entry point lowering.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_compute_stage_emits_default_numthreads_attribute"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_compute_stage_emits_default_local_size_layout"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_compute_builtin_semantics_roundtrip"]},
-        "vulkan": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_stage_entry_point_generates_defined_function"]},
-        "cuda": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_compute_shader_to_kernel"]},
-        "hip": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_compute_shader_to_kernel"]},
-        "mojo": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_compute_non_executable_main_signatures_compile_as_mojo_package"]},
-        "rust": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_structured_buffer_type_mapping"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_compute_stage_emits_default_numthreads_attribute"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_compute_stage_emits_default_local_size_layout"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_compute_builtin_semantics_roundtrip"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_stage_entry_point_generates_defined_function"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_compute_shader_to_kernel"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_compute_shader_to_kernel"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_compute_non_executable_main_signatures_compile_as_mojo_package"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_structured_buffer_type_mapping"
+          ]
+        },
         "slang": {
           "status": "supported",
           "notes": "Compute entry points lower to Slang shader entries with HLSL-compatible numthreads defaults and parsed local-size layouts.",
@@ -315,10 +540,20 @@
       "name": "Geometry stage",
       "description": "Geometry shader stage and primitive stream shape validation.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_geometry_stage_lowers_hlsl_stage_attributes"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_geometry_stage_entrypoint"]},
-        "metal": {
+        "directx": {
           "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_geometry_stage_lowers_hlsl_stage_attributes"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_geometry_stage_entrypoint"
+          ]
+        },
+        "metal": {
+          "status": "diagnostic",
           "notes": "Metal has no traditional native geometry shader stage, so CrossGL geometry entry points lower to deterministic Metal helper functions with CrossGL geometry-stage metadata and compile-oriented PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder stream helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
@@ -338,7 +573,7 @@
           ]
         },
         "cuda": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "CUDA geometry stages lower to deterministic __device__ helper functions with CrossGL geometry-stage metadata and compile-oriented PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_geometry_stage_lowers_to_cuda_metadata_and_stream_placeholders",
@@ -346,7 +581,7 @@
           ]
         },
         "hip": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "HIP geometry stages lower to deterministic __device__ helper functions with CrossGL geometry-stage metadata and compile-oriented PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_geometry_stage_lowers_to_hip_metadata_and_stream_placeholders",
@@ -354,7 +589,7 @@
           ]
         },
         "mojo": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "Mojo geometry stages lower to deterministic compile-smoke helper functions with CrossGL geometry-stage metadata and PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_geometry_stage_lowers_to_mojo_metadata_and_stream_placeholders",
@@ -362,7 +597,7 @@
           ]
         },
         "rust": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "Rust geometry stages lower to deterministic compile-smoke functions with CrossGL geometry-stage metadata and PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder helpers, requires positive maxvertexcount attributes, validates point/line/triangle/adjacent input primitive array arity, and is covered by rustc smoke compilation.",
           "evidence": [
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_geometry_stage_lowers_with_metadata_and_stream_placeholders",
@@ -389,10 +624,20 @@
       "name": "Tessellation stages",
       "description": "Tessellation control/hull and tessellation evaluation/domain stages.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_tessellation_stages_lower_hlsl_stage_attributes"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_parts"]},
-        "metal": {
+        "directx": {
           "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_tessellation_stages_lower_hlsl_stage_attributes"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_parts"
+          ]
+        },
+        "metal": {
+          "status": "diagnostic",
           "notes": "Metal tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves domain, partitioning, output topology, outputcontrolpoints, patchconstantfunc, maxtessfactor, patch parameter element/count metadata, and tessellation helper semantics while validating patch signatures and domain-location shapes.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
@@ -413,7 +658,7 @@
           ]
         },
         "cuda": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "CUDA tessellation control and evaluation stages lower to deterministic __device__ helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves outputcontrolpoints, domain, partitioning, output topology, and patchconstantfunc metadata, maps patch parameter types to placeholder templates, requires positive outputcontrolpoints on control stages, requires valid domain metadata on evaluation stages, and validates partitioning values.",
           "evidence": [
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_tessellation_stages_lower_to_cuda_metadata_and_patch_placeholders",
@@ -421,7 +666,7 @@
           ]
         },
         "hip": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "HIP tessellation control and evaluation stages lower to deterministic __device__ helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves outputcontrolpoints, domain, partitioning, output topology, and patchconstantfunc metadata, maps patch parameter types to placeholder templates, requires positive outputcontrolpoints on control stages, requires valid domain metadata on evaluation stages, and validates partitioning values.",
           "evidence": [
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_tessellation_stages_lower_to_hip_metadata_and_patch_placeholders",
@@ -429,7 +674,7 @@
           ]
         },
         "mojo": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "Mojo tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves outputcontrolpoints, domain, partitioning, output topology, and patchconstantfunc metadata, maps patch parameter types to placeholder containers, requires positive outputcontrolpoints on control stages, requires valid domain metadata on evaluation stages, and validates partitioning values.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_tessellation_stages_lower_to_mojo_metadata_and_patch_placeholders",
@@ -437,7 +682,7 @@
           ]
         },
         "rust": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "Rust tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves outputcontrolpoints, domain, partitioning, output topology, patchconstantfunc, and patch parameter metadata, maps patch parameter types to placeholder containers, requires positive outputcontrolpoints on control stages, requires valid domain metadata on evaluation stages, validates partitioning values, and rejects invalid patch generic shapes/counts.",
           "evidence": [
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_tessellation_stages_lower_with_metadata_and_patch_placeholders",
@@ -549,7 +794,7 @@
           ]
         },
         "cuda": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "CUDA mesh, task, object, and amplification stages lower to deterministic __device__ helper functions with CrossGL mesh/task metadata and compile-oriented placeholder hooks. Mesh lowering preserves numthreads, output topology, max_vertices, max_primitives, and SetMeshOutputCounts calls; task/object/amplification lowering preserves numthreads and DispatchMesh payload calls. The backend validates output topology, positive local-size metadata, SetMeshOutputCounts arity, and DispatchMesh stage/arity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_mesh_task_stages_lower_to_cuda_metadata_and_placeholder_hooks",
@@ -558,7 +803,7 @@
           ]
         },
         "hip": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "HIP mesh, task, object, and amplification stages lower to deterministic __device__ helper functions with CrossGL mesh/task metadata and compile-oriented placeholder hooks. Mesh lowering preserves numthreads, output topology, max_vertices, max_primitives, and SetMeshOutputCounts calls; task/object/amplification lowering preserves numthreads and DispatchMesh payload calls. The backend validates output topology, positive local-size metadata, SetMeshOutputCounts arity, and DispatchMesh stage/arity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_mesh_task_stages_lower_to_hip_metadata_and_placeholder_hooks",
@@ -567,7 +812,7 @@
           ]
         },
         "mojo": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "Mojo mesh, task, object, and amplification stages lower to compile-oriented Mojo functions with deterministic CrossGL mesh/task metadata and placeholder helpers. Mesh lowering preserves output topology, max vertex/primitive limits, mesh payload/output roles, SetMeshOutputCounts calls, and task/object/amplification DispatchMesh calls while validating topology, positive limits, helper stage context, and helper arity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders",
@@ -577,7 +822,7 @@
           ]
         },
         "rust": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "Rust mesh, task, object, and amplification stages lower to deterministic functions with CrossGL mesh/task metadata and compile-oriented placeholder helpers. Mesh lowering preserves output topology, mesh payload/output roles, max vertex/primitive limits, SetMeshOutputCounts calls, and task/object/amplification DispatchMesh calls while validating topology, positive local-size metadata, output parameter roles/counts, helper stage context, and helper arity/count types.",
           "evidence": [
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_mesh_task_stages_lower_to_metadata_and_intrinsic_placeholders",
@@ -587,7 +832,7 @@
           ]
         },
         "slang": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "Entry points lower to Slang mesh/amplification shader attributes with deterministic duplicate-entry names, local-size layouts or @numthreads attributes, quoted outputtopology attributes, native SetMeshOutputCounts/DispatchMesh calls, mesh output signatures for vertices/indices/primitives, helper forwarding, mesh payload parameters, and DispatchMesh payload arguments. The backend validates intrinsic arity/stage/value contexts, count argument types, output roles/counts/topology, SetMeshOutputCounts ordering and duplicates, output write order and literal indices, payload parameter shapes, payload lvalue/type matching, and invalid helper payload arguments.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
@@ -648,7 +893,7 @@
         },
         "metal": {
           "status": "supported",
-          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, any-hit, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Metal-prohibited arrayed visible_function_table and intersection_function_table globals or parameters emit compile-safe diagnostics while scalar table globals, parameters, explicit callable dispatch, and intersection-table TraceRay paths remain compiler validated.",
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. RayQuery declarations and methods lower to compile-safe CglRayQuery placeholder helpers because Metal has no HLSL-style RayQuery object. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, any-hit, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Metal-prohibited arrayed visible_function_table and intersection_function_table globals or parameters emit compile-safe diagnostics while scalar table globals, parameters, explicit callable dispatch, and intersection-table TraceRay paths remain compiler validated.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_payload_semantics",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_hit_and_callable_stages_lower_to_visible_functions",
@@ -664,8 +909,10 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_skips_incompatible_intersection_function_table",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_uses_primitive_acceleration_structure_shape",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_acceleration_structure_globals_thread_through_helpers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_ray_query_operations_lower_to_compile_safe_helpers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_unsupported_ray_intrinsics_emit_compile_safe_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_query_placeholders_compile_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_intersection_table_trace_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_primitive_acceleration_trace_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_payload_trace_compiles_with_metal3",
@@ -778,9 +1025,24 @@
       "name": "Stage parameter semantics",
       "description": "Input parameter semantics and target builtin attributes.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_thread_system_crossgl_semantics_lower_and_validate"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_stage_builtin_parameter_aliases_to_glsl_builtin"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_graphics_builtin_parameter_semantics_roundtrip"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_thread_system_crossgl_semantics_lower_and_validate"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_stage_builtin_parameter_aliases_to_glsl_builtin"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_graphics_builtin_parameter_semantics_roundtrip"
+          ]
+        },
         "vulkan": {
           "status": "supported",
           "notes": "Global sampled textures, samplers, storage images, resource arrays, and cbuffers share deterministic DescriptorSet/Binding assignment with explicit @set/@group/@binding handling and duplicate binding rejection.",
@@ -808,53 +1070,68 @@
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_stage_parameter_semantics_thread_position_in_grid"
           ]
         },
-    "mojo": {
-      "status": "supported",
-      "notes": "Stage parameter semantics are preserved as deterministic stage-aware Mojo parameter comments for compile-smoke output, common vertex/fragment/compute builtin and generic semantics are mapped, duplicate parameter semantics, output-only input misuse, builtin stage misuse, and builtin parameter type mismatches are rejected deterministically.",
-      "evidence": [
-        "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
-        "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_vertex_fragment_shader_entries_compile_as_mojo_package",
-        "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen"
-      ]
+        "mojo": {
+          "status": "supported",
+          "notes": "Stage parameter semantics are preserved as deterministic stage-aware Mojo parameter comments for compile-smoke output, common vertex/fragment/compute builtin and generic semantics are mapped, duplicate parameter semantics, output-only input misuse, builtin stage misuse, and builtin parameter type mismatches are rejected deterministically.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_vertex_fragment_shader_entries_compile_as_mojo_package",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "Rust preserves struct, direct return, and builtin stage parameter semantics as deterministic generated comments for compile-smoke output, maps compute/vertex/fragment system-value aliases, and validates builtin parameter stage, type, duplicate system values, and output-only misuse deterministically.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_io_semantics_sv_position_sv_target",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_input_struct",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_semantics_all_mappings",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_direct_return_semantics_emit_metadata_and_compile"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "Stage parameter semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values across vertex, fragment, compute, geometry, tessellation, mesh, amplification, and ray interfaces; builtin stage input parameters validate stage, type, duplicate system values, and output-only misuse deterministically.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_input_parameter_semantic_annotations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_cover_tessellation_system_values",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_and_type",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_reject_duplicate_system_values",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stage_builtins_emit_stage_specific_slang_parameters",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_invalid_slang_ray_stage_semantic_parameters_raise",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_output_entry_parameters_reject_non_mesh_stages"
+          ]
+        }
+      }
     },
-    "rust": {
-      "status": "supported",
-      "notes": "Rust preserves struct, direct return, and builtin stage parameter semantics as deterministic generated comments for compile-smoke output, maps compute/vertex/fragment system-value aliases, and validates builtin parameter stage, type, duplicate system values, and output-only misuse deterministically.",
-      "evidence": [
-        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_io_semantics_sv_position_sv_target",
-        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_input_struct",
-        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_semantics_all_mappings",
-        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile",
-        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates",
-        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_direct_return_semantics_emit_metadata_and_compile"
-      ]
-    },
-    "slang": {
-      "status": "supported",
-      "notes": "Stage parameter semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values across vertex, fragment, compute, geometry, tessellation, mesh, amplification, and ray interfaces; builtin stage input parameters validate stage, type, duplicate system values, and output-only misuse deterministically.",
-      "evidence": [
-        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
-        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
-        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_input_parameter_semantic_annotations",
-        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_cover_tessellation_system_values",
-        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_and_type",
-        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_reject_duplicate_system_values",
-        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stage_builtins_emit_stage_specific_slang_parameters",
-        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_invalid_slang_ray_stage_semantic_parameters_raise",
-        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_output_entry_parameters_reject_non_mesh_stages"
-      ]
-    }
-  }
-},
     {
       "id": "io.return_semantics",
       "category": "stage I/O",
       "name": "Direct function return semantics",
       "description": "Function return semantics, wrapper output structs, and invalid-return validation.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_output_return_semantics_still_emit"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_vertex_return_semantic_assigns_position_builtin"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_return_semantics_lower_to_output_structs_when_required"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_output_return_semantics_still_emit"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_vertex_return_semantic_assigns_position_builtin"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_return_semantics_lower_to_output_structs_when_required"
+          ]
+        },
         "vulkan": {
           "status": "supported",
           "notes": "Direct entry-point return semantics lower to SPIR-V Output variables or BuiltIn Position/FragDepth outputs, fragment color returns use deterministic Location decorations, invalid builtin type/stage/input-only return semantics are rejected, and generated modules validate through spirv-as/spirv-val when available.",
@@ -925,9 +1202,24 @@
       "name": "Struct member semantics",
       "description": "Input/output struct member semantics and builtin type validation.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_struct_array_member_semantics_are_preserved"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_color_semantic_maps_to_explicit_stage_io_locations"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_struct_builtin_member_semantics_are_validated"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_struct_array_member_semantics_are_preserved"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_color_semantic_maps_to_explicit_stage_io_locations"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_struct_builtin_member_semantics_are_validated"
+          ]
+        },
         "vulkan": {
           "status": "supported",
           "notes": "Struct member semantics lower to SPIR-V member BuiltIn decorations for Position and SV_Position aliases, mesh-output struct members receive deterministic Location decorations, duplicate input/output locations are rejected, and generated modules validate through the SPIR-V tools smoke checks when available.",
@@ -999,9 +1291,24 @@
       "name": "Explicit and automatic resource bindings",
       "description": "Resource binding/register/location assignment and collision avoidance.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_global_resource_binding_attributes_drive_registers"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_global_resource_binding_attributes_drive_layout_bindings"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_global_resource_binding_attributes_drive_indices"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_global_resource_binding_attributes_drive_registers"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_global_resource_binding_attributes_drive_layout_bindings"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_global_resource_binding_attributes_drive_indices"
+          ]
+        },
         "vulkan": {
           "status": "supported",
           "notes": "Global sampled textures, samplers, storage images, resource arrays, and cbuffers share deterministic DescriptorSet/Binding assignment with explicit @set/@group/@binding handling and duplicate binding rejection.",
@@ -1065,9 +1372,24 @@
       "name": "Constant/uniform buffers",
       "description": "CrossGL cbuffer/uniform block lowering.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_cbuffer_with_register_b0_binding"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_cbuffer_binding_attributes_drive_layout_bindings"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cbuffer_lowers_to_constant_address_space_struct_pointer"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_cbuffer_with_register_b0_binding"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_cbuffer_binding_attributes_drive_layout_bindings"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cbuffer_lowers_to_constant_address_space_struct_pointer"
+          ]
+        },
         "vulkan": {
           "status": "supported",
           "notes": "CrossGL cbuffers lower to SPIR-V Uniform blocks with Block, member Offset, matrix stride, array stride, descriptor set/binding decorations, bare/member access lowering, duplicate binding rejection, and spirv-as/spirv-val coverage.",
@@ -1782,13 +2104,13 @@
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_resource_memory_qualifiers_emit_hip_pointer_qualifiers"
           ]
         },
-    "mojo": {
-      "status": "supported",
-      "notes": "For the repo-owned compile-oriented Mojo contract, readonly/writeonly access metadata is preserved in resource metadata comments and validated for Mojo image, indexed image arrays, image-atomic, buffer, indexed buffer arrays, byte-address member calls, and GLSL buffer-block placeholder reads/writes; coherent/globallycoherent/volatile/restrict are preserved as deterministic metadata comments without leaking unsupported Mojo semantics because Mojo has no target-native equivalent in this placeholder backend.",
-      "evidence": [
-        "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_memory_qualifier_metadata_and_access_validation_for_mojo_codegen",
-        "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_array_access_qualifiers_apply_to_indexed_mojo_resources",
-        "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_image_atomics_require_read_write_access_for_mojo_codegen",
+        "mojo": {
+          "status": "supported",
+          "notes": "For the repo-owned compile-oriented Mojo contract, readonly/writeonly access metadata is preserved in resource metadata comments and validated for Mojo image, indexed image arrays, image-atomic, buffer, indexed buffer arrays, byte-address member calls, and GLSL buffer-block placeholder reads/writes; coherent/globallycoherent/volatile/restrict are preserved as deterministic metadata comments without leaking unsupported Mojo semantics because Mojo has no target-native equivalent in this placeholder backend.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_memory_qualifier_metadata_and_access_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_array_access_qualifiers_apply_to_indexed_mojo_resources",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_image_atomics_require_read_write_access_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen"
           ]
         },
@@ -1823,9 +2145,24 @@
       "name": "Texture sampling",
       "description": "Basic sampling with regular and shadow samplers.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_texture_resources_and_sampling"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_texture_sampling_capability_descriptors"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_sampling_capability_descriptors"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_texture_resources_and_sampling"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_texture_sampling_capability_descriptors"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_sampling_capability_descriptors"
+          ]
+        },
         "vulkan": {
           "status": "supported",
           "notes": "Basic regular and shadow texture sampling lower to SPIR-V implicit-lod sampling instructions across 2D, 2D-array, 3D, cube, and cube-array resources, with explicit split samplers ignored for combined-image semantics and spirv-tools validation coverage.",
@@ -2227,7 +2564,7 @@
           ]
         },
         "cuda": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "CUDA sampled resources do not expose a backend-native shadow-comparison sampler contract in this translator; shadow compare, compare-offset, compare-LOD, compare-gradient, projected compare, and gather-compare forms emit deterministic diagnostics instead of leaking unsupported source calls.",
           "evidence": [
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_shadow_sampler_calls_emit_cuda_diagnostics",
@@ -2235,7 +2572,7 @@
           ]
         },
         "hip": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "HIP sampled resources do not expose a backend-native shadow-comparison sampler contract in this translator; shadow compare, compare-offset, compare-LOD, compare-gradient, projected compare, and gather-compare forms emit deterministic diagnostics instead of leaking unsupported source calls.",
           "evidence": [
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_shadow_sampler_calls_emit_hip_diagnostics",
@@ -2827,7 +3164,7 @@
           ]
         },
         "cuda": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "CUDA image atomic calls emit deterministic diagnostics or safe zero-value expressions for unsupported surface atomic semantics, with coordinate, format, access-mode, and multisample cases covered so source atomics never leak as invalid CUDA calls.",
           "evidence": [
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_image_atomic_builtins_emit_cuda_diagnostics",
@@ -2836,7 +3173,7 @@
           ]
         },
         "hip": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "HIP image atomic calls emit deterministic diagnostics or safe zero-value expressions for unsupported surface atomic semantics, with coordinate, format, access-mode, cubemap, and multisample cases covered so source atomics never leak as invalid HIP calls.",
           "evidence": [
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_image_atomic_builtins_emit_hip_diagnostics",
@@ -2971,9 +3308,24 @@
       "name": "Struct declarations and construction",
       "description": "Lower struct declarations, member access, initialization, and return values.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_struct"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_struct_concrete_constructor_and_member_access"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_struct"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_struct"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_struct_concrete_constructor_and_member_access"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_struct"
+          ]
+        },
         "vulkan": {
           "status": "supported",
           "notes": "SPIR-V lowers struct type declarations, constructors, member access, nested member access, parameters, local copies, returns, and resource-bearing struct values to OpTypeStruct, OpCompositeConstruct, OpAccessChain/OpCompositeExtract, and layout-compatible local values with spirv-as/spirv-val coverage.",
@@ -2984,11 +3336,36 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_language_features_compute_validates_with_spirv_tools"
           ]
         },
-        "cuda": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_struct_generation"]},
-        "hip": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_struct_generation"]},
-        "mojo": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_braced_struct_constructors_emit_mojo_initializers"]},
-        "rust": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_generated_structs_emit_new_constructors_and_smoke_compile"]},
-        "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_struct"]}
+        "cuda": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_struct_generation"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_struct_generation"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_braced_struct_constructors_emit_mojo_initializers"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_generated_structs_emit_new_constructors_and_smoke_compile"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_struct"
+          ]
+        }
       }
     },
     {
@@ -2997,9 +3374,24 @@
       "name": "Array declarations and access",
       "description": "Lower fixed arrays, array parameters, indexing, and array return diagnostics.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_array_handling"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_handling"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_array_handling"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_handling"
+          ]
+        },
         "vulkan": {
           "status": "supported",
           "notes": "SPIR-V lowers fixed arrays, array literals, local arrays, array parameters, array return values, nested array/struct member access, and dynamic indexing to OpTypeArray, OpCompositeConstruct, OpAccessChain, and local-copy helpers with spirv-as/spirv-val coverage.",
@@ -3010,11 +3402,36 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_language_features_compute_validates_with_spirv_tools"
           ]
         },
-        "cuda": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_array_declarations_emit_c_style_declarators"]},
-        "hip": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_array_operations"]},
-        "mojo": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_fixed_size_arrays_emit_inlinearray_and_cast_dynamic_indices"]},
-        "rust": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_array_access"]},
-        "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_array_access_and_ternary_expressions_emit_slang_syntax"]}
+        "cuda": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_array_declarations_emit_c_style_declarators"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_array_operations"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_fixed_size_arrays_emit_inlinearray_and_cast_dynamic_indices"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_array_access"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_array_access_and_ternary_expressions_emit_slang_syntax"
+          ]
+        }
       }
     },
     {
@@ -3023,9 +3440,24 @@
       "name": "Function declarations and calls",
       "description": "Lower helper functions, entry functions, call expressions, and return statements.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_function_call"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_function_call"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call"
+          ]
+        },
         "vulkan": {
           "status": "supported",
           "notes": "SPIR-V lowers helper functions, entry functions, function parameters, return-value conversion, argument conversion, user calls, and structured return statements to OpFunction/OpFunctionParameter/OpFunctionCall with spirv-as/spirv-val coverage.",
@@ -3036,11 +3468,36 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_language_features_compute_validates_with_spirv_tools"
           ]
         },
-        "cuda": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_function_conversion"]},
-        "hip": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_function_conversion"]},
-        "mojo": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_function_call"]},
-        "rust": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_function_call"]},
-        "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_local_functions_and_initialized_variables_emit"]}
+        "cuda": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_function_conversion"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_function_conversion"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_function_call"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_function_call"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_local_functions_and_initialized_variables_emit"
+          ]
+        }
       }
     },
     {
@@ -3049,24 +3506,64 @@
       "name": "Control flow",
       "description": "if/else, loops, switch, break, continue, and return statements.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+          ]
+        },
         "vulkan": {
           "status": "supported",
           "notes": "SPIR-V lowers if/else, for, while, do-while, switch/default, break, continue, returns, and resource use inside structured control flow to structured OpSelectionMerge/OpLoopMerge regions with spirv-as/spirv-val coverage.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_for_loop_control_flow",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_while_loop_generates_structured_control_flow",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_switch_node_emits_spirv_selection_chain_and_default",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_switch_node_emits_spirv_switch_and_default",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_language_features_compute_validates_with_spirv_tools"
           ]
         },
-        "cuda": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_while_loop_generation"]},
-        "hip": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_control_flow"]},
-        "mojo": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_switch_statement_lowers_to_mojo_condition_chain"]},
-        "rust": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body"]},
-        "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_if_else_control_flow_emits_slang_blocks"]}
+        "cuda": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_while_loop_generation"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_control_flow"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_switch_statement_lowers_to_mojo_condition_chain"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_if_else_control_flow_emits_slang_blocks"
+          ]
+        }
       }
     },
     {
@@ -3177,28 +3674,28 @@
       "name": "Wave/subgroup intrinsics",
       "description": "Lower CrossGL Wave* subgroup operations including lane queries, reductions, scans, votes, ballots, and lane reads.",
       "support": {
-    "directx": {
-      "status": "supported",
-      "notes": "WaveOpNode calls are preserved as native HLSL Wave* intrinsics across lane queries, votes, reductions, scans, ballots, WaveMatch, WaveMultiPrefix*, quad reads, and arity/type diagnostics. Optional DXC validation covers a compute wave shader when dxc is installed.",
-      "evidence": [
-        "tests/test_translator/test_codegen/test_directx_codegen.py::def test_wave_and_rayquery_intrinsics_codegen",
-        "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_wave_intrinsics_reject_wrong_arity",
-        "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_wave_intrinsics_validate_argument_types",
-        "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_wave_intrinsics_compute_validates_with_dxc"
-      ]
-    },
-    "opengl": {
-      "status": "supported",
-      "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations, deterministic arity/type diagnostics, and glslang validation coverage.",
-      "evidence": [
-        "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins",
-        "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_invalid_arities_and_wave_match_lowering",
-        "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics",
-        "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose",
-        "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_match_and_multiprefix_forms_lower_to_helpers",
-        "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang"
-      ]
-    },
+        "directx": {
+          "status": "supported",
+          "notes": "WaveOpNode calls are preserved as native HLSL Wave* intrinsics across lane queries, votes, reductions, scans, ballots, WaveMatch, WaveMultiPrefix*, quad reads, and arity/type diagnostics. Optional DXC validation covers a compute wave shader when dxc is installed.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_wave_and_rayquery_intrinsics_codegen",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_wave_intrinsics_reject_wrong_arity",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_wave_intrinsics_validate_argument_types",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_wave_intrinsics_compute_validates_with_dxc"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations, deterministic arity/type diagnostics, and glslang validation coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_invalid_arities_and_wave_match_lowering",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_match_and_multiprefix_forms_lower_to_helpers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang"
+          ]
+        },
         "metal": {
           "status": "supported",
           "notes": "Lowers CrossGL Wave* operations to Metal simdgroup intrinsics or helper functions, threads compute-stage lane metadata through helper calls, and emits compile-safe diagnostics for contexts where Metal cannot supply simdgroup lane values.",
@@ -3334,7 +3831,7 @@
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_guarded_arm_lowers_to_cuda_if_chain",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_identifier_binding_arm_lowers_to_cuda_scoped_else_body",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_plain_struct_pattern_binds_fields_for_cuda",
-            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_return_match_expression_lowers_to_cuda_typed_temporary"
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_return_match_expression_in_cuda_kernel_discards_return_value"
           ]
         },
         "hip": {
@@ -3345,7 +3842,7 @@
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_match_guarded_arm_lowers_to_hip_if_chain",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_match_identifier_binding_arm_lowers_to_hip_scoped_else_body",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_match_plain_struct_pattern_binds_fields_for_hip",
-            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_return_match_expression_lowers_to_hip_typed_temporary"
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_return_match_expression_in_hip_kernel_discards_return_value"
           ]
         },
         "mojo": {
@@ -3434,11 +3931,38 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_numeric_mix_builtins_use_spirv_operand_result_type"
           ]
         },
-        "cuda": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_matrix_types_and_constructors_emit_cuda_names"]},
-        "hip": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_matrix_types_and_constructors_emit_hip_names"]},
-        "mojo": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_double_vector_and_matrix_types_emit_mojo_names"]},
-        "rust": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_double_vector_and_matrix_types_emit_rust_names"]},
-        "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_matrix_and_non_float_vector_types_emit_slang_names"]}
+        "cuda": {
+          "status": "supported",
+          "notes": "CUDA lowering emits concrete float/double matrix helper structs for 2x2 through 4x4 shapes alongside native vector aliases, so generated matrix type names and scalar constructors are self-contained.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_matrix_types_and_constructors_emit_cuda_names"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "HIP lowering emits concrete float/double matrix helper structs for 2x2 through 4x4 shapes alongside native vector aliases, so generated matrix type names and scalar constructors are self-contained.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_matrix_types_and_constructors_emit_hip_names"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_double_vector_and_matrix_types_emit_mojo_names"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_double_vector_and_matrix_types_emit_rust_names"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_matrix_and_non_float_vector_types_emit_slang_names"
+          ]
+        }
       }
     },
     {
@@ -3447,9 +3971,24 @@
       "name": "Bitwise operations",
       "description": "Integer bitwise operators and assignment variants.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_bitwise_operators"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_bitwise_operators"]},
-        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_bitwise_operators"]},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_bitwise_operators"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_bitwise_operators"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_bitwise_operators"
+          ]
+        },
         "vulkan": {
           "status": "supported",
           "notes": "SPIR-V codegen lowers integer bitwise &, |, ^, shifts, unary bitwise not, and bitwise compound assignments to validated SPIR-V bitwise/shift opcodes.",
@@ -3463,11 +4002,36 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compound_assignments_load_apply_op_and_store_result"
           ]
         },
-        "cuda": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_integer_vector_bitwise_ops_expand_cuda_components"]},
-        "hip": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_integer_vector_bitwise_ops_expand_hip_components"]},
-        "mojo": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_bitwise_operators"]},
-        "rust": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_bitwise_operators"]},
-        "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_bitwise_operators_emit_slang_syntax"]}
+        "cuda": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_integer_vector_bitwise_ops_expand_cuda_components"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_integer_vector_bitwise_ops_expand_hip_components"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_bitwise_operators"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_bitwise_operators"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_bitwise_operators_emit_slang_syntax"
+          ]
+        }
       }
     },
     {

@@ -9,10 +9,14 @@ for GPU programming.
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
+    ArrayNode,
     ASTNode,
     BreakNode,
     CbufferNode,
+    ConstantNode,
+    ConstructorNode,
     ContinueNode,
+    EnumNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
@@ -31,7 +35,44 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
-from .array_utils import parse_array_type
+from .array_utils import parse_array_type, split_array_type_suffix
+from .enum_utils import (
+    collect_enum_struct_variant_fields,
+    collect_enum_type_names,
+    collect_enum_variant_constants,
+    collect_enum_variant_constructor_fields,
+    collect_enum_variant_constructors,
+    collect_generic_enum_specialization_member_types,
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    collect_generic_enum_variant_constants,
+    collect_plain_enums,
+    collect_struct_payload_enums,
+    enum_struct_fields,
+    enum_value_expression,
+    generate_enum_constants,
+    generate_enum_constructor_call,
+    generate_enum_constructor_expression,
+    generate_enum_constructor_functions,
+    generate_enum_structs,
+    generate_generic_enum_constants,
+    generate_generic_enum_constructor_functions,
+    generate_generic_enum_structs,
+    generic_enum_specialized_fields,
+    generic_enum_specialized_type_name,
+    infer_enum_constructor_type,
+)
+from .generic_struct_utils import (
+    collect_generic_struct_definitions,
+    collect_generic_struct_specialization_member_types,
+    collect_generic_struct_specializations,
+    generate_generic_structs,
+    generate_struct_constructor_expression,
+    generic_struct_member_type_name,
+    generic_struct_specialized_fields,
+    generic_struct_specialized_type_name,
+    infer_struct_constructor_type,
+)
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -108,11 +149,16 @@ HIP_WAVE_UVEC4_RESULT_OPS = {
     "WaveMatch",
 }
 
+HIP_WARP_SYNC_BUILTIN_ARITIES = {
+    "__shfl_down_sync": 3,
+}
+
 
 class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
     """Emit HIP source from the shared CrossGL translator AST."""
 
     resource_diagnostic_backend = "HIP"
+    struct_constructor_uses_braces = True
     synchronization_builtins = {
         "barrier",
         "groupMemoryBarrier",
@@ -178,8 +224,25 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.current_structured_buffer_length_parameters = {}
         self.current_function_name = None
         self.current_stage_name = None
+        self.hip_function_capture_params = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        self.stage_builtin_aliases = {}
+        self.current_function_is_kernel_entry = False
+        self.current_expression_expected_type = None
+        self.structs_by_name = {}
+        self.generic_enum_struct_definitions = {}
+        self.generic_enum_specializations = {}
+        self.generic_struct_definitions = {}
+        self.generic_struct_specializations = {}
+        self.plain_enums = []
+        self.struct_payload_enums = []
+        self.enum_type_names = set()
+        self.enum_struct_type_names = set()
+        self.enum_struct_variant_fields = {}
+        self.enum_variant_constructors = {}
+        self.enum_variant_constructor_fields = {}
+        self.enum_variant_constants = {}
 
         # CrossGL to HIP type mapping
         self.type_map = {
@@ -190,6 +253,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "bool": "bool",
             "void": "void",
             "uint": "unsigned int",
+            "str": "int",
             # Vector types
             "vec2": "float2",
             "vec3": "float3",
@@ -459,18 +523,27 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         # Built-in variable mappings
         self.builtin_map = {
+            "gl_LocalInvocationID": "make_uint3(threadIdx.x, threadIdx.y, threadIdx.z)",
             "gl_LocalInvocationID.x": "threadIdx.x",
             "gl_LocalInvocationID.y": "threadIdx.y",
             "gl_LocalInvocationID.z": "threadIdx.z",
+            "gl_WorkGroupID": "make_uint3(blockIdx.x, blockIdx.y, blockIdx.z)",
             "gl_WorkGroupID.x": "blockIdx.x",
             "gl_WorkGroupID.y": "blockIdx.y",
             "gl_WorkGroupID.z": "blockIdx.z",
+            "gl_WorkGroupSize": "make_uint3(blockDim.x, blockDim.y, blockDim.z)",
             "gl_WorkGroupSize.x": "blockDim.x",
             "gl_WorkGroupSize.y": "blockDim.y",
             "gl_WorkGroupSize.z": "blockDim.z",
+            "gl_NumWorkGroups": "make_uint3(gridDim.x, gridDim.y, gridDim.z)",
             "gl_NumWorkGroups.x": "gridDim.x",
             "gl_NumWorkGroups.y": "gridDim.y",
             "gl_NumWorkGroups.z": "gridDim.z",
+            "gl_GlobalInvocationID": (
+                "make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+                "(blockIdx.y * blockDim.y + threadIdx.y), "
+                "(blockIdx.z * blockDim.z + threadIdx.z))"
+            ),
             "gl_GlobalInvocationID.x": "(blockIdx.x * blockDim.x + threadIdx.x)",
             "gl_GlobalInvocationID.y": "(blockIdx.y * blockDim.y + threadIdx.y)",
             "gl_GlobalInvocationID.z": "(blockIdx.z * blockDim.z + threadIdx.z)",
@@ -482,10 +555,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "SV_GroupThreadID.x": "threadIdx.x",
             "SV_GroupThreadID.y": "threadIdx.y",
             "SV_GroupThreadID.z": "threadIdx.z",
+            "SV_GROUPTHREADID": "make_uint3(threadIdx.x, threadIdx.y, threadIdx.z)",
+            "SV_GROUPTHREADID.x": "threadIdx.x",
+            "SV_GROUPTHREADID.y": "threadIdx.y",
+            "SV_GROUPTHREADID.z": "threadIdx.z",
             "SV_GroupID": "make_uint3(blockIdx.x, blockIdx.y, blockIdx.z)",
             "SV_GroupID.x": "blockIdx.x",
             "SV_GroupID.y": "blockIdx.y",
             "SV_GroupID.z": "blockIdx.z",
+            "SV_GROUPID": "make_uint3(blockIdx.x, blockIdx.y, blockIdx.z)",
+            "SV_GROUPID.x": "blockIdx.x",
+            "SV_GROUPID.y": "blockIdx.y",
+            "SV_GROUPID.z": "blockIdx.z",
             "SV_DispatchThreadID": (
                 "make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
                 "(blockIdx.y * blockDim.y + threadIdx.y), "
@@ -494,7 +575,19 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "SV_DispatchThreadID.x": "(blockIdx.x * blockDim.x + threadIdx.x)",
             "SV_DispatchThreadID.y": "(blockIdx.y * blockDim.y + threadIdx.y)",
             "SV_DispatchThreadID.z": "(blockIdx.z * blockDim.z + threadIdx.z)",
+            "SV_DISPATCHTHREADID": (
+                "make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+                "(blockIdx.y * blockDim.y + threadIdx.y), "
+                "(blockIdx.z * blockDim.z + threadIdx.z))"
+            ),
+            "SV_DISPATCHTHREADID.x": "(blockIdx.x * blockDim.x + threadIdx.x)",
+            "SV_DISPATCHTHREADID.y": "(blockIdx.y * blockDim.y + threadIdx.y)",
+            "SV_DISPATCHTHREADID.z": "(blockIdx.z * blockDim.z + threadIdx.z)",
             "SV_GroupIndex": (
+                "(threadIdx.z * blockDim.y * blockDim.x + "
+                "threadIdx.y * blockDim.x + threadIdx.x)"
+            ),
+            "SV_GROUPINDEX": (
                 "(threadIdx.z * blockDim.y * blockDim.x + "
                 "threadIdx.y * blockDim.x + threadIdx.x)"
             ),
@@ -505,6 +598,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.code_lines = []
         self.indent_level = 0
         self.validate_supported_stage_types(node)
+        self.reject_unsupported_generic_functions(node)
         self.variable_types = {}
         self.image_resource_accesses = {}
         self.buffer_resource_accesses = {}
@@ -520,7 +614,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.helper_functions = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        self.stage_builtin_aliases = {}
+        self.current_function_is_kernel_entry = False
         self.current_stage_name = None
+        self.hip_function_capture_params = {}
+        self.current_expression_expected_type = None
+        self.setup_enum_and_generic_metadata(node)
         (
             self.query_resource_names,
             self.query_metadata_function_params,
@@ -539,6 +638,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.reserve_explicit_hip_resource_bindings(node)
 
         self.add_includes()
+        self.add_generated_code(self.generate_hip_matrix_type_helpers())
+        self.add_line()
         if self.has_geometry_stage(node):
             self.add_generated_code(self.generate_hip_geometry_stream_helpers())
             self.add_line()
@@ -552,6 +653,123 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.insert_helper_functions()
 
         return "\n".join(self.code_lines)
+
+    def reject_unsupported_generic_functions(self, ast_node):
+        """Reject generic functions before emitting non-compilable HIP code."""
+        functions = list(getattr(ast_node, "functions", []) or [])
+        for stage in (getattr(ast_node, "stages", {}) or {}).values():
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                functions.append(entry_point)
+            functions.extend(getattr(stage, "local_functions", []) or [])
+
+        for func in functions:
+            generic_params = getattr(func, "generic_params", []) or []
+            if not generic_params:
+                continue
+            names = [
+                getattr(param, "name", str(param))
+                for param in generic_params
+                if getattr(param, "name", str(param))
+            ]
+            suffix = f" ({', '.join(names)})" if names else ""
+            raise ValueError(
+                f"HIP codegen does not support generic functions{suffix}; "
+                "specialize the function before HIP generation"
+            )
+
+    def setup_enum_and_generic_metadata(self, ast_node):
+        """Collect enum and concrete generic type metadata used by HIP lowering."""
+        structs = list(getattr(ast_node, "structs", []) or [])
+        self.structs_by_name = {
+            node.name: node
+            for node in structs
+            if isinstance(node, StructNode) and getattr(node, "name", None)
+        }
+        self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
+            structs
+        )
+        self.generic_struct_definitions = collect_generic_struct_definitions(
+            structs,
+            excluded_names=set(self.generic_enum_struct_definitions),
+        )
+        self.generic_enum_specializations = collect_generic_enum_specializations(
+            ast_node,
+            self.generic_enum_struct_definitions,
+            self.type_name_string,
+        )
+        self.generic_struct_specializations = collect_generic_struct_specializations(
+            ast_node,
+            self.generic_struct_definitions,
+            self.type_name_string,
+        )
+        self.plain_enums = collect_plain_enums(structs)
+        self.struct_payload_enums = collect_struct_payload_enums(structs)
+        self.enum_type_names = collect_enum_type_names(self.plain_enums)
+        self.enum_struct_type_names = (
+            collect_enum_type_names(self.struct_payload_enums)
+            | set(self.generic_enum_struct_definitions)
+            | {
+                specialization["struct_name"]
+                for specialization in self.generic_enum_specializations.values()
+            }
+        )
+        self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constructors = collect_enum_variant_constructors(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constructor_fields = collect_enum_variant_constructor_fields(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constants = {
+            **collect_enum_variant_constants(
+                self.plain_enums + self.struct_payload_enums
+            ),
+            **collect_generic_enum_variant_constants(
+                self.generic_enum_struct_definitions
+            ),
+        }
+        self.struct_member_types.update(
+            self.generic_struct_definition_member_types(self.generic_struct_definitions)
+        )
+        self.struct_member_types.update(
+            self.enum_payload_struct_member_types(self.struct_payload_enums)
+        )
+        self.struct_member_types.update(
+            collect_generic_enum_specialization_member_types(
+                self,
+                self.generic_enum_specializations,
+            )
+        )
+        self.struct_member_types.update(
+            collect_generic_struct_specialization_member_types(
+                self,
+                self.generic_struct_specializations,
+            )
+        )
+
+    def enum_payload_struct_member_types(self, enums):
+        member_types = {}
+        for enum in enums or []:
+            fields = {"variant": "int"}
+            for field_name, field_type in enum_struct_fields(enum) or []:
+                fields[field_name] = self.type_name_string(field_type)
+            member_types[enum.name] = fields
+        return member_types
+
+    def generic_struct_definition_member_types(self, definitions):
+        member_types = {}
+        for name, definition in (definitions or {}).items():
+            member_types[name] = {
+                member.name: generic_struct_member_type_name(
+                    member,
+                    self.type_name_string,
+                )
+                for member in definition["members"]
+            }
+        return member_types
 
     def unsupported_stage_types(self):
         return set()
@@ -689,6 +907,263 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "}\n"
         )
 
+    def generate_hip_matrix_type_helpers(self):
+        components = ("x", "y", "z", "w")
+
+        def matrix_type(scalar, columns, rows):
+            return f"{scalar}{columns}x{rows}"
+
+        def vector_type(scalar, size):
+            return f"{scalar}{size}"
+
+        def vector_constructor(scalar, size, args):
+            return f"make_{scalar}{size}({', '.join(args)})"
+
+        lines = ["// CrossGL matrix value helpers"]
+        for scalar in ("float", "double"):
+            for columns in range(2, 5):
+                for rows in range(2, 5):
+                    type_name = matrix_type(scalar, columns, rows)
+                    count = columns * rows
+                    params = ", ".join(f"{scalar} v{i}" for i in range(count))
+                    assignments = " ".join(f"m[{i}] = v{i};" for i in range(count))
+                    zero = f"{scalar}(0)"
+                    add_args = ", ".join(f"m[{i}] + rhs.m[{i}]" for i in range(count))
+                    sub_args = ", ".join(f"m[{i}] - rhs.m[{i}]" for i in range(count))
+                    neg_args = ", ".join(f"-m[{i}]" for i in range(count))
+                    mul_args = ", ".join(f"m[{i}] * rhs" for i in range(count))
+                    div_args = ", ".join(f"m[{i}] / rhs" for i in range(count))
+                    column_params = ", ".join(
+                        f"{vector_type(scalar, rows)} c{column}"
+                        for column in range(columns)
+                    )
+                    column_assignments = " ".join(
+                        (f"m[{column * rows + row}] = " f"c{column}.{components[row]};")
+                        for column in range(columns)
+                        for row in range(rows)
+                    )
+                    one = f"{scalar}(1)"
+                    lines.extend(
+                        [
+                            f"struct {type_name} {{",
+                            f"    {scalar} m[{count}];",
+                            f"    static const int CGL_COLUMNS = {columns};",
+                            f"    static const int CGL_ROWS = {rows};",
+                            f"    __host__ __device__ {type_name}() {{ }}",
+                            f"    __host__ __device__ explicit {type_name}({scalar} diagonal) {{",
+                            f"        for (int i = 0; i < {count}; ++i) {{ m[i] = {zero}; }}",
+                        ]
+                    )
+                    for index in range(min(columns, rows)):
+                        lines.append(f"        m[{index * rows + index}] = diagonal;")
+                    lines.extend(
+                        [
+                            "    }",
+                            f"    __host__ __device__ {type_name}({column_params}) {{ {column_assignments} }}",
+                            (
+                                "    template <typename Matrix, "
+                                "typename = decltype(Matrix::CGL_COLUMNS), "
+                                "typename = decltype(Matrix::CGL_ROWS)>"
+                            ),
+                            f"    __host__ __device__ explicit {type_name}(const Matrix& source) {{",
+                            f"        for (int i = 0; i < {count}; ++i) {{ m[i] = {zero}; }}",
+                            f"        for (int column = 0; column < {columns}; ++column) {{",
+                            f"            for (int row = 0; row < {rows}; ++row) {{",
+                            "                if (column < Matrix::CGL_COLUMNS && row < Matrix::CGL_ROWS) {",
+                            f"                    m[column * {rows} + row] = source.m[column * Matrix::CGL_ROWS + row];",
+                            "                } else if (column == row) {",
+                            f"                    m[column * {rows} + row] = {one};",
+                            "                }",
+                            "            }",
+                            "        }",
+                            "    }",
+                            f"    __host__ __device__ {type_name}({params}) {{ {assignments} }}",
+                            f"    __host__ __device__ {scalar}& operator[](int index) {{ return m[index]; }}",
+                            f"    __host__ __device__ const {scalar}& operator[](int index) const {{ return m[index]; }}",
+                            f"    __host__ __device__ {type_name} operator+(const {type_name}& rhs) const {{",
+                            f"        return {type_name}({add_args});",
+                            "    }",
+                            f"    __host__ __device__ {type_name} operator-(const {type_name}& rhs) const {{",
+                            f"        return {type_name}({sub_args});",
+                            "    }",
+                            f"    __host__ __device__ {type_name} operator-() const {{",
+                            f"        return {type_name}({neg_args});",
+                            "    }",
+                            f"    __host__ __device__ {type_name} operator*({scalar} rhs) const {{",
+                            f"        return {type_name}({mul_args});",
+                            "    }",
+                            f"    __host__ __device__ {type_name} operator/({scalar} rhs) const {{",
+                            f"        return {type_name}({div_args});",
+                            "    }",
+                            f"    __host__ __device__ {type_name}& operator+=(const {type_name}& rhs) {{",
+                            "        *this = *this + rhs;",
+                            "        return *this;",
+                            "    }",
+                            f"    __host__ __device__ {type_name}& operator-=(const {type_name}& rhs) {{",
+                            "        *this = *this - rhs;",
+                            "        return *this;",
+                            "    }",
+                            f"    __host__ __device__ {type_name}& operator*=({scalar} rhs) {{",
+                            "        *this = *this * rhs;",
+                            "        return *this;",
+                            "    }",
+                            f"    __host__ __device__ {type_name}& operator/=({scalar} rhs) {{",
+                            "        *this = *this / rhs;",
+                            "        return *this;",
+                            "    }",
+                            "};",
+                            "",
+                            f"__host__ __device__ inline {type_name} operator*({scalar} lhs, const {type_name}& rhs) {{",
+                            "    return rhs * lhs;",
+                            "}",
+                            "",
+                        ]
+                    )
+
+            for columns in range(2, 5):
+                for rows in range(2, 5):
+                    type_name = matrix_type(scalar, columns, rows)
+                    result_type = matrix_type(scalar, rows, columns)
+                    transpose_values = [
+                        f"value.m[{row * rows + column}]"
+                        for column in range(rows)
+                        for row in range(columns)
+                    ]
+                    lines.extend(
+                        [
+                            f"__host__ __device__ inline {result_type} transpose(const {type_name}& value) {{",
+                            f"    return {result_type}({', '.join(transpose_values)});",
+                            "}",
+                            "",
+                        ]
+                    )
+
+            for size in range(2, 5):
+                type_name = matrix_type(scalar, size, size)
+                zero = f"{scalar}(0)"
+                one = f"{scalar}(1)"
+                lines.extend(
+                    [
+                        f"__host__ __device__ inline {type_name} inverse(const {type_name}& value) {{",
+                        f"    {type_name} a(value);",
+                        f"    {type_name} result({one});",
+                        f"    for (int column = 0; column < {size}; ++column) {{",
+                        "        int pivot_row = column;",
+                        f"        {scalar} pivot_value = a.m[column * {size} + column];",
+                        (
+                            f"        {scalar} pivot_abs = pivot_value < {zero} ? "
+                            "-pivot_value : pivot_value;"
+                        ),
+                        f"        for (int row = column + 1; row < {size}; ++row) {{",
+                        f"            {scalar} candidate_value = a.m[column * {size} + row];",
+                        (
+                            f"            {scalar} candidate_abs = "
+                            f"candidate_value < {zero} ? "
+                            "-candidate_value : candidate_value;"
+                        ),
+                        "            if (candidate_abs > pivot_abs) {",
+                        "                pivot_abs = candidate_abs;",
+                        "                pivot_row = row;",
+                        "            }",
+                        "        }",
+                        f"        if (pivot_abs == {zero}) {{",
+                        "            return result;",
+                        "        }",
+                        "        if (pivot_row != column) {",
+                        f"            for (int c = 0; c < {size}; ++c) {{",
+                        f"                {scalar} tmp = a.m[c * {size} + column];",
+                        f"                a.m[c * {size} + column] = a.m[c * {size} + pivot_row];",
+                        f"                a.m[c * {size} + pivot_row] = tmp;",
+                        f"                tmp = result.m[c * {size} + column];",
+                        f"                result.m[c * {size} + column] = result.m[c * {size} + pivot_row];",
+                        f"                result.m[c * {size} + pivot_row] = tmp;",
+                        "            }",
+                        "        }",
+                        f"        {scalar} pivot = a.m[column * {size} + column];",
+                        f"        for (int c = 0; c < {size}; ++c) {{",
+                        f"            a.m[c * {size} + column] /= pivot;",
+                        f"            result.m[c * {size} + column] /= pivot;",
+                        "        }",
+                        f"        for (int row = 0; row < {size}; ++row) {{",
+                        "            if (row == column) {",
+                        "                continue;",
+                        "            }",
+                        f"            {scalar} factor = a.m[column * {size} + row];",
+                        f"            for (int c = 0; c < {size}; ++c) {{",
+                        f"                a.m[c * {size} + row] -= factor * a.m[c * {size} + column];",
+                        f"                result.m[c * {size} + row] -= factor * result.m[c * {size} + column];",
+                        "            }",
+                        "        }",
+                        "    }",
+                        "    return result;",
+                        "}",
+                        "",
+                    ]
+                )
+
+            for left_columns in range(2, 5):
+                for left_rows in range(2, 5):
+                    left_type = matrix_type(scalar, left_columns, left_rows)
+                    in_vector = vector_type(scalar, left_columns)
+                    out_vector = vector_type(scalar, left_rows)
+                    values = []
+                    for row in range(left_rows):
+                        terms = [
+                            f"lhs.m[{column * left_rows + row}] * rhs.{components[column]}"
+                            for column in range(left_columns)
+                        ]
+                        values.append(" + ".join(terms))
+                    lines.extend(
+                        [
+                            f"__host__ __device__ inline {out_vector} operator*(const {left_type}& lhs, const {in_vector}& rhs) {{",
+                            f"    return {vector_constructor(scalar, left_rows, values)};",
+                            "}",
+                            "",
+                        ]
+                    )
+
+                    in_vector = vector_type(scalar, left_rows)
+                    out_vector = vector_type(scalar, left_columns)
+                    values = []
+                    for column in range(left_columns):
+                        terms = [
+                            f"lhs.{components[row]} * rhs.m[{column * left_rows + row}]"
+                            for row in range(left_rows)
+                        ]
+                        values.append(" + ".join(terms))
+                    lines.extend(
+                        [
+                            f"__host__ __device__ inline {out_vector} operator*(const {in_vector}& lhs, const {left_type}& rhs) {{",
+                            f"    return {vector_constructor(scalar, left_columns, values)};",
+                            "}",
+                            "",
+                        ]
+                    )
+
+                    for right_columns in range(2, 5):
+                        right_type = matrix_type(scalar, right_columns, left_columns)
+                        result_type = matrix_type(scalar, right_columns, left_rows)
+                        values = []
+                        for column in range(right_columns):
+                            for row in range(left_rows):
+                                terms = [
+                                    (
+                                        f"lhs.m[{shared * left_rows + row}] * "
+                                        f"rhs.m[{column * left_columns + shared}]"
+                                    )
+                                    for shared in range(left_columns)
+                                ]
+                                values.append(" + ".join(terms))
+                        lines.extend(
+                            [
+                                f"__host__ __device__ inline {result_type} operator*(const {left_type}& lhs, const {right_type}& rhs) {{",
+                                f"    return {result_type}({', '.join(values)});",
+                                "}",
+                                "",
+                            ]
+                        )
+        return "\n".join(lines)
+
     def validate_supported_stage_types(self, ast_node, target_stage=None):
         unsupported_stages = set()
         for stage_type in getattr(ast_node, "stages", {}) or {}:
@@ -750,15 +1225,318 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             f"Code generation not implemented for {type(node).__name__}"
         )
 
+    def ordered_generic_struct_specializations(self):
+        specializations = self.generic_struct_specializations or {}
+        if not specializations:
+            return {}
+
+        type_text_by_struct_name = {
+            specialization["struct_name"]: type_text
+            for type_text, specialization in specializations.items()
+        }
+        dependencies = {type_text: set() for type_text in specializations}
+        for type_text, specialization in specializations.items():
+            for _field_name, field_type in generic_struct_specialized_fields(
+                self.type_name_string,
+                specialization,
+            ):
+                dependency_name = generic_struct_specialized_type_name(
+                    self,
+                    field_type,
+                )
+                dependency_type = type_text_by_struct_name.get(dependency_name)
+                if dependency_type and dependency_type != type_text:
+                    dependencies[type_text].add(dependency_type)
+
+        ordered = {}
+        visiting = set()
+        visited = set()
+        type_order = {
+            type_text: index for index, type_text in enumerate(specializations)
+        }
+
+        def visit(type_text):
+            if type_text in visited or type_text in visiting:
+                return
+            visiting.add(type_text)
+            for dependency_type in sorted(
+                dependencies[type_text],
+                key=lambda item: type_order[item],
+            ):
+                visit(dependency_type)
+            visiting.remove(type_text)
+            visited.add(type_text)
+            ordered[type_text] = specializations[type_text]
+
+        for type_text in specializations:
+            visit(type_text)
+        return ordered
+
+    def mapped_type_dependency_name(self, type_value):
+        mapped_type = self.map_type(type_value)
+        base_type, _array_suffix = split_array_type_suffix(str(mapped_type or ""))
+        base_type = base_type.strip()
+        if base_type in {"int", "unsigned int", "float", "double", "bool", "void"}:
+            return None
+        return base_type or None
+
+    def struct_node_dependency_names(self, node):
+        dependencies = []
+        for member in getattr(node, "members", []) or []:
+            if isinstance(member, ArrayNode):
+                member_type = getattr(
+                    member,
+                    "element_type",
+                    getattr(member, "vtype", "float"),
+                )
+            elif hasattr(member, "member_type"):
+                member_type = self.type_name_string(member.member_type)
+            else:
+                member_type = getattr(member, "vtype", "float")
+            dependency = self.mapped_type_dependency_name(member_type)
+            if dependency is not None:
+                dependencies.append(dependency)
+        return dependencies
+
+    def order_struct_declaration_entries(self, entries):
+        by_name = {}
+        for entry in entries:
+            by_name.setdefault(entry["name"], entry)
+
+        order_index = {entry["name"]: index for index, entry in enumerate(entries)}
+        dependencies = {
+            entry["name"]: [
+                dependency
+                for dependency in entry["dependencies"]
+                if dependency in by_name and dependency != entry["name"]
+            ]
+            for entry in entries
+        }
+
+        ordered = []
+        visiting = set()
+        visited = set()
+
+        def visit(name):
+            if name in visited or name in visiting:
+                return
+            visiting.add(name)
+            for dependency in sorted(
+                dependencies.get(name, []),
+                key=lambda item: order_index[item],
+            ):
+                visit(dependency)
+            visiting.remove(name)
+            visited.add(name)
+            ordered.append(by_name[name])
+
+        for entry in entries:
+            visit(entry["name"])
+        return ordered
+
+    def generate_struct_declaration_code(self, node):
+        saved_lines = self.code_lines
+        saved_indent = self.indent_level
+        self.code_lines = []
+        self.indent_level = 0
+        try:
+            self.visit_StructNode(node)
+            return "\n".join(self.code_lines).rstrip() + "\n\n"
+        finally:
+            self.code_lines = saved_lines
+            self.indent_level = saved_indent
+
+    def generate_ordered_data_struct_declarations(self, data_struct_nodes):
+        entries = []
+        for node in data_struct_nodes:
+            entries.append(
+                {
+                    "name": node.name,
+                    "dependencies": self.struct_node_dependency_names(node),
+                    "code": self.generate_struct_declaration_code(node),
+                }
+            )
+
+        for specialization in self.ordered_generic_struct_specializations().values():
+            entries.append(
+                {
+                    "name": specialization["struct_name"],
+                    "dependencies": [
+                        self.mapped_type_dependency_name(field_type)
+                        for _field_name, field_type in (
+                            generic_struct_specialized_fields(
+                                self.type_name_string,
+                                specialization,
+                            )
+                        )
+                    ],
+                    "code": generate_generic_structs(
+                        self,
+                        {specialization["type_name"]: specialization},
+                    ),
+                }
+            )
+
+        for enum in self.struct_payload_enums:
+            fields = enum_struct_fields(enum) or []
+            entries.append(
+                {
+                    "name": enum.name,
+                    "dependencies": [
+                        self.mapped_type_dependency_name(field_type)
+                        for _field_name, field_type in fields
+                    ],
+                    "code": generate_enum_structs(self, [enum]),
+                }
+            )
+
+        for type_text, specialization in self.generic_enum_specializations.items():
+            entries.append(
+                {
+                    "name": specialization["struct_name"],
+                    "dependencies": [
+                        self.mapped_type_dependency_name(field_type)
+                        for _field_name, field_type in generic_enum_specialized_fields(
+                            self,
+                            specialization,
+                        )
+                    ],
+                    "code": generate_generic_enum_structs(
+                        self,
+                        {type_text: specialization},
+                    ),
+                }
+            )
+
+        code = ""
+        for entry in self.order_struct_declaration_entries(entries):
+            code += entry["code"]
+        return code
+
+    def default_value_expression_for_type(self, type_value):
+        mapped_type = self.map_type(type_value)
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type or ""))
+        if array_suffix:
+            return None
+
+        vector_info = self.vector_type_info(mapped_type)
+        if vector_info is not None:
+            scalar = (
+                "0.0" if vector_info["component_type"] in {"float", "double"} else "0"
+            )
+            args = ", ".join([scalar] * len(vector_info["components"]))
+            return f"{vector_info['constructor']}({args})"
+
+        if base_type in self.struct_member_types:
+            defaults = [
+                self.default_value_expression_for_type(field_type)
+                or self.primitive_default_value_expression(field_type)
+                for field_type in self.struct_member_types[base_type].values()
+            ]
+            return f"{base_type}{{{', '.join(defaults)}}}"
+
+        return None
+
+    def primitive_default_value_expression(self, type_value):
+        mapped_type = self.map_type(type_value)
+        if mapped_type == "bool":
+            return "false"
+        if mapped_type in {"float", "double"}:
+            return "0.0"
+        if mapped_type in {"int", "unsigned int"}:
+            return "0"
+        return f"{mapped_type}{{}}"
+
+    def is_hip_data_struct_node(self, node):
+        if getattr(node, "is_cbuffer", False):
+            return False
+        for member in getattr(node, "members", []) or []:
+            if isinstance(member, (EnumNode, FunctionNode, StructNode)):
+                return False
+        return True
+
     def visit_ShaderNode(self, node: ShaderNode) -> str:
         """Render a full shader/program AST as a HIP translation unit."""
         structs = getattr(node, "structs", [])
+        self.add_generated_code(
+            generate_enum_constants(
+                self,
+                self.plain_enums + self.struct_payload_enums,
+                qualifier="static const",
+            )
+        )
+        self.add_generated_code(
+            generate_generic_enum_constants(
+                self,
+                self.generic_enum_struct_definitions,
+                qualifier="static const",
+            )
+        )
+
+        data_struct_nodes = []
         for struct in structs:
-            self.visit(struct)
+            if isinstance(struct, EnumNode):
+                if struct in self.plain_enums:
+                    self.visit(struct)
+                continue
+            if not isinstance(struct, StructNode):
+                self.visit(struct)
+                continue
+            if struct.name in self.generic_enum_struct_definitions:
+                continue
+            if struct.name in self.generic_struct_definitions:
+                continue
+            if self.is_hip_data_struct_node(struct):
+                data_struct_nodes.append(struct)
+            elif getattr(struct, "is_cbuffer", False):
+                self.visit(struct)
+
+        self.add_generated_code(
+            self.generate_ordered_data_struct_declarations(data_struct_nodes)
+        )
+        self.add_generated_code(
+            generate_enum_constructor_functions(self, self.struct_payload_enums)
+        )
+        self.add_generated_code(
+            generate_generic_enum_constructor_functions(
+                self,
+                self.generic_enum_specializations,
+            )
+        )
+
+        for constant in getattr(node, "constants", []) or []:
+            self.visit(constant)
 
         global_vars = getattr(node, "global_variables", [])
         for var in global_vars:
             self.visit(var)
+
+        emitted_stage_local_variables = {
+            getattr(var, "name", None): self.type_name_string(
+                self.get_variable_node_type(var)
+            )
+            for var in global_vars
+            if getattr(var, "name", None)
+        }
+        for stage in (getattr(node, "stages", {}) or {}).values():
+            for var in getattr(stage, "local_variables", []) or []:
+                if self.is_hip_shared_variable(var):
+                    continue
+                var_name = getattr(var, "name", None)
+                var_type = self.type_name_string(self.get_variable_node_type(var))
+                if not var_name:
+                    continue
+                previous_type = emitted_stage_local_variables.get(var_name)
+                if previous_type is not None:
+                    if previous_type != var_type:
+                        raise ValueError(
+                            "Conflicting HIP stage-local declaration for "
+                            f"'{var_name}': {previous_type} differs from {var_type}"
+                        )
+                    self.register_variable_type(var_name, var_type, var)
+                    continue
+                self.visit(var)
+                emitted_stage_local_variables[var_name] = var_type
 
         cbuffers = getattr(node, "cbuffers", [])
         for cbuffer in cbuffers:
@@ -790,25 +1568,39 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                         else:
                             stage.entry_point.qualifiers = ["compute"]
 
-                    for func in getattr(stage, "local_functions", []):
-                        if id(func) in emitted_local_functions:
-                            continue
-                        self.visit(func)
-                        emitted_local_functions.add(id(func))
-
+                    local_captures = self.collect_stage_local_function_captures(stage)
+                    self.hip_function_capture_params.update(local_captures)
                     saved_stage_name = self.current_stage_name
-                    self.current_stage_name = stage_name
                     saved_override = getattr(
                         self, "current_stage_entry_function_name", None
                     )
-                    self.current_stage_entry_function_name = (
-                        self.stage_entry_function_name(
-                            stage_name, stage.entry_point, stage_entry_name_counts
-                        )
+                    saved_stage_local_variables = getattr(
+                        self, "current_stage_local_variables", []
                     )
-                    self.visit(stage.entry_point)
-                    self.current_stage_entry_function_name = saved_override
-                    self.current_stage_name = saved_stage_name
+                    try:
+                        self.current_stage_name = saved_stage_name
+                        for func in getattr(stage, "local_functions", []):
+                            if id(func) in emitted_local_functions:
+                                continue
+                            self.visit(func)
+                            emitted_local_functions.add(id(func))
+
+                        self.current_stage_name = stage_name
+                        self.current_stage_entry_function_name = (
+                            self.stage_entry_function_name(
+                                stage_name, stage.entry_point, stage_entry_name_counts
+                            )
+                        )
+                        self.current_stage_local_variables = (
+                            getattr(stage, "local_variables", []) or []
+                        )
+                        self.visit(stage.entry_point)
+                    finally:
+                        self.current_stage_entry_function_name = saved_override
+                        self.current_stage_name = saved_stage_name
+                        self.current_stage_local_variables = saved_stage_local_variables
+                        for captured_name in local_captures:
+                            self.hip_function_capture_params.pop(captured_name, None)
 
         return ""
 
@@ -825,6 +1617,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         name = getattr(entry_point, "name", None)
         if not name:
             return name
+        if normalize_stage_name(stage_name) == "compute" and name == "main":
+            return "compute_main"
         if stage_name in self.hip_ray_stage_names() and name == "main":
             return f"{stage_name}_{name}"
         if (
@@ -838,6 +1632,61 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return f"{stage_name}_{name}"
         return name
 
+    def collect_stage_local_function_captures(self, stage):
+        entry_point = getattr(stage, "entry_point", None)
+        entry_params = list(
+            getattr(entry_point, "parameters", getattr(entry_point, "params", []))
+        )
+        entry_params_by_name = {
+            getattr(param, "name", None): param for param in entry_params
+        }
+        entry_params_by_name = {
+            name: param for name, param in entry_params_by_name.items() if name
+        }
+        if not entry_params_by_name:
+            return {}
+
+        captures = {}
+        for function in getattr(stage, "local_functions", []) or []:
+            if getattr(function, "body", None) is None:
+                continue
+            used_names = self.collect_function_free_identifier_names(function)
+            captured_params = [
+                entry_params_by_name[name]
+                for name in entry_params_by_name
+                if name in used_names
+            ]
+            if captured_params:
+                captures[getattr(function, "name", None)] = captured_params
+        return {name: params for name, params in captures.items() if name}
+
+    def is_hip_shared_variable(self, node):
+        """Return whether a stage-local variable maps to HIP shared memory."""
+        return any(
+            "shared" in qualifier_name or "workgroup" in qualifier_name
+            for qualifier_name in (
+                str(qualifier).lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            )
+        )
+
+    def collect_function_free_identifier_names(self, function):
+        params = getattr(function, "parameters", getattr(function, "params", []))
+        bound_names = {getattr(param, "name", None) for param in params}
+        bound_names = {name for name in bound_names if name}
+        body = getattr(function, "body", None)
+        local_names = {
+            getattr(node, "name", None)
+            for node in self.query_walk_nodes(body)
+            if isinstance(node, VariableNode)
+        }
+        bound_names.update(name for name in local_names if name)
+        return {
+            node.name
+            for node in self.query_walk_nodes(body)
+            if isinstance(node, IdentifierNode) and node.name not in bound_names
+        }
+
     def visit_FunctionNode(self, node: FunctionNode) -> str:
         """Render a CrossGL function or compute entry point as HIP code."""
         saved_variable_types = self.variable_types.copy()
@@ -848,11 +1697,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.current_function = node.name
         saved_current_function_return_type = self.current_function_return_type
         saved_current_function_name = self.current_function_name
+        saved_stage_builtin_aliases = self.stage_builtin_aliases
+        saved_current_function_is_kernel_entry = self.current_function_is_kernel_entry
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
         )
         self.current_function_name = node.name
         self.current_structured_buffer_length_parameters = {}
+        self.stage_builtin_aliases = {}
+        self.current_function_is_kernel_entry = False
 
         qualifiers = []
         if hasattr(node, "qualifiers") and node.qualifiers:
@@ -875,6 +1728,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         else:
             qualifiers.append("__device__")
 
+        stage_name = self.function_stage_name(node)
+        is_kernel_entry = "__global__" in qualifiers
+        self.current_function_is_kernel_entry = is_kernel_entry
+
         if hasattr(node, "return_type"):
             self.current_function_return_type = node.return_type
             return_type = self.map_type(node.return_type)
@@ -882,7 +1739,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             self.current_function_return_type = "void"
             return_type = "void"
 
-        stage_name = self.function_stage_name(node)
         return_semantic = self.semantic_from_node(node)
         self.validate_hip_return_semantic(
             stage_name, self.current_function_return_type, return_semantic
@@ -890,8 +1746,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.validate_hip_struct_return_semantics(
             stage_name, self.current_function_return_type
         )
+        if is_kernel_entry:
+            self.current_function_return_type = "void"
+            return_type = "void"
 
-        param_list = getattr(node, "parameters", getattr(node, "params", []))
+        param_list = list(getattr(node, "parameters", getattr(node, "params", [])))
+        param_list.extend(self.hip_function_capture_params.get(node.name, []))
         self.validate_hip_stage_parameter_semantics(stage_name, param_list)
         if stage_name == "geometry":
             self.validate_hip_geometry_stage(node, param_list)
@@ -901,9 +1761,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             self.validate_hip_mesh_task_stage(node, stage_name)
         param_declarations = []
         for param in param_list:
-            param_declarations.append(self.visit_parameter(param))
             param_type = self.get_parameter_type(param)
             param_name = getattr(param, "name", getattr(param, "param_name", None))
+            builtin_role = self.hip_compute_builtin_parameter_role(stage_name, param)
+            if param_name and builtin_role is not None:
+                self.register_variable_type(param_name, param_type, param)
+                self.stage_builtin_aliases[param_name] = builtin_role
+                continue
+
+            param_declarations.append(self.visit_parameter(param))
             metadata_param = self.query_metadata_parameter(param_name, param_type)
             if metadata_param:
                 param_declarations.append(metadata_param)
@@ -926,7 +1792,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         function_name = getattr(self, "current_stage_entry_function_name", None)
         if not function_name:
             function_name = node.name
+        if is_kernel_entry and function_name == "main":
+            function_name = "compute_main"
         signature = f"{qualifier_str} {return_type} {function_name}({params})"
+        body = getattr(node, "body", None)
 
         if stage_name in self.hip_ray_stage_names():
             self.add_line(
@@ -960,18 +1829,19 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                         f"// CrossGL parameter semantic: {param_name}: "
                         f"{self.map_semantic(param_semantic)}"
                     )
-        self.add_line(signature)
-
-        body = getattr(node, "body", [])
-        if body:
+        if body is None:
+            self.add_line(f"{signature};")
+        else:
+            self.add_line(signature)
             self.add_line("{")
             self.indent_level += 1
+            for local_var in getattr(self, "current_stage_local_variables", []) or []:
+                if self.is_hip_shared_variable(local_var):
+                    self.visit(local_var)
             self.emit_body(body)
 
             self.indent_level -= 1
             self.add_line("}")
-        else:
-            self.add_line(";")
 
         self.add_line()
         self.current_function = None
@@ -982,6 +1852,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
         self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
         self.current_function_name = saved_current_function_name
+        self.stage_builtin_aliases = saved_stage_builtin_aliases
+        self.current_function_is_kernel_entry = saved_current_function_is_kernel_entry
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
         )
@@ -1803,6 +2675,152 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "SV_DISPATCHRAYSDIMENSIONS": ("launch_size", "uint3", ray_stages),
         }
 
+    def hip_compute_builtin_parameter_role(self, stage_name, param):
+        """Return the compute built-in role for a semantic kernel parameter."""
+        if stage_name != "compute":
+            return None
+
+        semantic = self.semantic_from_node(param)
+        if semantic is None:
+            return None
+
+        rule = self.hip_stage_parameter_semantic_rules().get(
+            self.hip_stage_parameter_semantic_key(semantic)
+        )
+        if rule is None:
+            return None
+
+        role, _expected_type, allowed_stages = rule
+        if "compute" not in allowed_stages:
+            return None
+        if role in {
+            "global_invocation_id",
+            "local_invocation_id",
+            "local_invocation_index",
+            "workgroup_id",
+        }:
+            return role
+        return None
+
+    def hip_compute_builtin_expression(self, role, component=None):
+        """Return the HIP expression for a CrossGL compute built-in role."""
+        local_index = (
+            "(threadIdx.z * blockDim.y * blockDim.x + "
+            "threadIdx.y * blockDim.x + threadIdx.x)"
+        )
+        component_expressions = {
+            "global_invocation_id": {
+                "x": "(blockIdx.x * blockDim.x + threadIdx.x)",
+                "y": "(blockIdx.y * blockDim.y + threadIdx.y)",
+                "z": "(blockIdx.z * blockDim.z + threadIdx.z)",
+            },
+            "local_invocation_id": {
+                "x": "threadIdx.x",
+                "y": "threadIdx.y",
+                "z": "threadIdx.z",
+            },
+            "workgroup_id": {
+                "x": "blockIdx.x",
+                "y": "blockIdx.y",
+                "z": "blockIdx.z",
+            },
+            "workgroup_size": {
+                "x": "blockDim.x",
+                "y": "blockDim.y",
+                "z": "blockDim.z",
+            },
+            "num_workgroups": {
+                "x": "gridDim.x",
+                "y": "gridDim.y",
+                "z": "gridDim.z",
+            },
+        }
+
+        if role == "local_invocation_index":
+            return local_index if component is None else None
+
+        role_components = component_expressions.get(role)
+        if role_components is None:
+            return None
+        if component is not None:
+            if component in role_components:
+                return role_components[component]
+            swizzle_components = tuple(str(component))
+            if all(part in role_components for part in swizzle_components):
+                constructor = {
+                    2: "make_uint2",
+                    3: "make_uint3",
+                    4: "make_uint4",
+                }.get(len(swizzle_components))
+                if constructor is not None:
+                    values = ", ".join(
+                        role_components[part] for part in swizzle_components
+                    )
+                    return f"{constructor}({values})"
+            return None
+        return "make_uint3({x}, {y}, {z})".format(**role_components)
+
+    def hip_compute_builtin_role_for_name(self, name):
+        """Return the compute built-in role represented by a source identifier."""
+        return {
+            "gl_GlobalInvocationID": "global_invocation_id",
+            "SV_DispatchThreadID": "global_invocation_id",
+            "SV_DISPATCHTHREADID": "global_invocation_id",
+            "gl_LocalInvocationID": "local_invocation_id",
+            "SV_GroupThreadID": "local_invocation_id",
+            "SV_GROUPTHREADID": "local_invocation_id",
+            "gl_WorkGroupID": "workgroup_id",
+            "SV_GroupID": "workgroup_id",
+            "SV_GROUPID": "workgroup_id",
+            "gl_WorkGroupSize": "workgroup_size",
+            "gl_NumWorkGroups": "num_workgroups",
+            "gl_LocalInvocationIndex": "local_invocation_index",
+            "SV_GroupIndex": "local_invocation_index",
+            "SV_GROUPINDEX": "local_invocation_index",
+        }.get(name)
+
+    def hip_compute_builtin_type(self, name):
+        """Return the HIP value type for a compute built-in identifier."""
+        role = self.hip_compute_builtin_role_for_name(name)
+        if role is None:
+            return None
+        if role == "local_invocation_index":
+            return "uint"
+        return "uint3"
+
+    def hip_compute_builtin_member_type(self, name, member):
+        """Return the type of a direct compute built-in member/swizzle."""
+        root_type = self.hip_compute_builtin_type(name)
+        vector_info = self.vector_type_info(root_type)
+        if vector_info is None:
+            return None
+        component_aliases = {
+            "x": "x",
+            "y": "y",
+            "z": "z",
+            "w": "w",
+            "r": "x",
+            "g": "y",
+            "b": "z",
+            "a": "w",
+        }
+        components = [component_aliases.get(component) for component in str(member)]
+        if not components or any(component is None for component in components):
+            return None
+        if any(component not in vector_info["components"] for component in components):
+            return None
+        if len(components) == 1:
+            return vector_info["component_type"]
+        return self.vector_type_for_components(
+            vector_info["component_type"], len(components)
+        )
+
+    def hip_stage_builtin_alias_expression(self, name, component=None):
+        role = self.stage_builtin_aliases.get(name)
+        if role is None:
+            return None
+        return self.hip_compute_builtin_expression(role, component)
+
     def validate_hip_stage_parameter_semantic_type(
         self, param, semantic, expected_type
     ):
@@ -1949,6 +2967,17 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         )
         if counter_declaration:
             self.add_line(f"{counter_declaration};")
+        return ""
+
+    def visit_ConstantNode(self, node: ConstantNode) -> str:
+        const_type = self.type_name_string(getattr(node, "const_type", "auto"))
+        value = getattr(node, "value", None)
+        self.register_variable_type(node.name, const_type, node, value)
+        declaration_type = self.glsl_buffer_block_declaration_type(const_type, node)
+        declaration = self.format_typed_declarator(declaration_type, node.name)
+        if value is not None:
+            declaration += f" = {self.visit(value)}"
+        self.add_line(f"const {declaration};")
         return ""
 
     def format_variable_declaration(self, node: VariableNode) -> str:
@@ -2245,8 +3274,13 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return ""
         return self.visit(node)
 
-    def generate_expression_with_expected(self, node, _expected_type):
-        return self.generate_expression(node)
+    def generate_expression_with_expected(self, node, expected_type):
+        saved_expected_type = self.current_expression_expected_type
+        self.current_expression_expected_type = self.type_name_string(expected_type)
+        try:
+            return self.generate_expression(node)
+        finally:
+            self.current_expression_expected_type = saved_expected_type
 
     def visit_CaseNode(self, node) -> str:
         if getattr(node, "value", None) is None:
@@ -2262,6 +3296,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def visit_ReturnNode(self, node) -> str:
+        if self.current_function_is_kernel_entry:
+            if node.value and not isinstance(node.value, MatchNode):
+                self.visit(node.value)
+            self.add_line("return;")
+            return ""
         if node.value:
             if isinstance(node.value, MatchNode):
                 return self.emit_match_expression_return(node.value)
@@ -2309,6 +3348,13 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             )
         if diagnostic is not None:
             return diagnostic
+        swizzle_assignment = self.format_swizzle_assignment_expression(
+            node.left,
+            node.right,
+            operator,
+        )
+        if swizzle_assignment is not None:
+            return swizzle_assignment
         self.assignment_lhs_depth += 1
         try:
             left = self.visit(node.left)
@@ -2359,6 +3405,71 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if lowered_right is not None:
                 return f"{left} = {lowered_right}"
         return f"{left} {operator} {right}"
+
+    def format_swizzle_assignment_expression(self, target_node, value_node, operator):
+        if not isinstance(target_node, MemberAccessNode):
+            return None
+        object_node = getattr(
+            target_node, "object_expr", getattr(target_node, "object", None)
+        )
+        components = self.member_swizzle_components(target_node)
+        if object_node is None or components is None or len(components) <= 1:
+            return None
+
+        object_info = self.vector_type_info(self.expression_result_type(object_node))
+        if object_info is None:
+            return None
+        result_type = self.vector_type_for_components(
+            object_info["component_type"], len(components)
+        )
+        result_info = self.vector_type_info(result_type)
+        if result_info is None:
+            return None
+
+        object_expr = self.visit(object_node)
+        value_expr = self.visit(value_node)
+        temp_name = self.next_hip_temp_variable("swizzle_value")
+        value_info = self.vector_type_info(self.expression_result_type(value_node))
+        if value_info is not None:
+            if len(value_info["components"]) != len(components):
+                return None
+            temp_type = result_info["type"]
+            value_parts = [f"{temp_name}.{part}" for part in result_info["components"]]
+        else:
+            scalar_type = self.scalar_component_type(
+                self.expression_result_type(value_node)
+            )
+            if scalar_type is None:
+                scalar_type = self.vector_scalar_parameter_type(object_info)
+            temp_type = self.map_type(scalar_type)
+            value_parts = None
+
+        statements = [f"{temp_type} {temp_name} = {value_expr}"]
+        if value_parts is None:
+            value_parts = [temp_name] * len(components)
+
+        compound_ops = {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+            "%=": "%",
+            "&=": "&",
+            "|=": "|",
+            "^=": "^",
+            "<<=": "<<",
+            ">>=": ">>",
+        }
+        binary_op = compound_ops.get(operator)
+        for component, value_part in zip(components, value_parts):
+            target = f"{object_expr}.{component}"
+            if operator == "=":
+                statements.append(f"{target} = {value_part}")
+            elif binary_op is not None:
+                statements.append(f"{target} = ({target} {binary_op} {value_part})")
+            else:
+                return None
+        return "; ".join(statements)
 
     def visit_BinaryOpNode(self, node) -> str:
         left = self.visit(node.left)
@@ -2437,6 +3548,43 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return lowered
         return f"{node.op}{operand}"
 
+    def visit_ConstructorNode(self, node) -> str:
+        enum_constructor = generate_enum_constructor_expression(self, node)
+        if enum_constructor is not None:
+            return enum_constructor
+
+        struct_constructor = generate_struct_constructor_expression(self, node)
+        if struct_constructor is not None:
+            return struct_constructor
+
+        constructor_type = self.type_name_string(
+            getattr(node, "constructor_type", getattr(node, "vtype", None))
+        )
+        positional_args = list(getattr(node, "arguments", []) or [])
+        named_args = dict(getattr(node, "named_arguments", {}) or {})
+        rendered_args = [self.visit(arg) for arg in positional_args]
+        if named_args and constructor_type:
+            fields = list(self.struct_member_types.get(constructor_type, {}).items())
+            consumed = set()
+            for field_name, field_type in fields[len(rendered_args) :]:
+                if field_name not in named_args:
+                    break
+                consumed.add(field_name)
+                rendered_args.append(
+                    self.generate_expression_with_expected(
+                        named_args[field_name],
+                        field_type,
+                    )
+                )
+            for field_name, value in named_args.items():
+                if field_name not in consumed:
+                    rendered_args.append(self.visit(value))
+
+        mapped_type = self.map_type(constructor_type) if constructor_type else ""
+        if not mapped_type:
+            return "{" + ", ".join(rendered_args) + "}"
+        return f"{mapped_type}{{{', '.join(rendered_args)}}}"
+
     def visit_FunctionCallNode(self, node) -> str:
         func_expr = (
             node.function if hasattr(node, "function") else getattr(node, "name", None)
@@ -2454,6 +3602,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         else:
             callee = self.visit(func_expr)
         raw_args = getattr(node, "args", getattr(node, "arguments", []))
+
+        enum_constructor = generate_enum_constructor_call(self, func_name, raw_args)
+        if enum_constructor is not None:
+            return enum_constructor
+
         args = [self.visit(arg) for arg in raw_args]
 
         if func_name == "lambda":
@@ -2464,6 +3617,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return self.generate_mesh_task_call_expression(func_name, raw_args, args)
 
         is_user_function = self.is_user_defined_function(func_name)
+        if not is_user_function:
+            warp_sync_builtin_call = self.generate_warp_sync_builtin_call(
+                func_name, raw_args, args
+            )
+            if warp_sync_builtin_call is not None:
+                return warp_sync_builtin_call
         if not is_user_function:
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name, raw_args
@@ -2558,6 +3717,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 saturate_call = self.generate_saturate_call(raw_args, args)
                 if saturate_call is not None:
                     return saturate_call
+        elif func_name == "smoothstep":
+            if len(args) == 3:
+                smoothstep_call = self.generate_smoothstep_call(raw_args, args)
+                if smoothstep_call is not None:
+                    return smoothstep_call
         elif func_name in ["texture", "tex2D"]:
             # Handle texture sampling
             if len(args) >= 2:
@@ -2566,6 +3730,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     f"{self.coord_component(args[1], 'x')}, "
                     f"{self.coord_component(args[1], 'y')})"
                 )
+
+        vector_math_call = self.generate_vector_scalar_math_call(
+            func_name,
+            raw_args,
+            args,
+        )
+        if vector_math_call is not None:
+            return vector_math_call
 
         vector_info = self.vector_type_info(func_name)
         if vector_info:
@@ -2588,6 +3760,42 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         args_str = ", ".join(args)
         target = mapped_name if mapped_name is not None else callee
         return f"{target}({args_str})"
+
+    def generate_warp_sync_builtin_call(self, func_name, raw_args, args):
+        expected_count = HIP_WARP_SYNC_BUILTIN_ARITIES.get(func_name)
+        if expected_count is None:
+            return None
+        if len(raw_args) != expected_count:
+            raise ValueError(
+                f"HIP warp sync builtin {func_name} requires {expected_count} "
+                f"argument{'s' if expected_count != 1 else ''}, got {len(raw_args)}"
+            )
+        if func_name == "__shfl_down_sync":
+            helper_name = self.require_hip_shfl_down_sync_helper(raw_args[1])
+            return f"{helper_name}({', '.join(args)})"
+        return None
+
+    def require_hip_shfl_down_sync_helper(self, value_arg):
+        value_type = self.map_type(self.expression_result_type(value_arg) or "uint")
+        helper_name = f"cgl_hip_shfl_down_sync_{self.wave_type_suffix(value_type)}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        helper = (
+            f"__device__ inline {value_type} {helper_name}"
+            f"(unsigned long long mask, {value_type} value, int offset)\n"
+            "{\n"
+            "#if defined(__HIP_DEVICE_COMPILE__) && defined(HIP_ENABLE_WARP_SYNC_BUILTINS)\n"
+            "    return __shfl_down_sync(mask, value, offset);\n"
+            "#else\n"
+            "    (void)mask;\n"
+            "    (void)offset;\n"
+            "    return value;\n"
+            "#endif\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
 
     def visit_MeshOpNode(self, node: MeshOpNode) -> str:
         operation = getattr(node, "operation", "")
@@ -2986,6 +4194,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 "object_expr",
                 getattr(raw_arg, "object", None),
             )
+            role = self.hip_compute_builtin_role_for_name(
+                getattr(object_node, "name", None)
+            )
+            if role is not None:
+                lanes = [
+                    self.hip_compute_builtin_expression(role, component)
+                    for component in swizzle_components
+                ]
+                if all(lane is not None for lane in lanes):
+                    return lanes
             object_expr = self.visit(object_node)
             return [f"{object_expr}.{component}" for component in swizzle_components]
 
@@ -5267,12 +6485,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         intrinsic, required_arg_count, supported_kinds, supported_kinds_label = (
             operation
         )
-        target_expr = raw_args[0] if raw_args else None
-        block_access, _ = self.glsl_buffer_block_access(target_expr)
-        if block_access is None:
-            return None
+        raw_target = raw_args[0] if raw_args else None
+        target_expr = (
+            self.strip_address_of_expression(raw_target) if raw_target else None
+        )
+        address_taken = target_expr is not raw_target
         target_type = self.expression_result_type(target_expr) if target_expr else None
-        fallback = self.diagnostic_zero_value_for_type(target_type)
+        indirect_info = self.hip_indirect_type_info(target_type)
+        pointee_type = (
+            indirect_info["pointee_type"] if indirect_info is not None else None
+        )
+        atomic_type = pointee_type or target_type
+        fallback = self.diagnostic_zero_value_for_type(atomic_type)
 
         if len(args) != required_arg_count:
             return self.unsupported_plain_atomic_call(
@@ -5280,10 +6504,34 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 f"requires {required_arg_count} argument(s)",
                 fallback,
             )
-        if target_expr is None or not self.is_plain_atomic_lvalue(target_expr):
+        if target_expr is None or (
+            pointee_type is None and not self.is_plain_atomic_lvalue(target_expr)
+        ):
             return self.unsupported_plain_atomic_call(
                 func_name,
                 "requires assignable scalar target",
+                fallback,
+            )
+
+        if (
+            address_taken
+            and indirect_info is not None
+            and indirect_info["kind"] == "pointer"
+        ):
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                f"on {indirect_info['type_label']} requires pointer target, "
+                "not address of pointer",
+                fallback,
+            )
+
+        readonly_reason = self.plain_atomic_readonly_target_reason(
+            target_expr, indirect_info
+        )
+        if readonly_reason is not None:
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                readonly_reason,
                 fallback,
             )
 
@@ -5293,9 +6541,13 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if access_diagnostic is not None:
             return access_diagnostic
 
-        scalar_kind = self.hip_atomic_scalar_kind(target_type)
+        scalar_kind = self.hip_atomic_scalar_kind(atomic_type)
         if scalar_kind not in supported_kinds:
-            type_label = self.type_name_string(target_type) or "unknown target"
+            type_label = (
+                indirect_info["type_label"]
+                if indirect_info is not None
+                else self.type_name_string(atomic_type) or "unknown target"
+            )
             return self.unsupported_plain_atomic_call(
                 func_name,
                 f"on {type_label} requires supported scalar "
@@ -5303,13 +6555,94 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 fallback,
             )
 
-        target_code = args[0]
+        target_code = self.visit(target_expr)
+        if indirect_info is not None and indirect_info["kind"] == "pointer":
+            target_pointer = target_code
+        else:
+            target_pointer = f"&{target_code}"
         value_args = ", ".join(args[1:])
-        return f"{intrinsic}(&{target_code}, {value_args})"
+        return f"{intrinsic}({target_pointer}, {value_args})"
 
     def is_plain_atomic_lvalue(self, expr):
         """Return whether an expression can be addressed for a HIP atomic."""
         return isinstance(expr, (IdentifierNode, ArrayAccessNode, MemberAccessNode))
+
+    def hip_indirect_type_info(self, type_name):
+        """Return pointer/reference metadata for HIP indirect type spellings."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+
+        if type_name.startswith("ptr<") and type_name.endswith(">"):
+            pointee = type_name[4:-1].strip()
+            return {
+                "kind": "pointer",
+                "pointee_type": pointee,
+                "readonly": False,
+                "type_label": f"{pointee}*",
+            }
+
+        mapped_type = self.map_type(type_name)
+        for candidate in (type_name, mapped_type):
+            info = self.hip_pointer_or_reference_type_info(candidate)
+            if info is not None:
+                return info
+        return None
+
+    def hip_pointer_or_reference_type_info(self, type_name):
+        """Parse a HIP pointer/reference spelling into target metadata."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+
+        stripped = type_name.strip()
+        for suffix, kind in (("*", "pointer"), ("&", "reference")):
+            if not stripped.endswith(suffix):
+                continue
+            pointee = stripped[: -len(suffix)].strip()
+            readonly = pointee.startswith("const ")
+            if readonly:
+                pointee = pointee[len("const ") :].strip()
+            return {
+                "kind": kind,
+                "pointee_type": pointee,
+                "readonly": readonly,
+                "type_label": stripped,
+            }
+        return None
+
+    def plain_atomic_readonly_target_reason(self, target_expr, indirect_info):
+        """Return a diagnostic reason for readonly plain atomic targets."""
+        if indirect_info is not None and indirect_info["readonly"]:
+            if indirect_info["kind"] == "reference":
+                return (
+                    f"on {indirect_info['type_label']} requires mutable "
+                    "reference target"
+                )
+            return f"on {indirect_info['type_label']} requires writable pointer target"
+
+        if isinstance(target_expr, ArrayAccessNode):
+            array_expr = getattr(
+                target_expr, "array_expr", getattr(target_expr, "array", None)
+            )
+            array_type = self.expression_result_type(array_expr)
+            array_info = self.hip_indirect_type_info(array_type)
+            if array_info is not None and array_info["readonly"]:
+                if array_info["kind"] == "reference":
+                    return (
+                        f"on {array_info['type_label']} requires mutable "
+                        "reference target"
+                    )
+                return f"on {array_info['type_label']} requires writable pointer target"
+        return None
+
+    def strip_address_of_expression(self, expr):
+        """Return the lvalue inside an address-of expression."""
+        if isinstance(expr, UnaryOpNode):
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            if operator == "&":
+                return getattr(expr, "operand", expr)
+        return expr
 
     def unsupported_plain_atomic_call(self, operation, reason, fallback):
         """Return diagnostic code for unsupported ordinary HIP atomics."""
@@ -5819,7 +7152,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         """Expand user calls with HIP sidecar resource arguments."""
         callee = self.query_functions_by_name.get(func_name)
         if callee is None:
-            return args
+            return args + self.hip_captured_function_call_args(func_name)
 
         params = getattr(callee, "parameters", getattr(callee, "params", []))
         query_params = self.query_metadata_function_params.get(func_name, set())
@@ -5851,7 +7184,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 if counter_arg:
                     expanded_args.append(counter_arg)
 
+        expanded_args.extend(self.hip_captured_function_call_args(func_name))
         return expanded_args
+
+    def hip_captured_function_call_args(self, func_name):
+        return [
+            self.visit(IdentifierNode(param.name))
+            for param in self.hip_function_capture_params.get(func_name, [])
+        ]
 
     def byte_address_buffer_member_call(self, function_expr):
         """Return byte-address buffer member-call pieces, if applicable."""
@@ -6130,9 +7470,19 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return diagnostic
         raw_object_name = getattr(node.object, "name", None)
         if raw_object_name is not None:
+            alias_component = self.hip_stage_builtin_alias_expression(
+                raw_object_name, node.member
+            )
+            if alias_component is not None:
+                return alias_component
             ray_builtin = self.hip_ray_builtin_expression(raw_object_name)
             if ray_builtin is not None:
                 return f"{ray_builtin}.{node.member}"
+            direct_builtin = self.hip_compute_builtin_expression(
+                self.hip_compute_builtin_role_for_name(raw_object_name), node.member
+            )
+            if direct_builtin is not None:
+                return direct_builtin
             raw_member_access = f"{raw_object_name}.{node.member}"
             if raw_member_access in self.builtin_map:
                 return self.builtin_map[raw_member_access]
@@ -6255,6 +7605,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def visit_IdentifierNode(self, node) -> str:
         name = getattr(node, "name", str(node))
+        if name in getattr(self, "enum_variant_constants", {}):
+            return enum_value_expression(self, name)
+        builtin_alias = self.hip_stage_builtin_alias_expression(name)
+        if builtin_alias is not None:
+            return builtin_alias
         ray_builtin = self.hip_ray_builtin_expression(name)
         if ray_builtin is not None and name not in self.variable_types:
             return ray_builtin
@@ -6419,6 +7774,20 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             type_str = self.convert_type_node_to_string(type_name)
         else:
             type_str = str(type_name)
+
+        generic_enum_type = generic_enum_specialized_type_name(self, type_str)
+        if generic_enum_type is not None:
+            return generic_enum_type
+
+        generic_struct_type = generic_struct_specialized_type_name(self, type_str)
+        if generic_struct_type is not None:
+            return generic_struct_type
+
+        if type_str in getattr(self, "enum_type_names", set()):
+            return "int"
+
+        if type_str in getattr(self, "enum_struct_type_names", set()):
+            return type_str
 
         geometry_stream_type = self.hip_geometry_stream_mapped_type(type_str)
         if geometry_stream_type is not None:
@@ -7102,6 +8471,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def expression_result_type(self, node):
         """Infer expression result types with HIP buffer operations."""
+        if isinstance(node, (IdentifierNode, VariableNode)):
+            builtin_type = self.hip_compute_builtin_type(getattr(node, "name", None))
+            if builtin_type is not None:
+                return builtin_type
         if isinstance(node, WaveOpNode):
             return self.wave_result_type(
                 getattr(node, "operation", ""), getattr(node, "arguments", []) or []
@@ -7130,6 +8503,24 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             buffer_result_type = self.buffer_call_result_type(node)
             if buffer_result_type is not None:
                 return buffer_result_type
+        if isinstance(node, MemberAccessNode):
+            object_node = getattr(
+                node,
+                "object_expr",
+                getattr(node, "object", None),
+            )
+            builtin_member_type = self.hip_compute_builtin_member_type(
+                getattr(object_node, "name", None),
+                getattr(node, "member", ""),
+            )
+            if builtin_member_type is not None:
+                return builtin_member_type
+        if isinstance(node, ConstructorNode):
+            return infer_enum_constructor_type(
+                self, node
+            ) or infer_struct_constructor_type(self, node)
+        if isinstance(node, MatchNode):
+            return infer_match_expression_result_type(self, node)
         return super().expression_result_type(node)
 
     def buffer_call_result_type(self, node):

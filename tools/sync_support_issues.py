@@ -75,8 +75,6 @@ FRONTEND_NAME = "Frontend / IR / Parser"
 
 BACKLOG_STATUSES = {
     "partial",
-    "diagnostic",
-    "validated_rejection",
     "unsupported",
     "unknown",
 }
@@ -1078,14 +1076,71 @@ def build_desired_issues(
     matrix: dict[str, Any], signals: dict[str, Any] | None = None
 ) -> dict[str, DesiredIssue]:
     desired: dict[str, DesiredIssue] = {}
+    child_issues: list[DesiredIssue] = []
+    child_keys: set[str] = set()
     lookup = feature_lookup(matrix)
     signals_by_row = signal_lookup(signals)
     rows_by_backend = backlog_by_backend(matrix)
-    parent_backend_ids = {backend["id"] for backend in matrix.get("backends", [])}
-    parent_backend_ids.add(FRONTEND_ID)
+    known_parent_backend_ids = {backend["id"] for backend in matrix.get("backends", [])}
+    known_parent_backend_ids.add(FRONTEND_ID)
+    parent_backend_ids: set[str] = set()
+
+    for item in matrix.get("backlog", []):
+        backend_id = item["backend_id"]
+        feature_id = item["feature_id"]
+        key = f"backlog:{backend_id}:{feature_id}"
+        labels = (
+            LABEL_MANAGED,
+            LABEL_BACKLOG,
+            LABEL_PREFIX_BACKEND + compact_label_part(backend_id),
+            LABEL_PREFIX_CATEGORY + compact_label_part(item["category"]),
+            LABEL_PREFIX_STATUS + compact_label_part(item["status"]),
+        )
+        child_issues.append(
+            DesiredIssue(
+                key=key,
+                title="[Support Matrix][{}] {} ({})".format(
+                    item["backend"], item["feature"], item["status"]
+                ),
+                body=child_body(item, lookup, signals_by_row),
+                labels=labels,
+                parent_key=f"parent:{backend_id}",
+            )
+        )
+        child_keys.add(key)
+        if backend_id in known_parent_backend_ids:
+            parent_backend_ids.add(backend_id)
+
+    for issue in (signals or {}).get("issues", []):
+        if issue["backend_id"] not in known_parent_backend_ids:
+            continue
+        key = issue["key"]
+        if key in child_keys:
+            continue
+        labels = (
+            LABEL_MANAGED,
+            LABEL_EXTRACTED,
+            LABEL_PREFIX_BACKEND + compact_label_part(issue["backend_id"]),
+            LABEL_PREFIX_CATEGORY + compact_label_part(issue["category"]),
+        )
+        child_issues.append(
+            DesiredIssue(
+                key=key,
+                title="[Support Signals][{}] {} ({})".format(
+                    issue["backend"], issue["feature"], issue["kind"]
+                ),
+                body=extracted_issue_body(issue, signals_by_row),
+                labels=labels,
+                parent_key="parent:{}".format(issue["backend_id"]),
+            )
+        )
+        child_keys.add(key)
+        parent_backend_ids.add(issue["backend_id"])
 
     for backend in matrix.get("backends", []):
         backend_id = backend["id"]
+        if backend_id not in parent_backend_ids:
+            continue
         rows = rows_by_backend.get(backend_id, [])
         parent_key = f"parent:{backend_id}"
         parent_labels = (
@@ -1100,60 +1155,21 @@ def build_desired_issues(
             labels=parent_labels,
         )
 
-    frontend_key = f"parent:{FRONTEND_ID}"
-    desired[frontend_key] = DesiredIssue(
-        key=frontend_key,
-        title=f"[Support Matrix] {FRONTEND_NAME} coverage",
-        body=frontend_parent_body(),
-        labels=(
-            LABEL_MANAGED,
-            LABEL_PARENT,
-            LABEL_PREFIX_BACKEND + FRONTEND_ID,
-        ),
-    )
-
-    for item in matrix.get("backlog", []):
-        backend_id = item["backend_id"]
-        feature_id = item["feature_id"]
-        key = f"backlog:{backend_id}:{feature_id}"
-        labels = (
-            LABEL_MANAGED,
-            LABEL_BACKLOG,
-            LABEL_PREFIX_BACKEND + compact_label_part(backend_id),
-            LABEL_PREFIX_CATEGORY + compact_label_part(item["category"]),
-            LABEL_PREFIX_STATUS + compact_label_part(item["status"]),
-        )
-        desired[key] = DesiredIssue(
-            key=key,
-            title="[Support Matrix][{}] {} ({})".format(
-                item["backend"], item["feature"], item["status"]
+    if FRONTEND_ID in parent_backend_ids:
+        frontend_key = f"parent:{FRONTEND_ID}"
+        desired[frontend_key] = DesiredIssue(
+            key=frontend_key,
+            title=f"[Support Matrix] {FRONTEND_NAME} coverage",
+            body=frontend_parent_body(),
+            labels=(
+                LABEL_MANAGED,
+                LABEL_PARENT,
+                LABEL_PREFIX_BACKEND + FRONTEND_ID,
             ),
-            body=child_body(item, lookup, signals_by_row),
-            labels=labels,
-            parent_key=f"parent:{backend_id}",
         )
 
-    for issue in (signals or {}).get("issues", []):
-        if issue["backend_id"] not in parent_backend_ids:
-            continue
-        key = issue["key"]
-        if key in desired:
-            continue
-        labels = (
-            LABEL_MANAGED,
-            LABEL_EXTRACTED,
-            LABEL_PREFIX_BACKEND + compact_label_part(issue["backend_id"]),
-            LABEL_PREFIX_CATEGORY + compact_label_part(issue["category"]),
-        )
-        desired[key] = DesiredIssue(
-            key=key,
-            title="[Support Signals][{}] {} ({})".format(
-                issue["backend"], issue["feature"], issue["kind"]
-            ),
-            body=extracted_issue_body(issue, signals_by_row),
-            labels=labels,
-            parent_key="parent:{}".format(issue["backend_id"]),
-        )
+    for child in child_issues:
+        desired[child.key] = child
 
     return desired
 
@@ -1182,13 +1198,6 @@ def validate_desired_issues(
             )
         )
 
-    expected_parent_keys = {
-        "parent:{}".format(backend["id"]) for backend in matrix.get("backends", [])
-    }
-    expected_parent_keys.add(f"parent:{FRONTEND_ID}")
-    for key in sorted(expected_parent_keys - set(desired)):
-        errors.append(f"missing desired parent issue: {key}")
-
     for item in matrix.get("backlog", []):
         if item.get("status") not in BACKLOG_STATUSES:
             errors.append(
@@ -1209,6 +1218,15 @@ def validate_desired_issues(
             continue
         if issue["key"] not in desired:
             errors.append("missing desired extracted issue: {}".format(issue["key"]))
+            continue
+        expected_parent_key = "parent:{}".format(issue["backend_id"])
+        desired_parent_key = desired[issue["key"]].parent_key
+        if desired_parent_key != expected_parent_key:
+            errors.append(
+                "desired extracted issue {} references parent {}, expected {}".format(
+                    issue["key"], desired_parent_key, expected_parent_key
+                )
+            )
 
     for key, issue in desired.items():
         if marker_for(key) not in issue.body:

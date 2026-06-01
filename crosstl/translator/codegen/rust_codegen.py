@@ -11,6 +11,7 @@ from ..ast import (
     BlockNode,
     BreakNode,
     CaseNode,
+    ConstantNode,
     ConstructorNode,
     ConstructorPatternNode,
     ContinueNode,
@@ -31,6 +32,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    ParameterNode,
     PointerAccessNode,
     RangeNode,
     RayQueryOpNode,
@@ -472,6 +474,7 @@ class RustCodeGen:
             "AllMemoryBarrierWithGroupSync": "all_memory_barrier_with_group_sync",
             "WaveShuffle": "subgroup_shuffle",
             "WaveShuffleXor": "subgroup_shuffle_xor",
+            "__shfl_down_sync": "subgroup_shuffle_down",
         }
         self.wave_op_map = {
             "WaveActiveSum": "subgroup_add",
@@ -552,6 +555,7 @@ class RustCodeGen:
         self.user_function_param_types = {}
         self.user_function_generic_constraint_cache = {}
         self.active_generic_constraint_functions = set()
+        self.rust_function_capture_params = {}
         self.current_generic_param_names = set()
         self.current_function_generic_constraints = {}
         self.trait_methods = {}
@@ -605,6 +609,7 @@ class RustCodeGen:
         self.user_function_param_types = self.collect_user_function_param_types(ast)
         self.user_function_generic_constraint_cache = {}
         self.active_generic_constraint_functions = set()
+        self.rust_function_capture_params = {}
         self.current_generic_param_names = set()
         self.current_function_generic_constraints = {}
         self.trait_methods = self.collect_trait_methods(ast)
@@ -615,6 +620,7 @@ class RustCodeGen:
         )
         self.enum_generic_params = self.collect_enum_generic_params(ast)
         self.non_copy_type_names = self.collect_non_copy_type_names(ast)
+        self.register_constant_types(ast)
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
         self.required_mesh_helpers = set()
@@ -648,6 +654,8 @@ class RustCodeGen:
                     code += self.generate_struct(node)
             elif isinstance(node, EnumNode):
                 code += self.generate_enum(node)
+
+        code += self.generate_constant_declarations(ast)
 
         emitted_static_names = set()
         global_vars = getattr(ast, "global_variables", [])
@@ -724,6 +732,8 @@ class RustCodeGen:
 
                 saved_variable_types = self.variable_types.copy()
                 for variable in getattr(stage, "local_variables", []) or []:
+                    if self.is_rust_shared_variable(variable):
+                        continue
                     self.register_variable_type(
                         variable.name,
                         self.get_variable_type(variable),
@@ -733,6 +743,7 @@ class RustCodeGen:
                         code += self.generate_variable_static_declaration(variable)
                         emitted_static_names.add(variable.name)
 
+                local_captures = {}
                 if hasattr(stage, "entry_point"):
                     stage_name = str(stage_type).split(".")[-1].lower()
                     function_name = self.stage_entry_function_name(
@@ -740,6 +751,8 @@ class RustCodeGen:
                         stage.entry_point,
                         stage_entry_name_counts,
                     )
+                    local_captures = self.collect_stage_local_function_captures(stage)
+                    self.rust_function_capture_params.update(local_captures)
                     code += f"// {stage_name.title()} Shader\n"
                     code += self.generate_function(
                         stage.entry_point,
@@ -749,7 +762,14 @@ class RustCodeGen:
                     )
                 if hasattr(stage, "local_functions"):
                     for func in stage.local_functions:
-                        code += self.generate_function(func)
+                        code += self.generate_function(
+                            func,
+                            extra_params=self.rust_function_capture_params.get(
+                                getattr(func, "name", None), []
+                            ),
+                        )
+                for captured_name in local_captures:
+                    self.rust_function_capture_params.pop(captured_name, None)
 
                 self.variable_types = saved_variable_types
 
@@ -943,8 +963,7 @@ class RustCodeGen:
         display_name = attribute_names[0]
         if len(arguments) != 1:
             raise ValueError(
-                f"Rust {stage_name} stage {display_name} requires exactly one "
-                "argument"
+                f"Rust {stage_name} stage {display_name} requires exactly one argument"
             )
         return self.attribute_argument_text(arguments[0])
 
@@ -955,8 +974,7 @@ class RustCodeGen:
         display_name = attribute_names[0]
         if len(arguments) != 1:
             raise ValueError(
-                f"Rust {stage_name} stage {display_name} requires exactly one "
-                "argument"
+                f"Rust {stage_name} stage {display_name} requires exactly one argument"
             )
         value_text = self.attribute_argument_text(arguments[0])
         value = self.literal_int_value(arguments[0])
@@ -972,8 +990,7 @@ class RustCodeGen:
             return None
         if len(arguments) > 3:
             raise ValueError(
-                f"Rust {stage_name} stage numthreads requires at most three "
-                "arguments"
+                f"Rust {stage_name} stage numthreads requires at most three arguments"
             )
         values = [self.attribute_argument_text(arg) for arg in arguments]
         for index, argument in enumerate(arguments):
@@ -1001,8 +1018,7 @@ class RustCodeGen:
                 )
                 if len(arguments) != 1:
                     raise ValueError(
-                        f"Rust {stage_name} stage {name} requires exactly one "
-                        "argument"
+                        f"Rust {stage_name} stage {name} requires exactly one argument"
                     )
                 value = self.literal_int_value(arguments[0])
                 if value is not None and value <= 0:
@@ -1289,7 +1305,7 @@ class RustCodeGen:
             descriptions.append(f"{role}:{parameter.name}->{base_type}{suffix}")
         if not descriptions:
             return ""
-        return "// CrossGL mesh parameter role: " f"{', '.join(descriptions)}\n"
+        return f"// CrossGL mesh parameter role: {', '.join(descriptions)}\n"
 
     def generate_rust_mesh_stage_comments(
         self, func, parameters, shader_type, stage_node=None
@@ -1297,14 +1313,10 @@ class RustCodeGen:
         lines = [f"// CrossGL mesh/task stage: stage={shader_type}\n"]
         numthreads = self.rust_mesh_stage_numthreads(func, shader_type)
         if numthreads is not None:
-            lines.append(
-                "// CrossGL mesh/task numthreads: " f"{', '.join(numthreads)}\n"
-            )
+            lines.append(f"// CrossGL mesh/task numthreads: {', '.join(numthreads)}\n")
         local_size = self.rust_mesh_stage_layout_local_size(stage_node, shader_type)
         if local_size is not None:
-            lines.append(
-                "// CrossGL mesh/task local size: " f"{', '.join(local_size)}\n"
-            )
+            lines.append(f"// CrossGL mesh/task local size: {', '.join(local_size)}\n")
 
         if shader_type == "mesh":
             topology = self.rust_mesh_output_topology(func, shader_type, required=True)
@@ -1341,7 +1353,7 @@ class RustCodeGen:
         if operation == "DispatchMesh":
             self.required_mesh_helpers.add("dispatch_mesh")
             if len(args) == 3:
-                return "_crossgl_dispatch_mesh_without_payload(" f"{', '.join(args)})"
+                return f"_crossgl_dispatch_mesh_without_payload({', '.join(args)})"
             return f"_crossgl_dispatch_mesh({', '.join(args)})"
 
         raise ValueError(f"Unsupported Rust mesh intrinsic {operation}")
@@ -1550,8 +1562,7 @@ class RustCodeGen:
             )
         if stream_descriptions:
             lines.append(
-                "// CrossGL geometry output stream: "
-                f"{', '.join(stream_descriptions)}\n"
+                f"// CrossGL geometry output stream: {', '.join(stream_descriptions)}\n"
             )
         return "".join(lines)
 
@@ -1628,8 +1639,7 @@ class RustCodeGen:
             arguments = self.rust_stage_attribute_arguments(func, "vertices")
         if not arguments:
             raise ValueError(
-                "Rust tessellation_control stage requires outputcontrolpoints "
-                "attribute"
+                "Rust tessellation_control stage requires outputcontrolpoints attribute"
             )
         if len(arguments) != 1:
             raise ValueError(
@@ -1908,7 +1918,7 @@ class RustCodeGen:
             "InputPatch": "CglRustInputPatch",
             "OutputPatch": "CglRustOutputPatch",
         }[info["kind"]]
-        return f"{helper_name}<{info['mapped_element_type']}, " f"{info['count_text']}>"
+        return f"{helper_name}<{info['mapped_element_type']}, {info['count_text']}>"
 
     def validate_supported_stage_types(self, ast, target_stage=None):
         unsupported_stages = set()
@@ -2031,7 +2041,13 @@ class RustCodeGen:
                 if name:
                     names.add(name)
             for variable in getattr(current, "local_variables", []):
+                if self.is_rust_shared_variable(variable):
+                    continue
                 name = getattr(variable, "name", None)
+                if name:
+                    names.add(name)
+            for constant in getattr(current, "constants", []):
+                name = getattr(constant, "name", None)
                 if name:
                     names.add(name)
             for cbuffer in self.get_cbuffer_nodes(current):
@@ -2378,13 +2394,134 @@ class RustCodeGen:
         collect(node)
         return param_types
 
+    def collect_stage_local_function_captures(self, stage):
+        entry_point = getattr(stage, "entry_point", None)
+        entry_params = getattr(
+            entry_point, "parameters", getattr(entry_point, "params", [])
+        )
+        entry_param_types = {
+            param.name: self.function_parameter_type(param) for param in entry_params
+        }
+        if not entry_param_types:
+            return {}
+
+        captures = {}
+        for function in getattr(stage, "local_functions", []) or []:
+            if self.is_function_prototype(function):
+                continue
+            used_names = self.collect_free_identifier_names(function)
+            captured_params = [
+                ParameterNode(name, entry_param_types[name])
+                for name in entry_param_types
+                if name in used_names
+            ]
+            if captured_params:
+                captures[function.name] = captured_params
+        return captures
+
+    def collect_free_identifier_names(self, function):
+        bound_names = {
+            param.name
+            for param in getattr(
+                function, "parameters", getattr(function, "params", [])
+            )
+        }
+        used_names = set()
+
+        def visit(node, bound):
+            if node is None:
+                return
+            if isinstance(node, list):
+                for item in node:
+                    visit(item, bound)
+                return
+            if isinstance(node, IdentifierNode):
+                if node.name not in bound:
+                    used_names.add(node.name)
+                return
+            if isinstance(node, VariableNode):
+                visit(getattr(node, "initial_value", None), bound)
+                bound.add(node.name)
+                return
+            if isinstance(node, ArrayNode):
+                visit(
+                    getattr(node, "initial_value", getattr(node, "value", None)), bound
+                )
+                bound.add(node.name)
+                return
+            if isinstance(node, FunctionCallNode):
+                for arg in getattr(node, "arguments", getattr(node, "args", [])) or []:
+                    visit(arg, bound)
+                return
+            if isinstance(node, MemberAccessNode):
+                visit(
+                    getattr(node, "object_expr", getattr(node, "object", None)), bound
+                )
+                return
+            if isinstance(node, AssignmentNode):
+                visit(getattr(node, "target", getattr(node, "left", None)), bound)
+                visit(getattr(node, "value", getattr(node, "right", None)), bound)
+                return
+            if isinstance(
+                node, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode, IfNode)
+            ):
+                for value in getattr(node, "__dict__", {}).values():
+                    visit(value, bound)
+                return
+            if isinstance(node, ReturnNode):
+                visit(getattr(node, "value", None), bound)
+                return
+            if isinstance(node, ExpressionStatementNode):
+                visit(getattr(node, "expression", None), bound)
+                return
+            if isinstance(
+                node, (BinaryOpNode, TernaryOpNode, UnaryOpNode, ArrayAccessNode)
+            ):
+                for value in getattr(node, "__dict__", {}).values():
+                    visit(value, bound)
+                return
+            if isinstance(
+                node, (ConstructorNode, ArrayLiteralNode, BlockNode, MatchNode)
+            ):
+                for value in getattr(node, "__dict__", {}).values():
+                    visit(value, bound)
+
+        visit(getattr(function, "body", None), set(bound_names))
+        return used_names
+
     def derive_traits_for_members(self, members, include_default=False):
         traits = ["Debug", "Clone"]
         if self.members_are_copy_derivable(members):
             traits.append("Copy")
-        if include_default:
+        if include_default and self.members_default_derive_supported(members):
             traits.append("Default")
         return ", ".join(traits)
+
+    def members_default_derive_supported(self, members):
+        return all(
+            self.member_default_derive_supported(member)
+            for member in members
+            if not isinstance(member, EnumNode)
+        )
+
+    def member_default_derive_supported(self, member):
+        member_type = self.member_type_for_copy_check(member)
+        if member_type is None:
+            return True
+        return self.rust_type_default_derive_supported(self.map_type(member_type))
+
+    def rust_type_default_derive_supported(self, rust_type):
+        array_type = self.parse_rust_array_type(str(rust_type))
+        if array_type is None:
+            return True
+        element_type, size = array_type
+        if size is not None:
+            try:
+                if int(size) > 32:
+                    return False
+            except ValueError:
+                return False
+        return self.rust_type_default_derive_supported(element_type)
 
     def derive_traits_for_enum(self, node, generic_owner=None, include_default=False):
         traits = ["Debug", "Clone"]
@@ -2722,6 +2859,7 @@ class RustCodeGen:
 
         for member in members:
             if isinstance(member, ArrayNode):
+                member_name = self.rust_identifier(member.name)
                 element_type = getattr(
                     member, "element_type", getattr(member, "vtype", "float")
                 )
@@ -2731,9 +2869,15 @@ class RustCodeGen:
                     else f"{self.convert_type_node_to_string(element_type)}[]"
                 )
                 if member.size:
-                    code += f"    pub {member.name}: [{self.map_type_to_rust(element_type)}; {member.size}],\n"
+                    code += (
+                        f"    pub {member_name}: "
+                        f"[{self.map_type_to_rust(element_type)}; {member.size}],\n"
+                    )
                 else:
-                    code += f"    pub {member.name}: Vec<{self.map_type_to_rust(element_type)}>,\n"
+                    code += (
+                        f"    pub {member_name}: "
+                        f"Vec<{self.map_type_to_rust(element_type)}>,\n"
+                    )
             else:
                 if not hasattr(member, "member_type") and not hasattr(member, "vtype"):
                     continue
@@ -2755,13 +2899,19 @@ class RustCodeGen:
                 semantic_comment = (
                     f"  // {self.map_semantic(semantic)}" if semantic else ""
                 )
-                code += f"    pub {member.name}: {self.map_type(member_type)},{semantic_comment}\n"
+                member_name = self.rust_identifier(member.name)
+                code += (
+                    f"    pub {member_name}: "
+                    f"{self.map_type(member_type)},{semantic_comment}\n"
+                )
 
         self.struct_member_types[node.name] = member_types
         self.struct_member_semantics[node.name] = member_semantics
         self.struct_generic_params[node.name] = self.generic_param_names(node)
         code += "}\n\n"
         code += self.generate_struct_constructor_impl(node, member_types)
+        if not self.members_default_derive_supported(members):
+            code += self.generate_struct_default_impl(node, member_types)
         return code
 
     def generate_struct_constructor_impl(self, node, member_types):
@@ -2775,15 +2925,34 @@ class RustCodeGen:
         fields = []
         for name, member_type in member_types.items():
             param_name = self.struct_constructor_param_name(name)
-            params.append(f"{param_name}: {self.map_type(member_type)}")
+            field_ident = self.rust_identifier(name)
+            param_ident = self.rust_identifier(param_name)
+            params.append(f"{param_ident}: {self.map_type(member_type)}")
             if param_name == name:
-                fields.append(name)
+                fields.append(field_ident)
             else:
-                fields.append(f"{name}: {param_name}")
+                fields.append(f"{field_ident}: {param_ident}")
 
         code = f"impl{generic_decl} {node.name}{generic_use} {{\n"
         code += f"    pub fn new({', '.join(params)}) -> Self {{\n"
         code += f"        Self {{ {', '.join(fields)} }}\n"
+        code += "    }\n"
+        code += "}\n\n"
+        return code
+
+    def generate_struct_default_impl(self, node, member_types):
+        generic_decl = self.format_generic_params(node)
+        generic_use = self.format_generic_argument_params(node)
+        field_initializers = []
+        for name, member_type in member_types.items():
+            field_initializers.append(
+                f"{self.rust_identifier(name)}: "
+                f"{self.rust_runtime_default_initializer(member_type)}"
+            )
+
+        code = f"impl{generic_decl} Default for {node.name}{generic_use} {{\n"
+        code += "    fn default() -> Self {\n"
+        code += f"        Self {{ {', '.join(field_initializers)} }}\n"
         code += "    }\n"
         code += "}\n\n"
         return code
@@ -2895,7 +3064,8 @@ class RustCodeGen:
 
         if all(isinstance(item, tuple) and len(item) == 2 for item in data):
             fields = ", ".join(
-                f"{name}: Default::default()" for name, _field_type in data
+                f"{self.rust_identifier(name)}: Default::default()"
+                for name, _field_type in data
             )
             return f"Self::{variant.name} {{ {fields} }}"
 
@@ -2928,7 +3098,8 @@ class RustCodeGen:
         if data:
             if all(isinstance(item, tuple) and len(item) == 2 for item in data):
                 fields = ", ".join(
-                    f"{name}: {self.map_type(self.convert_type_node_to_string(field_type))}"
+                    f"{self.rust_identifier(name)}: "
+                    f"{self.map_type(self.convert_type_node_to_string(field_type))}"
                     for name, field_type in data
                 )
                 return f"{variant.name} {{ {fields} }}"
@@ -3388,13 +3559,24 @@ class RustCodeGen:
                 code += f"#[repr(C)]\n#[derive({derive_traits})]\n"
                 code += f"pub struct {node.name} {{\n"
                 for member in members:
+                    member_name = self.rust_identifier(member.name)
                     if isinstance(member, ArrayNode):
                         if member.size:
-                            code += f"    pub {member.name}: [{self.map_type(member.element_type)}; {member.size}],\n"
+                            code += (
+                                f"    pub {member_name}: "
+                                f"[{self.map_type(member.element_type)}; "
+                                f"{member.size}],\n"
+                            )
                         else:
-                            code += f"    pub {member.name}: Vec<{self.map_type(member.element_type)}>,\n"
+                            code += (
+                                f"    pub {member_name}: "
+                                f"Vec<{self.map_type(member.element_type)}>,\n"
+                            )
                     else:
-                        code += f"    pub {member.name}: {self.map_type(self.get_member_type(member))},\n"
+                        code += (
+                            f"    pub {member_name}: "
+                            f"{self.map_type(self.get_member_type(member))},\n"
+                        )
                 code += "}\n\n"
                 code += self.generate_cbuffer_member_statics(members)
             elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode
@@ -3406,13 +3588,24 @@ class RustCodeGen:
                 code += f"#[repr(C)]\n#[derive({derive_traits})]\n"
                 code += f"pub struct {node.name} {{\n"
                 for member in members:
+                    member_name = self.rust_identifier(member.name)
                     if isinstance(member, ArrayNode):
                         if member.size:
-                            code += f"    pub {member.name}: [{self.map_type(member.element_type)}; {member.size}],\n"
+                            code += (
+                                f"    pub {member_name}: "
+                                f"[{self.map_type(member.element_type)}; "
+                                f"{member.size}],\n"
+                            )
                         else:
-                            code += f"    pub {member.name}: Vec<{self.map_type(member.element_type)}>,\n"
+                            code += (
+                                f"    pub {member_name}: "
+                                f"Vec<{self.map_type(member.element_type)}>,\n"
+                            )
                     else:
-                        code += f"    pub {member.name}: {self.map_type(self.get_member_type(member))},\n"
+                        code += (
+                            f"    pub {member_name}: "
+                            f"{self.map_type(self.get_member_type(member))},\n"
+                        )
                 code += "}\n\n"
                 code += self.generate_cbuffer_member_statics(members)
         return code
@@ -3518,10 +3711,74 @@ class RustCodeGen:
             node.name, rust_type, initializer, lazy_lock=lazy_lock
         )
 
+    def register_constant_types(self, ast):
+        for node in getattr(ast, "constants", []) or []:
+            if not isinstance(node, ConstantNode):
+                continue
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+            const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
+            self.register_variable_type(name, const_type, scope="static")
+
+    def generate_constant_declarations(self, ast):
+        code = ""
+        for node in getattr(ast, "constants", []) or []:
+            if isinstance(node, ConstantNode):
+                code += self.generate_constant_declaration(node)
+        return f"{code}\n" if code else ""
+
+    def generate_constant_declaration(self, node):
+        name = getattr(node, "name", None)
+        if not name:
+            return ""
+
+        const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
+        if hasattr(const_type, "name") or hasattr(const_type, "element_type"):
+            const_type = self.convert_type_node_to_string(const_type)
+        else:
+            const_type = str(const_type)
+
+        self.register_variable_type(name, const_type, scope="static")
+        rust_type = self.map_type(const_type)
+        value = getattr(node, "value", None)
+        if value is None:
+            initializer = self.rust_static_default_initializer(rust_type)
+        else:
+            initializer = self.generate_expression_with_type(
+                value,
+                const_type,
+                static_context=True,
+            )
+            initializer = self.normalize_assignment_rhs(
+                const_type,
+                value,
+                initializer,
+                "=",
+            )
+
+        if self.rust_constant_initializer_is_const(rust_type):
+            symbol = self.static_symbol_name(name)
+            return f"const {symbol}: {rust_type} = {initializer};\n"
+
+        return self.generate_static_declaration(
+            name,
+            rust_type,
+            initializer,
+            lazy_lock=True,
+        )
+
+    def rust_constant_initializer_is_const(self, rust_type):
+        return self.rust_scalar_default_literal(rust_type) is not None
+
     def generate_static_declaration(
         self, name, rust_type, initializer, lazy_lock=False
     ):
         symbol = self.static_symbol_name(name)
+        if self.pointer_type_parts(rust_type) is not None:
+            self.lazy_static_names.discard(name)
+            initializer = self.rust_static_pointer_storage_initializer(initializer)
+            return f"static {symbol}: usize = {initializer};\n"
         lazy_lock = lazy_lock or self.static_initializer_requires_lazy_lock(
             rust_type,
             initializer,
@@ -3537,6 +3794,18 @@ class RustCodeGen:
 
     def static_initializer_requires_lazy_lock(self, rust_type, initializer):
         return str(initializer) == "Default::default()"
+
+    def rust_static_pointer_storage_initializer(self, initializer):
+        initializer = str(initializer).strip()
+        if initializer in {
+            "",
+            "0",
+            "Default::default()",
+            "std::ptr::null()",
+            "std::ptr::null_mut()",
+        }:
+            return "0"
+        return f"({initializer} as usize)"
 
     def static_array_literal_requires_lazy_lock(self, target_type, initial_value):
         if not isinstance(initial_value, ArrayLiteralNode):
@@ -3563,6 +3832,8 @@ class RustCodeGen:
             element_initializer = self.rust_scalar_default_literal(element_type)
             if element_initializer is not None:
                 return f"[{element_initializer}; {size}]"
+            if self.rust_type_is_zeroable(element_type):
+                return "unsafe { std::mem::zeroed() }"
             if self.is_rust_shader_pod_value_type(element_type):
                 return "unsafe { std::mem::zeroed() }"
             return "Default::default()"
@@ -3573,11 +3844,23 @@ class RustCodeGen:
 
         return "Default::default()"
 
+    def rust_runtime_default_initializer(self, type_name):
+        rust_type = self.map_type(type_name)
+        if self.parse_rust_array_type(
+            rust_type
+        ) is not None and self.rust_type_is_zeroable(rust_type):
+            return "unsafe { std::mem::zeroed() }"
+        return self.rust_static_default_initializer(rust_type)
+
     def local_array_default_initializer(self, rust_type):
         rust_type = str(rust_type)
         if rust_type.startswith("Vec<"):
             return "Vec::new()"
         if self.parse_rust_array_type(rust_type) is not None:
+            if not self.rust_type_default_derive_supported(
+                rust_type
+            ) and self.rust_type_is_zeroable(rust_type):
+                return "unsafe { std::mem::zeroed() }"
             return "std::array::from_fn(|_| Default::default())"
         return None
 
@@ -3591,6 +3874,7 @@ class RustCodeGen:
         return element_type.strip(), size.strip()
 
     def rust_scalar_default_literal(self, rust_type):
+        rust_type = str(rust_type)
         if rust_type in {"f16", "f32", "f64"}:
             return "0.0"
         if rust_type in {
@@ -3616,6 +3900,21 @@ class RustCodeGen:
             return '""'
         return None
 
+    def rust_type_is_zeroable(self, rust_type):
+        rust_type = str(rust_type).strip()
+        if self.pointer_type_parts(rust_type) is not None:
+            return True
+
+        array_type = self.parse_rust_array_type(rust_type)
+        if array_type is not None:
+            element_type, _size = array_type
+            return self.rust_type_is_zeroable(element_type)
+
+        if self.rust_scalar_default_literal(rust_type) is not None:
+            return rust_type != "&'static str"
+
+        return self.is_rust_shader_pod_value_type(rust_type)
+
     def is_rust_shader_pod_value_type(self, rust_type):
         rust_type = self.unqualify_runtime_type_name(rust_type)
         return str(rust_type).startswith(
@@ -3633,9 +3932,18 @@ class RustCodeGen:
         ) and str(rust_type).endswith(">")
 
     def generate_function(
-        self, func, indent=0, shader_type=None, function_name=None, stage_node=None
+        self,
+        func,
+        indent=0,
+        shader_type=None,
+        function_name=None,
+        stage_node=None,
+        extra_params=None,
     ):
         """Render one CrossGL function or shader entry point as Rust code."""
+        if self.is_function_prototype(func):
+            return ""
+
         code = ""
         code += "  " * indent
         saved_variable_types = self.variable_types.copy()
@@ -3650,7 +3958,9 @@ class RustCodeGen:
         saved_mutated_names = self.current_mutated_names
         self.current_generic_param_names = set(self.generic_param_names(func))
         self.current_shader_type = shader_type
-        param_list = getattr(func, "parameters", getattr(func, "params", []))
+        param_list = list(getattr(func, "parameters", getattr(func, "params", [])))
+        if extra_params:
+            param_list.extend(extra_params)
         for p in param_list:
             self.register_glsl_buffer_block_metadata(p)
             self.register_variable_type(
@@ -3692,8 +4002,9 @@ class RustCodeGen:
         for p, param_type in zip(param_list, param_types):
             self.register_glsl_buffer_block_metadata(p)
             self.register_variable_type(p.name, param_type, scope="local")
-            param_name = p.name
-            if param_name in self.current_mutated_names or (
+            source_param_name = p.name
+            param_name = self.rust_identifier(source_param_name)
+            if source_param_name in self.current_mutated_names or (
                 self.function_parameter_requires_mut_binding(
                     p,
                     inferred_constraints,
@@ -3708,11 +4019,11 @@ class RustCodeGen:
         params_str = ", ".join(params) if params else ""
 
         if shader_type == "vertex":
-            code += f"#[vertex_shader]\n"
+            code += self.generate_rust_stage_attribute("vertex_shader")
         elif shader_type == "fragment":
-            code += f"#[fragment_shader]\n"
+            code += self.generate_rust_stage_attribute("fragment_shader")
         elif shader_type == "compute":
-            code += f"#[compute_shader]\n"
+            code += self.generate_rust_stage_attribute("compute_shader")
         elif shader_type == "geometry":
             code += self.generate_rust_geometry_stage_comments(func, param_list)
         elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
@@ -3722,7 +4033,7 @@ class RustCodeGen:
                 shader_type,
             )
         elif shader_type in self.rust_mesh_stage_names():
-            code += "// CrossGL shader stage: " f"{shader_type}\n"
+            code += f"// CrossGL shader stage: {shader_type}\n"
             code += self.generate_rust_mesh_stage_comments(
                 func, param_list, shader_type, stage_node
             )
@@ -3749,11 +4060,16 @@ class RustCodeGen:
             extra_constraints=inferred_constraints,
             lifetime=reference_lifetime,
         )
-        emitted_name = function_name or func.name
+        emitted_name = self.rust_identifier(function_name or func.name)
         code += (
             f"pub fn {emitted_name}{generic_params}({params_str}) "
             f"-> {self.map_type_with_lifetime(return_type, reference_lifetime)} {{\n"
         )
+
+        if stage_node is not None:
+            for variable in getattr(stage_node, "local_variables", []) or []:
+                if self.is_rust_shared_variable(variable):
+                    code += self.generate_statement(variable, indent + 1)
 
         body = getattr(func, "body", [])
         if hasattr(body, "statements"):
@@ -3774,6 +4090,20 @@ class RustCodeGen:
         self.current_function_generic_constraints = saved_function_generic_constraints
         self.current_mutated_names = saved_mutated_names
         return code
+
+    def is_function_prototype(self, func):
+        return isinstance(func, FunctionNode) and getattr(func, "body", None) is None
+
+    def is_rust_shared_variable(self, node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        return bool(qualifiers & {"shared", "workgroup", "groupshared"})
+
+    def generate_rust_stage_attribute(self, attribute_name):
+        """Render a host-compatible Rust shader stage attribute."""
+        return f'#[cfg_attr(feature = "crossgl_gpu", {attribute_name})]\n'
 
     def function_reference_return_lifetime(self, func, return_type, param_types):
         if self.reference_type_parts_for_type(return_type) is None:
@@ -4533,6 +4863,7 @@ class RustCodeGen:
             vtype = self.variable_declaration_type(stmt, initial_value)
             self.register_variable_type(stmt.name, vtype, scope="local")
             binding_keyword = self.local_let_keyword(stmt)
+            binding_name = self.rust_identifier(stmt.name)
             rust_type = self.map_type(vtype)
             default_array_initializer = self.local_array_default_initializer(rust_type)
             if initial_value is not None:
@@ -4557,15 +4888,32 @@ class RustCodeGen:
                     )
                 if self.expression_contains_block_node(initial_value):
                     init_expr = self.indent_multiline_expression(init_expr, indent)
-                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = {init_expr};\n"
+                return (
+                    f"{indent_str}{binding_keyword} {binding_name}: "
+                    f"{rust_type} = {init_expr};\n"
+                )
             elif self.is_generated_struct_type(vtype):
-                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = Default::default();\n"
+                return (
+                    f"{indent_str}{binding_keyword} {binding_name}: "
+                    f"{rust_type} = Default::default();\n"
+                )
             elif self.is_default_constructible_ray_runtime_type(rust_type):
-                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = Default::default();\n"
+                return (
+                    f"{indent_str}{binding_keyword} {binding_name}: "
+                    f"{rust_type} = Default::default();\n"
+                )
             elif default_array_initializer is not None:
-                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = {default_array_initializer};\n"
+                return (
+                    f"{indent_str}{binding_keyword} {binding_name}: "
+                    f"{rust_type} = {default_array_initializer};\n"
+                )
+            elif self.local_value_default_initializer(rust_type) is not None:
+                return (
+                    f"{indent_str}{binding_keyword} {binding_name}: "
+                    f"{rust_type} = {self.local_value_default_initializer(rust_type)};\n"
+                )
             else:
-                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type};\n"
+                return f"{indent_str}{binding_keyword} {binding_name}: {rust_type};\n"
 
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
@@ -4681,6 +5029,14 @@ class RustCodeGen:
             return f"{indent_str}/* unsupported sync: {sync_type} */\n"
         return f"{indent_str}{rust_name}();\n"
 
+    def local_value_default_initializer(self, rust_type):
+        scalar_initializer = self.rust_scalar_default_literal(rust_type)
+        if scalar_initializer is not None:
+            return scalar_initializer
+        if self.is_rust_shader_pod_value_type(rust_type):
+            return "Default::default()"
+        return None
+
     def generate_wave_op_expression(self, expr):
         """Render a WaveOpNode as a Rust subgroup intrinsic call."""
         operation = getattr(expr, "operation", "")
@@ -4771,9 +5127,13 @@ class RustCodeGen:
 
         operand = self.generate_expression(getattr(initial_value, "operand", ""))
         assignment_op = "+=" if op == "++" else "-="
-        update = f"{'    ' * indent}{operand} {assignment_op} 1;\n"
+        increment = self.rust_increment_literal(
+            self.expression_result_type(getattr(initial_value, "operand", None))
+        )
+        update = f"{'    ' * indent}{operand} {assignment_op} {increment};\n"
         declaration = (
-            f"{'    ' * indent}{self.local_let_keyword(stmt)} {stmt.name}: "
+            f"{'    ' * indent}{self.local_let_keyword(stmt)} "
+            f"{self.rust_identifier(stmt.name)}: "
             f"{self.map_type(vtype)} = {operand};\n"
         )
         is_postfix = getattr(
@@ -5484,6 +5844,8 @@ class RustCodeGen:
         binding_name = name
         if name in unused_bindings and not name.startswith("_"):
             binding_name = f"_{name}"
+        else:
+            binding_name = self.rust_identifier(binding_name)
         if name in mutable_bindings:
             return f"mut {binding_name}"
         return binding_name
@@ -5507,7 +5869,7 @@ class RustCodeGen:
                     unused_bindings,
                     mutable_bindings,
                 )
-            return pattern.name
+            return self.rust_identifier(pattern.name)
         if isinstance(pattern, ConstructorPatternNode):
             if not pattern.arguments:
                 return pattern.type_name
@@ -5524,14 +5886,15 @@ class RustCodeGen:
                     unused_bindings,
                     mutable_bindings,
                 )
+                field_ident = self.rust_identifier(field_name)
                 if (
                     isinstance(field_pattern, IdentifierPatternNode)
                     and field_pattern.name == field_name
-                    and field_pattern_code == field_name
+                    and field_pattern_code == field_ident
                 ):
-                    fields.append(field_name)
+                    fields.append(field_ident)
                 else:
-                    fields.append(f"{field_name}: {field_pattern_code}")
+                    fields.append(f"{field_ident}: {field_pattern_code}")
             if getattr(pattern, "has_rest", False):
                 fields.append("..")
             return f"{pattern.type_name} {{ {', '.join(fields)} }}"
@@ -5836,7 +6199,8 @@ class RustCodeGen:
         self.register_variable_type(node.name, source_type, scope="local")
         initializer = self.local_array_default_initializer(rust_type)
         return (
-            f"{indent_str}{self.local_let_keyword(node)} {node.name}: "
+            f"{indent_str}{self.local_let_keyword(node)} "
+            f"{self.rust_identifier(node.name)}: "
             f"{rust_type} = {initializer};\n"
         )
 
@@ -6012,7 +6376,8 @@ class RustCodeGen:
                 func_name=func_name,
                 move_counts=move_counts,
             )
-            return f"{callee}({', '.join(generated_args)})"
+            generated_args.extend(self.generate_captured_function_call_args(func_name))
+            return f"{self.rust_callable_name(callee)}({', '.join(generated_args)})"
 
         struct_constructor = self.generate_return_struct_new_call_with_typed_args(
             func_name,
@@ -6120,7 +6485,7 @@ class RustCodeGen:
                 ),
                 lambda_conflict_roots[index],
             )
-            fields.append(f"{name}: {field_value}")
+            fields.append(f"{self.rust_identifier(name)}: {field_value}")
         return fields
 
     def generate_enum_variant_call_with_typed_args(
@@ -6699,7 +7064,7 @@ class RustCodeGen:
         finally:
             self.member_object_depth -= 1
         obj = self.lazy_static_object_expression(obj_expr, obj)
-        return f"{obj}.{member}"
+        return f"{obj}.{self.rust_identifier(member)}"
 
     def should_move_member_return_place(self, expr):
         if not isinstance(expr, MemberAccessNode):
@@ -6803,10 +7168,31 @@ class RustCodeGen:
         if vector_comparison is not None:
             return vector_comparison
 
+        vector_arithmetic = self.generate_vector_arithmetic_expression(
+            left_expr, right_expr, left_type, right_type, mapped_op
+        )
+        if vector_arithmetic is not None:
+            return vector_arithmetic
+
+        matrix_multiply = self.generate_matrix_multiply_expression(
+            left_expr, right_expr, left_type, right_type, mapped_op
+        )
+        if matrix_multiply is not None:
+            return matrix_multiply
+
         matrix_vector_plan = self.binary_matrix_vector_plan(
             left_type, right_type, mapped_op, target_type
         )
         if matrix_vector_plan is not None:
+            matrix_vector = self.generate_matrix_vector_expression(
+                left_expr,
+                right_expr,
+                left_type,
+                right_type,
+                matrix_vector_plan,
+            )
+            if matrix_vector is not None:
+                return matrix_vector
             left = self.generate_binary_composite_operand(
                 left_expr, left_type, matrix_vector_plan["left_target_type"]
             )
@@ -6855,6 +7241,145 @@ class RustCodeGen:
             )
 
         return f"({left} {mapped_op} {right})"
+
+    def generate_matrix_multiply_expression(
+        self, left_expr, right_expr, left_type, right_type, operator
+    ):
+        plan = self.matrix_multiply_plan(left_type, right_type, operator)
+        if plan is None:
+            return None
+
+        temp_bindings = []
+        left_lanes = self.matrix_argument_lane_expressions(
+            left_expr,
+            plan["left_matrix"],
+            temp_bindings,
+            plan["component_type"],
+        )
+        right_lanes = self.matrix_argument_lane_expressions(
+            right_expr,
+            plan["right_matrix"],
+            temp_bindings,
+            plan["component_type"],
+        )
+
+        left_cell = self.matrix_lane_accessor(left_lanes, plan["left_matrix"])
+        right_cell = self.matrix_lane_accessor(right_lanes, plan["right_matrix"])
+        result_lanes = []
+        for column in range(plan["result_columns"]):
+            for row in range(plan["result_rows"]):
+                terms = [
+                    f"({left_cell(k, row)} * {right_cell(column, k)})"
+                    for k in range(plan["shared_size"])
+                ]
+                result_lanes.append(self.sum_rust_terms(terms))
+
+        return self.generate_constructor_call(
+            self.map_type(plan["result_type"]),
+            result_lanes,
+            temp_bindings,
+        )
+
+    def generate_matrix_vector_expression(
+        self, left_expr, right_expr, left_type, right_type, plan
+    ):
+        if not self.rust_matrix_vector_requires_lanes(plan):
+            return None
+
+        temp_bindings = []
+        matrix_expr = left_expr if plan["matrix_on_left"] else right_expr
+        vector_expr = right_expr if plan["matrix_on_left"] else left_expr
+        matrix_type = left_type if plan["matrix_on_left"] else right_type
+        vector_type = right_type if plan["matrix_on_left"] else left_type
+        matrix_info = self.matrix_type_info(matrix_type)
+        vector_info = self.vector_type_info(vector_type)
+        if matrix_info is None or vector_info is None:
+            return None
+
+        result_info = self.vector_type_info(plan["result_type"])
+        if result_info is None:
+            return None
+        component_type = result_info["component_type"]
+
+        matrix_lanes = self.matrix_argument_lane_expressions(
+            matrix_expr,
+            matrix_info,
+            temp_bindings,
+            component_type,
+        )
+        vector_lanes = self.vector_argument_lane_expressions(
+            vector_expr,
+            vector_info,
+            temp_bindings,
+            component_type,
+        )
+        matrix_cell = self.matrix_lane_accessor(matrix_lanes, matrix_info)
+
+        result_lanes = []
+        if plan["matrix_on_left"]:
+            for row in range(matrix_info["rows"]):
+                terms = [
+                    f"({matrix_cell(column, row)} * {vector_lanes[column]})"
+                    for column in range(matrix_info["columns"])
+                ]
+                result_lanes.append(self.sum_rust_terms(terms))
+        else:
+            for column in range(matrix_info["columns"]):
+                terms = [
+                    f"({vector_lanes[row]} * {matrix_cell(column, row)})"
+                    for row in range(matrix_info["rows"])
+                ]
+                result_lanes.append(self.sum_rust_terms(terms))
+
+        return self.generate_constructor_call(
+            self.map_type(plan["result_type"]),
+            result_lanes,
+            temp_bindings,
+        )
+
+    def matrix_lane_accessor(self, lanes, matrix_info):
+        rows = matrix_info["rows"]
+        return lambda column, row: lanes[column * rows + row]
+
+    def sum_rust_terms(self, terms):
+        if not terms:
+            return "0"
+        expression = terms[0]
+        for term in terms[1:]:
+            expression = f"({expression} + {term})"
+        return expression
+
+    def generate_vector_arithmetic_expression(
+        self, left_expr, right_expr, left_type, right_type, operator
+    ):
+        plan = self.vector_arithmetic_plan(left_type, right_type, operator)
+        if plan is None or not self.rust_vector_arithmetic_requires_lanes(plan):
+            return None
+
+        temp_bindings = []
+        left_lanes = self.vector_comparison_operand_lanes(
+            left_expr,
+            left_type,
+            plan["component_type"],
+            plan["size"],
+            temp_bindings,
+        )
+        right_lanes = self.vector_comparison_operand_lanes(
+            right_expr,
+            right_type,
+            plan["component_type"],
+            plan["size"],
+            temp_bindings,
+        )
+        lanes = [
+            f"({left_lane} {operator} {right_lane})"
+            for left_lane, right_lane in zip(left_lanes, right_lanes)
+        ]
+        return self.generate_constructor_call(
+            self.map_type(plan["result_type"]),
+            lanes,
+            temp_bindings,
+        )
 
     def generate_scalar_left_vector_binary_expression(
         self, left_expr, right_expr, left_type, right_type, operator
@@ -7244,7 +7769,7 @@ class RustCodeGen:
                 ),
                 lambda_conflict_roots[index],
             )
-            fields.append(f"{name}: {field_value}")
+            fields.append(f"{self.rust_identifier(name)}: {field_value}")
         return fields
 
     def rust_array_padding_expression(self, base_type, static_context=False):
@@ -7270,11 +7795,31 @@ class RustCodeGen:
             value_expr = node.right
             op = getattr(node, "operator", "=")
 
+        swizzle_assignment = self.generate_swizzle_assignment(
+            target_expr, value_expr, op
+        )
+        if swizzle_assignment is not None:
+            return swizzle_assignment
+
+        pointer_assignment = self.generate_pointer_index_assignment(
+            target_expr, value_expr, op
+        )
+        if pointer_assignment is not None:
+            return pointer_assignment
+
         glsl_block_store = self.generate_glsl_buffer_block_assignment(
             target_expr, value_expr, op
         )
         if glsl_block_store is not None:
             return glsl_block_store
+
+        vector_compound_assignment = self.generate_vector_compound_assignment(
+            target_expr,
+            value_expr,
+            op,
+        )
+        if vector_compound_assignment is not None:
+            return vector_compound_assignment
 
         if hasattr(node, "target") and hasattr(node, "value"):
             # New AST structure
@@ -7295,6 +7840,96 @@ class RustCodeGen:
             )
             op = getattr(node, "operator", "=")
         return f"{lhs} {op} {rhs}"
+
+    def generate_vector_compound_assignment(self, target, value, operator):
+        binary_operator = {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+            "%=": "%",
+        }.get(operator)
+        if binary_operator is None:
+            return None
+
+        target_type = self.expression_result_type(target)
+        if self.vector_type_info(target_type) is None:
+            return None
+
+        value_type = self.expression_result_type(value)
+        if (
+            self.vector_type_info(value_type) is None
+            and self.normalize_scalar_type(value_type) is None
+        ):
+            return None
+
+        lhs = self.generate_assignment_target_expression(target)
+        rhs = self.generate_vector_arithmetic_expression(
+            target,
+            value,
+            target_type,
+            value_type,
+            binary_operator,
+        )
+        if rhs is None:
+            expression = BinaryOpNode(target, binary_operator, value)
+            rhs = self.generate_binary_expression(expression, target_type)
+            rhs = self.normalize_typed_expression_value(expression, rhs, target_type)
+        return f"{lhs} = {rhs}"
+
+    def generate_swizzle_assignment(self, target, value, operator):
+        if not isinstance(target, MemberAccessNode):
+            return None
+
+        components = self.member_swizzle_components(target)
+        if components is None or len(components) <= 1:
+            return None
+
+        target_type = self.expression_result_type(target)
+        rhs = self.generate_expression_with_type(value, target_type)
+        rhs = self.normalize_assignment_rhs(target_type, value, rhs, operator)
+        rhs_info = self.vector_type_info(self.expression_result_type(value))
+        target_info = self.vector_type_info(target_type)
+        if rhs_info is None and target_info is not None:
+            rhs = self.normalize_typed_expression_value(value, rhs, target_type)
+
+        object_expr = getattr(target, "object_expr", getattr(target, "object", None))
+        self.assignment_lhs_depth += 1
+        try:
+            obj = self.generate_expression(object_expr)
+        finally:
+            self.assignment_lhs_depth -= 1
+
+        rhs_name = self.next_swizzle_temp_name()
+        assignments = []
+        if self.vector_type_info(self.expression_result_type(value)) is not None:
+            for component in components:
+                assignments.append(
+                    f"{obj}.{component} {operator} {rhs_name}.{component}"
+                )
+        else:
+            for component in components:
+                assignments.append(f"{obj}.{component} {operator} {rhs_name}")
+        return f"{{ let {rhs_name} = {rhs}; {'; '.join(assignments)}; }}"
+
+    def generate_pointer_index_assignment(self, target, value, operator):
+        if not isinstance(target, ArrayAccessNode):
+            return None
+
+        array_expr = getattr(target, "array_expr", getattr(target, "array", None))
+        pointer_type = self.pointer_type_parts(
+            self.map_type(self.expression_result_type(array_expr))
+        )
+        if pointer_type is None:
+            return None
+
+        index_expr = getattr(target, "index_expr", getattr(target, "index", None))
+        pointer = self.generate_expression(array_expr)
+        index = self.generate_array_index_expression(index_expr)
+        lhs_type = self.expression_result_type(target)
+        rhs = self.generate_expression_with_type(value, lhs_type)
+        rhs = self.normalize_assignment_rhs(lhs_type, value, rhs, operator)
+        return f"unsafe {{ *({pointer}).add({index}) {operator} {rhs} }}"
 
     def generate_glsl_buffer_block_assignment(self, target, value, op):
         access = self.glsl_buffer_block_access(target)
@@ -7445,7 +8080,7 @@ class RustCodeGen:
 
         if self.is_integer_literal_expression(expr):
             if target_type in {"f32", "f64"}:
-                return f"{expr.value}.0"
+                return f"{self.integer_literal_expression_value(expr)}.0"
             if target_type == "f16":
                 return f"({generated_expr} as f16)"
             return generated_expr
@@ -7566,6 +8201,8 @@ class RustCodeGen:
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
         pattern = getattr(node, "pattern", "item")
+        if isinstance(pattern, str):
+            pattern = self.rust_identifier(pattern)
         iterable = self.generate_for_in_iterable(getattr(node, "iterable", None))
 
         code = f"{indent_str}for {pattern} in {iterable} {{\n"
@@ -7710,7 +8347,10 @@ class RustCodeGen:
             if op in ["++", "--"]:
                 operand = self.generate_expression(operand_expr)
                 assignment_op = "+=" if op == "++" else "-="
-                return f"{operand} {assignment_op} 1"
+                increment = self.rust_increment_literal(
+                    self.expression_result_type(operand_expr)
+                )
+                return f"{operand} {assignment_op} {increment}"
             bool_vector_not = self.generate_bool_vector_not_expression(operand_expr, op)
             if bool_vector_not is not None:
                 return bool_vector_not
@@ -7726,6 +8366,13 @@ class RustCodeGen:
                 self.array_object_depth -= 1
             array = self.lazy_static_object_expression(array_expr, array)
             index = self.generate_array_index_expression(index_expr)
+            if (
+                self.pointer_type_parts(
+                    self.map_type(self.expression_result_type(array_expr))
+                )
+                is not None
+            ):
+                return f"unsafe {{ *({array}).add({index}) }}"
             access = f"{array}[{index}]"
             if self.should_clone_array_access_value(expr):
                 return self.clone_value_expression(access)
@@ -7765,7 +8412,7 @@ class RustCodeGen:
                 args_str = ", ".join(
                     self.generate_user_function_call_args(func_name, args)
                 )
-                return f"{callee}({args_str})"
+                return f"{self.rust_callable_name(callee)}({args_str})"
 
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name,
@@ -7786,11 +8433,28 @@ class RustCodeGen:
                 if bool_mix is not None:
                     return bool_mix
 
+            original_func_name = func_name
             func_name = self.mapped_function_name(func_name, len(args), args)
+            cuda_shuffle_call = self.generate_cuda_shuffle_intrinsic_call(
+                original_func_name, args
+            )
+            if cuda_shuffle_call is not None:
+                return cuda_shuffle_call
             self.validate_rust_texture_helper_call(func_name, args)
             if func_name == "saturate" and len(args) == 1:
                 arg = self.generate_expression(args[0])
                 return f"clamp({arg}, 0.0, 1.0)"
+
+            dot_call = self.generate_inline_dot_call(func_name, args)
+            if dot_call is not None:
+                return dot_call
+
+            vector_intrinsic = self.generate_inline_vector_intrinsic_call(
+                func_name,
+                args,
+            )
+            if vector_intrinsic is not None:
+                return vector_intrinsic
 
             generic_intrinsic = self.generate_generic_intrinsic_call(func_name, args)
             if generic_intrinsic is not None:
@@ -7835,7 +8499,7 @@ class RustCodeGen:
                 return self.generate_matrix_constructor_call(func_name, args)
 
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
-            return f"{func_name or callee}({args_str})"
+            return f"{self.rust_callable_name(func_name or callee)}({args_str})"
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             return self.generate_member_access_expression(expr)
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
@@ -7844,6 +8508,107 @@ class RustCodeGen:
             return self.generate_wave_op_expression(expr)
         else:
             return str(expr)
+
+    def rust_increment_literal(self, operand_type):
+        scalar_type = self.normalize_scalar_type(operand_type)
+        if scalar_type in {"f16", "f32", "f64"}:
+            return "1.0"
+        return "1"
+
+    def generate_inline_dot_call(self, func_name, args):
+        if func_name != "dot" or len(args or []) != 2:
+            return None
+
+        left_type = self.expression_result_type(args[0])
+        right_type = self.expression_result_type(args[1])
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is None or right_info is None:
+            return None
+        if left_info["size"] != right_info["size"]:
+            return None
+
+        # The standalone Rust contract already has Vec3 dot; other vector widths
+        # need concrete lane math instead of a runtime overload.
+        if left_info["size"] == 3:
+            return None
+
+        component_type = self.promoted_scalar_type(
+            left_info["component_type"],
+            right_info["component_type"],
+        )
+        if component_type is None:
+            return None
+
+        temp_bindings = []
+        left_lanes = self.vector_argument_lane_expressions(
+            args[0],
+            left_info,
+            temp_bindings,
+            component_type,
+        )
+        right_lanes = self.vector_argument_lane_expressions(
+            args[1],
+            right_info,
+            temp_bindings,
+            component_type,
+        )
+        products = [
+            f"({left_lane} * {right_lane})"
+            for left_lane, right_lane in zip(left_lanes, right_lanes)
+        ]
+        expression = " + ".join(products)
+        if not temp_bindings:
+            return expression
+
+        bindings = " ".join(
+            self.generate_temp_binding_statement(binding) for binding in temp_bindings
+        )
+        return f"{{ {bindings} {expression} }}"
+
+    def generate_inline_vector_intrinsic_call(self, func_name, args):
+        if len(args or []) != 1 or func_name not in {"length", "normalize"}:
+            return None
+
+        value_type = self.expression_result_type(args[0])
+        value_info = self.vector_type_info(value_type)
+        if value_info is None:
+            return None
+
+        # The standalone Rust contract already has Vec3 length/normalize.
+        if value_info["size"] == 3:
+            return None
+
+        component_type = value_info["component_type"]
+        temp_bindings = []
+        value_expr = self.generate_expression(args[0])
+        temp_name = self.next_vector_arg_temp_name()
+        type_hint = self.map_type(value_type)
+        temp_bindings.append((temp_name, value_expr, type_hint))
+
+        components = ("x", "y", "z", "w")[: value_info["size"]]
+        length_terms = [
+            f"({temp_name}.{component} * {temp_name}.{component})"
+            for component in components
+        ]
+        length_expr = f"({self.sum_rust_terms(length_terms)}).sqrt()"
+        if func_name == "length":
+            bindings = " ".join(
+                self.generate_temp_binding_statement(binding)
+                for binding in temp_bindings
+            )
+            return f"{{ {bindings} {length_expr} }}"
+
+        length_name = self.next_vector_arg_temp_name()
+        temp_bindings.append((length_name, length_expr, self.map_type(component_type)))
+        lanes = [
+            f"({temp_name}.{component} / {length_name})" for component in components
+        ]
+        return self.generate_constructor_call(
+            self.map_type(value_type),
+            lanes,
+            temp_bindings,
+        )
 
     def generate_generic_intrinsic_call(self, func_name, args):
         if func_name != "sqrt" or len(args) != 1:
@@ -7856,6 +8621,13 @@ class RustCodeGen:
         self.required_generic_math_traits.add("CglSqrt")
         return f"CglSqrt::cgl_sqrt({self.generate_expression(args[0])})"
 
+    def generate_cuda_shuffle_intrinsic_call(self, func_name, args):
+        if func_name != "__shfl_down_sync" or len(args or []) < 3:
+            return None
+        value = self.generate_expression(args[1])
+        delta = self.generate_expression(args[2])
+        return f"subgroup_shuffle_down({value}, {delta})"
+
     def generate_ray_tracing_op_expression(self, expr):
         operation = getattr(expr, "operation", "")
         if operation in self.user_function_names:
@@ -7865,7 +8637,7 @@ class RustCodeGen:
                     getattr(expr, "arguments", []),
                 )
             )
-            return f"{operation}({args})"
+            return f"{self.rust_callable_name(operation)}({args})"
 
         return self.generate_ray_tracing_call_expression(
             operation,
@@ -8788,7 +9560,7 @@ class RustCodeGen:
             return raw or "_"
 
         type_name, param_name = typed_param
-        return f"{param_name}: {self.map_type(type_name)}"
+        return f"{self.rust_identifier(param_name)}: {self.map_type(type_name)}"
 
     def generate_lambda_body(self, arg):
         raw = self.lambda_raw_argument_text(arg).strip()
@@ -9099,7 +9871,17 @@ class RustCodeGen:
                 target_type,
             )
             generated_args.append(arg_expr)
+        generated_args.extend(self.generate_captured_function_call_args(func_name))
         return generated_args
+
+    def generate_captured_function_call_args(self, func_name):
+        captured_params = self.rust_function_capture_params.get(func_name, [])
+        return [
+            self.generate_expression_with_type(
+                IdentifierNode(param.name), param.param_type
+            )
+            for param in captured_params
+        ]
 
     def user_function_argument_target_type(self, func_name, arg, param_type):
         if not isinstance(arg, LambdaNode):
@@ -9211,14 +9993,46 @@ class RustCodeGen:
         if not temp_bindings:
             return constructor
 
-        bindings = " ".join(f"let {name} = {expr};" for name, expr in temp_bindings)
+        bindings = " ".join(
+            self.generate_temp_binding_statement(binding) for binding in temp_bindings
+        )
         return f"{{ {bindings} {constructor} }}"
+
+    def generate_temp_binding_statement(self, binding):
+        name, expr, *type_hint = binding
+        if type_hint and type_hint[0]:
+            return f"let {name}: {type_hint[0]} = {expr};"
+        return f"let {name} = {expr};"
 
     def generate_matrix_constructor_args(self, matrix_info, args):
         generated_args = []
         temp_bindings = []
         expected_count = matrix_info["columns"] * matrix_info["rows"]
         component_type = matrix_info["component_type"]
+
+        if len(args) == 1:
+            arg_type = self.expression_result_type(args[0])
+            arg_matrix_info = self.matrix_type_info(arg_type)
+            if arg_matrix_info is not None:
+                return self.generate_matrix_conversion_constructor_args(
+                    args[0], arg_matrix_info, matrix_info, component_type
+                )
+
+            if self.normalize_scalar_type(arg_type) is not None:
+                scalar_expr = self.generate_expression_with_type(
+                    args[0], component_type
+                )
+                scalar_expr = self.normalize_scalar_assignment_value(
+                    args[0], scalar_expr, arg_type, component_type
+                )
+                zero = (
+                    self.rust_scalar_default_literal(self.map_type(component_type))
+                    or "0"
+                )
+                for column in range(matrix_info["columns"]):
+                    for row in range(matrix_info["rows"]):
+                        generated_args.append(scalar_expr if row == column else zero)
+                return generated_args, temp_bindings
 
         for arg in args:
             arg_info = self.vector_type_info(self.expression_result_type(arg))
@@ -9241,6 +10055,36 @@ class RustCodeGen:
             if len(generated_args) >= expected_count:
                 return generated_args[:expected_count], temp_bindings
 
+        return generated_args, temp_bindings
+
+    def generate_matrix_conversion_constructor_args(
+        self, arg, source_info, target_info, component_type
+    ):
+        temp_bindings = []
+        source_expr = self.generate_expression(arg)
+        source_expr = self.generate_matrix_lane_source(arg, source_expr, temp_bindings)
+        source_expr = self.rust_member_base_expression(source_expr)
+        components = ("x", "y", "z", "w")
+        zero = self.rust_scalar_default_literal(self.map_type(component_type)) or "0"
+        one = (
+            "1.0"
+            if self.normalize_scalar_type(component_type) in {"f16", "f32", "f64"}
+            else "1"
+        )
+        generated_args = []
+        for column in range(target_info["columns"]):
+            for row in range(target_info["rows"]):
+                if column < source_info["columns"] and row < source_info["rows"]:
+                    generated_args.append(
+                        self.normalize_constructor_scalar_lane(
+                            None,
+                            f"{source_expr}.c{column}.{components[row]}",
+                            source_info["component_type"],
+                            component_type,
+                        )
+                    )
+                else:
+                    generated_args.append(one if column == row else zero)
         return generated_args, temp_bindings
 
     def generate_vector_constructor_args(self, vector_info, args):
@@ -9366,8 +10210,34 @@ class RustCodeGen:
         if self.is_repeat_safe_expression(expr):
             return generated_expr
         temp_name = self.next_vector_arg_temp_name()
-        temp_bindings.append((temp_name, generated_expr))
+        type_hint = self.rust_temp_binding_type_hint(expr)
+        if type_hint is None:
+            temp_bindings.append((temp_name, generated_expr))
+        else:
+            temp_bindings.append((temp_name, generated_expr, type_hint))
         return temp_name
+
+    def rust_temp_binding_type_hint(self, expr):
+        func_name = (
+            self.function_call_name(getattr(expr, "function", None))
+            if isinstance(expr, FunctionCallNode)
+            else None
+        )
+        if func_name is None:
+            return None
+
+        mapped_name = self.mapped_function_name(
+            func_name,
+            len(getattr(expr, "arguments", getattr(expr, "args", [])) or []),
+            getattr(expr, "arguments", getattr(expr, "args", [])) or [],
+        )
+        if mapped_name not in {"texture_size", "texture_size_lod", "image_size"}:
+            return None
+
+        result_type = self.expression_result_type(expr)
+        if result_type is None:
+            return None
+        return self.map_type(result_type)
 
     def rust_member_base_expression(self, generated_expr):
         generated_expr = str(generated_expr)
@@ -9395,7 +10265,7 @@ class RustCodeGen:
 
         swizzle_components = self.member_swizzle_components(expr)
         if swizzle_components is None:
-            access = f"{obj}.{member}"
+            access = f"{obj}.{self.rust_identifier(member)}"
             if self.should_clone_member_access_value(expr):
                 return f"{access}.clone()"
             return access
@@ -9463,6 +10333,15 @@ class RustCodeGen:
 
     def rust_builtin_value_expression(self, name):
         return {
+            "gl_WorkGroupID": "workgroup_id()",
+            "gl_LocalInvocationID": "local_invocation_id()",
+            "gl_GlobalInvocationID": "global_invocation_id()",
+            "gl_LocalInvocationIndex": "local_invocation_index()",
+            "gl_NumWorkGroups": "num_workgroups()",
+            "SV_GroupID": "workgroup_id()",
+            "SV_GroupThreadID": "local_invocation_id()",
+            "SV_DispatchThreadID": "global_invocation_id()",
+            "SV_GroupIndex": "local_invocation_index()",
             "gl_LaunchIDEXT": "ray_launch_id()",
             "gl_LaunchSizeEXT": "ray_launch_size()",
             "gl_HitTEXT": "ray_hit_t()",
@@ -9475,6 +10354,31 @@ class RustCodeGen:
             "gl_IncomingRayFlagsEXT": "ray_incoming_flags()",
             "gl_InstanceCustomIndexEXT": "ray_instance_custom_index()",
             "gl_GeometryIndexEXT": "ray_geometry_index()",
+        }.get(name)
+
+    def rust_builtin_value_type(self, name):
+        return {
+            "gl_WorkGroupID": "uvec3",
+            "gl_LocalInvocationID": "uvec3",
+            "gl_GlobalInvocationID": "uvec3",
+            "gl_LocalInvocationIndex": "uint",
+            "gl_NumWorkGroups": "uvec3",
+            "SV_GroupID": "uvec3",
+            "SV_GroupThreadID": "uvec3",
+            "SV_DispatchThreadID": "uvec3",
+            "SV_GroupIndex": "uint",
+            "gl_LaunchIDEXT": "uvec3",
+            "gl_LaunchSizeEXT": "uvec3",
+            "gl_HitTEXT": "float",
+            "gl_HitKindEXT": "uint",
+            "gl_WorldRayOriginEXT": "vec3",
+            "gl_WorldRayDirectionEXT": "vec3",
+            "gl_ObjectRayOriginEXT": "vec3",
+            "gl_ObjectRayDirectionEXT": "vec3",
+            "gl_RayTminEXT": "float",
+            "gl_IncomingRayFlagsEXT": "uint",
+            "gl_InstanceCustomIndexEXT": "uint",
+            "gl_GeometryIndexEXT": "uint",
         }.get(name)
 
     def is_default_constructible_ray_runtime_type(self, rust_type):
@@ -9806,6 +10710,123 @@ class RustCodeGen:
             "result_type": result_type,
         }
 
+    def vector_arithmetic_plan(self, left_type, right_type, operator=None):
+        if operator not in {"+", "-", "*", "/", "%"}:
+            return None
+
+        left_vector = self.vector_type_info(left_type)
+        right_vector = self.vector_type_info(right_type)
+        left_scalar = self.normalize_scalar_type(left_type)
+        right_scalar = self.normalize_scalar_type(right_type)
+
+        if left_vector is not None and right_vector is not None:
+            if left_vector["size"] != right_vector["size"]:
+                return None
+            component_type = self.promoted_scalar_type(
+                left_vector["component_type"], right_vector["component_type"]
+            )
+            size = left_vector["size"]
+            operand_shape = "vector_vector"
+        elif left_vector is not None and right_scalar is not None:
+            component_type = self.promoted_scalar_type(
+                left_vector["component_type"], right_scalar
+            )
+            size = left_vector["size"]
+            operand_shape = "vector_scalar"
+        elif right_vector is not None and left_scalar is not None:
+            component_type = self.promoted_scalar_type(
+                left_scalar, right_vector["component_type"]
+            )
+            size = right_vector["size"]
+            operand_shape = "scalar_vector"
+        else:
+            return None
+
+        component_type = self.normalize_scalar_type(component_type)
+        if component_type is None or component_type == "bool":
+            return None
+
+        result_type = self.vector_type_for_components(component_type, size)
+        if result_type is None:
+            return None
+
+        return {
+            "component_type": component_type,
+            "operand_shape": operand_shape,
+            "operator": operator,
+            "result_type": result_type,
+            "size": size,
+        }
+
+    def rust_vector_arithmetic_requires_lanes(self, plan):
+        """Return whether Rust output should avoid relying on vector operator traits."""
+        if plan["operand_shape"] != "vector_vector":
+            return True
+
+        if plan["size"] == 2:
+            return True
+
+        # The current standalone Rust contract only defines Vec4 addition.
+        if plan["size"] == 4:
+            return plan["operator"] != "+"
+
+        if plan["size"] == 3:
+            return plan["operator"] in {"/", "%"}
+
+        return True
+
+    def matrix_multiply_plan(self, left_type, right_type, operator=None):
+        if operator != "*":
+            return None
+
+        left_matrix = self.matrix_type_info(left_type)
+        right_matrix = self.matrix_type_info(right_type)
+        if left_matrix is None or right_matrix is None:
+            return None
+        if left_matrix["columns"] != right_matrix["rows"]:
+            return None
+
+        component_type = self.promoted_scalar_type(
+            left_matrix["component_type"], right_matrix["component_type"]
+        )
+        if component_type is None:
+            return None
+
+        result_type = self.matrix_type_for_dimensions(
+            component_type,
+            right_matrix["columns"],
+            left_matrix["rows"],
+        )
+        if result_type is None:
+            return None
+
+        return {
+            "component_type": component_type,
+            "left_matrix": left_matrix,
+            "result_columns": right_matrix["columns"],
+            "result_rows": left_matrix["rows"],
+            "result_type": result_type,
+            "right_matrix": right_matrix,
+            "shared_size": left_matrix["columns"],
+        }
+
+    def rust_matrix_vector_requires_lanes(self, plan):
+        if not plan["matrix_on_left"]:
+            return True
+
+        matrix_info = self.matrix_type_info(plan["left_target_type"])
+        vector_info = self.vector_type_info(plan["right_target_type"])
+        if matrix_info is None or vector_info is None:
+            return True
+
+        component_type = self.normalize_scalar_type(matrix_info["component_type"])
+        return not (
+            component_type == "f32"
+            and matrix_info["columns"] == matrix_info["rows"]
+            and matrix_info["columns"] in {3, 4}
+            and vector_info["size"] == matrix_info["columns"]
+        )
+
     def binary_matrix_vector_plan(
         self, left_type, right_type, operator=None, target_type=None
     ):
@@ -9875,6 +10896,7 @@ class RustCodeGen:
         return {
             "result_type": result_type,
             "left_target_type": left_target_type,
+            "matrix_on_left": matrix_on_left,
             "right_target_type": right_target_type,
         }
 
@@ -9997,7 +11019,7 @@ class RustCodeGen:
 
         if self.is_integer_literal_expression(expr):
             if target_type in {"f32", "f64"}:
-                return f"{expr.value}.0"
+                return f"{self.integer_literal_expression_value(expr)}.0"
             if target_type == "f16":
                 return f"({generated_expr} as f16)"
             return generated_expr
@@ -10005,11 +11027,16 @@ class RustCodeGen:
         return f"({generated_expr} as {target_type})"
 
     def is_integer_literal_expression(self, expr):
+        if isinstance(expr, int) and not isinstance(expr, bool):
+            return True
         return (
             isinstance(expr, LiteralNode)
             and isinstance(expr.value, int)
             and not isinstance(expr.value, bool)
         )
+
+    def integer_literal_expression_value(self, expr):
+        return expr.value if isinstance(expr, LiteralNode) else expr
 
     def normalize_scalar_type(self, type_name):
         if type_name is None:
@@ -10074,8 +11101,15 @@ class RustCodeGen:
             symbol = self.static_symbol_name(name)
             if self.is_lazy_static_reference(name):
                 return f"*{symbol}"
+            pointer_parts = self.pointer_type_parts(
+                self.map_type(self.variable_types.get(name))
+            )
+            if pointer_parts is not None:
+                is_mutable, pointee_type = pointer_parts
+                pointer_keyword = "mut" if is_mutable else "const"
+                return f"({symbol} as *{pointer_keyword} {pointee_type})"
             return symbol
-        return name
+        return self.rust_identifier(name)
 
     def lazy_static_object_expression(self, expr, generated_expr):
         name = self.get_expression_name(expr)
@@ -10093,6 +11127,71 @@ class RustCodeGen:
 
     def static_symbol_name(self, name):
         return self.static_symbol_names.get(name, name)
+
+    def rust_identifier(self, name):
+        """Return a Rust-safe value/field identifier for source-level names."""
+        name = str(name)
+        if name in {"self", "Self", "super", "crate"}:
+            return f"{name}_"
+        if name in self.rust_reserved_identifiers():
+            return f"{name}_"
+        return name
+
+    def rust_callable_name(self, name):
+        if isinstance(name, str) and name.isidentifier():
+            return self.rust_identifier(name)
+        return name
+
+    def rust_reserved_identifiers(self):
+        return {
+            "as",
+            "async",
+            "await",
+            "become",
+            "box",
+            "break",
+            "const",
+            "continue",
+            "do",
+            "dyn",
+            "else",
+            "enum",
+            "extern",
+            "false",
+            "final",
+            "fn",
+            "for",
+            "if",
+            "impl",
+            "in",
+            "let",
+            "loop",
+            "macro",
+            "match",
+            "mod",
+            "move",
+            "mut",
+            "override",
+            "priv",
+            "pub",
+            "ref",
+            "return",
+            "static",
+            "struct",
+            "trait",
+            "true",
+            "try",
+            "type",
+            "typeof",
+            "union",
+            "unsafe",
+            "unsized",
+            "use",
+            "virtual",
+            "where",
+            "while",
+            "yield",
+        }
 
     def is_generated_struct_type(self, type_name):
         if type_name is None:
@@ -10135,10 +11234,20 @@ class RustCodeGen:
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if isinstance(expr, bool):
+            return "bool"
+        if isinstance(expr, int):
+            return "int"
+        if isinstance(expr, float):
+            return "float"
         if isinstance(expr, ArrayAccessNode):
             return self.array_access_element_type(expr)
         if isinstance(expr, (IdentifierNode, VariableNode)):
-            return self.variable_types.get(self.get_expression_name(expr))
+            name = self.get_expression_name(expr)
+            variable_type = self.variable_types.get(name)
+            if variable_type is not None:
+                return variable_type
+            return self.rust_builtin_value_type(name)
         if isinstance(expr, LiteralNode):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
             if literal_type:
@@ -10263,6 +11372,11 @@ class RustCodeGen:
             )
             if vector_comparison_plan is not None:
                 return vector_comparison_plan["result_type"]
+            matrix_multiply_plan = self.matrix_multiply_plan(
+                left_type, right_type, operator
+            )
+            if matrix_multiply_plan is not None:
+                return matrix_multiply_plan["result_type"]
             matrix_vector_plan = self.binary_matrix_vector_plan(
                 left_type, right_type, operator
             )
@@ -11599,6 +12713,9 @@ class RustCodeGen:
             array_type = self.convert_type_node_to_string(array_type)
         else:
             array_type = str(array_type)
+        pointer_parts = self.pointer_type_parts(self.map_type(array_type))
+        if pointer_parts is not None:
+            return pointer_parts[1]
         if "[" not in array_type or "]" not in array_type:
             patch_info = self.rust_tessellation_patch_info(array_type)
             if patch_info is not None and patch_info["valid"]:

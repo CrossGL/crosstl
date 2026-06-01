@@ -8796,6 +8796,56 @@ def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3(
     )
 
 
+def test_generated_metal_ray_query_placeholders_compile_with_metal3(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_query_placeholders.metal"
+    output = tmp_path / "ray_query_placeholders.air"
+    shader = """
+    shader MetalRayQueryValidation {
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayDesc ray = RayDesc(vec3(0.0), 0.001, vec3(0.0, 0.0, 1.0), 100.0);
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(topLevelAS, RAY_FLAG_NONE, 255, ray);
+                bool active = rq.Proceed();
+                uint hitType = rq.CommittedType();
+                float hitT = rq.CommittedRayT();
+                float candidateT = rq.CandidateRayT();
+            }
+        }
+    }
+    """
+    code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    assert "CglRayDesc ray = CglRayDesc" in code
+    assert "CglRayQuery rq;" in code
+    assert "cgl_ray_query_trace_ray_inline(rq, topLevelAS, 0u, 255, ray)" in code
+    assert "cgl_ray_query_proceed(rq)" in code
+    assert "cgl_ray_query_committed_ray_t(rq)" in code
+    assert "RayDesc ray = RayDesc" not in code
+    assert "RayQuery<RAY_FLAG_NONE>" not in code
+    assert "RAY_FLAG_NONE" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
 def test_generated_metal_ray_tracing_intersection_table_trace_compiles_with_metal3(
     tmp_path,
 ):

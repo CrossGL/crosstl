@@ -3,18 +3,18 @@
 using namespace metal;
 
 struct VertexInput {
-  float3 position;
-  float2 texCoord;
+  float3 position [[attribute(0)]];
+  float2 texCoord [[attribute(1)]];
 };
 struct VertexOutput {
   float2 uv;
-  float4 position;
+  float4 position [[position]];
 };
 struct FragmentInput {
   float2 uv;
 };
 struct FragmentOutput {
-  float4 color;
+  float4 color [[color(0)]];
 };
 // Vertex Shader
 vertex VertexOutput vertex_main(VertexInput input [[stage_in]]) {

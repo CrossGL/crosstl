@@ -2,6 +2,11 @@
 #include <metal_stdlib>
 using namespace metal;
 
+__attribute__((unused)) constant float PI = 3.14159265359;
+__attribute__((unused)) constant float EPSILON = 0.0001;
+__attribute__((unused)) constant int MAX_LIGHTS = 32;
+__attribute__((unused)) constant int MAX_SHADOW_CASCADES = 4;
+
 struct MaterialProperties {
   float3 albedo;
   float metallic;
@@ -62,65 +67,98 @@ struct RenderSettings {
   int max_lights;
   float lod_bias;
 };
+struct VertexInput {
+  float3 position [[attribute(0)]];
+  float3 normal [[attribute(1)]];
+  float3 tangent [[attribute(2)]];
+  float2 uv [[attribute(3)]];
+  float4 color [[attribute(4)]];
+};
 struct VertexOutput {
-  float4 clip_position;
+  float4 clip_position [[position]];
   float3 world_position;
   float3 world_normal;
   float3 world_tangent;
   float3 world_bitangent;
   float2 uv;
   float4 color;
-  float3x3 tbn_matrix;
-  float4 shadow_coords[MAX_SHADOW_CASCADES];
+  float3 tbn_matrix_0;
+  float3 tbn_matrix_1;
+  float3 tbn_matrix_2;
+  float4 shadow_coords_0;
+  float4 shadow_coords_1;
+  float4 shadow_coords_2;
+  float4 shadow_coords_3;
 };
-float4x4 model_matrix;
-float4x4 view_matrix;
-float4x4 projection_matrix;
-float3x3 normal_matrix;
-CameraData camera;
-RenderSettings settings;
-float4x4 shadow_matrices[MAX_SHADOW_CASCADES];
-MaterialProperties material;
-EnvironmentData environment;
-CameraData camera;
-RenderSettings settings;
-LightData lights[MAX_LIGHTS];
-int active_light_count;
-float3 getNormalFromMap(
-    texture2d<float> normal_map [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 2) uv [[stage_in]],
-    MatrixType(element_type = PrimitiveType(name = float, size_bits = None),
-               rows = 3, cols = 3) tbn [[stage_in]],
-    float scale [[stage_in]]) {
+struct FragmentInput {
+  float3 world_position;
+  float3 world_normal;
+  float3 world_tangent;
+  float3 world_bitangent;
+  float2 uv;
+  float4 color;
+  float3 tbn_matrix_0;
+  float3 tbn_matrix_1;
+  float3 tbn_matrix_2;
+  float4 shadow_coords_0;
+  float4 shadow_coords_1;
+  float4 shadow_coords_2;
+  float4 shadow_coords_3;
+};
+static inline float4 __attribute__((unused))
+__crossgl_stage_io_get_FragmentInput_shadow_coords(FragmentInput value,
+                                                   int index) {
+  switch (index) {
+  case 0:
+    return value.shadow_coords_0;
+  case 1:
+    return value.shadow_coords_1;
+  case 2:
+    return value.shadow_coords_2;
+  case 3:
+    return value.shadow_coords_3;
+  default:
+    return float4(0);
+  }
+}
+
+static inline float4 __attribute__((unused))
+__crossgl_stage_io_get_VertexOutput_shadow_coords(VertexOutput value,
+                                                  int index) {
+  switch (index) {
+  case 0:
+    return value.shadow_coords_0;
+  case 1:
+    return value.shadow_coords_1;
+  case 2:
+    return value.shadow_coords_2;
+  case 3:
+    return value.shadow_coords_3;
+  default:
+    return float4(0);
+  }
+}
+
+float3 getNormalFromMap(texture2d<float> normal_map, float2 uv, float3x3 tbn,
+                        float scale) {
   float3 tangent_normal =
       normal_map.sample(sampler(mag_filter::linear, min_filter::linear), uv)
               .xyz *
-          2.0 -
-      1.0;
+          float3(2.0) -
+      float3(1.0);
   tangent_normal.xy *= scale;
   return normalize(tbn * tangent_normal);
 }
 
-float2 parallaxMapping(
-    texture2d<float> height_map [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 2) uv [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) view_dir [[stage_in]],
-    float height_scale [[stage_in]]) {
+float2 parallaxMapping(texture2d<float> height_map, float2 uv, float3 view_dir,
+                       float height_scale) {
   float height =
       height_map.sample(sampler(mag_filter::linear, min_filter::linear), uv).r;
-  float2 p = view_dir.xy / view_dir.z * height * height_scale;
+  float2 p = view_dir.xy / float2(view_dir.z) * float2(height * height_scale);
   return uv - p;
 }
 
-float distributionGGX(
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) N [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) H [[stage_in]],
-    float roughness [[stage_in]]) {
+float distributionGGX(float3 N, float3 H, float roughness) {
   float a = roughness * roughness;
   float a2 = a * a;
   float NdotH = max(dot(N, H), 0.0);
@@ -131,8 +169,7 @@ float distributionGGX(
   return num / max(denom, EPSILON);
 }
 
-float geometrySchlickGGX(float NdotV [[stage_in]],
-                         float roughness [[stage_in]]) {
+float geometrySchlickGGX(float NdotV, float roughness) {
   float r = roughness + 1.0;
   float k = r * r / 8.0;
   float num = NdotV;
@@ -140,14 +177,7 @@ float geometrySchlickGGX(float NdotV [[stage_in]],
   return num / max(denom, EPSILON);
 }
 
-float geometrySmith(
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) N [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) V [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) L [[stage_in]],
-    float roughness [[stage_in]]) {
+float geometrySmith(float3 N, float3 V, float3 L, float roughness) {
   float NdotV = max(dot(N, V), 0.0);
   float NdotL = max(dot(N, L), 0.0);
   float ggx2 = geometrySchlickGGX(NdotV, roughness);
@@ -155,33 +185,27 @@ float geometrySmith(
   return ggx1 * ggx2;
 }
 
-float3 fresnelSchlick(float cosTheta [[stage_in]],
-                      VectorType(element_type = PrimitiveType(name = float,
-                                                              size_bits = None),
-                                 size = 3) F0 [[stage_in]]) {
-  return F0 + 1.0 - F0 * pow(max(1.0 - cosTheta, 0.0), 5.0);
+float3 fresnelSchlick(float cosTheta, float3 F0) {
+  return F0 + float3(1.0) - F0 * pow(max(1.0 - cosTheta, 0.0), 5.0);
 }
 
-float3 fresnelSchlickRoughness(
-    float cosTheta [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) F0 [[stage_in]],
-    float roughness [[stage_in]]) {
+float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
   return F0 + max(float3(1.0 - roughness), F0) -
          F0 * pow(max(1.0 - cosTheta, 0.0), 5.0);
 }
 
-float calculateShadow(texture2d<float> shadow_map [[stage_in]],
-                      VectorType(element_type = PrimitiveType(name = float,
-                                                              size_bits = None),
-                                 size = 4) frag_pos_light_space [[stage_in]],
-                      float bias [[stage_in]]) {
-  float3 proj_coords = frag_pos_light_space.xyz / frag_pos_light_space.w;
-  proj_coords = proj_coords * 0.5 + 0.5;
+float calculateShadow(texture2d<float> shadow_map, float4 frag_pos_light_space,
+                      float bias) {
+  float3 proj_coords =
+      frag_pos_light_space.xyz / float3(frag_pos_light_space.w);
+  proj_coords = proj_coords * float3(0.5) + float3(0.5);
   if (proj_coords.z > 1.0) {
+    return 0.0;
   }
   float shadow = 0.0;
-  float2 texel_size = 1.0 / textureSize(shadow_map, 0);
+  float2 texel_size =
+      float2(1.0) / float2(int2(shadow_map.get_width(uint(0)),
+                                shadow_map.get_height(uint(0))));
   for (int x = -1; x <= 1; ++x) {
     for (int y = -1; y <= 1; ++y) {
       float pcf_depth =
@@ -195,19 +219,12 @@ float calculateShadow(texture2d<float> shadow_map [[stage_in]],
   return shadow / 9.0;
 }
 
-float3 calculateIBL(
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) N [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) V [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) albedo [[stage_in]],
-    float metallic [[stage_in]], float roughness [[stage_in]],
-    EnvironmentData env [[stage_in]]) {
+float3 calculateIBL(float3 N, float3 V, float3 albedo, float metallic,
+                    float roughness, EnvironmentData env) {
   float3 F0 = mix(float3(0.04), albedo, metallic);
   float3 F = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
   float3 kS = F;
-  float3 kD = 1.0 - kS;
+  float3 kD = float3(1.0) - kS;
   kD *= 1.0 - metallic;
   float3 irradiance =
       env.irradiance_map
@@ -216,27 +233,21 @@ float3 calculateIBL(
   float3 diffuse = irradiance * albedo;
   float3 R = reflect(-V, N);
   float3 prefiltered_color =
-      textureLod(env.prefilter_map, R, roughness * env.max_reflection_lod).rgb;
+      env.prefilter_map
+          .sample(sampler(mag_filter::linear, min_filter::linear), R,
+                  level(roughness * env.max_reflection_lod))
+          .rgb;
   float2 brdf = env.brdf_lut
                     .sample(sampler(mag_filter::linear, min_filter::linear),
                             float2(max(dot(N, V), 0.0), roughness))
                     .rg;
-  float3 specular = prefiltered_color * F * brdf.x + brdf.y;
-  return kD * diffuse + specular * env.exposure;
+  float3 specular = prefiltered_color * F * float3(brdf.x) + float3(brdf.y);
+  return kD * diffuse + specular * float3(env.exposure);
 }
 
-float3 calculateDirectLighting(
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) N [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) V [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) L [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) albedo [[stage_in]],
-    float metallic [[stage_in]], float roughness [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) light_color [[stage_in]]) {
+float3 calculateDirectLighting(float3 N, float3 V, float3 L, float3 albedo,
+                               float metallic, float roughness,
+                               float3 light_color) {
   float3 H = normalize(V + L);
   float3 F0 = mix(float3(0.04), albedo, metallic);
   float NDF = distributionGGX(N, H, roughness);
@@ -245,17 +256,14 @@ float3 calculateDirectLighting(
   float3 kS = F;
   float3 kD = float3(1.0) - kS;
   kD *= 1.0 - metallic;
-  float3 numerator = NDF * G * F;
+  float3 numerator = float3(NDF * G) * F;
   float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + EPSILON;
-  float3 specular = numerator / denominator;
+  float3 specular = numerator / float3(denominator);
   float NdotL = max(dot(N, L), 0.0);
-  return kD * albedo / PI + specular * light_color * NdotL;
+  return kD * albedo / PI + specular * light_color * float3(NdotL);
 }
 
-float calculateAttenuation(
-    LightData light [[stage_in]],
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) frag_pos [[stage_in]]) {
+float calculateAttenuation(LightData light, float3 frag_pos) {
   if (light.type == 0) {
     return 1.0;
   }
@@ -275,31 +283,48 @@ float calculateAttenuation(
   return 0.0;
 }
 
-float3 reinhardToneMapping(
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) color [[stage_in]]) {
-  return color / color + float3(1.0);
-}
+float3 reinhardToneMapping(float3 color) { return color / color + float3(1.0); }
 
-float3 acesToneMapping(
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) color [[stage_in]]) {
+float3 acesToneMapping(float3 color) {
   float a = 2.51;
   float b = 0.03;
   float c = 2.43;
   float d = 0.59;
   float e = 0.14;
-  return clamp(color * a * color + b / color * c * color + d + e, 0.0, 1.0);
+  return clamp(color * float3(a) * color +
+                   float3(b) / color * float3(c) * color + float3(d) +
+                   float3(e),
+               0.0, 1.0);
 }
 
-float3 gammaCorrection(
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) color [[stage_in]],
-    float gamma [[stage_in]]) {
+float3 gammaCorrection(float3 color, float gamma) {
   return pow(color, float3(1.0 / gamma));
 }
 
-VertexOutput main(VertexInput input [[stage_in]]) {
+// Vertex Shader
+vertex VertexOutput vertex_main(
+    VertexInput input [[stage_in]],
+    constant float4x4 &model_matrix [[buffer(0)]],
+    constant float4x4 &view_matrix [[buffer(1)]],
+    constant float4x4 &projection_matrix [[buffer(2)]],
+    constant float3x3 &normal_matrix [[buffer(3)]],
+    constant CameraData &camera [[buffer(4)]],
+    constant RenderSettings &settings [[buffer(5)]],
+    constant float4x4 *shadow_matrices [[buffer(6)]],
+    constant MaterialProperties &material [[buffer(7)]],
+    constant EnvironmentData &environment [[buffer(8)]],
+    constant LightData *lights [[buffer(9)]],
+    constant int &active_light_count [[buffer(10)]],
+    constant int &face_index [[buffer(11)]],
+    constant int &mip_level [[buffer(12)]],
+    texture2d<float> albedo_map [[texture(0)]],
+    texture2d<float> normal_map [[texture(1)]],
+    texture2d<float> metallic_roughness_map [[texture(2)]],
+    texture2d<float> ao_map [[texture(3)]],
+    texture2d<float> emission_map [[texture(4)]],
+    texture2d<float> height_map [[texture(5)]],
+    array<texture2d<float>, MAX_SHADOW_CASCADES> shadow_maps [[texture(6)]],
+    texturecube<float> environment_map [[texture(10)]]) {
   VertexOutput output;
   float4 world_pos = model_matrix * float4(input.position, 1.0);
   output.world_position = world_pos.xyz;
@@ -307,24 +332,70 @@ VertexOutput main(VertexInput input [[stage_in]]) {
   output.world_normal = normalize(normal_matrix * input.normal);
   output.world_tangent = normalize(normal_matrix * input.tangent);
   output.world_bitangent = cross(output.world_normal, output.world_tangent);
-  output.tbn_matrix =
-      mat3(output.world_tangent, output.world_bitangent, output.world_normal);
+  float3x3 __crossgl_stage_io_matrix_0 = float3x3(
+      output.world_tangent, output.world_bitangent, output.world_normal);
+  output.tbn_matrix_0 = __crossgl_stage_io_matrix_0[0];
+  output.tbn_matrix_1 = __crossgl_stage_io_matrix_0[1];
+  output.tbn_matrix_2 = __crossgl_stage_io_matrix_0[2];
   output.uv = input.uv;
   output.color = input.color;
   if (settings.enable_shadows) {
     for (int i = 0;
          i < settings.shadow_cascade_count && i < MAX_SHADOW_CASCADES; ++i) {
-      output.shadow_coords[i] = shadow_matrices[i] * world_pos;
+      float4 __crossgl_stage_io_array_1 = shadow_matrices[i] * world_pos;
+      switch (i) {
+      case 0:
+        output.shadow_coords_0 = __crossgl_stage_io_array_1;
+        break;
+      case 1:
+        output.shadow_coords_1 = __crossgl_stage_io_array_1;
+        break;
+      case 2:
+        output.shadow_coords_2 = __crossgl_stage_io_array_1;
+        break;
+      case 3:
+        output.shadow_coords_3 = __crossgl_stage_io_array_1;
+        break;
+      default:
+        break;
+      }
     }
   }
   return output;
 }
 
-float4 main(FragmentInput input [[stage_in]]) {
+// Fragment Shader
+fragment float4 fragment_main(
+    FragmentInput input [[stage_in]],
+    constant float4x4 &model_matrix [[buffer(0)]],
+    constant float4x4 &view_matrix [[buffer(1)]],
+    constant float4x4 &projection_matrix [[buffer(2)]],
+    constant float3x3 &normal_matrix [[buffer(3)]],
+    constant CameraData &camera [[buffer(4)]],
+    constant RenderSettings &settings [[buffer(5)]],
+    constant float4x4 *shadow_matrices [[buffer(6)]],
+    constant MaterialProperties &material [[buffer(7)]],
+    constant EnvironmentData &environment [[buffer(8)]],
+    constant LightData *lights [[buffer(9)]],
+    constant int &active_light_count [[buffer(10)]],
+    constant int &face_index [[buffer(11)]],
+    constant int &mip_level [[buffer(12)]],
+    texture2d<float> albedo_map [[texture(0)]],
+    texture2d<float> normal_map [[texture(1)]],
+    texture2d<float> metallic_roughness_map [[texture(2)]],
+    texture2d<float> ao_map [[texture(3)]],
+    texture2d<float> emission_map [[texture(4)]],
+    texture2d<float> height_map [[texture(5)]],
+    array<texture2d<float>, MAX_SHADOW_CASCADES> shadow_maps [[texture(6)]],
+    texturecube<float> environment_map [[texture(10)]],
+    texture2d_array<float, access::read_write> irradiance_map [[texture(11)]]) {
   float2 uv = input.uv;
   if (settings.enable_parallax_mapping && material.has_height_map) {
     float3 view_dir = normalize(camera.position - input.world_position);
-    float3 tangent_view_dir = transpose(input.tbn_matrix) * view_dir;
+    float3 tangent_view_dir =
+        transpose(float3x3(input.tbn_matrix_0, input.tbn_matrix_1,
+                           input.tbn_matrix_2)) *
+        view_dir;
     uv = parallaxMapping(height_map, uv, tangent_view_dir,
                          material.height_scale);
   }
@@ -357,8 +428,10 @@ float4 main(FragmentInput input [[stage_in]]) {
   }
   float3 N = normalize(input.world_normal);
   if (settings.enable_normal_mapping && material.has_normal_map) {
-    N = getNormalFromMap(normal_map, uv, input.tbn_matrix,
-                         material.normal_scale);
+    N = getNormalFromMap(
+        normal_map, uv,
+        float3x3(input.tbn_matrix_0, input.tbn_matrix_1, input.tbn_matrix_2),
+        material.normal_scale);
   }
   float3 V = normalize(camera.position - input.world_position);
   float3 Lo = float3(0.0);
@@ -371,23 +444,25 @@ float4 main(FragmentInput input [[stage_in]]) {
       L = normalize(light.position - input.world_position);
     }
     float attenuation = calculateAttenuation(light, input.world_position);
-    float3 radiance = light.color * light.intensity * attenuation;
+    float3 radiance =
+        light.color * float3(light.intensity) * float3(attenuation);
     float shadow = 0.0;
     if (settings.enable_shadows && light.cast_shadows &&
         i < settings.shadow_cascade_count) {
-      shadow = calculateShadow(shadow_maps[i], input.shadow_coords[i],
-                               settings.shadow_bias);
+      shadow = calculateShadow(
+          shadow_maps[i],
+          __crossgl_stage_io_get_FragmentInput_shadow_coords(input, i),
+          settings.shadow_bias);
     }
     Lo += calculateDirectLighting(N, V, L, albedo, metallic, roughness,
                                   radiance) *
-              1.0 -
-          shadow;
+          float3(1.0 - shadow);
   }
   float3 ambient = float3(0.0);
   if (settings.enable_ibl) {
     ambient = calculateIBL(N, V, albedo, metallic, roughness, environment);
   } else {
-    ambient = environment.ambient_color * albedo * ao;
+    ambient = environment.ambient_color * albedo * float3(ao);
   }
   float3 color = ambient + Lo + emission;
   if (settings.enable_tone_mapping) {
@@ -399,27 +474,69 @@ float4 main(FragmentInput input [[stage_in]]) {
   return float4(color, input.color.a);
 }
 
-// Vertex Shader
-vertex void vertex_main() {}
-
-// Fragment Shader
-fragment void fragment_main(, texture2d<float> albedo_map [[texture(7)]],
-                            texture2d<float> normal_map [[texture(8)]],
-                            texture2d<float> metallic_roughness_map
-                            [[texture(9)]],
-                            texture2d<float> ao_map [[texture(10)]],
-                            texture2d<float> emission_map [[texture(11)]],
-                            texture2d<float> height_map [[texture(12)]],
-                            texture2d<float> shadow_maps [[texture(13)]]) {}
+float3 getSamplingVector(float2 uv, int face) {
+  float3 result;
+  switch (face) {
+  case 0: {
+    result = float3(1.0, -uv.y, -uv.x);
+    break;
+  }
+  case 1: {
+    result = float3(-1.0, -uv.y, uv.x);
+    break;
+  }
+  case 2: {
+    result = float3(uv.x, 1.0, uv.y);
+    break;
+  }
+  case 3: {
+    result = float3(uv.x, -1.0, -uv.y);
+    break;
+  }
+  case 4: {
+    result = float3(uv.x, -uv.y, 1.0);
+    break;
+  }
+  case 5: {
+    result = float3(-uv.x, -uv.y, -1.0);
+    break;
+  }
+  }
+  return normalize(result);
+}
 
 // Compute Shader
-kernel void kernel_precompute_environment() {
-  int2 coord = ivec2(gl_GlobalInvocationID.xy);
-  int2 size = imageSize(irradiance_map);
+kernel void kernel_precompute_environment(
+    uint3 gl_GlobalInvocationID [[thread_position_in_grid]],
+    constant float4x4 &model_matrix [[buffer(0)]],
+    constant float4x4 &view_matrix [[buffer(1)]],
+    constant float4x4 &projection_matrix [[buffer(2)]],
+    constant float3x3 &normal_matrix [[buffer(3)]],
+    constant CameraData &camera [[buffer(4)]],
+    constant RenderSettings &settings [[buffer(5)]],
+    constant float4x4 *shadow_matrices [[buffer(6)]],
+    constant MaterialProperties &material [[buffer(7)]],
+    constant EnvironmentData &environment [[buffer(8)]],
+    constant LightData *lights [[buffer(9)]],
+    constant int &active_light_count [[buffer(10)]],
+    constant int &face_index [[buffer(11)]],
+    constant int &mip_level [[buffer(12)]],
+    texture2d<float> albedo_map [[texture(0)]],
+    texture2d<float> normal_map [[texture(1)]],
+    texture2d<float> metallic_roughness_map [[texture(2)]],
+    texture2d<float> ao_map [[texture(3)]],
+    texture2d<float> emission_map [[texture(4)]],
+    texture2d<float> height_map [[texture(5)]],
+    array<texture2d<float>, MAX_SHADOW_CASCADES> shadow_maps [[texture(6)]],
+    texturecube<float> environment_map [[texture(10)]],
+    texture2d_array<float, access::read_write> irradiance_map [[texture(11)]]) {
+  int2 coord = int2(gl_GlobalInvocationID.xy);
+  int2 size = int2(irradiance_map.get_width(), irradiance_map.get_height());
   if (coord.x >= size.x || coord.y >= size.y) {
+    return;
   }
-  float2 uv = float2(coord) + 0.5 / float2(size);
-  uv = uv * 2.0 - 1.0;
+  float2 uv = float2(coord) + float2(0.5) / float2(size);
+  uv = uv * float2(2.0) - float2(1.0);
   float3 N = getSamplingVector(uv, face_index);
   float3 irradiance = float3(0.0);
   float sample_count = 0.0;
@@ -431,8 +548,9 @@ kernel void kernel_precompute_environment() {
           abs(N.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
       float3 right = normalize(cross(up, N));
       up = normalize(cross(N, right));
-      float3 sample_vec = tangent_sample.x * right + tangent_sample.y * up +
-                          tangent_sample.z * N;
+      float3 sample_vec = float3(tangent_sample.x) * right +
+                          float3(tangent_sample.y) * up +
+                          float3(tangent_sample.z) * N;
       irradiance += environment_map
                         .sample(sampler(mag_filter::linear, min_filter::linear),
                                 sample_vec)
@@ -441,15 +559,8 @@ kernel void kernel_precompute_environment() {
       ++sample_count;
     }
   }
-  irradiance = PI * irradiance / sample_count;
-  imageStore(irradiance_map, ivec3(coord, face_index), float4(irradiance, 1.0));
-}
-
-float3 getSamplingVector(
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 2) uv [[stage_in]],
-    int face [[stage_in]]) {
-  float3 result;
-  SwitchNode(cases = 6);
-  return normalize(result);
+  irradiance = PI * irradiance / float3(sample_count);
+  irradiance_map.write(float4(irradiance, 1.0),
+                       uint2((int3(coord, face_index)).xy),
+                       uint((int3(coord, face_index)).z));
 }

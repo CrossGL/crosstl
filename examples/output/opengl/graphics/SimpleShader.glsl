@@ -1,33 +1,40 @@
 
 #version 450 core
-struct VertexInput {
-  vec3 position;
-  vec2 texCoord;
-};
-struct VertexOutput {
-  vec2 uv;
-  vec4 position;
-};
-struct FragmentInput {
-  vec2 uv;
-};
+#ifdef GL_VERTEX_SHADER
+in vec3 position;
+in vec2 texCoord;
+#endif
+#ifdef GL_VERTEX_SHADER
+out vec2 uv;
+out vec4 out_position;
+#endif
+#ifdef GL_FRAGMENT_SHADER
+in vec2 in_uv;
+#endif
+#ifdef GL_FRAGMENT_SHADER
+layout(location = 0) out vec4 color;
+#endif
 struct FragmentOutput {
   vec4 color;
 };
+
+#ifdef GL_VERTEX_SHADER
 // Vertex Shader
 void main() {
-  VertexOutput output;
-  output.uv = input.texCoord;
-  output.position = vec4(input.position, 1.0);
-  return output;
+  uv = texCoord;
+  out_position = vec4(position, 1.0);
+  return;
 }
 
+#endif
+#ifdef GL_FRAGMENT_SHADER
 // Fragment Shader
 void main() {
-  FragmentOutput output;
-  float r = input.uv.x;
-  float g = input.uv.y;
+  float r = in_uv.x;
+  float g = in_uv.y;
   float b = 0.5;
-  output.color = vec4(r, g, b, 1.0);
-  return output;
+  color = vec4(r, g, b, 1.0);
+  return;
 }
+
+#endif

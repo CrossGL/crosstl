@@ -4034,6 +4034,91 @@ def test_glsl_tessellation_control_accepts_dynamic_integer_factor_component_indi
     assert "gl_TessLevelInner[innerIndex] = 3.0;" in generated_code
 
 
+def test_glsl_tessellation_control_allows_top_level_barrier_before_return():
+    code = """
+    shader ValidGLSLTessellationControlBarrier {
+        tessellation_control {
+            void main() @outputcontrolpoints(3) {
+                gl_TessLevelOuter[0] = 1.0;
+                workgroupBarrier();
+                gl_TessLevelInner[0] = 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "tessellation_control"
+    )
+
+    assert "layout(vertices = 3) out;" in generated_code
+    assert "barrier();" in generated_code
+    assert "workgroupBarrier();" not in generated_code
+
+
+def test_glsl_tessellation_control_rejects_barrier_inside_control_flow():
+    code = """
+    shader BadGLSLTessellationControlBarrierControlFlow {
+        tessellation_control {
+            void main() @outputcontrolpoints(3) {
+                if (gl_InvocationID == 0u) {
+                    workgroupBarrier();
+                }
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="barrier\\(\\).*inside control flow"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+def test_glsl_tessellation_control_rejects_barrier_after_return():
+    code = """
+    shader BadGLSLTessellationControlBarrierAfterReturn {
+        tessellation_control {
+            void main() @outputcontrolpoints(3) {
+                return;
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="barrier\\(\\).*after a return"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+def test_glsl_tessellation_control_rejects_helper_barrier():
+    code = """
+    shader BadGLSLTessellationControlHelperBarrier {
+        void synchronizePatch() {
+            workgroupBarrier();
+        }
+
+        tessellation_control {
+            void main() @outputcontrolpoints(3) {
+                synchronizePatch();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "barrier\\(\\).*directly in main\\(\\); helper function "
+            "'synchronizePatch' reaches 'workgroupBarrier'"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+
 @pytest.mark.parametrize("builtin", ["gl_TessLevelOuter", "gl_TessLevelInner"])
 def test_glsl_tessellation_control_rejects_whole_factor_assignment(builtin):
     code = f"""
@@ -5121,6 +5206,35 @@ def test_glsl_fragment_output_struct_renames_value_parameter_name_collision():
     assert "return FragOut" not in generated_code
 
 
+def test_glsl_fragment_output_struct_renames_local_variable_name_collision():
+    code = """
+    shader FragmentOutputLocalNameCollision {
+        struct FragOut {
+            vec4 color @gl_FragColor;
+        };
+
+        fragment {
+            FragOut main() {
+                FragOut output;
+                vec3 color = vec3(0.2, 0.4, 0.6);
+                output.color = vec4(color, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 0) out vec4 out_color;" in generated_code
+    assert "vec3 color = vec3(0.2, 0.4, 0.6);" in generated_code
+    assert "out_color = vec4(color, 1.0);" in generated_code
+    assert "layout(location = 0) out vec4 color;" not in generated_code
+    assert "\n    color = vec4(color, 1.0);" not in generated_code
+
+
 def test_glsl_direct_fragment_output_renames_input_name_collision():
     code = """
     shader DirectFragmentOutputInputNameCollision {
@@ -5142,6 +5256,29 @@ def test_glsl_direct_fragment_output_renames_input_name_collision():
     assert "layout(location = 0) out vec4 out_fragColor;" in generated_code
     assert "out_fragColor = fragColor;" in generated_code
     assert "layout(location = 0) out vec4 fragColor;" not in generated_code
+
+
+def test_glsl_direct_fragment_output_renames_local_variable_name_collision():
+    code = """
+    shader DirectFragmentOutputLocalNameCollision {
+        fragment {
+            vec4 main() @gl_FragColor {
+                vec4 fragColor = vec4(1.0);
+                return fragColor;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 0) out vec4 out_fragColor;" in generated_code
+    assert "vec4 fragColor = vec4(1.0);" in generated_code
+    assert "out_fragColor = fragColor;" in generated_code
+    assert "layout(location = 0) out vec4 fragColor;" not in generated_code
+    assert "\n    fragColor = fragColor;" not in generated_code
 
 
 def test_glsl_global_uniforms_do_not_consume_resource_bindings():
@@ -6515,9 +6652,11 @@ def test_glsl_combined_multi_stage_entries_use_distinct_names():
     vertex_code = GLSLCodeGen().generate_stage(ast, "vertex")
     fragment_code = GLSLCodeGen().generate_stage(ast, "fragment")
 
-    assert "void vertex_main()" in combined_code
-    assert "void fragment_main()" in combined_code
-    assert "void main()" not in combined_code
+    assert "#ifdef GL_VERTEX_SHADER" in combined_code
+    assert "#ifdef GL_FRAGMENT_SHADER" in combined_code
+    assert "void vertex_main()" not in combined_code
+    assert "void fragment_main()" not in combined_code
+    assert combined_code.count("void main()") == 2
     assert combined_code.count("void ") == 2
 
     assert "void main()" in vertex_code
@@ -6544,9 +6683,41 @@ def test_glsl_combined_stage_entry_names_avoid_helper_function_collisions():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert generated_code.count("void vertex_main()") == 1
-    assert "void vertex_main_2()" in generated_code
-    assert "void fragment_main()" in generated_code
-    assert "void main()" not in generated_code
+    assert generated_code.count("void main()") == 2
+    assert "void vertex_main_2()" not in generated_code
+    assert "void fragment_main()" not in generated_code
+
+
+def test_glsl_stage_guards_are_only_emitted_for_combined_multi_stage_output():
+    single_stage_shader = """
+    shader SingleComputeStage {
+        compute {
+            void main() { }
+        }
+    }
+    """
+    multi_stage_shader = """
+    shader GuardedGraphicsStages {
+        vertex {
+            void main() { }
+        }
+
+        fragment {
+            void main() { }
+        }
+    }
+    """
+
+    single_stage_code = GLSLCodeGen().generate(
+        crosstl.translator.parse(single_stage_shader)
+    )
+    multi_stage_code = GLSLCodeGen().generate(
+        crosstl.translator.parse(multi_stage_shader)
+    )
+
+    assert "#ifdef GL_COMPUTE_SHADER" not in single_stage_code
+    assert "#ifdef GL_VERTEX_SHADER" in multi_stage_code
+    assert "#ifdef GL_FRAGMENT_SHADER" in multi_stage_code
 
 
 def test_glsl_combined_single_stage_entry_name_avoids_helper_main():
@@ -6604,10 +6775,13 @@ def test_glsl_combined_advanced_stage_entries_use_distinct_names():
     combined_code = GLSLCodeGen().generate(ast)
     geometry_code = GLSLCodeGen().generate_stage(ast, "geometry")
 
-    assert "void geometry_main()" in combined_code
-    assert "void tessellation_control_main()" in combined_code
-    assert "void tessellation_evaluation_main()" in combined_code
-    assert "void main()" not in combined_code
+    assert "#ifdef GL_GEOMETRY_SHADER" in combined_code
+    assert "#ifdef GL_TESS_CONTROL_SHADER" in combined_code
+    assert "#ifdef GL_TESS_EVALUATION_SHADER" in combined_code
+    assert "void geometry_main()" not in combined_code
+    assert "void tessellation_control_main()" not in combined_code
+    assert "void tessellation_evaluation_main()" not in combined_code
+    assert combined_code.count("void main()") == 3
 
     assert "void main()" in geometry_code
     assert "void geometry_main()" not in geometry_code
@@ -6634,10 +6808,12 @@ def test_glsl_mesh_task_stage_entries_use_distinct_names():
     combined_code = GLSLCodeGen().generate(ast)
     mesh_code = GLSLCodeGen().generate_stage(ast, "mesh")
 
-    assert "void task_main()" in combined_code
-    assert "void mesh_main()" in combined_code
-    assert "void amplification_main()" in combined_code
-    assert "void main()" not in combined_code
+    assert "#ifdef GL_TASK_SHADER_EXT" in combined_code
+    assert "#ifdef GL_MESH_SHADER_EXT" in combined_code
+    assert "void task_main()" not in combined_code
+    assert "void mesh_main()" not in combined_code
+    assert "void amplification_main()" not in combined_code
+    assert combined_code.count("void main()") == 3
 
     assert "void main()" in mesh_code
     assert "void mesh_main()" not in mesh_code
@@ -8162,13 +8338,19 @@ def test_glsl_ray_stage_entries_use_distinct_names():
     combined_code = GLSLCodeGen().generate(ast)
     ray_miss_code = GLSLCodeGen().generate_stage(ast, "ray_miss")
 
-    assert "void ray_generation_main()" in combined_code
-    assert "void ray_closest_hit_main()" in combined_code
-    assert "void ray_any_hit_main()" in combined_code
-    assert "void ray_miss_main()" in combined_code
-    assert "void ray_intersection_main()" in combined_code
-    assert "void ray_callable_main()" in combined_code
-    assert "void main()" not in combined_code
+    assert "#ifdef GL_RAYGEN_SHADER_EXT" in combined_code
+    assert "#ifdef GL_CLOSEST_HIT_SHADER_EXT" in combined_code
+    assert "#ifdef GL_ANY_HIT_SHADER_EXT" in combined_code
+    assert "#ifdef GL_MISS_SHADER_EXT" in combined_code
+    assert "#ifdef GL_INTERSECTION_SHADER_EXT" in combined_code
+    assert "#ifdef GL_CALLABLE_SHADER_EXT" in combined_code
+    assert "void ray_generation_main()" not in combined_code
+    assert "void ray_closest_hit_main()" not in combined_code
+    assert "void ray_any_hit_main()" not in combined_code
+    assert "void ray_miss_main()" not in combined_code
+    assert "void ray_intersection_main()" not in combined_code
+    assert "void ray_callable_main()" not in combined_code
+    assert combined_code.count("void main()") == 6
     assert combined_code.lstrip().startswith("#version 460 core")
     assert "#extension GL_EXT_ray_tracing : require" in combined_code
     assert "#extension GL_EXT_ray_query : require" not in combined_code
@@ -8264,8 +8446,11 @@ def test_glsl_ray_hit_position_fetch_builtin_emits_extension_only_for_users():
         combined_code.count("#extension GL_EXT_ray_tracing_position_fetch : require")
         == 1
     )
-    assert "void ray_closest_hit_main()" in combined_code
-    assert "void ray_miss_main()" in combined_code
+    assert "#ifdef GL_CLOSEST_HIT_SHADER_EXT" in combined_code
+    assert "#ifdef GL_MISS_SHADER_EXT" in combined_code
+    assert "void ray_closest_hit_main()" not in combined_code
+    assert "void ray_miss_main()" not in combined_code
+    assert combined_code.count("void main()") == 2
 
 
 def test_glsl_ray_query_methods_lower_to_ext_functions():
@@ -8428,8 +8613,11 @@ def test_glsl_target_stage_ray_query_extensions_are_scoped_to_emitted_stage():
 
     assert combined_code.lstrip().startswith("#version 460 core")
     assert combined_code.count("#extension GL_EXT_ray_query : require") == 1
-    assert "void vertex_main()" in combined_code
-    assert "void compute_main()" in combined_code
+    assert "#ifdef GL_VERTEX_SHADER" in combined_code
+    assert "#ifdef GL_COMPUTE_SHADER" in combined_code
+    assert "void vertex_main()" not in combined_code
+    assert "void compute_main()" not in combined_code
+    assert combined_code.count("void main()") == 2
 
 
 def test_glsl_acceleration_structure_globals_emit_extension_for_non_ray_stage():
@@ -9023,6 +9211,28 @@ def test_compute_stage_uses_execution_config_local_size():
         "layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;"
         in compute_code
     )
+
+
+def test_combined_same_stage_compute_output_keeps_single_native_layout_and_main():
+    shader = """
+    shader MultiCompute {
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+            void main() { }
+        }
+
+        compute spawn {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() { }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert generated_code.count("layout(local_size_x") == 1
+    assert generated_code.count("void main()") == 1
+    assert "void compute_main()" in generated_code
 
 
 @pytest.mark.parametrize("attribute", ["numthreads", "local_size", "workgroup_size"])
@@ -9681,15 +9891,13 @@ def test_generic_enum_function_call_match_infers_result_type_once():
 
     assert "Result_int_MathError make_result(bool ok)" in generated_code
     assert (
-        "Result_int_MathError __crossgl_match_subject_0 = make_result(ok);"
-        in generated_code
+        "Result_int_MathError cgl_match_subject_0 = make_result(ok);" in generated_code
     )
     assert generated_code.count("make_result(ok)") == 1
-    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
-    assert (
-        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
-    )
-    assert "int value = __crossgl_match_subject_0.Ok_0;" in generated_code
+    assert "if ((cgl_match_subject_0.variant == Result_Ok))" in generated_code
+    assert "else if ((cgl_match_subject_0.variant == Result_Err))" in generated_code
+    assert "int value = cgl_match_subject_0.Ok_0;" in generated_code
+    assert "__crossgl_match_subject" not in generated_code
     assert "Result::" not in generated_code
     assert "MatchNode(" not in generated_code
 
@@ -9770,14 +9978,12 @@ def test_generic_enum_match_expression_initializes_vector_local():
     assert "vec3 read(bool ok, vec3 fallback)" in generated_code
     assert "vec3 value;" in generated_code
     assert (
-        "Result_vec3_MathError __crossgl_match_subject_0 = make_result(ok);"
-        in generated_code
+        "Result_vec3_MathError cgl_match_subject_0 = make_result(ok);" in generated_code
     )
-    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
-    assert (
-        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
-    )
-    assert "vec3 actual = __crossgl_match_subject_0.Ok_0;" in generated_code
+    assert "if ((cgl_match_subject_0.variant == Result_Ok))" in generated_code
+    assert "else if ((cgl_match_subject_0.variant == Result_Err))" in generated_code
+    assert "vec3 actual = cgl_match_subject_0.Ok_0;" in generated_code
+    assert "__crossgl_match_subject" not in generated_code
     assert "value = actual;" in generated_code
     assert "value = fallback;" in generated_code
     assert "float value = MatchNode" not in generated_code
@@ -25837,6 +26043,55 @@ def test_glsl_wave_ops_with_active_variable_name_reservation():
     assert "WaveGetLaneIndex" not in generated
     assert "WaveActiveSum" not in generated
     assert "WaveActiveAnyTrue" not in generated
+
+
+def test_glsl_struct_member_name_reservation_updates_member_accesses():
+    code = """
+    shader ReservedStructMember {
+        struct Params {
+            int max_particles;
+        };
+
+        struct Particle {
+            bool active;
+            int type;
+        };
+
+        struct ParticleBuffer {
+            Particle particles[4];
+        };
+
+        compute {
+            uniform Params params;
+            buffer ParticleBuffer particle_buffer;
+
+            void main() {
+                Particle particle = particle_buffer.particles[0];
+                if (params.max_particles > 0 && !particle.active) {
+                    particle.active = true;
+                }
+                if (particle_buffer.particles[1].active) {
+                    particle.type = 1;
+                }
+                particle_buffer.particles[0] = particle;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "uniform Params params;" in generated
+    assert "layout(std430, binding = 0) buffer ParticleBuffer" in generated
+    assert "} particle_buffer;" in generated
+    assert "bool active_;" in generated
+    assert "bool active;" not in generated
+    assert "if (((params.max_particles > 0) && (!particle.active_)))" in generated
+    assert "particle.active_ = true;" in generated
+    assert "if (particle_buffer.particles[1].active_)" in generated
+    assert "particle.active" not in generated.replace("particle.active_", "")
+    assert ".active" not in generated.replace(".active_", "")
 
 
 def test_glsl_subgroup_ops_combined_with_texture_gather():

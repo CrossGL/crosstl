@@ -6,6 +6,7 @@ import pytest
 import crosstl.translator
 from crosstl.translator.ast import (
     ArrayNode,
+    AttributeNode,
     BlockNode,
     ExecutionModel,
     FunctionNode,
@@ -400,8 +401,7 @@ def test_directx_interpolation_builtins_reject_wrong_arity():
     with pytest.raises(
         ValueError,
         match=(
-            "DirectX interpolation builtin 'interpolateAtCentroid' requires "
-            "1 argument"
+            "DirectX interpolation builtin 'interpolateAtCentroid' requires 1 argument"
         ),
     ):
         generate_code(parse_code(tokenize_code(shader)))
@@ -467,7 +467,7 @@ def test_hlsl_float16_matrix_ir_aliases_map_to_half_matrices():
     assert "half2x3 m = half2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
     assert "half3x3 passSquare(half3x3 input)" in generated_code
     assert "half3x3 m = half3x3(1.0);" in generated_code
-    assert "return (input * m);" in generated_code
+    assert "return mul(input, m);" in generated_code
     assert "f16mat3x2" not in generated_code
     assert "f16mat3" not in generated_code
 
@@ -730,6 +730,64 @@ def test_hlsl_simd_aliases_map_to_standard_hlsl_types():
     assert "float3x2 passMatrix(float3x2 input)" in generated_code
     assert "float3x2 m = float3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
     assert "simd_" not in generated_code
+
+
+def test_hlsl_glsl_matrix_constructors_emit_hlsl_names():
+    shader = """
+    shader MatrixConstructorSmoke {
+        mat4 makeIdentity() {
+            mat4 m = mat4(1.0);
+            return m;
+        }
+
+        mat3 makeBasis(vec3 x, vec3 y, vec3 z) {
+            return mat3(x, y, z);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float4x4 m = float4x4(1.0);" in generated_code
+    assert "return float3x3(x, y, z);" in generated_code
+    assert "mat4(" not in generated_code
+    assert "mat3(" not in generated_code
+
+
+def test_hlsl_matrix_multiply_lowers_to_mul_intrinsic():
+    shader = """
+    shader MatrixMultiplySmoke {
+        vertex {
+            struct VertexInput {
+                vec3 position;
+                vec3 normal;
+            };
+
+            struct VertexOutput {
+                vec4 clipPosition;
+                vec3 worldNormal;
+            };
+
+            VertexOutput main(VertexInput input) {
+                mat4 transform = mat4(1.0);
+                mat3 normalMatrix = mat3(1.0);
+                VertexOutput output;
+                output.clipPosition = transform * vec4(input.position, 1.0);
+                output.worldNormal = normalMatrix * input.normal;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "output.clipPosition = mul(transform, float4(input.position, 1.0));"
+        in generated_code
+    )
+    assert "output.worldNormal = mul(normalMatrix, input.normal);" in generated_code
+    assert "float4 clipPosition: SV_Position;" in generated_code
 
 
 def test_hlsl_fixed_width_scalar_aliases_map_to_valid_hlsl_scalars():
@@ -1602,7 +1660,7 @@ def test_directx_glsl_buffer_block_atomics_are_expression_safe_in_value_contexts
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     expected_direct = (
-        "uint direct = __crossgl_byteaddress_atomic_add_uint(" "atomicBlock, 0, value);"
+        "uint direct = __crossgl_byteaddress_atomic_add_uint(atomicBlock, 0, value);"
     )
     assert expected_direct in generated_code
     assert (
@@ -1876,8 +1934,7 @@ def test_directx_typed_buffer_atomics_lower_to_interlocked_statements():
     )
     assert "uint __crossgl_atomic_expr_4;" in generated_code
     assert (
-        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, "
-        "__crossgl_atomic_expr_4);"
+        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, __crossgl_atomic_expr_4);"
     ) in generated_code
     assert (
         "uint combined = (__crossgl_atomic_expr_3 + __crossgl_atomic_expr_4);"
@@ -1966,7 +2023,7 @@ def test_directx_typed_buffer_atomics_validate_explicit_original_targets(
         "return result;",
         "uint oldValue = 0u; "
         "return useUint(atomicAdd(counters[index], 1u, oldValue + 1u));",
-        "uint oldValue = 0u; " "return atomicAdd(counters[index], 1u, oldValue + 1u);",
+        "uint oldValue = 0u; return atomicAdd(counters[index], 1u, oldValue + 1u);",
     ],
 )
 def test_directx_typed_buffer_atomics_reject_non_lvalue_explicit_originals(
@@ -2111,8 +2168,7 @@ def test_directx_typed_buffer_atomics_lift_inside_constructors():
     )
     assert "uint __crossgl_atomic_expr_1;" in generated_code
     assert (
-        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, "
-        "__crossgl_atomic_expr_1);"
+        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, __crossgl_atomic_expr_1);"
     ) in generated_code
     assert (
         "uint2 pair = uint2(__crossgl_atomic_expr_0, __crossgl_atomic_expr_1);"
@@ -2159,8 +2215,7 @@ def test_directx_typed_buffer_atomics_lower_inside_ternary_statements():
     )
     assert "return __crossgl_atomic_expr_0;" in generated_code
     assert (
-        "InterlockedCompareExchange(counters[index], 2u, 3u, "
-        "__crossgl_atomic_expr_1);"
+        "InterlockedCompareExchange(counters[index], 2u, 3u, __crossgl_atomic_expr_1);"
     ) in generated_code
     assert "return __crossgl_atomic_expr_1;" in generated_code
     assert "uint selected;\n    if (useAdd) {" in generated_code
@@ -2170,8 +2225,7 @@ def test_directx_typed_buffer_atomics_lower_inside_ternary_statements():
     )
     assert "selected = __crossgl_atomic_expr_2;" in generated_code
     assert (
-        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, "
-        "__crossgl_atomic_expr_3);"
+        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, __crossgl_atomic_expr_3);"
     ) in generated_code
     assert "selected = __crossgl_atomic_expr_3;" in generated_code
     assert (
@@ -2283,8 +2337,7 @@ def test_directx_typed_buffer_atomic_ternaries_lift_inside_larger_expressions():
     assert "uint selected = (__crossgl_atomic_ternary_2 + 3u);" in generated_code
     assert "uint __crossgl_atomic_ternary_5;" in generated_code
     assert (
-        "InterlockedCompareExchange(counters[tid.x], 4u, 5u, "
-        "__crossgl_atomic_expr_6);"
+        "InterlockedCompareExchange(counters[tid.x], 4u, 5u, __crossgl_atomic_expr_6);"
     ) in generated_code
     assert "selected = (uint(__crossgl_atomic_ternary_5) + 1u);" in generated_code
     assert "uint __crossgl_atomic_ternary_7;" in generated_code
@@ -2334,8 +2387,7 @@ def test_directx_typed_buffer_atomics_lift_in_user_function_arguments():
     assert "uint result = consume(__crossgl_atomic_expr_0);" in generated_code
     assert "uint __crossgl_atomic_expr_1;" in generated_code
     assert (
-        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, "
-        "__crossgl_atomic_expr_1);"
+        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, __crossgl_atomic_expr_1);"
     ) in generated_code
     assert "result = (consume(__crossgl_atomic_expr_1) + 4u);" in generated_code
     assert "uint __crossgl_atomic_expr_2;" in generated_code
@@ -2413,8 +2465,7 @@ def test_directx_typed_buffer_atomics_lift_in_struct_constructors():
     assert "__crossgl_atomic_ternary_0 = 7u;" in generated_code
     assert "uint __crossgl_atomic_expr_2;" in generated_code
     assert (
-        "InterlockedCompareExchange(counters[index], 2u, 3u, "
-        "__crossgl_atomic_expr_2);"
+        "InterlockedCompareExchange(counters[index], 2u, 3u, __crossgl_atomic_expr_2);"
     ) in generated_code
     assert "return Pair(__crossgl_atomic_ternary_0, __crossgl_atomic_expr_2);" in (
         generated_code
@@ -2427,8 +2478,7 @@ def test_directx_typed_buffer_atomics_lift_in_struct_constructors():
     assert "Pair p = Pair(__crossgl_atomic_expr_3, 7u);" in generated_code
     assert "uint __crossgl_atomic_expr_4;" in generated_code
     assert (
-        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, "
-        "__crossgl_atomic_expr_4);"
+        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, __crossgl_atomic_expr_4);"
     ) in generated_code
     assert "uint __crossgl_atomic_expr_5;" in generated_code
     assert (
@@ -2472,8 +2522,7 @@ def test_directx_typed_buffer_atomics_lift_in_array_literals():
     )
     assert "uint __crossgl_atomic_expr_1;" in generated_code
     assert (
-        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, "
-        "__crossgl_atomic_expr_1);"
+        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, __crossgl_atomic_expr_1);"
     ) in generated_code
     assert (
         "uint values[2] = {__crossgl_atomic_expr_0, __crossgl_atomic_expr_1};"
@@ -2677,22 +2726,22 @@ def test_directx_append_consume_buffers_reject_wrong_helpers(declaration, call, 
         (
             "AppendStructuredBuffer<uint> values @register(u1);",
             "buffer_append(values);",
-            "DirectX buffer helper 'buffer_append' requires " "2 argument(s), got 1",
+            "DirectX buffer helper 'buffer_append' requires 2 argument(s), got 1",
         ),
         (
             "AppendStructuredBuffer<uint> values @register(u1);",
             "buffer_append(values, 1u, 2u);",
-            "DirectX buffer helper 'buffer_append' requires " "2 argument(s), got 3",
+            "DirectX buffer helper 'buffer_append' requires 2 argument(s), got 3",
         ),
         (
             "ConsumeStructuredBuffer<uint> values @register(u2);",
             "uint value = buffer_consume();",
-            "DirectX buffer helper 'buffer_consume' requires " "1 argument(s), got 0",
+            "DirectX buffer helper 'buffer_consume' requires 1 argument(s), got 0",
         ),
         (
             "ConsumeStructuredBuffer<uint> values @register(u2);",
             "uint value = buffer_consume(values, 1u);",
-            "DirectX buffer helper 'buffer_consume' requires " "1 argument(s), got 2",
+            "DirectX buffer helper 'buffer_consume' requires 1 argument(s), got 2",
         ),
         (
             "RWStructuredBuffer<uint> values @register(u3);",
@@ -3034,8 +3083,7 @@ def test_directx_byte_address_interlocked_member_calls_validate_arguments(
     ("function_body", "method_name"),
     [
         (
-            "uint direct = rawBytes.InterlockedAdd(0u, 1u, oldValue); "
-            "return direct;",
+            "uint direct = rawBytes.InterlockedAdd(0u, 1u, oldValue); return direct;",
             "InterlockedAdd",
         ),
         (
@@ -3360,6 +3408,34 @@ def test_hlsl_stage_local_resources_emit_global_registers():
     assert "localTex.Sample(localTexSampler, uv)" in generated_code
 
 
+def test_hlsl_stage_local_cbuffer_blocks_emit_and_scope_members():
+    code = """
+    shader StageLocalUniformBlock {
+        compute {
+            uniform Globals {
+                float time;
+                vec3 tint;
+            };
+
+            void main() {
+                float x = time;
+                vec3 y = tint;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert "cbuffer Globals : register(b0)" in generated_code
+    assert "float time;" in generated_code
+    assert "float3 tint;" in generated_code
+    assert "float x = time;" in generated_code
+    assert "float3 y = tint;" in generated_code
+
+
 def test_hlsl_stage_local_cube_image_size_uses_storage_image_helper():
     code = """
     shader StageLocalCubeImageSize {
@@ -3379,7 +3455,9 @@ def test_hlsl_stage_local_cube_image_size_uses_storage_image_helper():
     )
 
     assert "RWTextureCube<float4> cubeImage : register(u3);" in generated_code
+    assert "#define RWTextureCube RWTexture2DArray" in generated_code
     assert "int2 imageSize(RWTextureCube<float4> image)" in generated_code
+    assert "image.GetDimensions(width, height, elements);" in generated_code
     assert "int2 size = imageSize(cubeImage);" in generated_code
 
 
@@ -3675,7 +3753,7 @@ def test_hlsl_implicit_shadow_sampler_split_inherits_global_texture_register_spa
         "SamplerState shadowMapQuerySampler : register(s1, space3);" in generated_code
     )
     assert (
-        "shadowMap.CalculateLevelOfDetailUnclamped(shadowMapQuerySampler, uv)"
+        "float2 lod = float2(shadowMap.CalculateLevelOfDetail(shadowMapQuerySampler, uv), shadowMap.CalculateLevelOfDetailUnclamped(shadowMapQuerySampler, uv));"
         in generated_code
     )
     assert "shadowMap.SampleCmp(shadowMapSampler, uv, depth)" in generated_code
@@ -3877,6 +3955,104 @@ def test_hlsl_fragment_entry_input_structs_get_missing_member_semantics():
     assert "float depth: TEXCOORD3;" in generated
     assert "float value;" in generated
     assert "float4 PSMain(FSInput input): SV_TARGET" in generated
+
+
+def test_hlsl_entry_structs_and_plain_returns_get_default_semantics():
+    code = """
+    shader EntryDefaultSemantics {
+        struct VertexInput {
+            vec3 position;
+            vec2 uv;
+        };
+
+        struct FragmentOutput {
+            vec4 color;
+            float depth;
+        };
+
+        vertex {
+            vec4 main(VertexInput input) {
+                return vec4(input.position, 1.0);
+            }
+        }
+
+        fragment {
+            FragmentOutput main() {
+                FragmentOutput output;
+                output.color = vec4(1.0);
+                output.depth = 0.5;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float3 position: POSITION;" in generated
+    assert "float2 uv: TEXCOORD0;" in generated
+    assert "float4 VSMain(VertexInput input): SV_POSITION" in generated
+    assert "float4 color: SV_TARGET;" in generated
+    assert "float depth: SV_DEPTH;" in generated
+
+
+def test_hlsl_fragment_plain_float4_return_defaults_to_sv_target():
+    code = """
+    shader FragmentReturnDefaultSemantics {
+        fragment {
+            vec4 main() {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float4 PSMain(): SV_TARGET" in generated
+
+
+def test_hlsl_gl_builtin_input_semantics_use_canonical_system_values():
+    code = """
+    shader CanonicalHLSLBuiltinInputs {
+        fragment {
+            vec4 main(
+                vec4 coord @ gl_FragCoord,
+                bool front @ gl_FrontFacing,
+                bool frontAlias @ gl_IsFrontFace,
+                int primitive @ gl_PrimitiveID
+            ) @ gl_FragColor {
+                return vec4(coord.xy, (front || frontAlias) ? 1.0 : 0.0, float(primitive));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float4 coord : SV_Position" in generated
+    assert "bool front : SV_IsFrontFace" in generated
+    assert "bool frontAlias : SV_IsFrontFace" in generated
+    assert "int primitive : SV_PrimitiveID" in generated
+    assert "FRONT_FACE" not in generated
+    assert "PRIMITIVE_ID" not in generated
+
+
+def test_hlsl_point_size_uses_legacy_psize_semantic():
+    code = """
+    shader PointSizeOutput {
+        vertex {
+            float main() @ gl_PointSize {
+                return 1.0;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float VSMain(): PSIZE" in generated
+    assert "SV_POINTSIZE" not in generated
 
 
 def test_hlsl_legacy_array_node_struct_member_semantics_are_preserved():
@@ -4847,6 +5023,30 @@ def test_match_tuple_enum_pattern_binds_payload_fields():
     assert "MatchNode(" not in generated_code
 
 
+def test_non_void_match_function_emits_fallthrough_return():
+    shader = """
+    shader MatchFallthroughReturn {
+        enum MaybeInt {
+            Value(int),
+            Missing
+        }
+
+        int read(MaybeInt item) {
+            match item {
+                MaybeInt::Value(value) => { return value; }
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int read(MaybeInt item)" in generated_code
+    assert "if ((item.variant == MaybeInt_Value))" in generated_code
+    assert "return value;" in generated_code
+    assert "return int(0);" in generated_code
+
+
 def test_string_payload_enum_maps_to_shader_token_type():
     shader = """
     shader StringPayloadEnum {
@@ -5314,6 +5514,133 @@ def test_generic_struct_concrete_constructor_and_member_access():
     assert "ConstructorNode(" not in generated_code
 
 
+def test_hlsl_orders_generic_specialized_struct_dependencies_before_users():
+    shader = """
+    shader HlslGenericOrder {
+        generic<T> struct Option {
+            enum OptionType { Some(T), None }
+            OptionType variant;
+        }
+
+        generic<T, E> struct Result {
+            enum ResultType { Ok(T), Err(E) }
+            ResultType variant;
+        }
+
+        generic<T> struct Vec3 { T x; T y; T z; }
+        generic<T> struct Matrix3x3 {
+            Vec3<T> row0;
+            Vec3<T> row1;
+            Vec3<T> row2;
+        }
+
+        struct State {
+            Matrix3x3<float> transform;
+            Option<int> id;
+            Result<float, int> result;
+        }
+
+        generic<T> fn ok(value: T) -> Result<T, int> {
+            return Result::Ok(value);
+        }
+
+        Result<float, int> make(float value) {
+            return ok(value);
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert generated_code.index("struct Vec3_float") < generated_code.index(
+        "struct Matrix3x3_float"
+    )
+    assert generated_code.index("struct Matrix3x3_float") < generated_code.index(
+        "struct State"
+    )
+    assert generated_code.index("struct Option_int") < generated_code.index(
+        "struct State"
+    )
+    assert generated_code.index("struct Result_float_int") < generated_code.index(
+        "struct State"
+    )
+    assert "Result_float_int ok_float(float value)" in generated_code
+    assert "Result_float_int make(float value)" in generated_code
+    assert "Result<" not in generated_code
+    assert "Option<" not in generated_code
+
+
+def test_hlsl_lowers_glsl_fractional_mix_and_simple_atomic_names():
+    shader = """
+    shader HlslBuiltinLowering {
+        struct Counters {
+            int active;
+        }
+
+        compute {
+            buffer Counters counters;
+
+            void main() {
+                let r = fract(1.25);
+                let mixed = mix(vec3(0.0), vec3(1.0), r);
+                atomicAdd(counters.active, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "RWStructuredBuffer<Counters> counters : register(u0);" in generated_code
+    assert "float r = frac(1.25);" in generated_code
+    assert (
+        "float3 mixed = lerp(float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0), r);"
+    ) in generated_code
+    assert "InterlockedAdd(counters[0].active, 1);" in generated_code
+    assert "static Counters counters;" not in generated_code
+    assert "fract(" not in generated_code
+    assert "mix(" not in generated_code
+    assert "atomicAdd(" not in generated_code
+
+
+def test_directx_buffer_struct_qualifier_lowers_to_rwstructuredbuffer():
+    shader = """
+    shader HlslStructBuffer {
+        struct Particle {
+            vec3 position;
+            int active;
+        }
+
+        struct ParticleBlock {
+            Particle particles[4];
+            int active_count;
+        }
+
+        compute {
+            buffer ParticleBlock particle_buffer;
+
+            void main() {
+                Particle particle = particle_buffer.particles[1];
+                particle.position = vec3(1.0);
+                particle_buffer.particles[1] = particle;
+                atomicAdd(particle_buffer.active_count, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "RWStructuredBuffer<ParticleBlock> particle_buffer : register(u0);"
+        in generated_code
+    )
+    assert "Particle particle = particle_buffer[0].particles[1];" in generated_code
+    assert "particle_buffer[0].particles[1] = particle;" in generated_code
+    assert "InterlockedAdd(particle_buffer[0].active_count, 1);" in generated_code
+    assert "static ParticleBlock particle_buffer;" not in generated_code
+
+
 def test_struct_constructor_and_inferred_generic_constructor_local():
     shader = """
     shader StructConstructors {
@@ -5381,7 +5708,7 @@ def test_ray_and_mesh_shader_attributes():
             void main() { }
         }
         mesh {
-            void main() { }
+            void main() @outputtopology(triangle) { }
         }
     }
     """
@@ -6180,6 +6507,16 @@ def test_directx_mesh_task_stages_emit_numthreads_layouts():
 
 
 def test_directx_mesh_stage_validates_outputtopology_values():
+    missing_code = """
+    shader MissingMeshTopology {
+        mesh {
+            void main() { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="mesh stage requires.*outputtopology"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(missing_code), "mesh")
+
     invalid_code = """
     shader BadMeshTopology {
         mesh {
@@ -6211,6 +6548,25 @@ def test_directx_mesh_stage_validates_outputtopology_values():
         crosstl.translator.parse(valid_code), "mesh"
     )
     assert '[outputtopology("line")]' in generated
+
+
+def test_directx_mesh_task_stage_validates_numthreads_product_limit():
+    invalid_code = """
+    shader BadMeshThreads {
+        mesh {
+            void main() @numthreads(129, 1, 1) @outputtopology(triangle) { }
+        }
+
+        task {
+            void main() @numthreads(8, 8, 3) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="numthreads product must not exceed 128"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(invalid_code), "mesh")
+
+    with pytest.raises(ValueError, match="numthreads product must not exceed 128"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(invalid_code), "task")
 
 
 def test_directx_mesh_task_stage_validates_system_value_parameter_types():
@@ -10927,6 +11283,7 @@ def test_directx_qualified_non_graphics_entries_use_stage_specific_names():
                 [],
                 BlockNode([]),
                 qualifiers=["mesh"],
+                attributes=[AttributeNode("outputtopology", ["triangle"])],
             ),
             FunctionNode(
                 "rayEntry",
@@ -12435,8 +12792,7 @@ def test_directx_ray_acceleration_structure_globals_use_srv_registers_and_spaces
         "RaytracingAccelerationStructure gapFill : register(t3, space1);" in generated
     )
     assert (
-        "RaytracingAccelerationStructure instances[ACCEL_COUNT] : "
-        "register(t5, space1);"
+        "RaytracingAccelerationStructure instances[ACCEL_COUNT] : register(t5, space1);"
     ) in generated
     assert "Texture2D after : register(t7, space1);" in generated
 
@@ -13523,6 +13879,36 @@ def test_directx_non_resource_arrays_preserve_expression_sizes():
     assert "float3 localNormals[+6];" in generated_code
     assert "float values[]" not in generated_code
     assert "float localWeights[]" not in generated_code
+
+
+def test_directx_unsized_non_resource_struct_and_globals_use_fixed_fallback():
+    shader = """
+    shader UnsizedNonResourceArrays {
+        struct Globals {
+            float weights[];
+            vec3 colors[];
+        };
+
+        float globalWeights[];
+        Globals globals;
+
+        compute {
+            void main() {
+                float value = globals.weights[3] + globalWeights[2];
+                vec3 color = globals.colors[1];
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float weights[1024];" in generated_code
+    assert "float3 colors[1024];" in generated_code
+    assert "float globalWeights[1024];" in generated_code
+    assert "float weights[];" not in generated_code
+    assert "float3 colors[];" not in generated_code
+    assert "float globalWeights[];" not in generated_code
 
 
 def test_directx_texture_resources_and_sampling():
@@ -24034,7 +24420,7 @@ def test_directx_texture_query_functions():
     assert "int2 size = textureSize(tex, 1);" in generated_code
     assert "int levels = textureQueryLevels(tex);" in generated_code
     assert (
-        "float2 lod = float2(tex.CalculateLevelOfDetailUnclamped(s, uv), tex.CalculateLevelOfDetail(s, uv));"
+        "float2 lod = float2(tex.CalculateLevelOfDetail(s, uv), tex.CalculateLevelOfDetailUnclamped(s, uv));"
         in generated_code
     )
     assert "return textureSize(tex, 0);" in generated_code
@@ -24211,8 +24597,8 @@ def test_directx_struct_member_resource_queries_use_hlsl_members():
     assert "int2 dims = textureSize(resources.color, 0);" in generated_code
     assert "int levels = textureQueryLevels(resources.color);" in generated_code
     assert (
-        "float2 lod = float2(resources.color.CalculateLevelOfDetailUnclamped("
-        "linearSampler, uv), resources.color.CalculateLevelOfDetail(linearSampler, uv));"
+        "float2 lod = float2(resources.color.CalculateLevelOfDetail("
+        "linearSampler, uv), resources.color.CalculateLevelOfDetailUnclamped(linearSampler, uv));"
     ) in generated_code
     assert "float2 pos = resources.ms.GetSamplePosition(sampleIndex);" in generated_code
     assert "float4 stored = resources.image[pixel];" in generated_code
@@ -24257,8 +24643,8 @@ def test_directx_indexed_struct_member_resource_queries_use_hlsl_members():
     assert "int2 dims = textureSize(resources[layer].color, 0);" in generated_code
     assert "int levels = textureQueryLevels(resources[layer].color);" in generated_code
     assert (
-        "float2 lod = float2(resources[layer].color.CalculateLevelOfDetailUnclamped("
-        "linearSampler, uv), resources[layer].color.CalculateLevelOfDetail(linearSampler, uv));"
+        "float2 lod = float2(resources[layer].color.CalculateLevelOfDetail("
+        "linearSampler, uv), resources[layer].color.CalculateLevelOfDetailUnclamped(linearSampler, uv));"
     ) in generated_code
     assert (
         "float2 pos = resources[layer].ms.GetSamplePosition(sampleIndex);"
@@ -24552,8 +24938,8 @@ def test_directx_typed_comparison_texture_operations_use_resource_shape():
         "int2 offset)"
     ) in generated_code
     assert (
-        "float2 lodInfo = float2(tex.CalculateLevelOfDetailUnclamped(texQuerySampler, uv), "
-        "tex.CalculateLevelOfDetail(texQuerySampler, uv));"
+        "float2 lodInfo = float2(tex.CalculateLevelOfDetail(texQuerySampler, uv), "
+        "tex.CalculateLevelOfDetailUnclamped(texQuerySampler, uv));"
     ) in generated_code
     assert "float cmp = tex.SampleCmp(texSampler, uv, depth);" in generated_code
     assert (
@@ -25646,23 +26032,23 @@ def test_directx_direct_stage_texture_queries_mix_size_levels_and_lod():
     assert "int colorLevels = textureQueryLevels(colorMap);" in generated_code
     assert "int shadowLevels = textureQueryLevels(shadowArray);" in generated_code
     assert (
-        "float2 colorLod = float2(colorMap.CalculateLevelOfDetailUnclamped(linearSampler, input.uv), colorMap.CalculateLevelOfDetail(linearSampler, input.uv));"
+        "float2 colorLod = float2(colorMap.CalculateLevelOfDetail(linearSampler, input.uv), colorMap.CalculateLevelOfDetailUnclamped(linearSampler, input.uv));"
         in generated_code
     )
     assert (
-        "float2 layerLod = float2(layerMap.CalculateLevelOfDetailUnclamped(linearSampler, input.uvLayer.xy), layerMap.CalculateLevelOfDetail(linearSampler, input.uvLayer.xy));"
+        "float2 layerLod = float2(layerMap.CalculateLevelOfDetail(linearSampler, input.uvLayer.xy), layerMap.CalculateLevelOfDetailUnclamped(linearSampler, input.uvLayer.xy));"
         in generated_code
     )
     assert (
-        "float2 cubeLod = float2(cubeArray.CalculateLevelOfDetailUnclamped(linearSampler, input.cubeLayer.xyz), cubeArray.CalculateLevelOfDetail(linearSampler, input.cubeLayer.xyz));"
+        "float2 cubeLod = float2(cubeArray.CalculateLevelOfDetail(linearSampler, input.cubeLayer.xyz), cubeArray.CalculateLevelOfDetailUnclamped(linearSampler, input.cubeLayer.xyz));"
         in generated_code
     )
     assert (
-        "float2 implicitLayerLod = float2(layerMap.CalculateLevelOfDetailUnclamped(layerMapSampler, input.uvLayer.xy), layerMap.CalculateLevelOfDetail(layerMapSampler, input.uvLayer.xy));"
+        "float2 implicitLayerLod = float2(layerMap.CalculateLevelOfDetail(layerMapSampler, input.uvLayer.xy), layerMap.CalculateLevelOfDetailUnclamped(layerMapSampler, input.uvLayer.xy));"
         in generated_code
     )
     assert (
-        "float2 implicitCubeShadowLod = float2(cubeShadowArray.CalculateLevelOfDetailUnclamped(cubeShadowArraySampler, input.cubeLayer.xyz), cubeShadowArray.CalculateLevelOfDetail(cubeShadowArraySampler, input.cubeLayer.xyz));"
+        "float2 implicitCubeShadowLod = float2(cubeShadowArray.CalculateLevelOfDetail(cubeShadowArraySampler, input.cubeLayer.xyz), cubeShadowArray.CalculateLevelOfDetailUnclamped(cubeShadowArraySampler, input.cubeLayer.xyz));"
         in generated_code
     )
     assert "textureQueryLod(" not in generated_code
@@ -25856,20 +26242,16 @@ def test_directx_array_texture_query_lod_uses_non_layer_coordinates():
         "float2 queryArrayLod(Texture2DArray tex, SamplerState s, float3 uvLayer)"
         in generated_code
     )
-    assert "tex.CalculateLevelOfDetailUnclamped(s, uvLayer.xy)" in generated_code
     assert "tex.CalculateLevelOfDetail(s, uvLayer.xy)" in generated_code
+    assert "tex.CalculateLevelOfDetailUnclamped(s, uvLayer.xy)" in generated_code
     assert (
         "float2 queryCubeArrayLod(TextureCubeArray tex, SamplerState s, float4 cubeLayer)"
         in generated_code
     )
-    assert "tex.CalculateLevelOfDetailUnclamped(s, cubeLayer.xyz)" in generated_code
     assert "tex.CalculateLevelOfDetail(s, cubeLayer.xyz)" in generated_code
+    assert "tex.CalculateLevelOfDetailUnclamped(s, cubeLayer.xyz)" in generated_code
     assert (
         "float2 queryArrayElementLod(Texture2DArray layerMaps[4], SamplerState linearSamplers[4], float3 uvLayer)"
-        in generated_code
-    )
-    assert (
-        "layerMaps[2].CalculateLevelOfDetailUnclamped(linearSamplers[2], uvLayer.xy)"
         in generated_code
     )
     assert (
@@ -25877,18 +26259,24 @@ def test_directx_array_texture_query_lod_uses_non_layer_coordinates():
         in generated_code
     )
     assert (
-        "float2 queryCubeArrayElementLod(TextureCubeArray cubeArrays[4], SamplerState linearSamplers[4], float4 cubeLayer)"
+        "layerMaps[2].CalculateLevelOfDetailUnclamped(linearSamplers[2], uvLayer.xy)"
         in generated_code
     )
     assert (
-        "cubeArrays[3].CalculateLevelOfDetailUnclamped(linearSamplers[3], cubeLayer.xyz)"
+        "float2 queryCubeArrayElementLod(TextureCubeArray cubeArrays[4], SamplerState linearSamplers[4], float4 cubeLayer)"
         in generated_code
     )
     assert (
         "cubeArrays[3].CalculateLevelOfDetail(linearSamplers[3], cubeLayer.xyz)"
         in generated_code
     )
+    assert (
+        "cubeArrays[3].CalculateLevelOfDetailUnclamped(linearSamplers[3], cubeLayer.xyz)"
+        in generated_code
+    )
+    assert "CalculateLevelOfDetail(s, uvLayer)" not in generated_code
     assert "CalculateLevelOfDetailUnclamped(s, uvLayer)" not in generated_code
+    assert "CalculateLevelOfDetail(s, cubeLayer)" not in generated_code
     assert "CalculateLevelOfDetailUnclamped(s, cubeLayer)" not in generated_code
 
 
@@ -25949,20 +26337,16 @@ def test_directx_shadow_array_texture_query_lod_uses_non_layer_coordinates():
         "float2 queryArrayLod(Texture2DArray tex, SamplerState s, float3 uvLayer)"
         in generated_code
     )
-    assert "tex.CalculateLevelOfDetailUnclamped(s, uvLayer.xy)" in generated_code
     assert "tex.CalculateLevelOfDetail(s, uvLayer.xy)" in generated_code
+    assert "tex.CalculateLevelOfDetailUnclamped(s, uvLayer.xy)" in generated_code
     assert (
         "float2 queryCubeArrayLod(TextureCubeArray tex, SamplerState s, float4 cubeLayer)"
         in generated_code
     )
-    assert "tex.CalculateLevelOfDetailUnclamped(s, cubeLayer.xyz)" in generated_code
     assert "tex.CalculateLevelOfDetail(s, cubeLayer.xyz)" in generated_code
+    assert "tex.CalculateLevelOfDetailUnclamped(s, cubeLayer.xyz)" in generated_code
     assert (
         "float2 queryArrayElementLod(Texture2DArray shadowArrays[4], SamplerState linearSamplers[4], float3 uvLayer)"
-        in generated_code
-    )
-    assert (
-        "shadowArrays[2].CalculateLevelOfDetailUnclamped(linearSamplers[2], uvLayer.xy)"
         in generated_code
     )
     assert (
@@ -25970,18 +26354,24 @@ def test_directx_shadow_array_texture_query_lod_uses_non_layer_coordinates():
         in generated_code
     )
     assert (
-        "float2 queryCubeArrayElementLod(TextureCubeArray cubeShadowArrays[4], SamplerState linearSamplers[4], float4 cubeLayer)"
+        "shadowArrays[2].CalculateLevelOfDetailUnclamped(linearSamplers[2], uvLayer.xy)"
         in generated_code
     )
     assert (
-        "cubeShadowArrays[3].CalculateLevelOfDetailUnclamped(linearSamplers[3], cubeLayer.xyz)"
+        "float2 queryCubeArrayElementLod(TextureCubeArray cubeShadowArrays[4], SamplerState linearSamplers[4], float4 cubeLayer)"
         in generated_code
     )
     assert (
         "cubeShadowArrays[3].CalculateLevelOfDetail(linearSamplers[3], cubeLayer.xyz)"
         in generated_code
     )
+    assert (
+        "cubeShadowArrays[3].CalculateLevelOfDetailUnclamped(linearSamplers[3], cubeLayer.xyz)"
+        in generated_code
+    )
+    assert "CalculateLevelOfDetail(s, uvLayer)" not in generated_code
     assert "CalculateLevelOfDetailUnclamped(s, uvLayer)" not in generated_code
+    assert "CalculateLevelOfDetail(s, cubeLayer)" not in generated_code
     assert "CalculateLevelOfDetailUnclamped(s, cubeLayer)" not in generated_code
 
 
@@ -26022,19 +26412,19 @@ def test_directx_implicit_array_texture_query_lod_synthesizes_regular_samplers()
     assert "SamplerState cubeShadowArraySampler : register(s3);" in generated_code
     assert "SamplerComparisonState" not in generated_code
     assert (
-        "layerMap.CalculateLevelOfDetailUnclamped(layerMapSampler, input.uvLayer.xy)"
+        "layerMap.CalculateLevelOfDetail(layerMapSampler, input.uvLayer.xy)"
         in generated_code
     )
     assert (
-        "cubeArray.CalculateLevelOfDetailUnclamped(cubeArraySampler, input.cubeLayer.xyz)"
+        "cubeArray.CalculateLevelOfDetail(cubeArraySampler, input.cubeLayer.xyz)"
         in generated_code
     )
     assert (
-        "shadowArray.CalculateLevelOfDetailUnclamped(shadowArraySampler, input.uvLayer.xy)"
+        "shadowArray.CalculateLevelOfDetail(shadowArraySampler, input.uvLayer.xy)"
         in generated_code
     )
     assert (
-        "cubeShadowArray.CalculateLevelOfDetailUnclamped(cubeShadowArraySampler, input.cubeLayer.xyz)"
+        "cubeShadowArray.CalculateLevelOfDetail(cubeShadowArraySampler, input.cubeLayer.xyz)"
         in generated_code
     )
 
@@ -26095,11 +26485,11 @@ def test_directx_nested_array_texture_query_lod_threads_resource_arrays():
     )
     assert "return explicitLeaf(layerMaps, linearSamplers, uvLayer);" in generated_code
     assert (
-        "layerMaps[2].CalculateLevelOfDetailUnclamped(linearSamplers[2], uvLayer.xy)"
+        "layerMaps[2].CalculateLevelOfDetail(linearSamplers[2], uvLayer.xy)"
         in generated_code
     )
     assert (
-        "layerMaps[2].CalculateLevelOfDetail(linearSamplers[2], uvLayer.xy)"
+        "layerMaps[2].CalculateLevelOfDetailUnclamped(linearSamplers[2], uvLayer.xy)"
         in generated_code
     )
     assert (
@@ -26115,11 +26505,11 @@ def test_directx_nested_array_texture_query_lod_threads_resource_arrays():
         in generated_code
     )
     assert (
-        "cubeArrays[3].CalculateLevelOfDetailUnclamped(cubeArraysSampler, cubeLayer.xyz)"
+        "cubeArrays[3].CalculateLevelOfDetail(cubeArraysSampler, cubeLayer.xyz)"
         in generated_code
     )
     assert (
-        "cubeArrays[3].CalculateLevelOfDetail(cubeArraysSampler, cubeLayer.xyz)"
+        "cubeArrays[3].CalculateLevelOfDetailUnclamped(cubeArraysSampler, cubeLayer.xyz)"
         in generated_code
     )
     assert (
@@ -26130,10 +26520,12 @@ def test_directx_nested_array_texture_query_lod_threads_resource_arrays():
         "float2 b = implicitMid(cubeArrays, cubeArraysSampler, input.cubeLayer);"
         in generated_code
     )
+    assert "CalculateLevelOfDetail(linearSamplers[2], uvLayer)" not in generated_code
     assert (
         "CalculateLevelOfDetailUnclamped(linearSamplers[2], uvLayer)"
         not in generated_code
     )
+    assert "CalculateLevelOfDetail(cubeArraysSampler, cubeLayer)" not in generated_code
     assert (
         "CalculateLevelOfDetailUnclamped(cubeArraysSampler, cubeLayer)"
         not in generated_code
@@ -26211,7 +26603,7 @@ def test_directx_nested_shadow_array_query_lod_and_compare_split_samplers():
         in generated_code
     )
     assert (
-        "float2 query = float2(shadowArrays[2].CalculateLevelOfDetailUnclamped(shadowArraysQuerySampler, uvLayer.xy), shadowArrays[2].CalculateLevelOfDetail(shadowArraysQuerySampler, uvLayer.xy));"
+        "float2 query = float2(shadowArrays[2].CalculateLevelOfDetail(shadowArraysQuerySampler, uvLayer.xy), shadowArrays[2].CalculateLevelOfDetailUnclamped(shadowArraysQuerySampler, uvLayer.xy));"
         in generated_code
     )
     assert (
@@ -26239,7 +26631,7 @@ def test_directx_nested_shadow_array_query_lod_and_compare_split_samplers():
         in generated_code
     )
     assert (
-        "float2 query = float2(cubeShadowArrays[2].CalculateLevelOfDetailUnclamped(cubeShadowArraysQuerySampler, cubeLayer.xyz), cubeShadowArrays[2].CalculateLevelOfDetail(cubeShadowArraysQuerySampler, cubeLayer.xyz));"
+        "float2 query = float2(cubeShadowArrays[2].CalculateLevelOfDetail(cubeShadowArraysQuerySampler, cubeLayer.xyz), cubeShadowArrays[2].CalculateLevelOfDetailUnclamped(cubeShadowArraysQuerySampler, cubeLayer.xyz));"
         in generated_code
     )
     assert (
@@ -26270,7 +26662,9 @@ def test_directx_nested_shadow_array_query_lod_and_compare_split_samplers():
         "cubeMid(cubeShadowArrays, cubeShadowArraysSampler, cubeShadowArraysQuerySampler, input.cubeLayer, input.depth, input.lod, input.ddxCube, input.ddyCube)"
         in generated_code
     )
+    assert "CalculateLevelOfDetail(shadowArraysSampler" not in generated_code
     assert "CalculateLevelOfDetailUnclamped(shadowArraysSampler" not in generated_code
+    assert "CalculateLevelOfDetail(cubeShadowArraysSampler" not in generated_code
     assert (
         "CalculateLevelOfDetailUnclamped(cubeShadowArraysSampler" not in generated_code
     )
@@ -26313,11 +26707,11 @@ def test_directx_implicit_texture_query_lod_parameter_threads_regular_sampler():
         "float2 queryCubeShadow(TextureCubeArray tex, SamplerState texSampler, float4 cubeLayer)"
         in generated_code
     )
+    assert "tex.CalculateLevelOfDetail(texSampler, cubeLayer.xyz)" in generated_code
     assert (
         "tex.CalculateLevelOfDetailUnclamped(texSampler, cubeLayer.xyz)"
         in generated_code
     )
-    assert "tex.CalculateLevelOfDetail(texSampler, cubeLayer.xyz)" in generated_code
     assert (
         "queryCubeShadow(cubeShadowArray, cubeShadowArraySampler, input.cubeLayer)"
         in generated_code
@@ -26784,7 +27178,7 @@ def test_directx_mixed_implicit_shadow_query_lod_and_compare_split_samplers():
         in generated_code
     )
     assert (
-        "float2 lod = float2(tex.CalculateLevelOfDetailUnclamped(texQuerySampler, uv), tex.CalculateLevelOfDetail(texQuerySampler, uv));"
+        "float2 lod = float2(tex.CalculateLevelOfDetail(texQuerySampler, uv), tex.CalculateLevelOfDetailUnclamped(texQuerySampler, uv));"
         in generated_code
     )
     assert "float cmp = tex.SampleCmp(texSampler, uv, depth);" in generated_code
@@ -26877,7 +27271,7 @@ def test_directx_mixed_implicit_cube_shadow_query_lod_and_compare_split_samplers
         in generated_code
     )
     assert (
-        "float2 lodValue = float2(tex.CalculateLevelOfDetailUnclamped(texQuerySampler, direction), tex.CalculateLevelOfDetail(texQuerySampler, direction));"
+        "float2 lodValue = float2(tex.CalculateLevelOfDetail(texQuerySampler, direction), tex.CalculateLevelOfDetailUnclamped(texQuerySampler, direction));"
         in generated_code
     )
     assert "float cmp = tex.SampleCmp(texSampler, direction, depth);" in generated_code
@@ -26894,7 +27288,7 @@ def test_directx_mixed_implicit_cube_shadow_query_lod_and_compare_split_samplers
         in generated_code
     )
     assert (
-        "float2 lodValue = float2(tex.CalculateLevelOfDetailUnclamped(texQuerySampler, cubeLayer.xyz), tex.CalculateLevelOfDetail(texQuerySampler, cubeLayer.xyz));"
+        "float2 lodValue = float2(tex.CalculateLevelOfDetail(texQuerySampler, cubeLayer.xyz), tex.CalculateLevelOfDetailUnclamped(texQuerySampler, cubeLayer.xyz));"
         in generated_code
     )
     assert "float cmp = tex.SampleCmp(texSampler, cubeLayer, depth);" in generated_code
@@ -26985,7 +27379,7 @@ def test_directx_nested_implicit_shadow_compare_lod_grad_threads_split_samplers(
         in generated_code
     )
     assert (
-        "float2 lod = float2(tex.CalculateLevelOfDetailUnclamped(texQuerySampler, uv), tex.CalculateLevelOfDetail(texQuerySampler, uv));"
+        "float2 lod = float2(tex.CalculateLevelOfDetail(texQuerySampler, uv), tex.CalculateLevelOfDetailUnclamped(texQuerySampler, uv));"
         in generated_code
     )
     assert (
@@ -28408,7 +28802,7 @@ def test_directx_sampler_1d_array_sampling_and_queries():
         in generated_code
     )
     assert (
-        "float2 lodInfo = float2(tex.CalculateLevelOfDetailUnclamped(samp, uvLayer.x), tex.CalculateLevelOfDetail(samp, uvLayer.x));"
+        "float2 lodInfo = float2(tex.CalculateLevelOfDetail(samp, uvLayer.x), tex.CalculateLevelOfDetailUnclamped(samp, uvLayer.x));"
         in generated_code
     )
     assert "tex.Sample(samp, uvLayer)" in generated_code
@@ -28417,6 +28811,7 @@ def test_directx_sampler_1d_array_sampling_and_queries():
     assert (
         "tex.Load(int3((pixelLayer.x + offset), pixelLayer.y, lod))" in generated_code
     )
+    assert "CalculateLevelOfDetail(samp, uvLayer)" not in generated_code
     assert "CalculateLevelOfDetailUnclamped(samp, uvLayer)" not in generated_code
 
 
@@ -30741,6 +31136,238 @@ def test_multiple_buffer_declarations_with_explicit_bindings():
     assert "results.Store(index, value);" in generated_code
     assert "rawData.Load(offset)" in generated_code
     assert "rawOutput.Store(offset, value);" in generated_code
+
+
+def test_hlsl_matrix_resize_constructor_lowers_nested_inverse_transpose():
+    shader = """
+    shader MatrixResizeInverse {
+        vertex {
+            struct VertexInput {
+                vec3 position;
+                vec3 normal;
+            };
+
+            struct VertexOutput {
+                vec4 position;
+                vec3 normal;
+            };
+
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                mat4 model = mat4(1.0);
+                mat3 normalMatrix = mat3(transpose(inverse(model)));
+                output.normal = normalMatrix * input.normal;
+                output.position = model * vec4(input.position, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "__crossgl_inverse_float4_4(model)" in generated_code
+    assert "inverse(" not in generated_code
+    assert (
+        "float3x3((transpose(__crossgl_inverse_float4_4(model)))[0].xyz"
+        in generated_code
+    )
+
+
+def test_hlsl_local_helpers_capture_stage_input_parameters():
+    shader = """
+    shader LocalHelperStageCapture {
+        struct VertexOutput {
+            vec3 worldNormal;
+            vec3 worldPosition;
+        };
+
+        fragment {
+            uniform sampler2D shadowMap;
+
+            float shadow(float2 uv);
+
+            vec4 main(VertexOutput input) {
+                return vec4(shadow(input.worldPosition.xy));
+            }
+
+            float shadow(float2 uv) {
+                return texture(shadowMap, uv).r + input.worldNormal.x;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float shadow(float2 uv, VertexOutput input);" in generated_code
+    assert "float shadow(float2 uv, VertexOutput input) {" in generated_code
+    assert "shadow(input.worldPosition.xy, input)" in generated_code
+
+
+def test_hlsl_compute_builtins_are_auto_parameters_when_referenced_by_name():
+    shader = """
+    shader ComputeBuiltinAutoParameters {
+        compute {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
+
+            void main() {
+                uvec3 global_id = gl_GlobalInvocationID;
+                uvec3 local_id = gl_LocalInvocationID;
+                uvec3 group_id = gl_WorkGroupID;
+                uint lane = gl_LocalInvocationIndex;
+                uvec3 groups = gl_NumWorkGroups;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint3 gl_GlobalInvocationID : SV_DispatchThreadID" in generated_code
+    assert "uint3 gl_LocalInvocationID : SV_GroupThreadID" in generated_code
+    assert "uint3 gl_WorkGroupID : SV_GroupID" in generated_code
+    assert "uint gl_LocalInvocationIndex : SV_GroupIndex" in generated_code
+    assert "uint3 gl_NumWorkGroups" in generated_code
+
+
+def test_hlsl_arrayed_resource_struct_members_lower_to_globals():
+    shader = """
+    shader ArrayedResourceStructMembers {
+        struct Material {
+            vec3 albedo;
+            sampler2D albedoMap;
+        };
+
+        struct Scene {
+            Material materials[2];
+        };
+
+        fragment {
+            uniform Scene scene;
+
+            vec4 main(vec2 uv @ TEXCOORD0, int materialIndex @ TEXCOORD1) @ gl_FragColor {
+                Material material = scene.materials[materialIndex];
+                return texture(material.albedoMap, uv) + vec4(material.albedo, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+    material_struct = re.search(
+        r"struct Material \{\n(?P<body>.*?)\};",
+        generated_code,
+        re.DOTALL,
+    )
+
+    assert material_struct is not None
+    assert "Texture2D albedoMap" not in material_struct.group("body")
+    assert "Texture2D albedoMap : register(t" in generated_code
+    assert "SamplerState albedoMapSampler : register(s" in generated_code
+    assert "albedoMap.Sample(albedoMapSampler, uv)" in generated_code
+    assert "material.albedoMap" not in generated_code
+
+
+def test_hlsl_arrayed_resource_struct_member_names_do_not_alias_across_structs():
+    shader = """
+    shader ArrayedResourceStructMemberCollisions {
+        struct A {
+            sampler2D map;
+            vec3 tint;
+        };
+
+        struct B {
+            sampler2D map;
+            vec3 tint;
+        };
+
+        struct Scene {
+            A a[1];
+            B b[1];
+        };
+
+        fragment {
+            uniform Scene scene;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                A a = scene.a[0];
+                B b = scene.b[0];
+                return texture(a.map, uv) +
+                    texture(b.map, uv) +
+                    vec4(a.tint + b.tint, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "Texture2D A_map : register(t" in generated_code
+    assert "Texture2D B_map : register(t" in generated_code
+    assert "SamplerState A_mapSampler : register(s" in generated_code
+    assert "SamplerState B_mapSampler : register(s" in generated_code
+    assert "A_map.Sample(A_mapSampler, uv)" in generated_code
+    assert "B_map.Sample(B_mapSampler, uv)" in generated_code
+    assert "Texture2D map : register" not in generated_code
+
+
+def test_hlsl_resource_struct_members_lower_without_losing_scalar_fields():
+    shader = """
+    shader ResourceStructScalarFields {
+        struct EnvironmentData {
+            samplerCube irradiance_map;
+            sampler2D brdf_lut;
+            float max_reflection_lod;
+            vec3 ambient_color;
+        };
+
+        vec3 calculate(EnvironmentData env, vec3 direction, vec2 uv) {
+            vec3 irradiance = texture(env.irradiance_map, direction).rgb;
+            vec3 brdf = texture(env.brdf_lut, uv).rgb;
+            return irradiance + brdf * env.max_reflection_lod + env.ambient_color;
+        }
+
+        fragment {
+            uniform EnvironmentData environment;
+
+            vec4 main(vec3 direction @ TEXCOORD0, vec2 uv @ TEXCOORD1) @ gl_FragColor {
+                return vec4(calculate(environment, direction, uv), 1.0);
+            }
+        }
+
+        compute {
+            uniform layout(rgba16f) imageCube irradiance_map;
+
+            void main() {
+                ivec2 size = imageSize(irradiance_map);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+    environment_struct = re.search(
+        r"struct EnvironmentData \{\n(?P<body>.*?)\};",
+        generated_code,
+        re.DOTALL,
+    )
+
+    assert environment_struct is not None
+    assert "TextureCube" not in environment_struct.group("body")
+    assert "Texture2D" not in environment_struct.group("body")
+    assert "float max_reflection_lod;" in environment_struct.group("body")
+    assert "float3 ambient_color;" in environment_struct.group("body")
+    assert "RWTextureCube<float4> irradiance_map : register(u" in generated_code
+    assert "TextureCube EnvironmentData_irradiance_map : register(t" in generated_code
+    assert "Texture2D brdf_lut : register(t" in generated_code
+    assert (
+        "EnvironmentData_irradiance_map.Sample(EnvironmentData_irradiance_mapSampler, direction)"
+        in generated_code
+    )
+    assert "brdf_lut.Sample(brdf_lutSampler, uv)" in generated_code
+    assert "env.max_reflection_lod" in generated_code
+    assert "env.ambient_color" in generated_code
 
 
 if __name__ == "__main__":

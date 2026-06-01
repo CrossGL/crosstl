@@ -1,23 +1,22 @@
 
 struct VertexInput
 {
-    float3 position;
-    float2 texCoord;
+    float3 position : POSITION;
+    float2 texCoord : TEXCOORD0;
 };
 struct VertexOutput
 {
-    float2 uv;
-    float4 position;
+    float2 uv : TEXCOORD0;
+    float4 position : SV_Position;
 };
 struct FragmentInput
 {
-    float2 uv;
+    float2 uv : TEXCOORD0;
 };
 struct FragmentOutput
 {
-    float4 color;
+    float4 color : SV_TARGET;
 };
-// Vertex Shader
 // Vertex Shader
 VertexOutput VSMain(VertexInput input)
 {
@@ -27,7 +26,6 @@ VertexOutput VSMain(VertexInput input)
     return output;
 }
 
-// Fragment Shader
 // Fragment Shader
 FragmentOutput PSMain(FragmentInput input)
 {

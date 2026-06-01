@@ -59,11 +59,12 @@ def test_parse_layout_locations_and_components():
     )
     assert (
         "layout(location = 0, index = 1) invariant precise noperspective sample "
-        "out mediump vec4 fragColor;" in glsl
+        "out mediump vec4 out_fragColor;" in glsl
     )
     assert "fragColor = color;" in glsl
-    assert "\n    vec4 fragColor;" not in glsl
-    assert "fragColor = fragColor;" not in glsl
+    assert "\n    vec4 fragColor;" in glsl
+    assert "out_fragColor = fragColor;" in glsl
+    assert "\n    fragColor = fragColor;" not in glsl
 
 
 @pytest.mark.parametrize(

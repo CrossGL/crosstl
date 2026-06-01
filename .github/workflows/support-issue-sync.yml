@@ -246,7 +246,7 @@ jobs:
           --max-retries 6
           --retry-base-seconds 60
           --retry-max-seconds 600
-          --min-desired-issues 10
+          --min-desired-issues 0
           --plan-output support/generated/support-issue-plan.json
           --dry-run
 
@@ -263,7 +263,7 @@ jobs:
           --max-retries 6
           --retry-base-seconds 60
           --retry-max-seconds 600
-          --min-desired-issues 10
+          --min-desired-issues 0
           --inspect-existing
           --planned-action-budget-mode fail
           --max-planned-created 300
@@ -271,7 +271,7 @@ jobs:
           --max-planned-closed 500
           --max-planned-attached 300
           --max-planned-total 600
-          --max-planned-stale-parent-closures 0
+          --max-planned-stale-parent-closures 10
           --max-planned-stale-backlog-closures 250
           --max-planned-stale-extracted-closures 250
           --max-planned-duplicate-marker-closures 25
@@ -292,7 +292,7 @@ jobs:
           --max-retries 6
           --retry-base-seconds 60
           --retry-max-seconds 600
-          --min-desired-issues 10
+          --min-desired-issues 0
           --inspect-existing
           --planned-action-budget-mode fail
           --max-planned-created 300
@@ -300,7 +300,7 @@ jobs:
           --max-planned-closed 500
           --max-planned-attached 300
           --max-planned-total 600
-          --max-planned-stale-parent-closures 0
+          --max-planned-stale-parent-closures 10
           --max-planned-stale-backlog-closures 250
           --max-planned-stale-extracted-closures 250
           --max-planned-duplicate-marker-closures 25

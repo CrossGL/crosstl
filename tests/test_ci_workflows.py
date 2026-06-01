@@ -1250,6 +1250,21 @@ def test_ci_coverage_reads_support_issue_sync_guards_from_their_steps():
     assert report["dry_run_on_pull_request"] is False
 
 
+def test_ci_coverage_requires_min_desired_issue_policy_in_every_sync_step():
+    module = _load_ci_coverage_module()
+    workflow = (WORKFLOW_DIR / "support-issue-sync.yml").read_text(encoding="utf-8")
+    dry_run_step = module.workflow_step_section(workflow, "Dry-run issue sync")
+    workflow = workflow.replace(
+        dry_run_step,
+        dry_run_step.replace("          --min-desired-issues 0\n", ""),
+    )
+    workflow += "\n# --min-desired-issues 0\n"
+
+    report = module.support_issue_sync_report(workflow)
+
+    assert report["min_desired_issues"] is False
+
+
 def test_ci_coverage_requires_support_signal_upload_after_extract_step():
     module = _load_ci_coverage_module()
     workflow = (WORKFLOW_DIR / "support-issue-sync.yml").read_text(encoding="utf-8")
@@ -1932,14 +1947,21 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
         in issue_sync
     )
     assert "--max-retries 6" in issue_sync
-    assert "--min-desired-issues 10" in issue_sync
+    ci_coverage = _load_ci_coverage_module()
+    for step_name in (
+        "Dry-run issue sync",
+        "Plan GitHub issue sync",
+        "Sync GitHub issues",
+    ):
+        step = ci_coverage.workflow_step_section(issue_sync, step_name)
+        assert "--min-desired-issues 0" in step
     assert "--planned-action-budget-mode fail" in issue_sync
     assert "--max-planned-created 300" in issue_sync
     assert "--max-planned-updated 300" in issue_sync
     assert "--max-planned-closed 500" in issue_sync
     assert "--max-planned-attached 300" in issue_sync
     assert "--max-planned-total 600" in issue_sync
-    assert "--max-planned-stale-parent-closures 0" in issue_sync
+    assert "--max-planned-stale-parent-closures 10" in issue_sync
     assert "--max-planned-stale-backlog-closures 250" in issue_sync
     assert "--max-planned-stale-extracted-closures 250" in issue_sync
     assert "--max-planned-duplicate-marker-closures 25" in issue_sync
