@@ -73,6 +73,35 @@ void main() {
 }
 """
 
+SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY = """
+; Reduced from Khronos SPIRV-Tools test/diff/diff_files/basic_src.spvasm.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %22 "main" %4 %14 %19
+OpName %4 "_ua_position"
+OpName %14 "ANGLEXfbPosition"
+OpName %19 ""
+OpDecorate %4 Location 0
+OpDecorate %14 Location 0
+OpMemberDecorate %17 0 BuiltIn Position
+OpDecorate %17 Block
+%1 = OpTypeFloat 32
+%2 = OpTypeVector %1 4
+%17 = OpTypeStruct %2
+%20 = OpTypeVoid
+%3 = OpTypePointer Input %2
+%13 = OpTypePointer Output %2
+%18 = OpTypePointer Output %17
+%21 = OpTypeFunction %20
+%4 = OpVariable %3 Input
+%14 = OpVariable %13 Output
+%19 = OpVariable %18 Output
+%22 = OpFunction %20 None %21
+%23 = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -306,21 +335,49 @@ def test_translate_api_rejects_binary_spv_source_with_clear_error(tmp_path):
         crosstl.translate(str(shader_path), backend="rust", format_output=False)
 
 
-def test_translate_api_rejects_spirv_assembly_with_clear_error(tmp_path):
+def test_spirv_assembly_location_decorated_interfaces_codegen():
+    tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 _ua_position @input @location(0);" in generated_code
+    assert "float4 ANGLEXfbPosition @output @location(0);" in generated_code
+    assert "%4" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_translate_api_accepts_location_decorated_spirv_assembly(tmp_path):
+    import crosstl
+
+    shader_path = tmp_path / "fragment.spvasm"
+    shader_path.write_text(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY, encoding="utf-8")
+
+    generated_code = crosstl.translate(
+        str(shader_path), backend="cgl", format_output=False
+    )
+
+    assert "float4 _ua_position @input @location(0);" in generated_code
+    assert "float4 ANGLEXfbPosition @output @location(0);" in generated_code
+
+
+def test_translate_api_rejects_unsupported_spirv_assembly_with_clear_error(tmp_path):
     import crosstl
 
     shader_path = tmp_path / "fragment.spvasm"
     shader_path.write_text(
         """
-        ; Minimal syntax from Khronos SPIRV-Tools test/diff/diff_files/basic_src.spvasm.
         OpCapability Shader
         OpMemoryModel Logical GLSL450
-        OpEntryPoint Vertex %22 "main"
+        OpEntryPoint Vertex %main "main"
+        %void = OpTypeVoid
+        %fn = OpTypeFunction %void
+        %main = OpFunction %void None %fn
+        OpFunctionEnd
         """,
         encoding="utf-8",
     )
 
-    with pytest.raises(SyntaxError, match="SPIR-V assembly input is not supported"):
+    with pytest.raises(SyntaxError, match="only partially supported"):
         crosstl.translate(str(shader_path), backend="cgl", format_output=False)
 
 

@@ -8470,6 +8470,10 @@ class RustToCrossGLConverter:
         return resolved
 
     def map_builtin_type(self, rust_type):
+        image_macro_type = self.map_image_macro_type(rust_type)
+        if image_macro_type is not None:
+            return image_macro_type
+
         for type_name in self.type_lookup_names(rust_type):
             mapped = self.type_map.get(type_name)
             if mapped is not None:
@@ -8551,6 +8555,134 @@ class RustToCrossGLConverter:
         if element_type.startswith("i"):
             return f"iimage{suffix}"
         return f"image{suffix}"
+
+    def map_image_macro_type(self, rust_type):
+        image_config = self.parse_image_macro_type(rust_type)
+        if image_config is None:
+            return None
+
+        suffix = self.image_macro_dimension_suffix(image_config)
+        if suffix is None:
+            return None
+
+        if image_config["sampled"] is True:
+            prefix = self.image_macro_sampler_prefix(image_config)
+            if image_config["depth"] is True:
+                return f"{prefix}{suffix}Shadow"
+            return f"{prefix}{suffix}"
+
+        prefix = self.image_macro_storage_prefix(image_config)
+        return f"{prefix}{suffix}"
+
+    def parse_image_macro_type(self, rust_type):
+        if not isinstance(rust_type, str):
+            return None
+
+        match = re.match(
+            r"^(?:(?:[A-Za-z_][A-Za-z0-9_]*)::)*Image!\((?P<args>.*)\)$",
+            rust_type,
+        )
+        if match is None:
+            return None
+
+        args = self.split_generic_arguments(match.group("args"))
+        if not args:
+            return None
+
+        config = {
+            "dimension": args[0].replace(" ", ""),
+            "type": None,
+            "format": None,
+            "sampled": None,
+            "multisampled": False,
+            "arrayed": False,
+            "depth": None,
+        }
+
+        for arg in args[1:]:
+            key, value = self.split_image_macro_argument(arg)
+            if key in {"type", "format"}:
+                config[key] = value
+            elif key in {"sampled", "multisampled", "arrayed", "depth"}:
+                config[key] = self.parse_image_macro_bool(value)
+
+        return config
+
+    def split_image_macro_argument(self, arg):
+        if "=" not in arg:
+            return arg.strip(), "true"
+
+        key, value = arg.split("=", 1)
+        return key.strip(), value.strip()
+
+    def parse_image_macro_bool(self, value):
+        value = (value or "").strip().lower()
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        return None
+
+    def image_macro_dimension_suffix(self, config):
+        suffix_map = {
+            "1d": "1D",
+            "2d": "2D",
+            "3d": "3D",
+            "cube": "Cube",
+        }
+        suffix = suffix_map.get(config["dimension"].lower())
+        if suffix is None:
+            return None
+
+        if config["multisampled"] is True:
+            if suffix != "2D":
+                return None
+            suffix = f"{suffix}MS"
+
+        if config["arrayed"] is True:
+            suffix = f"{suffix}Array"
+
+        return suffix
+
+    def image_macro_sampler_prefix(self, config):
+        if config["depth"] is True:
+            return "sampler"
+
+        family = self.image_macro_numeric_family(config)
+        if family == "u":
+            return "usampler"
+        if family == "i":
+            return "isampler"
+        return "sampler"
+
+    def image_macro_storage_prefix(self, config):
+        family = self.image_macro_numeric_family(config)
+        if family == "u":
+            return "uimage"
+        if family == "i":
+            return "iimage"
+        return "image"
+
+    def image_macro_numeric_family(self, config):
+        sample_type = config.get("type")
+        if sample_type:
+            sample_type = sample_type.rsplit("::", 1)[-1].strip().lower()
+            if sample_type.startswith("u"):
+                return "u"
+            if sample_type.startswith("i"):
+                return "i"
+            return "f"
+
+        image_format = config.get("format")
+        if image_format:
+            image_format = image_format.rsplit("::", 1)[-1].strip().lower()
+            image_format = image_format.replace("_", "")
+            if image_format.endswith("ui"):
+                return "u"
+            if image_format.endswith("i") and not image_format.endswith("ui"):
+                return "i"
+
+        return "f"
 
     def resolve_type_alias_target(self, rust_type):
         generic = self.parse_generic_type(rust_type)

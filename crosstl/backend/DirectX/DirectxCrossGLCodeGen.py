@@ -2010,6 +2010,11 @@ class HLSLToCrossGLConverter:
                 code += self.format_binding_attributes(node, 1)
                 code += f"    cbuffer {node.name} {{\n"
                 for member in node.members:
+                    for qualifier in getattr(member, "qualifiers", []) or []:
+                        if qualifier in {"row_major", "column_major"}:
+                            code += f"        @ {qualifier}\n"
+                    code += self.format_attributes(getattr(member, "attributes", []), 2)
+                    code += self.format_binding_attributes(member, 2)
                     array_suffix = self.format_array_suffixes(member)
                     code += (
                         f"        {self.map_variable_type(member)} "

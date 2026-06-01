@@ -167,6 +167,28 @@ def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
     assert "uint values[] @ binding(0)" in result
 
 
+def test_rust_gpu_image_macro_types_drive_resource_parameters():
+    code = """
+    use spirv_std::{spirv, Image};
+
+    type Image2d = Image!(2D, type=f32, sampled);
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(descriptor_set = 0, binding = 0)] sampled_tex: &Image2d,
+        #[spirv(descriptor_set = 0, binding = 1)] storage_tex: &Image!(2D, format=rgba16f, sampled=false),
+        #[spirv(descriptor_set = 0, binding = 2)] direct_tex: &Image!(2D, type=f32, sampled),
+    ) {}
+    """
+    result = parse_and_generate(code)
+
+    assert "typedef sampler2D Image2d;" in result
+    assert "fragment main_fs {" in result
+    assert "Image2d sampled_tex @ binding(0)" in result
+    assert "image2D storage_tex @ binding(1)" in result
+    assert "sampler2D direct_tex @ binding(2)" in result
+
+
 def test_rust_gpu_builtin_spirv_aliases_drive_parameter_semantics():
     code = """
     use spirv_std::spirv;

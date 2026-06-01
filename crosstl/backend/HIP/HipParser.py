@@ -189,6 +189,17 @@ class HipParser:
         index = 0
 
         while index < len(self.tokens):
+            linkage_end = self.skip_linkage_specifier_at_pos(index)
+            if depth == 0 and linkage_end is not None:
+                if (
+                    linkage_end < len(self.tokens)
+                    and self.tokens[linkage_end].type == "LBRACE"
+                ):
+                    index = linkage_end + 1
+                    continue
+                index = linkage_end
+                continue
+
             token_type = self.tokens[index].type
             if token_type == "LBRACE":
                 depth += 1
@@ -211,6 +222,10 @@ class HipParser:
         return names
 
     def function_name_index_at(self, index):
+        linkage_end = self.skip_linkage_specifier_at_pos(index)
+        if linkage_end is not None:
+            index = linkage_end
+
         function_qualifiers = {
             *self.FUNCTION_SPECIFIER_TOKENS,
             "__DEVICE__",
@@ -357,6 +372,9 @@ class HipParser:
 
         if self.match("HASH"):
             return self.parse_preprocessor()
+
+        if self.is_linkage_specifier_start():
+            return self.parse_linkage_specification()
 
         if self.match("TEMPLATE"):
             return self.parse_template_prefixed_declaration()
@@ -527,6 +545,57 @@ class HipParser:
             self.advance()
 
         return PreprocessorNode(directive, " ".join(content))
+
+    def is_linkage_specifier_start(self):
+        return (
+            self.match("EXTERN")
+            and self.peek() is not None
+            and self.peek().type == "STRING"
+        )
+
+    def parse_linkage_specification(self):
+        self.consume("EXTERN")
+        language = self.consume("STRING").value.strip('"')
+        self.skip_newlines()
+
+        if self.match("LBRACE"):
+            self.consume("LBRACE")
+            statements = []
+            while self.current_token and not self.match("RBRACE"):
+                if self.match("NEWLINE", "SEMICOLON"):
+                    self.advance()
+                    continue
+
+                stmt = self.parse_statement()
+                if stmt:
+                    if isinstance(stmt, list):
+                        statements.extend(stmt)
+                    else:
+                        statements.append(stmt)
+
+            self.consume("RBRACE")
+            self.apply_linkage_to_statement(statements, language)
+            return statements
+
+        stmt = self.parse_statement()
+        self.apply_linkage_to_statement(stmt, language)
+        return stmt
+
+    def apply_linkage_to_statement(self, stmt, language):
+        if isinstance(stmt, list):
+            for item in stmt:
+                self.apply_linkage_to_statement(item, language)
+            return
+
+        if not stmt:
+            return
+
+        if hasattr(stmt, "qualifiers"):
+            qualifiers = getattr(stmt, "qualifiers", []) or []
+            if "extern" not in qualifiers:
+                qualifiers.insert(0, "extern")
+            stmt.qualifiers = qualifiers
+            stmt.linkage = language
 
     def parse_function_with_qualifier(self):
         qualifiers = []
@@ -2443,6 +2512,15 @@ class HipParser:
         ):
             index += 1
         return index
+
+    def skip_linkage_specifier_at_pos(self, index):
+        if (
+            index + 1 < len(self.tokens)
+            and self.tokens[index].type == "EXTERN"
+            and self.tokens[index + 1].type == "STRING"
+        ):
+            return index + 2
+        return None
 
     def skip_launch_bounds_at_pos(self, index):
         index += 1

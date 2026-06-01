@@ -602,6 +602,36 @@ def test_inner_and_nested_spirv_attributes_parse_from_rust_gpu_style_source():
     ]
 
 
+def test_rust_gpu_image_macro_type_parsing():
+    code = """
+    use spirv_std::{spirv, Image};
+
+    type Image2d = Image!(2D, type=f32, sampled);
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(descriptor_set = 0, binding = 0)] sampled_tex: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 1)] storage_tex: &Image!(2D, format=rgba16f, sampled=false),
+    ) {}
+    """
+    ast = parse_code(code)
+
+    assert ast.type_aliases[0].alias_type == "Image!(2D, type=f32, sampled)"
+    function = ast.functions[0]
+    assert [param.vtype for param in function.params] == [
+        "&Image!(2D, type=f32, sampled)",
+        "&Image!(2D, format=rgba16f, sampled=false)",
+    ]
+    assert function.params[0].attributes[0].args == [
+        "descriptor_set",
+        "=",
+        "0",
+        "binding",
+        "=",
+        "0",
+    ]
+
+
 def test_rust_gpu_builtin_spirv_parameter_attributes_parse():
     code = """
     use spirv_std::spirv;

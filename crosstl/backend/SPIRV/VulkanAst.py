@@ -83,6 +83,9 @@ class LayoutNode(ASTNode):
         struct_fields=None,
         block_name=None,
         declaration_qualifiers=None,
+        spirv_id=None,
+        spirv_decorations=None,
+        spirv_storage_class=None,
     ):
         self.qualifiers = qualifiers
         self.declaration = declaration
@@ -93,6 +96,9 @@ class LayoutNode(ASTNode):
         self.struct_fields = struct_fields or []
         self.block_name = block_name
         self.declaration_qualifiers = declaration_qualifiers or []
+        self.spirv_id = spirv_id
+        self.spirv_decorations = spirv_decorations or []
+        self.spirv_storage_class = spirv_storage_class
 
     def __repr__(self):
         return (
@@ -100,7 +106,8 @@ class LayoutNode(ASTNode):
             f"qualifiers={self.qualifiers}, layout_type={self.layout_type}, "
             f"data_type={self.data_type}, variable_name={self.variable_name}, "
             f"block_name={self.block_name}, "
-            f"declaration_qualifiers={self.declaration_qualifiers})"
+            f"declaration_qualifiers={self.declaration_qualifiers}, "
+            f"spirv_id={self.spirv_id})"
         )
 
 

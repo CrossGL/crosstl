@@ -13,13 +13,17 @@ SPIRV_ASSEMBLY_PATTERN = re.compile(
     r"OpCapability\s+\w+\b"
     r"|OpMemoryModel\s+\w+\s+\w+\b"
     r"|OpEntryPoint\s+\w+\s+%[A-Za-z0-9_]+\b"
+    r"|OpDecorate\s+%[A-Za-z0-9_]+\s+\w+\b"
+    r"|OpMemberDecorate\s+%[A-Za-z0-9_]+\s+\d+\s+\w+\b"
+    r"|OpName\s+%[A-Za-z0-9_]+\b"
     r"|%[A-Za-z0-9_]+\s*=\s*Op[A-Za-z0-9_]+\b"
     r")"
 )
 
 SPIRV_ASSEMBLY_ERROR = (
-    "SPIR-V assembly input is not supported by the Vulkan backend parser; "
-    "provide Vulkan GLSL-style source instead."
+    "SPIR-V assembly input is only partially supported by the Vulkan backend "
+    "parser; supported assembly must expose location-decorated Input/Output "
+    "OpVariable declarations."
 )
 
 TOKENS = tuple(
@@ -330,8 +334,12 @@ class VulkanLexer:
                 max_expansion_depth=max_expansion_depth,
             )
             code = preprocessor.preprocess(code, file_path=file_path)
-        if self._looks_like_spirv_assembly(code):
-            raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
+        self.is_spirv_assembly = self._looks_like_spirv_assembly(code)
+        if self.is_spirv_assembly:
+            self._token_patterns = []
+            self.code = code
+            self._length = len(code)
+            return
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
@@ -346,6 +354,11 @@ class VulkanLexer:
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
         """Yield Vulkan/SPIR-V tokens while skipping whitespace and comments."""
+        if self.is_spirv_assembly:
+            yield ("SPIRV_ASSEMBLY", self.code)
+            yield ("EOF", "")
+            return
+
         pos = 0
         while pos < self._length:
             token = self._next_token(pos)

@@ -47,6 +47,24 @@ class TestHipLexer:
             ("IDENTIFIER", "kernel"),
         ]
 
+    def test_c_linkage_kernel_tokenization(self):
+        code = """
+        extern "C"
+        __global__ void vector_add(float* output) {}
+        """
+        lexer = HipLexer(code)
+        tokens = [token for token in lexer.tokenize() if token.type != "NEWLINE"]
+
+        assert [(token.type, token.value) for token in tokens[:7]] == [
+            ("EXTERN", "extern"),
+            ("STRING", '"C"'),
+            ("__GLOBAL__", "__global__"),
+            ("VOID", "void"),
+            ("IDENTIFIER", "vector_add"),
+            ("LPAREN", "("),
+            ("FLOAT", "float"),
+        ]
+
     def test_device_lambda_capture_tokenization(self):
         code = "[&] __device__ (int x) { return x; }"
         lexer = HipLexer(code)

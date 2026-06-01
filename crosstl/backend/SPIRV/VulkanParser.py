@@ -1,5 +1,7 @@
 """Parser for Vulkan SPIR-V source AST construction."""
 
+import shlex
+
 from .VulkanAst import *
 from .VulkanLexer import *
 
@@ -41,6 +43,26 @@ class VulkanParser:
         "ASSIGN_SHIFT_LEFT",
         "ASSIGN_SHIFT_RIGHT",
     )
+    SPIRV_INTERFACE_STORAGE_CLASSES = {"Input": "IN", "Output": "OUT"}
+    SPIRV_INTERFACE_DECORATIONS = {
+        "Location": "location",
+        "Component": "component",
+        "Index": "index",
+    }
+    SPIRV_VECTOR_TYPES = {
+        ("float", "2"): "vec2",
+        ("float", "3"): "vec3",
+        ("float", "4"): "vec4",
+        ("int", "2"): "ivec2",
+        ("int", "3"): "ivec3",
+        ("int", "4"): "ivec4",
+        ("uint", "2"): "uvec2",
+        ("uint", "3"): "uvec3",
+        ("uint", "4"): "uvec4",
+        ("bool", "2"): "bvec2",
+        ("bool", "3"): "bvec3",
+        ("bool", "4"): "bvec4",
+    }
 
     def __init__(self, tokens):
         self.tokens = tokens
@@ -91,6 +113,11 @@ class VulkanParser:
         return module
 
     def parse_module(self):
+        if self.current_token[0] == "SPIRV_ASSEMBLY":
+            code = self.current_token[1]
+            self.eat("SPIRV_ASSEMBLY")
+            return self.parse_spirv_assembly_module(code)
+
         functions = []
         structs = []
         global_variables = []
@@ -147,6 +174,244 @@ class VulkanParser:
             structs=structs,
             global_variables=global_variables,
         )
+
+    def parse_spirv_assembly_module(self, code):
+        instructions = self.parse_spirv_assembly_instructions(code)
+        names = {}
+        decorations = {}
+        member_decorations = {}
+        types = {}
+        constants = {}
+        variables = []
+        entry_points = []
+
+        for result_id, opcode, operands, _line_number in instructions:
+            if opcode == "OpName" and len(operands) >= 2:
+                names[operands[0]] = operands[1]
+            elif opcode == "OpDecorate" and len(operands) >= 2:
+                target, decoration = operands[0], operands[1]
+                decorations.setdefault(target, []).append((decoration, operands[2:]))
+            elif opcode == "OpMemberDecorate" and len(operands) >= 3:
+                target, member, decoration = operands[0], operands[1], operands[2]
+                member_decorations.setdefault(target, []).append(
+                    (member, decoration, operands[3:])
+                )
+            elif opcode == "OpEntryPoint" and len(operands) >= 3:
+                entry_points.append(
+                    {
+                        "execution_model": operands[0],
+                        "id": operands[1],
+                        "name": operands[2],
+                        "interface_ids": operands[3:],
+                    }
+                )
+            elif result_id and opcode == "OpTypeVoid":
+                types[result_id] = {"kind": "scalar", "name": "void"}
+            elif result_id and opcode == "OpTypeBool":
+                types[result_id] = {"kind": "scalar", "name": "bool"}
+            elif result_id and opcode == "OpTypeFloat" and operands:
+                types[result_id] = {
+                    "kind": "scalar",
+                    "name": self.spirv_float_type_name(operands[0]),
+                }
+            elif result_id and opcode == "OpTypeInt" and len(operands) >= 2:
+                types[result_id] = {
+                    "kind": "scalar",
+                    "name": self.spirv_int_type_name(operands[0], operands[1]),
+                }
+            elif result_id and opcode == "OpTypeVector" and len(operands) >= 2:
+                component_type = self.spirv_type_name(operands[0], types)
+                types[result_id] = {
+                    "kind": "vector",
+                    "name": self.SPIRV_VECTOR_TYPES.get(
+                        (component_type, operands[1]),
+                        f"{component_type}{operands[1]}" if component_type else None,
+                    ),
+                    "component_type": operands[0],
+                    "component_count": operands[1],
+                }
+            elif result_id and opcode == "OpTypeArray" and len(operands) >= 2:
+                types[result_id] = {
+                    "kind": "array",
+                    "element_type": operands[0],
+                    "length_id": operands[1],
+                }
+            elif result_id and opcode == "OpTypeStruct":
+                types[result_id] = {"kind": "struct", "member_types": operands}
+            elif result_id and opcode == "OpTypePointer" and len(operands) >= 2:
+                types[result_id] = {
+                    "kind": "pointer",
+                    "storage_class": operands[0],
+                    "type_id": operands[1],
+                }
+            elif result_id and opcode in {"OpConstant", "OpSpecConstant"}:
+                if len(operands) >= 2:
+                    constants[result_id] = operands[1]
+            elif result_id and opcode == "OpVariable" and len(operands) >= 2:
+                variables.append(
+                    {
+                        "id": result_id,
+                        "pointer_type_id": operands[0],
+                        "storage_class": operands[1],
+                    }
+                )
+
+        entry_interface_ids = {
+            interface_id
+            for entry_point in entry_points
+            for interface_id in entry_point["interface_ids"]
+        }
+        global_variables = self.spirv_assembly_interface_variables(
+            variables,
+            entry_interface_ids,
+            names,
+            decorations,
+            member_decorations,
+            types,
+            constants,
+        )
+        if not global_variables:
+            raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
+
+        return ShaderNode(
+            functions=[],
+            structs=[],
+            global_variables=global_variables,
+            spirv_assembly=True,
+            spirv_entry_points=entry_points,
+            spirv_names=names,
+            spirv_decorations=decorations,
+            spirv_member_decorations=member_decorations,
+            spirv_types=types,
+        )
+
+    def parse_spirv_assembly_instructions(self, code):
+        instructions = []
+        for line_number, line in enumerate(code.splitlines(), start=1):
+            lexer = shlex.shlex(line, posix=True)
+            lexer.whitespace_split = True
+            lexer.commenters = ";"
+            try:
+                parts = list(lexer)
+            except ValueError as exc:
+                raise SyntaxError(
+                    f"Invalid SPIR-V assembly syntax on line {line_number}: {exc}"
+                ) from exc
+
+            if not parts:
+                continue
+
+            result_id = None
+            if len(parts) >= 3 and parts[1] == "=":
+                result_id = parts[0]
+                opcode = parts[2]
+                operands = parts[3:]
+            else:
+                opcode = parts[0]
+                operands = parts[1:]
+
+            if not opcode.startswith("Op"):
+                raise SyntaxError(
+                    f"Expected SPIR-V opcode on line {line_number}, got {opcode}"
+                )
+            instructions.append((result_id, opcode, operands, line_number))
+
+        return instructions
+
+    def spirv_assembly_interface_variables(
+        self,
+        variables,
+        entry_interface_ids,
+        names,
+        decorations,
+        member_decorations,
+        types,
+        constants,
+    ):
+        del member_decorations
+        layouts = []
+        for variable in variables:
+            pointer_type = types.get(variable["pointer_type_id"], {})
+            storage_class = variable["storage_class"] or pointer_type.get(
+                "storage_class"
+            )
+            layout_type = self.SPIRV_INTERFACE_STORAGE_CLASSES.get(storage_class)
+            if layout_type is None:
+                continue
+            if entry_interface_ids and variable["id"] not in entry_interface_ids:
+                continue
+
+            variable_decorations = decorations.get(variable["id"], [])
+            qualifiers = self.spirv_layout_qualifiers(variable_decorations)
+            if not any(name == "location" for name, _value in qualifiers):
+                continue
+            if pointer_type.get("kind") != "pointer":
+                continue
+
+            data_type, array_suffix = self.spirv_type_name_and_suffix(
+                pointer_type.get("type_id"), types, constants
+            )
+            if data_type is None:
+                continue
+
+            variable_name = names.get(variable["id"]) or variable["id"].lstrip("%")
+            variable_name += array_suffix
+            layouts.append(
+                LayoutNode(
+                    qualifiers,
+                    layout_type=layout_type,
+                    data_type=data_type,
+                    variable_name=variable_name,
+                    spirv_id=variable["id"],
+                    spirv_decorations=variable_decorations,
+                    spirv_storage_class=storage_class,
+                )
+            )
+
+        return layouts
+
+    def spirv_layout_qualifiers(self, decorations):
+        qualifiers = []
+        for decoration, operands in decorations:
+            qualifier_name = self.SPIRV_INTERFACE_DECORATIONS.get(decoration)
+            if qualifier_name and operands:
+                qualifiers.append((qualifier_name, operands[0]))
+        return qualifiers
+
+    def spirv_type_name_and_suffix(self, type_id, types, constants):
+        type_info = types.get(type_id)
+        if type_info is None:
+            return None, ""
+
+        if type_info.get("kind") == "array":
+            base_type, suffix = self.spirv_type_name_and_suffix(
+                type_info.get("element_type"), types, constants
+            )
+            if base_type is None:
+                return None, ""
+            length_id = type_info.get("length_id")
+            length = constants.get(length_id, str(length_id).lstrip("%"))
+            return base_type, f"[{length}]{suffix}"
+
+        return type_info.get("name"), ""
+
+    def spirv_type_name(self, type_id, types):
+        type_info = types.get(type_id)
+        if type_info is None:
+            return None
+        return type_info.get("name")
+
+    def spirv_float_type_name(self, width):
+        if width == "64":
+            return "double"
+        return "float"
+
+    def spirv_int_type_name(self, width, signedness):
+        if width == "1":
+            return "bool"
+        if signedness == "0":
+            return "uint"
+        return "int"
 
     def parse_precision_declaration(self):
         self.eat("PRECISION")

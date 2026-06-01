@@ -115,7 +115,7 @@ def test_preprocessor_extension_directive_tokenization():
     assert all(token_type != "PREPROCESSOR" for token_type, _ in tokens)
 
 
-def test_spirv_assembly_rejected_with_clear_error():
+def test_spirv_assembly_tokenizes_as_single_payload():
     # Minimal syntax from Khronos SPIRV-Tools test/diff/diff_files/basic_src.spvasm.
     code = """
         ; SPIR-V
@@ -124,8 +124,9 @@ def test_spirv_assembly_rejected_with_clear_error():
         %1 = OpTypeVoid
     """
 
-    with pytest.raises(SyntaxError, match="SPIR-V assembly input is not supported"):
-        tokenize_code(code)
+    tokens = tokenize_code(code)
+
+    assert tokens == [("SPIRV_ASSEMBLY", code), ("EOF", "")]
 
 
 def test_one_dimensional_sampler_tokenization():

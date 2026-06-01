@@ -899,6 +899,36 @@ def test_codegen_cxx11_namespaced_cbuffer_attribute_passthrough():
     assert "vec4 tint;" in output
 
 
+def test_codegen_cbuffer_member_layout_metadata_passthrough():
+    hlsl = textwrap.dedent("""
+        cbuffer Material : register(b0) {
+            row_major float4x4 transform : packoffset(c0);
+            float roughness : packoffset(c4.x);
+        };
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ row_major" in output
+    assert "@ packoffset(c0)" in output
+    assert "@ packoffset(c4.x)" in output
+    assert "mat4 transform;" in output
+    assert "float roughness;" in output
+
+    shader_ast = parse_crossgl(output)
+    cbuffer = shader_ast.cbuffers[0]
+    transform, roughness = cbuffer.members
+    assert [attr.name for attr in transform.attributes] == [
+        "row_major",
+        "packoffset",
+    ]
+    assert transform.attributes[1].arguments[0].name == "c0"
+    assert [attr.name for attr in roughness.attributes] == ["packoffset"]
+    roughness_offset = roughness.attributes[0].arguments[0]
+    assert roughness_offset.object.name == "c4"
+    assert roughness_offset.member == "x"
+
+
 def test_codegen_waveops_include_helper_lanes_attribute_passthrough():
     hlsl = textwrap.dedent("""
         [WaveOpsIncludeHelperLanes]

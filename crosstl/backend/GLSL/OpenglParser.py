@@ -396,15 +396,24 @@ class GLSLParser:
         return qualifiers
 
     def parse_layout_value(self):
-        if self.current_token[0] == "NUMBER":
-            value = self.current_token[1]
-            self.eat("NUMBER")
-            return value
-        if self.current_token[0] == "IDENTIFIER":
-            value = self.current_token[1]
-            self.eat("IDENTIFIER")
-            return value
-        raise SyntaxError(f"Expected layout qualifier value, got {self.current_token}")
+        value = self.parse_layout_constant_expression()
+        if isinstance(value, NumberNode):
+            return value.value
+        if isinstance(value, VariableNode) and not value.vtype:
+            return value.name
+        return value
+
+    def parse_layout_constant_expression(self):
+        expr = self.parse_logical_or()
+        self.skip_newlines()
+        if self.current_token[0] == "QUESTION":
+            self.eat("QUESTION")
+            true_expr = self.parse_layout_constant_expression()
+            self.skip_newlines()
+            self.eat("COLON")
+            false_expr = self.parse_layout_constant_expression()
+            return TernaryOpNode(expr, true_expr, false_expr)
+        return expr
 
     def parse_qualifiers(self):
         qualifiers = []

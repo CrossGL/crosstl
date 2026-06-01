@@ -567,7 +567,11 @@ class GLSLToCrossGLConverter:
     def ssbo_binding_attribute_suffix(self, var):
         layout = getattr(var, "layout", None) or {}
         binding = layout.get("binding")
-        return f" @binding({binding})" if binding is not None else ""
+        return (
+            f" @binding({self.layout_value_to_string(binding)})"
+            if binding is not None
+            else ""
+        )
 
     def ssbo_block_attribute_suffix(self, var):
         layout_names = self.ssbo_block_layout_names(var)
@@ -577,7 +581,7 @@ class GLSLToCrossGLConverter:
 
         binding = self.ssbo_binding(var)
         if binding is not None:
-            attributes.append(f"@binding({binding})")
+            attributes.append(f"@binding({self.layout_value_to_string(binding)})")
 
         qualifiers = self._qualifier_set(var)
         for qualifier in ("coherent", "volatile", "restrict", "readonly", "writeonly"):
@@ -749,7 +753,7 @@ class GLSLToCrossGLConverter:
         layout = getattr(var, "layout", None) or {}
         binding = layout.get("binding")
         if binding is not None:
-            attributes.append(f"@binding({binding})")
+            attributes.append(f"@binding({self.layout_value_to_string(binding)})")
 
         if self._is_image_resource_type(var_type):
             supported_formats = self.supported_image_formats()
@@ -774,7 +778,7 @@ class GLSLToCrossGLConverter:
         for name in self.LAYOUT_ATTRIBUTE_NAMES:
             value = layout.get(name)
             if value is not None:
-                attributes.append(f"@{name}({value})")
+                attributes.append(f"@{name}({self.layout_value_to_string(value)})")
         for name in self.BARE_LAYOUT_ATTRIBUTE_NAMES:
             if name in layout and layout.get(name) is None:
                 attributes.append(f"@{name}")
@@ -917,6 +921,11 @@ class GLSLToCrossGLConverter:
                 emitted.append(mapped)
         return " ".join(emitted)
 
+    def layout_value_to_string(self, value):
+        if isinstance(value, str):
+            return value
+        return self.generate_expression(value)
+
     def format_layout(self, layout_entry):
         layout = (
             layout_entry.get("layout", {}) if isinstance(layout_entry, dict) else {}
@@ -929,7 +938,7 @@ class GLSLToCrossGLConverter:
             if value is None:
                 parts.append(str(key))
             else:
-                parts.append(f"{key} = {value}")
+                parts.append(f"{key} = {self.layout_value_to_string(value)}")
         layout_str = f"layout({', '.join(parts)})" if parts else "layout()"
         if qualifiers:
             layout_str += " " + " ".join(qualifiers)
@@ -964,7 +973,7 @@ class GLSLToCrossGLConverter:
         for key in self.LAYOUT_ATTRIBUTE_NAMES:
             value = layout.get(key)
             if value is not None:
-                attributes.append(f"@{key}({value})")
+                attributes.append(f"@{key}({self.layout_value_to_string(value)})")
 
         instance_name = getattr(node, "interface_instance_name", None)
         if instance_name:

@@ -85,6 +85,31 @@ class TestHipCodeGen:
         assert "// HIP launch bounds: (BlockSize)" in result
         assert "// Kernel: reduction_kernel" in result
 
+    def test_c_linkage_kernel_conversion(self):
+        code = """
+        extern "C"
+        __global__ void vector_add(float* output, float* input1, float* input2, size_t size) {
+            int i = threadIdx.x;
+            if (i < size) {
+                output[i] = input1[i] + input2[i];
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Kernel: vector_add" in result
+        assert "fn vector_add(" in result
+        assert "var i: i32 = gl_LocalInvocationID.x;" in result
+        assert "output[i] = (input1[i] + input2[i]);" in result
+        assert "extern" not in result
+        assert '"C"' not in result
+
     def test_device_function_conversion(self):
         code = """
         __device__ float add(float a, float b) {

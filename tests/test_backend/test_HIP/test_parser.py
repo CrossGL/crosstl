@@ -1458,6 +1458,50 @@ class TestHipParser:
         assert reduction_kernel.attributes == ["__launch_bounds__(BlockSize)"]
         assert reduction_kernel.params[0]["type"] == "float *"
 
+    def test_c_linkage_kernel_parsing(self):
+        code = """
+        extern "C"
+        __global__ void vector_add(float* output, float* input1, float* input2, size_t size) {
+            int i = threadIdx.x;
+            if (i < size) {
+                output[i] = input1[i] + input2[i];
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+        assert isinstance(kernel, KernelNode)
+        assert kernel.name == "vector_add"
+        assert kernel.qualifiers == ["extern", "__global__"]
+        assert kernel.linkage == "C"
+        assert kernel.params == [
+            {"type": "float *", "name": "output"},
+            {"type": "float *", "name": "input1"},
+            {"type": "float *", "name": "input2"},
+            {"type": "size_t", "name": "size"},
+        ]
+
+    def test_c_linkage_block_parsing(self):
+        code = """
+        extern "C" {
+        __global__ void kernel(float* out) {
+            out[threadIdx.x] = 1.0f;
+        }
+        void launch_wrapper() {}
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+        wrapper = ast.statements[1]
+        assert isinstance(kernel, KernelNode)
+        assert kernel.qualifiers == ["extern", "__global__"]
+        assert kernel.linkage == "C"
+        assert isinstance(wrapper, FunctionNode)
+        assert wrapper.qualifiers == ["extern"]
+        assert wrapper.linkage == "C"
+
     def test_hip_opaque_and_declared_type_pointer_declarations_parsing(self):
         code = """
         struct Pair {

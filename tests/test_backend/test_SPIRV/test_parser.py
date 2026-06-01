@@ -45,6 +45,90 @@ def tokenize_code(code: str) -> List:
     return lexer.tokenize()
 
 
+SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY = """
+; Reduced from Khronos SPIRV-Tools test/diff/diff_files/basic_src.spvasm.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %22 "main" %4 %14 %19
+OpName %4 "_ua_position"
+OpName %14 "ANGLEXfbPosition"
+OpName %19 ""
+OpDecorate %4 Location 0
+OpDecorate %14 Location 0
+OpMemberDecorate %17 0 BuiltIn Position
+OpDecorate %17 Block
+%1 = OpTypeFloat 32
+%2 = OpTypeVector %1 4
+%17 = OpTypeStruct %2
+%20 = OpTypeVoid
+%3 = OpTypePointer Input %2
+%13 = OpTypePointer Output %2
+%18 = OpTypePointer Output %17
+%21 = OpTypeFunction %20
+%4 = OpVariable %3 Input
+%14 = OpVariable %13 Output
+%19 = OpVariable %18 Output
+%22 = OpFunction %20 None %21
+%23 = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+
+def test_spirv_assembly_location_decorated_interfaces_parse():
+    tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    input_layout = ast.global_variables[0]
+    output_layout = ast.global_variables[1]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_entry_points == [
+        {
+            "execution_model": "Vertex",
+            "id": "%22",
+            "name": "main",
+            "interface_ids": ["%4", "%14", "%19"],
+        }
+    ]
+    assert ast.spirv_names["%4"] == "_ua_position"
+    assert ast.spirv_decorations["%17"] == [("Block", [])]
+    assert ast.spirv_member_decorations["%17"] == [("0", "BuiltIn", ["Position"])]
+    assert ast.spirv_types["%2"]["name"] == "vec4"
+    assert len(ast.global_variables) == 2
+    assert isinstance(input_layout, LayoutNode)
+    assert input_layout.spirv_id == "%4"
+    assert input_layout.spirv_storage_class == "Input"
+    assert input_layout.spirv_decorations == [("Location", ["0"])]
+    assert input_layout.layout_type == "IN"
+    assert input_layout.data_type == "vec4"
+    assert input_layout.variable_name == "_ua_position"
+    assert input_layout.qualifiers == [("location", "0")]
+
+    assert isinstance(output_layout, LayoutNode)
+    assert output_layout.spirv_id == "%14"
+    assert output_layout.spirv_storage_class == "Output"
+    assert output_layout.layout_type == "OUT"
+    assert output_layout.data_type == "vec4"
+    assert output_layout.variable_name == "ANGLEXfbPosition"
+    assert output_layout.qualifiers == [("location", "0")]
+
+
+def test_spirv_assembly_without_location_interface_is_rejected():
+    code = """
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint Vertex %main "main"
+    %void = OpTypeVoid
+    %fn = OpTypeFunction %void
+    %main = OpFunction %void None %fn
+    OpFunctionEnd
+    """
+
+    tokens = tokenize_code(code)
+    with pytest.raises(SyntaxError, match="only partially supported"):
+        parse_code(tokens)
+
+
 def test_mod_parsing():
     code = """
 

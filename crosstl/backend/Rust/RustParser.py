@@ -1044,6 +1044,8 @@ class RustParser:
                 self.eat("DOUBLE_COLON")
                 type_parts.append(self.current_token[1])
                 self.eat(self.current_token[0])
+            elif self.current_token[0] == "EXCLAMATION":
+                type_parts.append(self.parse_type_macro_suffix())
             elif self.current_token[0] == "LESS_THAN":
                 type_parts.append(self.parse_generic_argument_suffix())
             else:
@@ -1084,6 +1086,69 @@ class RustParser:
         arguments = self.collect_token_text_until({"GREATER_THAN"})
         self.eat("GREATER_THAN")
         return f"<{arguments}>"
+
+    def parse_type_macro_suffix(self):
+        self.eat("EXCLAMATION")
+        self.eat("LPAREN")
+        arguments = self.collect_macro_type_arguments()
+        self.eat("RPAREN")
+        return f"!({arguments})"
+
+    def collect_macro_type_arguments(self):
+        parts = []
+        depth = 0
+
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if token_type == "RPAREN" and depth == 0:
+                break
+
+            if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
+                depth += 1
+            elif token_type in {"RPAREN", "RBRACKET", "RBRACE"}:
+                depth = max(0, depth - 1)
+
+            parts.append(str(token_value))
+            self.eat(token_type)
+
+        return self.format_macro_type_parts(parts)
+
+    def format_macro_type_parts(self, parts):
+        formatted = []
+        previous = None
+
+        for part in parts:
+            if part == ",":
+                formatted.append(", ")
+            else:
+                if self.needs_macro_type_part_space(previous, part):
+                    formatted.append(" ")
+                formatted.append(part)
+            previous = part
+
+        return "".join(formatted).strip()
+
+    def needs_macro_type_part_space(self, previous, current):
+        if previous is None:
+            return False
+        if previous in {"<", "[", "(", "::", ",", "="}:
+            return False
+        if current in {
+            ">",
+            "]",
+            ")",
+            ",",
+            "::",
+            "<",
+            "[",
+            "(",
+            ":",
+            "=",
+        }:
+            return False
+        if previous.isdigit() and current == "D":
+            return False
+        return self.is_token_word(previous) and self.is_token_word(current)
 
     def parse_array_type_size(self):
         parts = []
