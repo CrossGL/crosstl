@@ -1972,7 +1972,11 @@ class MetalCodeGen:
         return declaration
 
     def strip_unused_metal_declaration_attribute(self, declaration):
-        return str(declaration).strip().removeprefix("__attribute__((unused)) ")
+        declaration = str(declaration).strip()
+        prefix = "__attribute__((unused)) "
+        if declaration.startswith(prefix):
+            return declaration[len(prefix) :]
+        return declaration
 
     def format_match_binding_declaration(self, declaration, _binding_name):
         return self.format_unused_metal_declaration(declaration)
