@@ -310,10 +310,8 @@ class VulkanToCrossGLConverter:
             if node.struct_fields:
                 block_name = node.block_name or node.variable_name or "UniformBuffer"
                 self.record_flattened_uniform_block_instance(node)
-                push_constant_attr = (
-                    " @push_constant" if getattr(node, "push_constant", False) else ""
-                )
-                code += f"    cbuffer {block_name}{push_constant_attr} {{\n"
+                attributes = self.uniform_block_attribute_suffix(node)
+                code += f"    cbuffer {block_name}{attributes} {{\n"
                 for field_type, field_name in node.struct_fields:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
                 code += "    }\n\n"
@@ -422,6 +420,18 @@ class VulkanToCrossGLConverter:
         if image_format is not None:
             attributes.append(f"@{image_format}")
         attributes.extend(declaration_attributes)
+        return f" {' '.join(attributes)}" if attributes else ""
+
+    def uniform_block_attribute_suffix(self, node):
+        attributes = []
+        for name, value in getattr(node, "qualifiers", []) or []:
+            qualifier_name = str(name).lower()
+            if qualifier_name == "set" and value is not None:
+                attributes.append(f"@set({value})")
+            elif qualifier_name == "binding" and value is not None:
+                attributes.append(f"@binding({value})")
+        if getattr(node, "push_constant", False):
+            attributes.append("@push_constant")
         return f" {' '.join(attributes)}" if attributes else ""
 
     def is_storage_image_type(self, type_name):

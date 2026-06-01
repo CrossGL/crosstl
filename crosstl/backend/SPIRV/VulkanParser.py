@@ -382,10 +382,11 @@ class VulkanParser:
             if pointer_type.get("kind") != "pointer":
                 continue
 
-            if storage_class == "PushConstant":
-                push_constant_layout = self.spirv_assembly_push_constant_layout(
+            if storage_class in {"PushConstant", "Uniform"}:
+                resource_block_layout = self.spirv_assembly_resource_block_layout(
                     variable,
                     pointer_type,
+                    storage_class,
                     names,
                     decorations,
                     member_decorations,
@@ -393,8 +394,8 @@ class VulkanParser:
                     types,
                     constants,
                 )
-                if push_constant_layout is not None:
-                    layouts.append(push_constant_layout)
+                if resource_block_layout is not None:
+                    layouts.append(resource_block_layout)
                 continue
 
             layout_type = self.SPIRV_INTERFACE_STORAGE_CLASSES.get(storage_class)
@@ -447,10 +448,11 @@ class VulkanParser:
 
         return layouts
 
-    def spirv_assembly_push_constant_layout(
+    def spirv_assembly_resource_block_layout(
         self,
         variable,
         pointer_type,
+        storage_class,
         names,
         decorations,
         member_decorations,
@@ -461,6 +463,12 @@ class VulkanParser:
         struct_type_id = pointer_type.get("type_id")
         struct_type = types.get(struct_type_id, {})
         if struct_type.get("kind") != "struct":
+            return None
+
+        struct_decorations = decorations.get(struct_type_id, [])
+        variable_id = variable["id"]
+        variable_decorations = decorations.get(variable_id, [])
+        if not self.spirv_has_decoration(struct_decorations, "Block"):
             return None
 
         struct_fields = []
@@ -482,24 +490,42 @@ class VulkanParser:
         if not struct_fields:
             return None
 
-        variable_id = variable["id"]
         variable_name = names.get(variable_id) or variable_id.lstrip("%")
         block_name = (
             names.get(struct_type_id) or variable_name or struct_type_id.lstrip("%")
         )
+        qualifiers = []
+        if storage_class == "Uniform":
+            qualifiers = self.spirv_descriptor_qualifiers(variable_decorations)
+            qualifier_names = {name for name, _value in qualifiers}
+            if not {"set", "binding"}.issubset(qualifier_names):
+                return None
 
         return LayoutNode(
-            [],
+            qualifiers,
             layout_type="UNIFORM",
-            push_constant=True,
+            push_constant=storage_class == "PushConstant",
             block_name=block_name,
             variable_name=variable_name,
             struct_fields=struct_fields,
             spirv_id=variable_id,
-            spirv_decorations=decorations.get(struct_type_id, [])
-            + decorations.get(variable_id, []),
-            spirv_storage_class="PushConstant",
+            spirv_decorations=struct_decorations + variable_decorations,
+            spirv_storage_class=storage_class,
         )
+
+    def spirv_has_decoration(self, decorations, target_decoration):
+        return any(decoration == target_decoration for decoration, _ in decorations)
+
+    def spirv_descriptor_qualifiers(self, decorations):
+        qualifiers = []
+        for decoration, operands in decorations:
+            if not operands:
+                continue
+            if decoration == "DescriptorSet":
+                qualifiers.append(("set", operands[0]))
+            elif decoration == "Binding":
+                qualifiers.append(("binding", operands[0]))
+        return qualifiers
 
     def spirv_assembly_struct_interface_layouts(
         self,

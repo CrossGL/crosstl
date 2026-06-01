@@ -23,7 +23,8 @@ SPIRV_ASSEMBLY_PATTERN = re.compile(
 SPIRV_ASSEMBLY_ERROR = (
     "SPIR-V assembly input is only partially supported by the Vulkan backend "
     "parser; supported assembly must expose location-decorated Input/Output "
-    "OpVariable declarations."
+    "OpVariable declarations, push-constant blocks, or descriptor-decorated "
+    "Uniform blocks."
 )
 
 TOKENS = tuple(

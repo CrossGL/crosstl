@@ -146,6 +146,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_UNIFORM_BLOCK_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main"
+OpName %Camera "Camera"
+OpName %camera "camera"
+OpMemberName %Camera 0 "viewProj"
+OpMemberName %Camera 1 "tint"
+OpDecorate %Camera Block
+OpDecorate %camera DescriptorSet 0
+OpDecorate %camera Binding 2
+OpMemberDecorate %Camera 0 Offset 0
+OpMemberDecorate %Camera 1 Offset 64
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%mat4 = OpTypeMatrix %v4float 4
+%Camera = OpTypeStruct %mat4 %v4float
+%ptr_camera = OpTypePointer Uniform %Camera
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%camera = OpVariable %ptr_camera Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -410,6 +437,17 @@ def test_spirv_assembly_push_constant_block_codegen():
     assert "float4x4 model;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%pc" not in generated_code
+
+
+def test_spirv_assembly_uniform_block_codegen():
+    tokens = tokenize_code(SPIRV_UNIFORM_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "cbuffer Camera @set(0) @binding(2) {" in generated_code
+    assert "float4x4 viewProj;" in generated_code
+    assert "float4 tint;" in generated_code
+    assert "%camera" not in generated_code
 
 
 def test_translate_api_accepts_location_decorated_spirv_assembly(tmp_path):

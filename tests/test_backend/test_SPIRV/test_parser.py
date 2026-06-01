@@ -118,6 +118,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_UNIFORM_BLOCK_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main"
+OpName %Camera "Camera"
+OpName %camera "camera"
+OpMemberName %Camera 0 "viewProj"
+OpMemberName %Camera 1 "tint"
+OpDecorate %Camera Block
+OpDecorate %camera DescriptorSet 0
+OpDecorate %camera Binding 2
+OpMemberDecorate %Camera 0 Offset 0
+OpMemberDecorate %Camera 1 Offset 64
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%mat4 = OpTypeMatrix %v4float 4
+%Camera = OpTypeStruct %mat4 %v4float
+%ptr_camera = OpTypePointer Uniform %Camera
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%camera = OpVariable %ptr_camera Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
@@ -193,6 +220,21 @@ def test_spirv_assembly_push_constant_block_parse():
     assert layout.variable_name == "pc"
     assert layout.struct_fields == [("mat4", "model"), ("vec4", "tint")]
     assert layout.spirv_storage_class == "PushConstant"
+
+
+def test_spirv_assembly_uniform_block_parse():
+    tokens = tokenize_code(SPIRV_UNIFORM_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert layout.layout_type == "UNIFORM"
+    assert layout.push_constant is False
+    assert layout.block_name == "Camera"
+    assert layout.variable_name == "camera"
+    assert layout.struct_fields == [("mat4", "viewProj"), ("vec4", "tint")]
+    assert layout.qualifiers == [("set", "0"), ("binding", "2")]
+    assert layout.spirv_storage_class == "Uniform"
 
 
 def test_spirv_assembly_without_location_interface_is_rejected():
