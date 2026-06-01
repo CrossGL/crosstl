@@ -266,10 +266,11 @@
         },
         "opengl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_parts"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_parts",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_tessellation_control_rejects_patchconstantfunc_metadata"
           ],
-          "notes": "",
-          "status": "supported"
+          "notes": "GLSL tessellation control/evaluation stages lower native layout metadata and tessellation builtins, while unsupported patchconstantfunc metadata is rejected with a deterministic diagnostic instead of emitting invalid GLSL.",
+          "status": "diagnostic"
         }
       }
     },
@@ -663,6 +664,7 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_unsized_texture_array_infers_helper_size_and_filters_sampler_array",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_unsized_shadow_texture_array_infers_helper_size_and_filters_sampler_array",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fragment_dynamic_sampled_texture_array_validates_with_glslang",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_formatted_image_arrays_preserve_format_metadata",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types"
           ],
@@ -1265,7 +1267,7 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types"
           ],
           "notes": "Represents multisample storage images as read-capable SRVs, preserves size/sample queries and arrays, and emits deterministic diagnostics for DirectX-unsupported stores and atomics.",
-          "status": "supported"
+          "status": "diagnostic"
         },
         "metal": {
           "evidence": [
@@ -1647,9 +1649,9 @@
     "feature_count": 43,
     "status_counts": {
       "directx": {
-        "diagnostic": 0,
+        "diagnostic": 1,
         "partial": 0,
-        "supported": 43,
+        "supported": 42,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -1663,9 +1665,9 @@
         "validated_rejection": 0
       },
       "opengl": {
-        "diagnostic": 0,
+        "diagnostic": 1,
         "partial": 0,
-        "supported": 43,
+        "supported": 42,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

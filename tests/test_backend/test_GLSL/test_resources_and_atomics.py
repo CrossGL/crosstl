@@ -13189,7 +13189,8 @@ def test_codegen_switch_match_sampled_arrays_ignore_dynamic_negative_indices():
         "vec4 sampleCases(sampler2D textures[5], int layer, vec2 uv, int mode)" in glsl
     )
     assert "texture(textures[(layer + 1)], uv)" in glsl
-    assert "texture(textures[(-1)], uv)" in glsl
+    assert "texture(textures[0], uv)" in glsl
+    assert "texture(textures[(-1)], uv)" not in glsl
     assert "texture(textures[(layer - 1)], uv)" in glsl
     assert glsl.count("texture(textures[(BASE + OFFSET)], uv)") == 2
     assert "layout(binding = 0) uniform sampler2D textures[1];" not in glsl
@@ -13282,7 +13283,8 @@ def test_codegen_switch_match_image_arrays_ignore_dynamic_negative_indices():
         "vec2 imageCases(image2D images[4], int layer, ivec2 pixel, int mode)" in glsl
     )
     assert "imageLoad(images[(layer + 1)], pixel).xy" in glsl
-    assert "imageLoad(images[(-1)], pixel).xy" in glsl
+    assert "imageLoad(images[0], pixel).xy" in glsl
+    assert "imageLoad(images[(-1)], pixel).xy" not in glsl
     assert "imageLoad(images[(layer - 1)], pixel).xy" in glsl
     assert glsl.count("imageLoad(images[(BASE + OFFSET)], pixel).xy") == 2
     assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[1];" not in glsl

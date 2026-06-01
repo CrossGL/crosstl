@@ -1284,6 +1284,29 @@ shader SampledTextureArrayValidation {
 """
 
 
+DYNAMIC_SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER = """
+shader DynamicSampledTextureArrayValidation {
+    sampler2D textures[];
+    sampler samplers[];
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        int layer @ TEXCOORD1;
+    };
+
+    vec4 sampleDynamic(sampler2D textures[], sampler samplers[], int layer, vec2 uv) {
+        return texture(textures[layer], samplers[layer], uv);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return sampleDynamic(textures, samplers, input.layer, input.uv);
+        }
+    }
+}
+"""
+
+
 IMPLICIT_SAMPLER_ARRAY_FRAGMENT_SHADER = """
 shader ImplicitSamplerArrayValidation {
     sampler2D textures[4];
@@ -11470,6 +11493,23 @@ def test_generated_glsl_fragment_sampled_texture_array_validates_with_glslang(
     source = tmp_path / "fragment_sampled_texture_array.frag"
     code = GLSLCodeGen().generate_stage(
         crosstl.translator.parse(SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_dynamic_sampled_texture_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_dynamic_sampled_texture_array.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(DYNAMIC_SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER),
         "fragment",
     )
     source.write_text(code, encoding="utf-8")

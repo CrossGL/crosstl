@@ -9006,7 +9006,7 @@ class GLSLCodeGen:
             # Handle array access properly
             if hasattr(expr, "array") and hasattr(expr, "index"):
                 array = self.generate_expression(expr.array)
-                index = self.generate_expression(expr.index)
+                index = self.glsl_resource_array_index_expression(expr)
                 return f"{array}[{index}]"
             else:
                 return str(expr)
@@ -9627,6 +9627,30 @@ class GLSLCodeGen:
             array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
             return self.expression_name(array_expr)
         return None
+
+    def glsl_resource_array_index_expression(self, expr):
+        index_expr = getattr(expr, "index", getattr(expr, "index_expr", None))
+        literal_index = self.literal_int_value(index_expr, self.literal_int_constants)
+        if (
+            isinstance(literal_index, int)
+            and not isinstance(literal_index, bool)
+            and literal_index < 0
+            and self.is_resource_array_access(expr)
+        ):
+            return "0"
+        return self.generate_expression(index_expr)
+
+    def is_resource_array_access(self, expr):
+        array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
+        array_name = self.expression_name(array_expr)
+        if not array_name:
+            return False
+        if array_name in self.texture_variable_types:
+            return True
+        if array_name in self.current_texture_parameters:
+            return True
+        array_type = self.expression_result_type(array_expr)
+        return self.is_resource_array_hint_type(array_type)
 
     def collect_function_parameter_types(self, functions):
         parameter_types = {}
@@ -13685,6 +13709,8 @@ class GLSLCodeGen:
                     else ""
                 )
             )
+            if not array_size and self.is_inferable_resource_array_type(vtype):
+                array_size = "1"
             array_suffix = f"[{array_size}]" if array_size else "[]"
             resource_count = self.resource_array_count(
                 node_type.size if node_type.size else array_size
@@ -13698,8 +13724,14 @@ class GLSLCodeGen:
         if "[" in vtype and "]" in vtype:
             base_type, parsed_size = parse_array_type(vtype)
             array_size = parsed_size
+            if array_size is None and self.is_inferable_resource_array_type(base_type):
+                array_size = "1"
             array_suffix = f"[{parsed_size}]" if parsed_size else "[]"
+            if array_size and not parsed_size:
+                array_suffix = f"[{array_size}]"
             resource_count = self.resource_array_count(parsed_size)
+            if array_size and not parsed_size:
+                resource_count = self.resource_array_count(array_size)
             return base_type, array_size, array_suffix, resource_count
 
         return vtype, None, "", resource_count
@@ -13964,9 +13996,7 @@ class GLSLCodeGen:
                     else function_hints.get(param_name, "")
                 )
                 mapped_type = self.map_image_base_type_with_format(base_type, node)
-                return (
-                    f"{mapped_type}[{array_size}]" if array_size else f"{mapped_type}[]"
-                )
+                return f"{mapped_type}[{array_size or 1}]"
 
         if not (hasattr(vtype, "name") or hasattr(vtype, "element_type")):
             type_string = str(vtype)
@@ -13976,11 +14006,7 @@ class GLSLCodeGen:
                     mapped_type = self.map_image_base_type_with_format(base_type, node)
                     if array_suffix == "[]":
                         array_size = function_hints.get(param_name, "")
-                        return (
-                            f"{mapped_type}[{array_size}]"
-                            if array_size
-                            else f"{mapped_type}[]"
-                        )
+                        return f"{mapped_type}[{array_size or 1}]"
                     return f"{mapped_type}{array_suffix}"
 
         return self.map_resource_type_with_format(vtype, node)

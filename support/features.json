@@ -631,9 +631,11 @@
           ]
         },
         "opengl": {
-          "status": "supported",
+          "status": "diagnostic",
+          "notes": "GLSL tessellation control/evaluation stages lower native layout metadata and tessellation builtins, while unsupported patchconstantfunc metadata is rejected with a deterministic diagnostic instead of emitting invalid GLSL.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_parts"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_parts",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_tessellation_control_rejects_patchconstantfunc_metadata"
           ]
         },
         "metal": {
@@ -1639,6 +1641,7 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_unsized_texture_array_infers_helper_size_and_filters_sampler_array",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_unsized_shadow_texture_array_infers_helper_size_and_filters_sampler_array",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fragment_dynamic_sampled_texture_array_validates_with_glslang",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_formatted_image_arrays_preserve_format_metadata",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types"
           ]
@@ -3220,7 +3223,7 @@
       "description": "Represent multisample storage images and report unsupported load/store/atomic combinations deterministically.",
       "support": {
         "directx": {
-          "status": "supported",
+          "status": "diagnostic",
           "notes": "Represents multisample storage images as read-capable SRVs, preserves size/sample queries and arrays, and emits deterministic diagnostics for DirectX-unsupported stores and atomics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_storage_images_emit_srv_reads_and_diagnostics",
@@ -3459,31 +3462,40 @@
           ]
         },
         "vulkan": {
-          "status": "supported",
-          "notes": "SPIR-V lowers helper functions, entry functions, function parameters, return-value conversion, argument conversion, user calls, and structured return statements to OpFunction/OpFunctionParameter/OpFunctionCall with spirv-as/spirv-val coverage.",
+          "status": "diagnostic",
+          "notes": "SPIR-V lowers non-generic helper functions, entry functions, function parameters, return-value conversion, argument conversion, user calls, and structured return statements to OpFunction/OpFunctionParameter/OpFunctionCall with spirv-as/spirv-val coverage. Generic functions emit deterministic diagnostics until SPIR-V monomorphization support is implemented.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_user_function_generates_opfunction_and_opfunctioncall",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_function_parameters_generate_opfunctionparameter",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_return_values_convert_to_declared_function_type",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_generic_functions_report_deterministic_diagnostic",
+            "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_language_features_compute_validates_with_spirv_tools"
           ]
         },
         "cuda": {
-          "status": "supported",
+          "status": "diagnostic",
+          "notes": "CUDA lowers non-generic helper functions, entry functions, calls, parameters, and returns. Generic functions emit deterministic diagnostics until CUDA monomorphization support is implemented.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_function_conversion"
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_function_conversion",
+            "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics"
           ]
         },
         "hip": {
-          "status": "supported",
+          "status": "diagnostic",
+          "notes": "HIP lowers non-generic helper functions, entry functions, calls, parameters, and returns. Generic functions emit deterministic diagnostics until HIP monomorphization support is implemented.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_function_conversion"
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_function_conversion",
+            "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics"
           ]
         },
         "mojo": {
-          "status": "supported",
+          "status": "diagnostic",
+          "notes": "Mojo lowers non-generic helper functions, entry functions, calls, parameters, and returns. Generic functions emit deterministic diagnostics until the backend has a generic ABI.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_function_call"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_function_call",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_generic_payload_enum_parameterized_specializations_are_diagnostic_for_mojo_codegen",
+            "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics"
           ]
         },
         "rust": {
@@ -3493,9 +3505,11 @@
           ]
         },
         "slang": {
-          "status": "supported",
+          "status": "diagnostic",
+          "notes": "Slang lowers non-generic helper functions, entry functions, calls, parameters, and returns. Generic functions emit deterministic diagnostics until Slang monomorphization support is implemented.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_local_functions_and_initialized_variables_emit"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_local_functions_and_initialized_variables_emit",
+            "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics"
           ]
         }
       }
@@ -3638,7 +3652,8 @@
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_barrier_emits_syncthreads",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_hip_memory_barrier_variants_emit_sync_intrinsics",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_hip_user_defined_synchronization_names_are_not_lowered",
-            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_hip_synchronization_builtins_reject_arguments"
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_hip_synchronization_builtins_reject_arguments",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_generated_atomic_barrier_kernel_smoke_compiles_with_hipcc"
           ]
         },
         "mojo": {

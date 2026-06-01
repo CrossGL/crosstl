@@ -35,7 +35,7 @@ def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
     """Compile generated CUDA when nvcc is available in the local environment."""
     nvcc = shutil.which("nvcc")
     if nvcc is None:
-        return
+        pytest.skip("nvcc is not installed")
 
     source_path = tmp_path / "generated.cu"
     object_path = tmp_path / "generated.o"

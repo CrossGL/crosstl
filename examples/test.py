@@ -17,6 +17,14 @@ EXAMPLE_BACKEND_SKIPS = {
     (
         "advanced",
         "GenericPatternMatching",
+        "vulkan",
+    ): (
+        "SPIR-V codegen intentionally rejects generic functions until the backend "
+        "has monomorphization support."
+    ),
+    (
+        "advanced",
+        "GenericPatternMatching",
         "mojo",
     ): (
         "Mojo codegen intentionally rejects generic functions until the backend has a generic ABI."

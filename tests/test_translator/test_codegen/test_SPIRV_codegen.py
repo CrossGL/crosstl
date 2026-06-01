@@ -1416,6 +1416,26 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
+    def test_generic_functions_report_deterministic_diagnostic(self):
+        source_code = """
+        shader GenericFunctionDiagnostic {
+            generic<T> fn identity(value: T) -> T {
+                return value;
+            }
+
+            compute {
+                void main() {
+                    float value = identity(1.0);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(
+            ValueError, match="SPIR-V codegen does not support generic functions"
+        ):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
     def test_lambda_call_emits_explicit_unsupported_spirv_fallback(self):
         source_code = """
         shader UnsupportedLambda {

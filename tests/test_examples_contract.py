@@ -35,6 +35,7 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
 ADDITIONAL_FIXED_CASES = ()
 
 GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
+    ("advanced/GenericPatternMatching.cgl", "vulkan", "SPIR-V"),
     ("advanced/GenericPatternMatching.cgl", "cuda", "CUDA"),
     ("advanced/GenericPatternMatching.cgl", "hip", "HIP"),
     ("advanced/GenericPatternMatching.cgl", "mojo", "Mojo"),

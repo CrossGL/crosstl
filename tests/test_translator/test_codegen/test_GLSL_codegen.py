@@ -13037,19 +13037,21 @@ def test_opengl_unsized_texture_array_ignores_unsupported_indices():
     dynamic_code = GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = GLSLCodeGen().generate(crosstl.translator.parse(negative_shader))
 
-    assert "layout(binding = 0) uniform sampler2D textures[];" in dynamic_code
+    assert "layout(binding = 0) uniform sampler2D textures[1];" in dynamic_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" in dynamic_code
-    assert "vec4 sampleLayer(sampler2D textures[], int layer, vec2 uv)" in dynamic_code
+    assert "vec4 sampleLayer(sampler2D textures[1], int layer, vec2 uv)" in dynamic_code
     assert "texture(textures[layer], uv)" in dynamic_code
-    assert "layout(binding = 0) uniform sampler2D textures[1];" not in dynamic_code
+    assert "layout(binding = 0) uniform sampler2D textures[];" not in dynamic_code
     assert "layout(binding = 2) uniform sampler2D afterTexture;" not in dynamic_code
     assert "sampler samplers" not in dynamic_code
     assert "samplers[layer]" not in dynamic_code
 
-    assert "layout(binding = 0) uniform sampler2D textures[];" in negative_code
+    assert "layout(binding = 0) uniform sampler2D textures[1];" in negative_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" in negative_code
-    assert "vec4 sampleLayer(sampler2D textures[], vec2 uv)" in negative_code
-    assert "texture(textures[(-1)], uv)" in negative_code
+    assert "vec4 sampleLayer(sampler2D textures[1], vec2 uv)" in negative_code
+    assert "texture(textures[0], uv)" in negative_code
+    assert "texture(textures[(-1)], uv)" not in negative_code
+    assert "layout(binding = 0) uniform sampler2D textures[];" not in negative_code
     assert "layout(binding = 0) uniform sampler2D textures[0];" not in negative_code
     assert "layout(binding = 0) uniform sampler2D afterTexture;" not in negative_code
     assert "sampler samplers" not in negative_code
@@ -13157,13 +13159,14 @@ def test_opengl_unsized_texture_array_ignores_shadowed_constant_name():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "const int LAYER = 3;" in generated_code
-    assert "layout(binding = 0) uniform sampler2D textures[];" in generated_code
+    assert "layout(binding = 0) uniform sampler2D textures[1];" in generated_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" in generated_code
     assert (
-        "vec4 sampleLayer(sampler2D textures[], int LAYER, vec2 uv)" in generated_code
+        "vec4 sampleLayer(sampler2D textures[1], int LAYER, vec2 uv)" in generated_code
     )
     assert "texture(textures[LAYER], uv)" in generated_code
     assert "sampleLayer(textures, layer, uv)" in generated_code
+    assert "layout(binding = 0) uniform sampler2D textures[];" not in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[4];" not in generated_code
     assert "layout(binding = 4) uniform sampler2D afterTexture;" not in generated_code
     assert "sampler samplers" not in generated_code
@@ -19904,19 +19907,19 @@ def test_opengl_shadowed_rg_image_array_constant_keeps_scalar_context():
 
     assert "const int LAYER = 3;" in generated_code
     assert (
-        "layout(rg32f, binding = 0) uniform image2D rgFloatImages[];" in generated_code
+        "layout(rg32f, binding = 0) uniform image2D rgFloatImages[1];" in generated_code
     )
     assert (
-        "layout(rg32ui, binding = 1) uniform uimage2D rgUnsignedImages[];"
+        "layout(rg32ui, binding = 1) uniform uimage2D rgUnsignedImages[1];"
         in generated_code
     )
     assert "layout(rg32f, binding = 2) uniform image2D afterImages;" in generated_code
     assert (
-        "float scalarFloat(image2D images[], ivec2 pixel, float value)"
+        "float scalarFloat(image2D images[1], ivec2 pixel, float value)"
         in generated_code
     )
     assert (
-        "uint scalarUnsigned(uimage2D images[], ivec2 pixel, uint value)"
+        "uint scalarUnsigned(uimage2D images[1], ivec2 pixel, uint value)"
         in generated_code
     )
     assert "int LAYER = 0;" in generated_code
@@ -20038,17 +20041,17 @@ def test_opengl_unsized_formatted_image_arrays_preserve_format_metadata():
     ast = crosstl.translator.parse(shader)
     generated_code = GLSLCodeGen().generate(ast)
 
-    assert "layout(r32ui, binding = 0) uniform uimage2D counters[];" in generated_code
-    assert "layout(rg16f, binding = 1) uniform image2D rgPairs[];" in generated_code
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[1];" in generated_code
+    assert "layout(rg16f, binding = 1) uniform image2D rgPairs[1];" in generated_code
     assert (
         "layout(r32ui, binding = 2) uniform uimage2D afterCounters;" in generated_code
     )
     assert (
-        "uint touchCounters(uimage2D images[], ivec2 pixel, uint value)"
+        "uint touchCounters(uimage2D images[1], ivec2 pixel, uint value)"
         in generated_code
     )
     assert (
-        "vec2 touchPairs(image2D images[], ivec2 pixel, vec2 value)" in generated_code
+        "vec2 touchPairs(image2D images[1], ivec2 pixel, vec2 value)" in generated_code
     )
     assert "uint oldValue = imageLoad(images[0], pixel).x;" in generated_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
@@ -20162,12 +20165,12 @@ def test_opengl_formatted_image_arrays_ignore_shadowed_local_constant():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "const int LAYER = 3;" in generated_code
-    assert "layout(r32ui, binding = 0) uniform uimage2D counters[];" in generated_code
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[1];" in generated_code
     assert (
         "layout(r32ui, binding = 1) uniform uimage2D afterCounters;" in generated_code
     )
     assert (
-        "uint touchCounters(uimage2D images[], ivec2 pixel, uint value)"
+        "uint touchCounters(uimage2D images[1], ivec2 pixel, uint value)"
         in generated_code
     )
     assert "int LAYER = 0;" in generated_code
@@ -20316,10 +20319,10 @@ def test_opengl_formatted_image_arrays_ignore_unsupported_indices():
     dynamic_code = GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = GLSLCodeGen().generate(crosstl.translator.parse(negative_shader))
 
-    assert "layout(r32ui, binding = 0) uniform uimage2D counters[];" in dynamic_code
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[1];" in dynamic_code
     assert "layout(r32ui, binding = 1) uniform uimage2D afterCounters;" in dynamic_code
     assert (
-        "uint touchCounters(uimage2D images[], int layer, ivec2 pixel, uint value)"
+        "uint touchCounters(uimage2D images[1], int layer, ivec2 pixel, uint value)"
         in dynamic_code
     )
     assert "uint oldValue = imageLoad(images[layer], pixel).x;" in dynamic_code
@@ -20336,13 +20339,13 @@ def test_opengl_formatted_image_arrays_ignore_unsupported_indices():
     )
     assert "uint oldValue = imageLoad(images[layer], pixel);" not in dynamic_code
 
-    assert "layout(r32ui, binding = 0) uniform uimage2D counters[];" in negative_code
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[1];" in negative_code
     assert "layout(r32ui, binding = 1) uniform uimage2D afterCounters;" in negative_code
     assert (
-        "uint touchCounters(uimage2D images[], ivec2 pixel, uint value)"
+        "uint touchCounters(uimage2D images[1], ivec2 pixel, uint value)"
         in negative_code
     )
-    assert "uint oldValue = imageLoad(images[(-1)], pixel).x;" in negative_code
+    assert "uint oldValue = imageLoad(images[0], pixel).x;" in negative_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in negative_code
     assert (
         "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);" in negative_code
@@ -20354,7 +20357,7 @@ def test_opengl_formatted_image_arrays_ignore_unsupported_indices():
         "layout(r32ui, binding = 0) uniform uimage2D afterCounters;"
         not in negative_code
     )
-    assert "uint oldValue = imageLoad(images[(-1)], pixel);" not in negative_code
+    assert "uint oldValue = imageLoad(images[(-1)], pixel)" not in negative_code
 
 
 def test_opengl_formatted_image_arrays_ignore_function_call_indices():
@@ -20383,13 +20386,13 @@ def test_opengl_formatted_image_arrays_ignore_function_call_indices():
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "layout(r32ui, binding = 0) uniform uimage2D counters[];" in generated_code
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[1];" in generated_code
     assert (
         "layout(r32ui, binding = 1) uniform uimage2D afterCounters;" in generated_code
     )
     assert "int getLayer()" in generated_code
     assert (
-        "uint touchCounters(uimage2D images[], ivec2 pixel, uint value)"
+        "uint touchCounters(uimage2D images[1], ivec2 pixel, uint value)"
         in generated_code
     )
     assert "uint oldValue = imageLoad(images[getLayer()], pixel).x;" in generated_code
@@ -20399,7 +20402,7 @@ def test_opengl_formatted_image_arrays_ignore_function_call_indices():
         in generated_code
     )
     assert (
-        "layout(r32ui, binding = 0) uniform uimage2D counters[1];" not in generated_code
+        "layout(r32ui, binding = 0) uniform uimage2D counters[];" not in generated_code
     )
     assert (
         "layout(r32ui, binding = 2) uniform uimage2D afterCounters;"
@@ -23991,15 +23994,15 @@ def test_opengl_unsized_shadow_texture_array_ignores_unsupported_indices():
     dynamic_code = GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = GLSLCodeGen().generate(crosstl.translator.parse(negative_shader))
 
-    assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[];" in dynamic_code
+    assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[1];" in dynamic_code
     assert "layout(binding = 1) uniform sampler2DShadow afterShadow;" in dynamic_code
     assert (
-        "float shadowLayer(sampler2DShadow shadowMaps[], int layer, vec2 uv, float depth)"
+        "float shadowLayer(sampler2DShadow shadowMaps[1], int layer, vec2 uv, float depth)"
         in dynamic_code
     )
     assert "texture(shadowMaps[layer], vec3(uv, depth))" in dynamic_code
     assert (
-        "layout(binding = 0) uniform sampler2DShadow shadowMaps[1];" not in dynamic_code
+        "layout(binding = 0) uniform sampler2DShadow shadowMaps[];" not in dynamic_code
     )
     assert (
         "layout(binding = 2) uniform sampler2DShadow afterShadow;" not in dynamic_code
@@ -24008,13 +24011,14 @@ def test_opengl_unsized_shadow_texture_array_ignores_unsupported_indices():
     assert "shadowSamplers[layer]" not in dynamic_code
     assert "textureCompare(" not in dynamic_code
 
-    assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[];" in negative_code
+    assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[1];" in negative_code
     assert "layout(binding = 1) uniform sampler2DShadow afterShadow;" in negative_code
     assert (
-        "float shadowLayer(sampler2DShadow shadowMaps[], vec2 uv, float depth)"
+        "float shadowLayer(sampler2DShadow shadowMaps[1], vec2 uv, float depth)"
         in negative_code
     )
-    assert "texture(shadowMaps[(-1)], vec3(uv, depth))" in negative_code
+    assert "texture(shadowMaps[0], vec3(uv, depth))" in negative_code
+    assert "texture(shadowMaps[(-1)], vec3(uv, depth))" not in negative_code
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[0];"
         not in negative_code
@@ -25217,7 +25221,7 @@ def test_glsl_storage_image_helper_parameter_metadata_contracts_allow_compatible
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "layout(r32ui, binding = 0) uniform uimage2D counters[];" in generated_code
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[1];" in generated_code
     assert "layout(rgba32f, binding = 1) uniform image2D target;" in generated_code
     assert "int queryCounter__glsl_images_counters(ivec2 pixel)" in generated_code
     assert "void sizeOnlyWrite__glsl_image_target()" in generated_code
