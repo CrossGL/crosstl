@@ -50,6 +50,7 @@ dist/crosstl-1.0.0.tar.gz
 .DS_Store
 docs/_build/
 docs/doxygen/build/
+worktrees/
 support/generated/*-failure-summary.json
 support/generated/*-failure-summary.md
 support/generated/*-pytest.xml

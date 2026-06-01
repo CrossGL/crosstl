@@ -33,6 +33,7 @@ SECTION_RE = re.compile(
 )
 FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
 INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 KEYWORDS = (
     "close",
     "closes",
@@ -344,6 +345,10 @@ def strip_code_spans(text: str) -> str:
     return INLINE_CODE_RE.sub(" ", text)
 
 
+def strip_html_comments(text: str) -> str:
+    return HTML_COMMENT_RE.sub(" ", text)
+
+
 def normalize_issue_ref(ref: str, repo: str) -> int | None:
     owner, repo_name = repo.split("/", 1)
     ref = ref.strip()
@@ -375,6 +380,7 @@ def normalize_issue_ref(ref: str, repo: str) -> int | None:
 
 def extract_closing_issue_numbers(title: str, body: str, repo: str) -> list[int]:
     source = "\n".join([title or "", strip_managed_section(body or "")])
+    source = strip_html_comments(source)
     source = strip_code_spans(source)
     numbers: list[int] = []
     seen = set()
@@ -437,7 +443,7 @@ def support_matrix_artifact_changed(paths: list[str] | tuple[str, ...]) -> bool:
 
 def has_support_traceability_opt_out(body: str) -> bool:
     match = SUPPORT_TRACEABILITY_RE.search(
-        strip_code_spans(strip_managed_section(body))
+        strip_code_spans(strip_html_comments(strip_managed_section(body)))
     )
     if not match:
         return False

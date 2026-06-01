@@ -104,6 +104,23 @@ Closes #16
     assert numbers == [18, 10, 11, 12, 13]
 
 
+def test_extract_closing_issue_numbers_ignores_html_comments():
+    module = load_sync_module()
+    body = """
+<!--
+Fixes #123
+Closes https://github.com/CrossGL/crosstl/issues/124
+-->
+Fixes #10
+"""
+
+    numbers = module.extract_closing_issue_numbers(
+        "Ignore template examples", body, "CrossGL/crosstl"
+    )
+
+    assert numbers == [10]
+
+
 def test_sync_assigns_unassigned_issues_and_updates_pr_body():
     module = load_sync_module()
     pr = module.PullRequestContext(
@@ -1106,6 +1123,38 @@ def test_traceability_policy_passes_with_explicit_no_issue_marker():
     assert summary["traceability_failed"] == 0
     assert summary["traceability_audit"]["satisfaction_sources"] == ["explicit_opt_out"]
     assert summary["traceability_audit"]["failure_reason"] is None
+
+
+def test_traceability_policy_ignores_no_issue_marker_in_html_comment():
+    module = load_sync_module()
+    pr = module.PullRequestContext(
+        number=5,
+        title="Refresh support matrix probes",
+        body="\n".join(
+            [
+                "<!--",
+                "Support issue traceability: no issue closed",
+                "-->",
+                "No linked issue.",
+            ]
+        ),
+        author="alice",
+        changed_files=("tools/support_matrix.py",),
+    )
+    client = FakeClient(module)
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        enforce_support_traceability=True,
+    )
+
+    assert summary["traceability_required"] == 1
+    assert summary["traceability_satisfied"] == 0
+    assert summary["traceability_failed"] == 1
+    assert summary["traceability_audit"]["satisfaction_sources"] == []
+    assert summary["traceability_audit"]["failure_reason"] == "missing_issue_or_opt_out"
 
 
 def test_traceability_policy_fails_for_support_files_without_issue_or_marker():
