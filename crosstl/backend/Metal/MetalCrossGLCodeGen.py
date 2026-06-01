@@ -805,7 +805,11 @@ class MetalToCrossGLConverter:
                             self.global_sampler_names.add(glob.left.name)
                             continue
                         self.global_variable_types[glob.left.name] = glob.left.vtype
-                    left = self.generate_expression(glob.left, False)
+                    left = (
+                        self.format_decl(glob.left, include_semantic=True)
+                        if isinstance(glob.left, VariableNode)
+                        else self.generate_expression(glob.left, False)
+                    )
                     right = self.generate_initializer_value(
                         glob.right,
                         False,

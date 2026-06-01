@@ -639,6 +639,34 @@ class TestCudaParser:
         assert ast.kernels[0].params[0].vtype == "float2 * __restrict"
         assert ast.kernels[1].qualifiers == ["__global__"]
 
+    def test_grid_constant_kernel_parameter_parsing(self):
+        code = """
+        struct Params {
+            int value;
+        };
+
+        __global__ void kernelDefault(__grid_constant__ const Params p, int* out) {
+            out[threadIdx.x] = p.value;
+        }
+
+        __global__ void kernelGuide(const __grid_constant__ int scale, int* out) {
+            out[threadIdx.x] = scale;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [kernel.name for kernel in ast.kernels] == [
+            "kernelDefault",
+            "kernelGuide",
+        ]
+        assert ast.kernels[0].params[0].vtype == "__grid_constant__ const Params"
+        assert ast.kernels[0].params[0].name == "p"
+        assert ast.kernels[1].params[0].vtype == "const __grid_constant__ int"
+        assert ast.kernels[1].params[0].name == "scale"
+
     def test_rvalue_reference_declarations_parsing(self):
         code = """
         void consume(float&& value, const float&& other) {

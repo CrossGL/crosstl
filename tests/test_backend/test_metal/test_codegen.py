@@ -1208,6 +1208,25 @@ def test_codegen_function_constants_and_argument_buffers():
     assert "@function_constant(0)" in result
 
 
+def test_codegen_defaulted_function_constant_preserves_attribute():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constant bool useFastPath [[function_constant(3)]] = true;
+
+    fragment float4 fragment_main() {
+        if (useFastPath) {
+            return float4(1.0);
+        }
+        return float4(0.0);
+    }
+    """
+    result = convert(code)
+    assert "constant bool useFastPath @function_constant(3) = true;" in result
+    assert "if (useFastPath)" in result
+
+
 def test_codegen_sanitizes_crossgl_keyword_identifiers_from_real_msl():
     code = """
     #include <metal_stdlib>

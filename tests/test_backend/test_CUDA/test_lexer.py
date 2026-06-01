@@ -3,7 +3,10 @@ from crosstl.backend.CUDA.CudaLexer import CudaLexer
 
 class TestCudaLexer:
     def test_cuda_keywords(self):
-        code = "__global__ __device__ __shared__ __constant__ __launch_bounds__"
+        code = (
+            "__global__ __device__ __shared__ __constant__ "
+            "__launch_bounds__ __grid_constant__"
+        )
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
 
@@ -13,6 +16,7 @@ class TestCudaLexer:
             ("SHARED", "__shared__"),
             ("CONSTANT", "__constant__"),
             ("LAUNCH_BOUNDS", "__launch_bounds__"),
+            ("GRID_CONSTANT", "__grid_constant__"),
             ("EOF", ""),
         ]
 

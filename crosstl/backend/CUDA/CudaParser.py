@@ -42,7 +42,14 @@ from .CudaAst import (
 class CudaParser:
     """Parse CUDA tokens into the CUDA backend shader AST."""
 
-    TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "UNSIGNED", "SIGNED", "RESTRICT"}
+    TYPE_QUALIFIER_TOKENS = {
+        "CONST",
+        "VOLATILE",
+        "UNSIGNED",
+        "SIGNED",
+        "RESTRICT",
+        "GRID_CONSTANT",
+    }
     POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "RESTRICT"}
     TYPE_REFERENCE_TOKENS = {"BITWISE_AND", "LOGICAL_AND"}
     CPP_NAMED_CASTS = {"static_cast", "reinterpret_cast", "const_cast", "dynamic_cast"}

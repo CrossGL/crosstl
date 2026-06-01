@@ -777,6 +777,25 @@ def test_comptime_assert_statement_codegen():
     assert 'assert((size > 0), "bad size");' in generated_code
 
 
+def test_alias_declaration_codegen_matches_comptime_declarations():
+    code = """
+    alias THREADS_PER_BLOCK = 256
+
+    def kernel():
+        alias LOCAL_BLOCK = THREADS_PER_BLOCK
+        for i in range(LOCAL_BLOCK):
+            sink(i)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let THREADS_PER_BLOCK = 256;" in generated_code
+    assert "let LOCAL_BLOCK = THREADS_PER_BLOCK;" in generated_code
+    assert "for (int i = 0; i < LOCAL_BLOCK; i++)" in generated_code
+
+
 def test_user_defined_lerp_matching_arity_does_not_lower_to_mix():
     code = """
     fn lerp(a: Float32, b: Float32, t: Float32) -> Float32:

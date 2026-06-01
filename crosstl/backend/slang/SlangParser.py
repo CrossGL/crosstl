@@ -186,6 +186,12 @@ class SlangParser:
                 depth -= 1
                 if depth == 0:
                     return current_pos + 1
+            elif token_type == "BITWISE_SHIFT_RIGHT":
+                depth -= 2
+                if depth == 0:
+                    return current_pos + 1
+                if depth < 0:
+                    raise SyntaxError("Unterminated generic type suffix")
             current_pos += 1
         raise SyntaxError("Unterminated generic type suffix")
 
@@ -300,6 +306,11 @@ class SlangParser:
             elif token_type == "GREATER_THAN":
                 depth -= 1
                 parts.append(">")
+            elif token_type == "BITWISE_SHIFT_RIGHT":
+                if depth < 2:
+                    raise SyntaxError("Unterminated generic type suffix")
+                depth -= 2
+                parts.append(">>")
             elif token_type == "COMMA":
                 parts.append(", ")
             else:

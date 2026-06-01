@@ -3,6 +3,7 @@ from typing import List
 import pytest
 
 from crosstl.backend.common_ast import (
+    AssignmentNode,
     CastNode,
     DiscardNode,
     FunctionCallNode,
@@ -199,6 +200,31 @@ def test_parse_argument_buffers_and_function_constants():
     }
     """
     parse_ok(code)
+
+
+def test_parse_defaulted_function_constant_preserves_attribute():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constant bool useFastPath [[function_constant(3)]] = true;
+
+    fragment float4 fragment_main() {
+        if (useFastPath) {
+            return float4(1.0);
+        }
+        return float4(0.0);
+    }
+    """
+    ast = parse_ok(code)
+    constant = ast.global_variables[0]
+    assert isinstance(constant, AssignmentNode)
+    assert constant.left.name == "useFastPath"
+    assert constant.left.vtype == "bool"
+    assert "constant" in constant.left.qualifiers
+    assert constant.left.attributes[0].name == "function_constant"
+    assert constant.left.attributes[0].args == ["3"]
+    assert constant.right == "true"
 
 
 def test_parse_access_qualified_textures_and_methods():

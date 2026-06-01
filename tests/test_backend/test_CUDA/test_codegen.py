@@ -40,6 +40,25 @@ class TestCudaCodeGen:
         assert "// CUDA launch bounds: (128)" in result
         assert "// Kernel: bounded" in result
 
+    def test_grid_constant_kernel_parameter_conversion(self):
+        code = """
+        __global__ void kernelLargeParam(__grid_constant__ const int scale,
+                                         int* result) {
+            result[threadIdx.x] = scale;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA grid constant parameter: scale" in result
+        assert "i32 scale" in result
+        assert "__grid_constant__" not in result
+
     def test_device_function_conversion(self):
         code = """
         __device__ float add(float a, float b) {

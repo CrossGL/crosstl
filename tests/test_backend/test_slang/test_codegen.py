@@ -706,6 +706,30 @@ def test_generic_resource_global_codegen():
     assert "sampler linearSampler;" in generated_code
 
 
+def test_nested_parameter_block_resource_wrapper_codegen():
+    code = """
+    struct S
+    {
+        ConstantBuffer<RWStructuredBuffer<int>> cb;
+    }
+
+    ParameterBlock<RWStructuredBuffer<int>> rwBuffer;
+    ParameterBlock<ConstantBuffer<int>> constBuffer;
+    ParameterBlock<ConstantBuffer<RWStructuredBuffer<int>>> nestedBuffer;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "ConstantBuffer<RWStructuredBuffer<int>> cb;" in generated_code
+    assert "ParameterBlock<RWStructuredBuffer<int>> rwBuffer;" in generated_code
+    assert "ParameterBlock<ConstantBuffer<int>> constBuffer;" in generated_code
+    assert (
+        "ParameterBlock<ConstantBuffer<RWStructuredBuffer<int>>> nestedBuffer;"
+        in generated_code
+    )
+
+
 def test_line_texture_resource_global_codegen():
     code = """
     Texture1D<float4> line;

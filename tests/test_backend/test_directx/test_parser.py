@@ -453,6 +453,25 @@ def test_parse_cbuffer_preserves_buffer_and_member_bindings():
     assert cbuffer.members[1].register is None
 
 
+def test_parse_cxx11_namespaced_attribute_on_cbuffer():
+    ast = parse_code("""
+    [[vk::push_constant]]
+    cbuffer PushConstants : register(b0, space1) {
+        float4 tint : packoffset(c0);
+    };
+    """)
+
+    cbuffer = ast.cbuffers[0]
+
+    assert cbuffer.name == "PushConstants"
+    assert cbuffer.register == "b0, space1"
+    assert cbuffer.members[0].name == "tint"
+    assert cbuffer.members[0].packoffset == "c0"
+    assert len(cbuffer.attributes) == 1
+    assert cbuffer.attributes[0].name == "vk::push_constant"
+    assert cbuffer.attributes[0].args == []
+
+
 def test_parse_geometry_shader():
     code = """
     struct GSInput {

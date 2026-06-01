@@ -872,6 +872,31 @@ def test_generic_resource_global_parsing():
     ]
 
 
+def test_nested_parameter_block_resource_wrapper_parsing():
+    code = """
+    struct S
+    {
+        ConstantBuffer<RWStructuredBuffer<int>> cb;
+    }
+
+    ParameterBlock<RWStructuredBuffer<int>> rwBuffer;
+    ParameterBlock<ConstantBuffer<int>> constBuffer;
+    ParameterBlock<ConstantBuffer<RWStructuredBuffer<int>>> nestedBuffer;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.structs[0].members[0].vtype == "ConstantBuffer<RWStructuredBuffer<int>>"
+    assert [(var.vtype, var.name) for var in ast.global_vars] == [
+        ("ParameterBlock<RWStructuredBuffer<int>>", "rwBuffer"),
+        ("ParameterBlock<ConstantBuffer<int>>", "constBuffer"),
+        (
+            "ParameterBlock<ConstantBuffer<RWStructuredBuffer<int>>>",
+            "nestedBuffer",
+        ),
+    ]
+
+
 def test_bound_generic_resource_global_parsing():
     code = """
     Texture2D<float4> albedo : register(t0);

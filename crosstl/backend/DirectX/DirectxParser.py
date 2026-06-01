@@ -181,11 +181,11 @@ class HLSLParser:
                 typedefs.append(self.parse_typedef())
                 continue
 
+            attributes = self.parse_attribute_list()
             if self.current_token[0] == "CBUFFER":
-                cbuffers.append(self.parse_cbuffer())
+                cbuffers.append(self.parse_cbuffer(attributes=attributes))
                 continue
 
-            attributes = self.parse_attribute_list()
             qualifiers = self.parse_qualifiers()
 
             if not self.is_type_token(self.current_token[0]):
@@ -587,7 +587,7 @@ class HLSLParser:
         self.eat("SEMICOLON")
         return TypeAliasNode(alias_type, name)
 
-    def parse_cbuffer(self):
+    def parse_cbuffer(self, attributes=None):
         self.eat("CBUFFER")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -618,6 +618,7 @@ class HLSLParser:
         cbuffer_node.is_cbuffer = True
         cbuffer_node.register = cbuffer_register
         cbuffer_node.packoffset = cbuffer_packoffset
+        cbuffer_node.attributes = attributes or []
         return cbuffer_node
 
     def parse_function(self, return_type, name, qualifiers, attributes):

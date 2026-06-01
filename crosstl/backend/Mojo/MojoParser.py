@@ -102,8 +102,8 @@ class MojoParser:
                 self.attach_attributes(node, attributes)
                 constants.append(node)
                 all_items.append(node)
-            elif self.current_token[0] == "COMPTIME":
-                node = self.parse_comptime_statement()
+            elif self.current_token[0] in ["COMPTIME", "ALIAS"]:
+                node = self.parse_comptime_or_alias_statement()
                 self.attach_attributes(node, attributes)
                 if isinstance(node, VariableDeclarationNode):
                     global_variables.append(node)
@@ -671,6 +671,7 @@ class MojoParser:
             "LET",
             "VAR",
             "COMPTIME",
+            "ALIAS",
         ]:
             return self.parse_variable_declaration_or_assignment()
 
@@ -718,8 +719,8 @@ class MojoParser:
             return self.parse_expression_statement()
 
     def parse_variable_declaration_or_assignment(self):
-        if self.current_token[0] == "COMPTIME":
-            return self.parse_comptime_statement()
+        if self.current_token[0] in ["COMPTIME", "ALIAS"]:
+            return self.parse_comptime_or_alias_statement()
 
         if self.current_token[0] in ["LET", "VAR"]:
             var_type = self.current_token[0]
@@ -762,6 +763,17 @@ class MojoParser:
         statement = self.parse_assignment()
         self.consume_statement_terminator()
         return statement
+
+    def parse_comptime_or_alias_statement(self):
+        if self.current_token[0] == "ALIAS":
+            return self.parse_alias_declaration()
+        return self.parse_comptime_statement()
+
+    def parse_alias_declaration(self):
+        self.eat("ALIAS")
+        node = self.parse_comptime_declaration(after_keyword=True)
+        node.is_alias = True
+        return node
 
     def parse_comptime_statement(self):
         self.eat("COMPTIME")

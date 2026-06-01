@@ -24,6 +24,7 @@ from crosstl.backend.Mojo.MojoAst import (
     TernaryOpNode,
     TupleNode,
     UnaryOpNode,
+    VariableDeclarationNode,
     VariableNode,
     VectorConstructorNode,
     WhileNode,
@@ -1057,6 +1058,35 @@ def test_comptime_declarations_and_raises_function_parse():
     assert isinstance(function.body[3], IfNode)
     assert isinstance(function.body[3].else_body[0], FunctionCallNode)
     assert function.body[3].else_body[0].name == "raise"
+
+
+def test_alias_declarations_parse_as_comptime_aliases():
+    code = """
+    alias THREADS_PER_BLOCK = 256
+    alias dtype = DType.float32
+
+    def kernel():
+        alias LOCAL_BLOCK = THREADS_PER_BLOCK
+        var lane = thread_idx.x
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "kernel")
+
+    assert [node.name for node in ast.global_variables] == [
+        "THREADS_PER_BLOCK",
+        "dtype",
+    ]
+    assert all(getattr(node, "is_comptime", False) for node in ast.global_variables)
+    assert all(getattr(node, "is_alias", False) for node in ast.global_variables)
+    assert ast.global_variables[0].initial_value == "256"
+    assert isinstance(ast.global_variables[1].initial_value, MemberAccessNode)
+
+    local_alias = function.body[0]
+    assert isinstance(local_alias, VariableDeclarationNode)
+    assert local_alias.name == "LOCAL_BLOCK"
+    assert getattr(local_alias, "is_comptime", False)
+    assert getattr(local_alias, "is_alias", False)
+    assert not local_alias.is_var
 
 
 def test_comptime_assert_statement_parse():

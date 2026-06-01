@@ -883,6 +883,22 @@ def test_codegen_cxx11_namespaced_resource_attribute_passthrough():
     assert "sampler2D texture2;" in output
 
 
+def test_codegen_cxx11_namespaced_cbuffer_attribute_passthrough():
+    hlsl = textwrap.dedent("""
+        [[vk::push_constant]]
+        cbuffer PushConstants : register(b0, space1) {
+            float4 tint : packoffset(c0);
+        };
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ vk::push_constant" in output
+    assert "@ register(b0, space1)" in output
+    assert "cbuffer PushConstants" in output
+    assert "vec4 tint;" in output
+
+
 def test_codegen_waveops_include_helper_lanes_attribute_passthrough():
     hlsl = textwrap.dedent("""
         [WaveOpsIncludeHelperLanes]

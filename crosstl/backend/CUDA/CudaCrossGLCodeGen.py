@@ -3571,6 +3571,9 @@ class CudaToCrossGLConverter:
             if attribute_text.startswith("__launch_bounds__"):
                 bounds = attribute_text[len("__launch_bounds__") :]
                 self.emit(f"// CUDA launch bounds: {bounds}")
+        for param in kernel.params:
+            if "__grid_constant__" in str(param.vtype).split():
+                self.emit(f"// CUDA grid constant parameter: {param.name}")
 
         self.emit("@compute")
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
@@ -5024,6 +5027,7 @@ class CudaToCrossGLConverter:
             "__restrict__",
             "__restrict",
             "restrict",
+            "__grid_constant__",
             "&",
             "&&",
         }
