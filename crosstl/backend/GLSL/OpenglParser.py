@@ -640,6 +640,7 @@ class GLSLParser:
             qualifier = self.shader_type
         self.eat("IDENTIFIER")
         params = self.parse_parameters()
+        self.skip_newlines()
 
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")

@@ -64,6 +64,24 @@ def test_parse_fragment_shader_with_discard():
     parse_ok(code, "fragment")
 
 
+def test_parse_function_body_with_brace_on_next_line():
+    code = textwrap.dedent("""
+        #version 320 es
+        precision mediump float;
+        layout(location = 0) in vec3 in_color;
+        layout(location = 0) out vec4 out_color;
+
+        void main()
+        {
+            out_color = vec4(in_color, 1.0);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+
+    assert any(function.name == "main" for function in ast.functions)
+
+
 def test_parse_structs_and_arrays():
     code = textwrap.dedent("""
         #version 450 core
