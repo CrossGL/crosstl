@@ -142,6 +142,23 @@ class TestCudaParser:
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
 
+    def test_dynamic_shared_memory_parsing_marks_extern_unsized_array(self):
+        code = """
+        __global__ void kernel() {
+            extern __shared__ float shared[];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        declaration = ast.kernels[0].body[0]
+        assert isinstance(declaration, SharedMemoryNode)
+        assert declaration.vtype == "float[]"
+        assert declaration.is_extern_shared_memory is True
+        assert declaration.is_dynamic_shared_memory is True
+
     def test_builtin_variables_parsing(self):
         code = """
         __global__ void kernel() {

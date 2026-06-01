@@ -72,6 +72,40 @@ def find_constant_buffer(ast, name: str):
     raise AssertionError(f"Constant buffer {name} not found")
 
 
+def test_function_parameter_conventions_parse_from_official_docs():
+    code = """
+    def get_name_tag(var name: String, out name_tag: NameTag):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "get_name_tag")
+
+    assert [
+        (param.name, param.vtype, param.parameter_convention)
+        for param in function.params
+    ] == [
+        ("name", "String", "var"),
+        ("name_tag", "NameTag", "out"),
+    ]
+
+
+def test_method_self_parameter_convention_without_type_parses():
+    code = """
+    def __init__(out self, value: Int):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "__init__")
+
+    assert [
+        (param.name, param.vtype, param.parameter_convention)
+        for param in function.params
+    ] == [
+        ("self", "", "out"),
+        ("value", "Int", None),
+    ]
+
+
 def test_struct_parsing():
     code = """
     struct VSInput:

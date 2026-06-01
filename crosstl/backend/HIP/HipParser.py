@@ -808,7 +808,16 @@ class HipParser:
             self.skip_newlines()
             self.consume("SEMICOLON")
 
-        return VariableNode(var_type, name, value, qualifiers)
+        return VariableNode(
+            var_type,
+            name,
+            value,
+            qualifiers,
+            is_extern_shared_memory=self.is_extern_shared_memory(qualifiers),
+            is_dynamic_shared_memory=self.is_dynamic_shared_memory(
+                var_type, qualifiers
+            ),
+        )
 
     def parse_variable_declaration_list(self, consume_semicolon=True):
         qualifiers = []
@@ -853,7 +862,26 @@ class HipParser:
         self.skip_newlines()
         value = self.parse_variable_initializer(var_type)
 
-        return VariableNode(var_type, name, value, list(qualifiers))
+        return VariableNode(
+            var_type,
+            name,
+            value,
+            list(qualifiers),
+            is_extern_shared_memory=self.is_extern_shared_memory(qualifiers),
+            is_dynamic_shared_memory=self.is_dynamic_shared_memory(
+                var_type, qualifiers
+            ),
+        )
+
+    def is_extern_shared_memory(self, qualifiers):
+        return "__shared__" in qualifiers and "extern" in qualifiers
+
+    def is_dynamic_shared_memory(self, var_type, qualifiers):
+        return (
+            self.is_extern_shared_memory(qualifiers)
+            and isinstance(var_type, str)
+            and var_type.endswith("[]")
+        )
 
     def parse_declarator_prefix(self, base_type):
         parts = [base_type] if base_type else []

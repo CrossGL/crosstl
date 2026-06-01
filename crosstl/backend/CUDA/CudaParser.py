@@ -894,7 +894,7 @@ class CudaParser:
         if "__constant__" in qualifiers:
             return ConstantMemoryNode(var.vtype, var.name, var.value)
         elif "__shared__" in qualifiers:
-            return SharedMemoryNode(var.vtype, var.name)
+            return self.create_shared_memory_node(var.vtype, var.name, qualifiers)
         else:
             return var
 
@@ -929,7 +929,7 @@ class CudaParser:
         var = VariableNode(vtype, name, value, qualifiers)
 
         if "__shared__" in qualifiers:
-            return SharedMemoryNode(vtype, name)
+            return self.create_shared_memory_node(vtype, name, qualifiers)
         elif "__constant__" in qualifiers:
             return ConstantMemoryNode(vtype, name, value)
         else:
@@ -973,10 +973,20 @@ class CudaParser:
         value = self.parse_variable_initializer(vtype)
 
         if "__shared__" in qualifiers:
-            return SharedMemoryNode(vtype, name)
+            return self.create_shared_memory_node(vtype, name, qualifiers)
         if "__constant__" in qualifiers:
             return ConstantMemoryNode(vtype, name, value)
         return VariableNode(vtype, name, value, list(qualifiers))
+
+    def create_shared_memory_node(self, vtype, name, qualifiers):
+        is_extern = "extern" in qualifiers
+        is_dynamic = is_extern and isinstance(vtype, str) and vtype.endswith("[]")
+        return SharedMemoryNode(
+            vtype,
+            name,
+            is_extern=is_extern,
+            is_dynamic=is_dynamic,
+        )
 
     def parse_declarator_prefix(self, base_type):
         parts = [base_type] if base_type else []

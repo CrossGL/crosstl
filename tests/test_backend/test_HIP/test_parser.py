@@ -160,6 +160,21 @@ class TestHipParser:
         assert right_value.builtin_name == "warpSize"
         assert right_value.component is None
 
+    def test_dynamic_shared_memory_parsing_marks_extern_unsized_array(self):
+        code = """
+        __global__ void kernel() {
+            extern __shared__ float shared[];
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0].body[0]
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "float[]"
+        assert declaration.qualifiers == ["extern", "__shared__"]
+        assert declaration.is_extern_shared_memory is True
+        assert declaration.is_dynamic_shared_memory is True
+
     def test_hip_device_property_member_names_can_match_builtin_tokens(self):
         code = """
         void host(hipDeviceProp_t* props_ptr) {

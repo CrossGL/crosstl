@@ -331,11 +331,15 @@ class VulkanToCrossGLConverter:
                     if "readonly" in getattr(node, "declaration_qualifiers", [])
                     else "RWStructuredBuffer"
                 )
+                attributes = self.uniform_block_attribute_suffix(node)
                 code += f"    struct {block_name} {{\n"
                 for field_type, field_name in node.struct_fields:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
                 code += "    };\n\n"
-                code += f"    {buffer_type}<{block_name}> {variable_name};\n\n"
+                code += (
+                    f"    {buffer_type}<{block_name}> {variable_name}"
+                    f"{attributes};\n\n"
+                )
         elif layout_type == "in" or layout_type == "out":
             if node.data_type and node.variable_name:
                 code += (

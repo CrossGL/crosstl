@@ -11,6 +11,16 @@ class MojoParser:
     ATTRIBUTE_START_TOKENS = {"ATTRIBUTE", "AT"}
     FUNCTION_TOKENS = {"FN", "DEF"}
     TYPE_START_TOKENS = {"IDENTIFIER", "INT", "FLOAT", "BOOL", "STRING"}
+    PARAMETER_CONVENTION_TOKENS = {"VAR"}
+    PARAMETER_CONVENTION_IDENTIFIERS = {
+        "borrowed",
+        "inout",
+        "mut",
+        "owned",
+        "out",
+        "read",
+        "ref",
+    }
 
     def __init__(self, tokens):
         self.tokens = tokens
@@ -535,8 +545,13 @@ class MojoParser:
 
             attributes = self.parse_attributes()
             self.skip_layout_tokens()
+            convention = self.parse_parameter_convention()
 
-            if self.current_token[0] in self.TYPE_START_TOKENS:
+            if self.is_untyped_self_parameter(convention):
+                name = self.current_token[1]
+                self.eat("IDENTIFIER")
+                vtype = ""
+            elif self.current_token[0] in self.TYPE_START_TOKENS:
                 if self.peek_token()[0] == "COLON":
                     name = self.current_token[1]
                     self.eat(self.current_token[0])
@@ -549,16 +564,22 @@ class MojoParser:
                         name = self.current_token[1]
                         self.eat("IDENTIFIER")
 
-                param_attributes = self.parse_attributes(skip_trailing_newlines=False)
-                attributes.extend(param_attributes)
-
-                params.append(VariableNode(vtype, name, attributes=attributes))
-                self.skip_layout_tokens()
-
             else:
                 raise SyntaxError(
                     f"Unexpected token in parameter list: {self.current_token[0]}"
                 )
+
+            param_attributes = self.parse_attributes(skip_trailing_newlines=False)
+            attributes.extend(param_attributes)
+            params.append(
+                VariableNode(
+                    vtype,
+                    name,
+                    attributes=attributes,
+                    parameter_convention=convention,
+                )
+            )
+            self.skip_layout_tokens()
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
@@ -573,6 +594,32 @@ class MojoParser:
                 )
 
         return params
+
+    def parse_parameter_convention(self):
+        token_type, token_value = self.current_token
+        if token_type in self.PARAMETER_CONVENTION_TOKENS:
+            convention = token_value
+        elif (
+            token_type == "IDENTIFIER"
+            and token_value in self.PARAMETER_CONVENTION_IDENTIFIERS
+        ):
+            convention = token_value
+        else:
+            return None
+
+        if self.peek_token()[0] not in self.TYPE_START_TOKENS:
+            return None
+
+        self.eat(token_type)
+        self.skip_layout_tokens()
+        return convention
+
+    def is_untyped_self_parameter(self, convention):
+        if convention is None:
+            return False
+        if self.current_token[0] != "IDENTIFIER" or self.current_token[1] != "self":
+            return False
+        return self.peek_token()[0] in {"COMMA", "RPAREN"}
 
     def parse_attributes(self, skip_trailing_newlines=True):
         attributes = []

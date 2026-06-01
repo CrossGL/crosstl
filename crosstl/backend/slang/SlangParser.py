@@ -532,23 +532,27 @@ class SlangParser:
         members = []
         while self.current_token[0] != "RBRACE":
             vtype = self.parse_type_name()
-            var_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            array_sizes = self.parse_array_suffixes()
-            semantic = None
-            if self.current_token[0] == "COLON":
-                self.eat("COLON")
-                semantic = self.current_token[1]
-                self.eat(self.current_token[0])
-            self.eat("SEMICOLON")
-            members.append(
-                VariableNode(
-                    vtype,
-                    var_name,
-                    array_sizes=array_sizes,
-                    semantic=semantic,
+            while True:
+                var_name = self.current_token[1]
+                self.eat("IDENTIFIER")
+                array_sizes = self.parse_array_suffixes()
+                semantic = None
+                if self.current_token[0] == "COLON":
+                    self.eat("COLON")
+                    semantic = self.current_token[1]
+                    self.eat(self.current_token[0])
+                members.append(
+                    VariableNode(
+                        vtype,
+                        var_name,
+                        array_sizes=array_sizes,
+                        semantic=semantic,
+                    )
                 )
-            )
+                if self.current_token[0] != "COMMA":
+                    break
+                self.eat("COMMA")
+            self.eat("SEMICOLON")
         self.eat("RBRACE")
         node = StructNode(name, members)
         node.generic_parameters = generic_parameters

@@ -372,6 +372,8 @@ class MojoToCrossGLConverter:
         param_names = []
         if hasattr(func, "params") and func.params:
             for p in func.params:
+                if not p.vtype:
+                    continue
                 param_str = f"{self.map_type(p.vtype)} {p.name}"
                 if hasattr(p, "attributes") and p.attributes:
                     semantic = self.map_semantic(p.attributes)

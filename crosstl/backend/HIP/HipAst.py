@@ -134,9 +134,18 @@ class TextureAccessNode(ASTNode):
 class SharedMemoryNode(VariableNode):
     """Node representing shared memory variable declaration"""
 
-    def __init__(self, vtype, name, size=None):
+    def __init__(
+        self,
+        vtype,
+        name,
+        size=None,
+        is_extern=False,
+        is_dynamic=False,
+    ):
         super().__init__(vtype, name, qualifiers=["__shared__"])
         self.size = size
+        self.is_extern_shared_memory = is_extern
+        self.is_dynamic_shared_memory = is_dynamic
 
     def __repr__(self):
         return (

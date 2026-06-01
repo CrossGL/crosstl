@@ -173,6 +173,31 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_BUFFER_BLOCK_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %Data "Data"
+OpName %data "data"
+OpMemberName %Data 0 "value"
+OpDecorate %Data BufferBlock
+OpDecorate %data DescriptorSet 0
+OpDecorate %data Binding 1
+OpMemberDecorate %Data 0 Offset 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%Data = OpTypeStruct %v4float
+%ptr_data = OpTypePointer Uniform %Data
+%data = OpVariable %ptr_data Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -450,6 +475,17 @@ def test_spirv_assembly_uniform_block_codegen():
     assert "%camera" not in generated_code
 
 
+def test_spirv_assembly_buffer_block_codegen():
+    tokens = tokenize_code(SPIRV_BUFFER_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct Data" in generated_code
+    assert "float4 value;" in generated_code
+    assert "RWStructuredBuffer<Data> data @set(0) @binding(1);" in generated_code
+    assert "%data" not in generated_code
+
+
 def test_translate_api_accepts_location_decorated_spirv_assembly(tmp_path):
     import crosstl
 
@@ -498,7 +534,9 @@ def test_vulkan_layout_blocks_emit_crossgl_resources():
     assert "cbuffer Camera" in generated_code
     assert "float4x4 viewProj;" in generated_code
     assert "struct Particles" in generated_code
-    assert "RWStructuredBuffer<Particles> particles;" in generated_code
+    assert (
+        "RWStructuredBuffer<Particles> particles @set(0) @binding(1);" in generated_code
+    )
     assert "float3 position @input @location(0);" in generated_code
     assert "vertex {" in generated_code
     assert "gl_Position = float4(position, 1.0);" in generated_code
@@ -548,7 +586,9 @@ def test_vulkan_readonly_buffer_layout_codegen():
     assert ast.global_variables[0].declaration_qualifiers == ["readonly"]
     assert "struct Particles" in generated_code
     assert "float4 pos[];" in generated_code
-    assert "StructuredBuffer<Particles> particles;" in generated_code
+    assert (
+        "StructuredBuffer<Particles> particles @set(0) @binding(0);" in generated_code
+    )
     assert "RWStructuredBuffer<Particles> particles;" not in generated_code
 
 

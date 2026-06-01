@@ -126,6 +126,25 @@ def test_struct_array_member_declarator_parsing():
     ]
 
 
+def test_struct_comma_member_declarators_from_ray_tracing_example():
+    code = """
+    struct Uniforms {
+        float screenWidth, screenHeight;
+        float focalLength, frameHeight;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    members = ast.structs[0].members
+
+    assert [(member.vtype, member.name) for member in members] == [
+        ("float", "screenWidth"),
+        ("float", "screenHeight"),
+        ("float", "focalLength"),
+        ("float", "frameHeight"),
+    ]
+
+
 def test_if_parsing():
     code = """
     [shader("vertex")]

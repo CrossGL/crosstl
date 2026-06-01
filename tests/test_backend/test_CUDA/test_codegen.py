@@ -403,6 +403,30 @@ class TestCudaCodeGen:
         assert "(&values[index])" not in result
         assert "(&sharedCounts[gl_LocalInvocationID.x])" not in result
 
+    def test_dynamic_shared_memory_codegen_marks_launch_sized_storage(self):
+        code = """
+        __global__ void kernel(float* out, const float* in) {
+            extern __shared__ float shared[];
+            shared[threadIdx.x] = in[threadIdx.x];
+            __syncthreads();
+            out[threadIdx.x] = shared[threadIdx.x];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA dynamic shared memory: shared uses launch-time shared memory size"
+            in result
+        )
+        assert "var<workgroup> shared: array<f32>;" in result
+        assert "workgroupBarrier();" in result
+
     def test_bitwise_atomics_lower_to_crossgl_lvalue_targets(self):
         code = """
         __global__ void kernel(unsigned int* values, unsigned int mask, int index) {
@@ -1215,6 +1239,33 @@ class TestCudaCodeGen:
         assert "err = cudaSuccess;" in result
         assert "cudaMalloc(ptr<ptr<void>>((&d)), (n * sizeof(float)))" not in result
         assert "err = cudaDeviceSynchronize();" not in result
+
+    def test_cuda_runtime_error_wrapper_unwraps_runtime_calls(self):
+        code = """
+        void host(float* h, size_t mem_size_A, cudaStream_t stream) {
+            float* d_A;
+            checkCudaErrors(cudaMalloc(reinterpret_cast<void **>(&d_A), mem_size_A));
+            checkCudaErrors(cudaMemcpyAsync(
+                d_A, h, mem_size_A, cudaMemcpyHostToDevice, stream
+            ));
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA memory allocate: d_A, bytes: mem_size_A" in result
+        assert (
+            "// CUDA memory copy: h -> d_A, bytes: mem_size_A, "
+            "kind: cudaMemcpyHostToDevice, stream: stream"
+        ) in result
+        assert "checkCudaErrors(" not in result
+        assert "cudaMalloc(" not in result
+        assert "cudaMemcpyAsync(" not in result
 
     def test_cuda_runtime_memset_async_conversion(self):
         code = """

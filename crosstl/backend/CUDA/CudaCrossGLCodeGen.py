@@ -16,6 +16,14 @@ from .CudaAst import (
 class CudaToCrossGLConverter:
     """Serialize CUDA backend AST nodes back into CrossGL source."""
 
+    CUDA_RUNTIME_ERROR_WRAPPER_NAMES = {
+        "CHECK_CUDA",
+        "CUDA_CHECK",
+        "checkCuda",
+        "checkCudaErrors",
+        "gpuErrchk",
+    }
+
     VECTOR_TYPE_MAPPING = {
         "float2": "vec2<f32>",
         "float3": "vec3<f32>",
@@ -572,6 +580,13 @@ class CudaToCrossGLConverter:
         if self.is_user_defined_function(stmt.name):
             return False
 
+        runtime_wrapper = self.format_cuda_runtime_wrapper_expression(stmt)
+        if runtime_wrapper is not None:
+            comments, _ = runtime_wrapper
+            for comment in comments:
+                self.emit(comment)
+            return True
+
         runtime_value = self.format_cuda_runtime_value_expression(stmt)
         if runtime_value is not None:
             comments, _ = runtime_value
@@ -592,6 +607,10 @@ class CudaToCrossGLConverter:
             return None
         if self.is_user_defined_function(value.name):
             return None
+
+        wrapped_runtime = self.format_cuda_runtime_wrapper_expression(value)
+        if wrapped_runtime is not None:
+            return wrapped_runtime
 
         comments = self.format_cuda_runtime_call(value)
         if comments is None:
@@ -621,6 +640,17 @@ class CudaToCrossGLConverter:
         if name == "cudaGetCurrentGraphExec" and not value.args:
             return ["// CUDA device graph get current exec"], "0"
         return None
+
+    def format_cuda_runtime_wrapper_expression(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+        if self.is_user_defined_function(value.name):
+            return None
+        if value.name not in self.CUDA_RUNTIME_ERROR_WRAPPER_NAMES:
+            return None
+        if len(getattr(value, "args", []) or []) != 1:
+            return None
+        return self.format_cuda_runtime_expression(value.args[0])
 
     def format_cuda_runtime_inline_expression(self, value):
         runtime_expression = self.format_cuda_runtime_expression(value)
@@ -3862,6 +3892,11 @@ class CudaToCrossGLConverter:
 
         # Convert to workgroup memory in CrossGL
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
+        if getattr(node, "is_dynamic_shared_memory", False):
+            self.emit(
+                f"// CUDA dynamic shared memory: {node.name} uses launch-time "
+                "shared memory size"
+            )
         if node.size:
             size = self.visit(node.size)
             self.emit(f"var<workgroup> {node.name}: array<{var_type}, {size}>;")

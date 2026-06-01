@@ -77,6 +77,24 @@ def test_struct_array_member_codegen():
     assert "vec4 colors[2][3]" in generated_code
 
 
+def test_struct_comma_member_declarators_codegen():
+    code = """
+    struct Uniforms {
+        float screenWidth, screenHeight;
+        float focalLength, frameHeight;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float screenWidth;" in generated_code
+    assert "float screenHeight;" in generated_code
+    assert "float focalLength;" in generated_code
+    assert "float frameHeight;" in generated_code
+    assert "screenWidth, screenHeight" not in generated_code
+
+
 def test_if_codegen():
     code = """
     [shader("vertex")]

@@ -382,7 +382,7 @@ class VulkanParser:
             if pointer_type.get("kind") != "pointer":
                 continue
 
-            if storage_class in {"PushConstant", "Uniform"}:
+            if storage_class in {"PushConstant", "StorageBuffer", "Uniform"}:
                 resource_block_layout = self.spirv_assembly_resource_block_layout(
                     variable,
                     pointer_type,
@@ -468,7 +468,24 @@ class VulkanParser:
         struct_decorations = decorations.get(struct_type_id, [])
         variable_id = variable["id"]
         variable_decorations = decorations.get(variable_id, [])
-        if not self.spirv_has_decoration(struct_decorations, "Block"):
+        has_block = self.spirv_has_decoration(struct_decorations, "Block")
+        has_buffer_block = self.spirv_has_decoration(struct_decorations, "BufferBlock")
+        if storage_class == "PushConstant":
+            if not has_block:
+                return None
+            layout_type = "UNIFORM"
+        elif storage_class == "Uniform":
+            if has_buffer_block:
+                layout_type = "BUFFER"
+            elif has_block:
+                layout_type = "UNIFORM"
+            else:
+                return None
+        elif storage_class == "StorageBuffer":
+            if not has_block:
+                return None
+            layout_type = "BUFFER"
+        else:
             return None
 
         struct_fields = []
@@ -495,7 +512,7 @@ class VulkanParser:
             names.get(struct_type_id) or variable_name or struct_type_id.lstrip("%")
         )
         qualifiers = []
-        if storage_class == "Uniform":
+        if storage_class in {"StorageBuffer", "Uniform"}:
             qualifiers = self.spirv_descriptor_qualifiers(variable_decorations)
             qualifier_names = {name for name, _value in qualifiers}
             if not {"set", "binding"}.issubset(qualifier_names):
@@ -503,7 +520,7 @@ class VulkanParser:
 
         return LayoutNode(
             qualifiers,
-            layout_type="UNIFORM",
+            layout_type=layout_type,
             push_constant=storage_class == "PushConstant",
             block_name=block_name,
             variable_name=variable_name,

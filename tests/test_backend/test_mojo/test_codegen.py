@@ -96,6 +96,23 @@ def test_struct_method_codegen_preserves_method_body():
     assert 'raise(Error("No known target"));' in generated_code
 
 
+def test_function_parameter_convention_codegen_drops_mojo_conventions():
+    code = """
+    def incr(a: Int, out b: Int):
+        pass
+
+    def __init__(out self, value: Int):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "void incr(int a, int b)" in generated_code
+    assert "void __init__(int value)" in generated_code
+    assert "out b" not in generated_code
+    assert "self" not in generated_code
+
+
 def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     code = """
     struct Resources {

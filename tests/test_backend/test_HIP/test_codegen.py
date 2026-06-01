@@ -58,6 +58,30 @@ class TestHipCodeGen:
         assert "__managed__" not in result
         assert "__shared__" not in result
 
+    def test_dynamic_shared_memory_codegen_marks_launch_sized_storage(self):
+        code = """
+        __global__ void kernel(float* out, const float* in) {
+            extern __shared__ float shared[];
+            shared[threadIdx.x] = in[threadIdx.x];
+            __syncthreads();
+            out[threadIdx.x] = shared[threadIdx.x];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// HIP dynamic shared memory: shared uses launch-time shared memory size"
+            in result
+        )
+        assert "var<workgroup> shared: array<f32>;" in result
+        assert "workgroupBarrier();" in result
+
     def test_cpp17_if_initializer_conversion(self):
         code = """
         int main() {
@@ -3187,6 +3211,31 @@ class TestHipCodeGen:
         assert "hipFreeArray(" not in result
         assert "hipArrayDestroy(" not in result
         assert "err = hipDeviceSynchronize();" not in result
+
+    def test_hip_runtime_error_wrapper_unwraps_runtime_calls(self):
+        code = """
+        void host(float* h, size_t bytes, hipStream_t stream) {
+            float* d;
+            HIP_CHECK(hipMalloc((void**)&d, bytes));
+            HIP_CHECK(hipMemcpyAsync(d, h, bytes, hipMemcpyHostToDevice, stream));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// HIP memory allocate: d, bytes: bytes" in result
+        assert (
+            "// HIP memory copy: h -> d, bytes: bytes, "
+            "kind: hipMemcpyHostToDevice, stream: stream"
+        ) in result
+        assert "HIP_CHECK(" not in result
+        assert "hipMalloc(" not in result
+        assert "hipMemcpyAsync(" not in result
 
     def test_hip_memory_pointer_occupancy_expression_contexts_emit_status(self):
         code = """
