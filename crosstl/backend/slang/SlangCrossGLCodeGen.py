@@ -231,8 +231,14 @@ class SlangToCrossGLConverter:
         }
 
     def generate(self, ast):
+        exported_functions = [
+            exp.item
+            for exp in getattr(ast, "exports", [])
+            if isinstance(getattr(exp, "item", None), FunctionNode)
+        ]
         self.user_function_names = {
-            getattr(func, "name", None) for func in getattr(ast, "functions", [])
+            getattr(func, "name", None)
+            for func in [*getattr(ast, "functions", []), *exported_functions]
         }
         self.user_function_names.discard(None)
         self.sampleable_resource_scopes = [self.collect_sampleable_resources(ast)]
@@ -243,7 +249,7 @@ class SlangToCrossGLConverter:
             code += "\n"
         if ast.exports:
             for exp in ast.exports:
-                code += f"    export {exp.item};\n"
+                code += self.generate_export(exp)
             code += "\n"
         for node in ast.typedefs:
             code += (
@@ -291,6 +297,25 @@ class SlangToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def generate_export(self, exp):
+        item = exp.item
+        if isinstance(item, FunctionNode):
+            return self.generate_function(item)
+        if isinstance(item, StructNode):
+            code = f"    struct {item.name} {{\n"
+            for member in item.members:
+                semantic = self.map_semantic(member.semantic)
+                semantic_suffix = f" {semantic}" if semantic else ""
+                code += (
+                    f"        {self.map_type(member.vtype)} {member.name}"
+                    f"{self.format_array_suffixes(member)}{semantic_suffix};\n"
+                )
+            code += "    }\n"
+            return code
+        if isinstance(item, (VariableNode, AssignmentNode)):
+            return self.generate_global_variable(item)
+        return ""
 
     def generate_numthreads_layout(self, func):
         numthreads = getattr(func, "numthreads", None)

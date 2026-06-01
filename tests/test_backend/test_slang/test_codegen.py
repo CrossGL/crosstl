@@ -1339,6 +1339,24 @@ def test_generic_struct_member_and_uniform_parameter_codegen_from_official_sampl
     assert "ImageProcessingOptions options" in generated_code
 
 
+def test_export_extern_cpp_function_codegen():
+    code = """
+    [TorchEntryPoint]
+    export __extern_cpp int main()
+    {
+        return 0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int main()" in generated_code
+    assert "return 0;" in generated_code
+    assert "FunctionNode(" not in generated_code
+
+
 def test_c_style_scalar_cast_codegen_from_official_select_expr_sample():
     code = """
     int test(int input)

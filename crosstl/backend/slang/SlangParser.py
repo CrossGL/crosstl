@@ -10,7 +10,15 @@ class SlangParser:
     DECLARATION_TYPE_TOKENS = {"FLOAT", "FVECTOR", "INT", "UINT", "BOOL", "MATRIX"}
     RESOURCE_TYPE_TOKENS = {"TEXTURE2D", "SAMPLER_STATE"}
     QUALIFIER_TOKENS = {"CONST", "CONSTEXPR", "INLINE", "STATIC"}
-    IDENTIFIER_QUALIFIERS = {"uniform", "in", "out", "inout"}
+    IDENTIFIER_QUALIFIERS = {
+        "uniform",
+        "in",
+        "out",
+        "inout",
+        "public",
+        "__global",
+        "__extern_cpp",
+    }
     BUILTIN_IDENTIFIER_TYPES = {
         "double",
         "double2",
@@ -91,7 +99,7 @@ class SlangParser:
             if self.current_token[0] == "IMPORT":
                 imports.append(self.parse_import())
             elif self.current_token[0] == "EXPORT":
-                exports.append(self.parse_export())
+                exports.append(self.parse_export(attributes=pending_attributes))
             elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
             elif self.current_token[0] == "CBUFFER":
@@ -384,13 +392,18 @@ class SlangParser:
         self.eat("SEMICOLON")
         return ImportNode(".".join(parts))
 
-    def parse_export(self):
+    def parse_export(self, attributes=None):
         self.eat("EXPORT")
-        exported_item = (
-            self.parse_function()
-            if self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS
-            else self.parse_struct()
-        )
+        if self.current_token[0] == "STRUCT":
+            exported_item = self.parse_struct()
+        elif self.is_function():
+            exported_item = self.parse_function(attributes=attributes)
+        elif self.is_variable_declaration_start():
+            exported_item = self.parse_global_variable()
+        else:
+            raise SyntaxError(
+                f"Expected export declaration, got {self.current_token[0]}"
+            )
         return ExportNode(exported_item)
 
     def parse_struct(self):

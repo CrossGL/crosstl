@@ -2122,6 +2122,27 @@ class TestCudaParser:
         assert body[3].value == "1e-3f"
         assert body[4].value == ".5f"
 
+    def test_character_literal_parsing(self):
+        code = r"""
+        char helper() {
+            char c = 'x';
+            char escaped = '\n';
+            char hex = '\x7f';
+            char oct = '\377';
+            return c;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert body[0].value == "'x'"
+        assert body[1].value == "'\\n'"
+        assert body[2].value == "'\\x7f'"
+        assert body[3].value == "'\\377'"
+
     def test_qualified_and_pointer_return_functions_parsing(self):
         code = """
         unsigned int lane_mask() { return 3u; }

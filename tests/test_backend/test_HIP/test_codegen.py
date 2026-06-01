@@ -15402,6 +15402,8 @@ class TestHipCodeGen:
             bool no = false;
             char c = 'x';
             char escaped = '\n';
+            char hex = '\x7f';
+            char oct = '\377';
             int* p = nullptr;
             int* q = NULL;
             return yes && !no;
@@ -15419,6 +15421,8 @@ class TestHipCodeGen:
         assert "var no: bool = false;" in result
         assert "var c: i8 = 'x';" in result
         assert "var escaped: i8 = '\\n';" in result
+        assert "var hex: i8 = '\\x7f';" in result
+        assert "var oct: i8 = '\\377';" in result
         assert "var p: ptr<i32> = nullptr;" in result
         assert "var q: ptr<i32> = NULL;" in result
         assert "return (yes && (!no));" in result

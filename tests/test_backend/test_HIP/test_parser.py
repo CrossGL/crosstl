@@ -1771,6 +1771,8 @@ class TestHipParser:
             bool no = false;
             char c = 'x';
             char escaped = '\n';
+            char hex = '\x7f';
+            char oct = '\377';
             int* p = nullptr;
             int* q = NULL;
             return yes && !no;
@@ -1786,9 +1788,11 @@ class TestHipParser:
         assert body[1].value == "false"
         assert body[2].value == "'x'"
         assert body[3].value == "'\\n'"
-        assert body[4].value == "nullptr"
-        assert body[5].value == "NULL"
-        assert body[6].value.op == "&&"
+        assert body[4].value == "'\\x7f'"
+        assert body[5].value == "'\\377'"
+        assert body[6].value == "nullptr"
+        assert body[7].value == "NULL"
+        assert body[8].value.op == "&&"
 
     def test_control_flow_and_cast_expression_parsing(self):
         code = """

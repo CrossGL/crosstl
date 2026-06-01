@@ -149,6 +149,7 @@ class HLSLParser:
         self.tokens = tokens
         self.current_index = 0
         self.current_token = tokens[0] if tokens else ("EOF", "")
+        self.synthetic_structs = []
 
     def parse(self):
         structs = []
@@ -166,7 +167,10 @@ class HLSLParser:
                 continue
 
             if self.current_token[0] == "STRUCT":
-                structs.append(self.parse_struct())
+                synthetic_start = len(self.synthetic_structs)
+                struct = self.parse_struct()
+                structs.extend(self.synthetic_structs[synthetic_start:])
+                structs.append(struct)
                 continue
 
             if self.current_token[0] == "ENUM":
@@ -397,6 +401,15 @@ class HLSLParser:
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             attributes = self.parse_attribute_list()
             qualifiers = self.parse_qualifiers()
+            if self.current_token[0] == "STRUCT":
+                declarations = self.parse_nested_struct_member(
+                    name,
+                    qualifiers=qualifiers,
+                    attributes=attributes,
+                    allow_semantic=True,
+                )
+                members.extend(self.ensure_statement_list(declarations))
+                continue
             if not self.is_type_token(self.current_token[0]):
                 raise SyntaxError(
                     f"Expected type in struct member, got {self.current_token[0]}"
@@ -427,6 +440,82 @@ class HLSLParser:
         struct_node.variables = variables
         struct_node.semantic = semantic
         return struct_node
+
+    def parse_nested_struct_member(
+        self,
+        parent_name,
+        qualifiers=None,
+        attributes=None,
+        allow_semantic=True,
+    ):
+        self.eat("STRUCT")
+        nested_name = None
+        if self.current_token[0] == "IDENTIFIER" and self.peek()[0] == "LBRACE":
+            nested_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+
+        self.eat("LBRACE")
+        nested_members = []
+        while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            member_attributes = self.parse_attribute_list()
+            member_qualifiers = self.parse_qualifiers()
+            if self.current_token[0] == "STRUCT":
+                declarations = self.parse_nested_struct_member(
+                    nested_name or parent_name,
+                    qualifiers=member_qualifiers,
+                    attributes=member_attributes,
+                    allow_semantic=True,
+                )
+                nested_members.extend(self.ensure_statement_list(declarations))
+                continue
+            if not self.is_type_token(self.current_token[0]):
+                raise SyntaxError(
+                    f"Expected type in struct member, got {self.current_token[0]}"
+                )
+            declarations = self.parse_variable_declaration(
+                qualifiers=member_qualifiers,
+                attributes=member_attributes,
+                allow_semantic=True,
+                consume_semicolon=True,
+            )
+            nested_members.extend(self.ensure_statement_list(declarations))
+
+        self.eat("RBRACE")
+
+        if self.current_token[0] != "IDENTIFIER":
+            if nested_name is None:
+                raise SyntaxError("Expected identifier after anonymous struct member")
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+            self.synthetic_structs.append(StructNode(nested_name, nested_members))
+            return []
+
+        first_name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        struct_type = nested_name or self.synthetic_struct_type_name(
+            parent_name, first_name
+        )
+        self.synthetic_structs.append(StructNode(struct_type, nested_members))
+        return self.parse_variable_declaration_list_rest(
+            struct_type,
+            first_name,
+            qualifiers=qualifiers,
+            attributes=attributes,
+            allow_semantic=allow_semantic,
+            consume_semicolon=True,
+        )
+
+    def synthetic_struct_type_name(self, parent_name, member_name):
+        base = re.sub(r"\W+", "_", f"{parent_name}_{member_name}").strip("_")
+        if not base:
+            base = "AnonymousStruct"
+        existing = {getattr(struct, "name", None) for struct in self.synthetic_structs}
+        if base not in existing:
+            return base
+        index = 1
+        while f"{base}_{index}" in existing:
+            index += 1
+        return f"{base}_{index}"
 
     def parse_enum(self):
         self.eat("ENUM")

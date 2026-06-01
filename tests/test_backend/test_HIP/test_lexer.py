@@ -151,18 +151,27 @@ class TestHipLexer:
         assert "2.5e-3f" in float_values
         assert ".5f" in float_values
 
-    def test_string_literals(self):
+    def test_string_and_character_literals(self):
         code = """
-        "hello world" 'c' "escaped \\"string\\"" "path/to/file"
+        "hello world" 'c' '\\n' '\\x7f' '\\377' u8'a' L'b'
+        "escaped \\"string\\"" "path/to/file" char
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
         strings = [token for token in tokens if token.type == "STRING"]
-        chars = [token for token in tokens if token.type == "CHAR"]
+        chars = [token for token in tokens if token.type == "CHAR_LIT"]
 
         assert len(strings) >= 3
-        assert len(chars) >= 1
+        assert [token.value for token in chars] == [
+            "'c'",
+            "'\\n'",
+            "'\\x7f'",
+            "'\\377'",
+            "u8'a'",
+            "L'b'",
+        ]
+        assert ("CHAR", "char") in [(token.type, token.value) for token in tokens]
 
     def test_preprocessor_directives(self):
         code = """

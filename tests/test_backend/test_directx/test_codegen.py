@@ -492,6 +492,26 @@ def test_hlsl_psize_roundtrips_to_gl_point_size():
     assert "@ PointSize" not in crossgl
 
 
+def test_codegen_anonymous_nested_struct_member_roundtrip():
+    hlsl = textwrap.dedent("""
+        struct NRCPathState {
+            float energy;
+            struct {
+                float3 origin;
+                float pdf;
+            } path;
+        };
+    """)
+
+    crossgl = generate_crossgl(hlsl)
+
+    assert "struct NRCPathState_path {" in crossgl
+    assert "vec3 origin;" in crossgl
+    assert "float pdf;" in crossgl
+    assert "struct NRCPathState {" in crossgl
+    assert "NRCPathState_path path;" in crossgl
+
+
 def test_brace_initializer_declarations_generate_crossgl():
     output = generate_crossgl(textwrap.dedent("""
             struct MyPayload {

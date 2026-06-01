@@ -140,13 +140,13 @@ TOKENS = tuple(
         ("NULL", r"\bNULL\b"),
         ("NULLPTR", r"\bnullptr\b"),
         # Identifiers and literals (must come after keywords)
-        ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         (
             "NUMBER",
             r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFdDlLuU]*",
         ),
         ("STRING", r'"([^"\\]|\\.)*"'),
-        ("CHAR_LIT", r"'([^'\\]|\\.)'"),
+        ("CHAR_LIT", r"(?:u8|u|U|L)?'(?:[^'\\\n]|\\.)+'"),
+        ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         # Preprocessor
         ("PREPROCESSOR", r"#[^\n]*"),
         # Operators (multi-character first)

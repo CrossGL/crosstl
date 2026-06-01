@@ -144,3 +144,13 @@ class TestCudaLexer:
         values = [value for token_type, value in tokens if token_type == "NUMBER"]
 
         assert values == ["0xffu", "0XCAFEull", "0b1010u", "0777u", "1e-3f", ".5f"]
+
+    def test_character_literal_tokenization(self):
+        code = r"'c' '\n' '\x7f' '\377' u8'a' L'b' char"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        values = [value for token_type, value in tokens if token_type == "CHAR_LIT"]
+
+        assert values == ["'c'", "'\\n'", "'\\x7f'", "'\\377'", "u8'a'", "L'b'"]
+        assert ("CHAR", "char") in tokens

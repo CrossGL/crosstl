@@ -1775,7 +1775,7 @@ class HipParser:
             self.advance()
             return value
 
-        elif self.match("CHAR") and self.current_token.value != "char":
+        elif self.match("CHAR_LIT"):
             value = self.current_token.value
             self.advance()
             return value

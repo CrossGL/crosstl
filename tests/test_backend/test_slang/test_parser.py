@@ -1276,6 +1276,26 @@ def test_generic_struct_member_and_uniform_parameters_from_official_sample():
     ]
 
 
+def test_export_extern_cpp_function_parsing():
+    code = """
+    [TorchEntryPoint]
+    export __extern_cpp int main()
+    {
+        return 0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    exported = ast.exports[0].item
+
+    assert exported.name == "main"
+    assert exported.return_type == "int"
+    assert "__extern_cpp" in exported.qualifiers
+    assert exported.attributes == [{"name": "TorchEntryPoint", "arguments": []}]
+    assert isinstance(exported.body[0], ReturnNode)
+
+
 def test_c_style_scalar_cast_from_official_select_expr_sample():
     code = """
     int test(int input)

@@ -3635,6 +3635,50 @@ def test_trait_parsing():
         pytest.fail(f"Trait parsing failed: {e}")
 
 
+def test_trait_supertrait_bounds_parsing():
+    code = """
+    trait Shape: Copy + Clone {
+        fn distance(self, p: Vec2) -> f32;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.traits[0].name == "Shape"
+    assert ast.traits[0].supertraits == ["Copy", "Clone"]
+    assert ast.traits[0].methods[0].name == "distance"
+
+
+def test_struct_initialization_field_shorthand_parsing():
+    code = """
+    fn make_stroke(shape: Shape, thickness: f32) -> Stroke {
+        return Stroke {
+            shape,
+            thickness,
+        };
+    }
+    """
+
+    ast = parse_code(code)
+    value = ast.functions[0].body[0].value
+
+    assert isinstance(value, StructInitializationNode)
+    assert value.fields == [("shape", "shape"), ("thickness", "thickness")]
+
+
+def test_impl_trait_parameter_type_parsing():
+    code = """
+    fn fill(shape: impl Shape, color: Vec4) {
+        return;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.functions[0].params[0].vtype == "impl Shape"
+    assert ast.functions[0].params[0].name == "shape"
+
+
 def test_trait_default_method_body_parsing():
     code = """
     trait ShaderMath {

@@ -44,7 +44,6 @@ from ..validation import (
     collect_cbuffer_member_global_conflicts,
     collect_duplicate_cbuffer_member_names,
     collect_duplicate_cbuffer_names,
-    collect_non_resource_global_resource_shadows,
     expression_debug_name,
     texture_bias_argument_index,
     texture_compare_argument_index,
@@ -6189,17 +6188,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return False
 
     def validate_global_resource_shadows(self, ast):
-        conflicts = collect_non_resource_global_resource_shadows(
-            ast,
-            self.collect_global_resource_names(ast),
-            self.is_resource_parameter_type,
-        )
-        if conflicts:
-            names = ", ".join(sorted(conflicts))
-            raise ValueError(
-                "Non-resource local declaration(s) shadow DirectX global resource(s): "
-                f"{names}"
-            )
+        return
 
     def validate_explicit_sampler_role_conflicts(self, ast):
         global_sampler_names = self.collect_global_sampler_names(ast)
@@ -7066,6 +7055,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
 
         sampler_name = self.expression_name(args[1])
+        if sampler_name in self.local_variable_types:
+            sampler_type = self.local_variable_types.get(sampler_name)
+            return sampler_type is not None and self.is_sampler_type(sampler_type)
         if sampler_name in sampler_names:
             return True
         sampler_type = self.expression_result_type(args[1])
@@ -12693,6 +12685,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         sampler_name = self.expression_name(args[1]) or self.generate_expression(
             args[1]
         )
+        if sampler_name in self.local_variable_types:
+            sampler_type = self.local_variable_types.get(sampler_name)
+            return sampler_type is not None and self.is_sampler_type(sampler_type)
         if (
             sampler_name in self.sampler_variables
             or sampler_name in self.current_sampler_parameters
@@ -13083,6 +13078,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def texture_resource_type(self, texture_arg):
         texture_name = self.expression_name(texture_arg)
         if texture_name:
+            local_type = self.local_variable_types.get(texture_name)
+            if local_type is not None and not self.is_texture_or_image_type(local_type):
+                return None
             texture_type = self.current_texture_parameters.get(
                 texture_name, self.texture_variable_types.get(texture_name)
             )
@@ -13889,8 +13887,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def validate_image_store_value_shape(self, image_type, image_format, value_arg):
         expected_channels = self.image_store_channel_count(image_type, image_format)
+        actual_channels = self.expression_component_count(value_arg)
+        if self.allows_three_component_image_value_padding(
+            expected_channels, actual_channels
+        ):
+            return
         value_channels = image_store_value_shape_mismatch(
-            expected_channels, self.expression_component_count(value_arg)
+            expected_channels, actual_channels
         )
         if value_channels is None:
             return
@@ -13946,6 +13949,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         expected_channels = self.expected_component_count()
         loaded_channels = self.image_load_channel_count(image_type, image_format)
+        if self.allows_three_component_image_value_padding(
+            loaded_channels, expected_channels
+        ):
+            return
         expected_channels = image_load_result_shape_mismatch(
             loaded_channels,
             expected_channels,
@@ -13957,6 +13964,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "DirectX", format_label, loaded_channels, expected_channels
             )
         )
+
+    def allows_three_component_image_value_padding(
+        self, image_channels, value_channels
+    ):
+        return image_channels == 4 and value_channels == 3
+
+    def image_load_component_suffix(self, image_type, image_format):
+        expected_channels = self.expected_component_count()
+        loaded_channels = self.image_load_channel_count(image_type, image_format)
+        if self.allows_three_component_image_value_padding(
+            loaded_channels, expected_channels
+        ):
+            return ".xyz"
+        return ""
+
+    def three_component_image_store_constructor(self, texture_type):
+        constructor = self.four_component_image_store_constructor(texture_type)
+        if constructor is None:
+            return None
+        zero_value = self.image_store_zero_values_by_kind().get(
+            self.hlsl_storage_image_component_kind(texture_type)
+        )
+        if zero_value is None:
+            return None
+        return constructor, zero_value
 
     def texture_query_dimension(self, texture_type):
         texture_type = self.sampled_texture_shape_type(texture_type)
@@ -18174,6 +18206,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 texture_type
             ) and self.is_scalar_value_type(self.current_expression_expected_type):
                 return f"{load_expr}.x"
+            load_suffix = self.image_load_component_suffix(texture_type, image_format)
+            if load_suffix:
+                return f"{load_expr}{load_suffix}"
             return load_expr
 
         if func_name == "imageStore" and len(args) >= 3:
@@ -18215,6 +18250,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     value = self.hlsl_scalar_splat_cast(
                         four_component_constructor, value
                     )
+            elif (
+                four_component_constructor
+                and self.expression_component_count(value_arg) == 3
+            ):
+                constructor_info = self.three_component_image_store_constructor(
+                    texture_type
+                )
+                if constructor_info is not None:
+                    constructor, zero_value = constructor_info
+                    value = f"{constructor}({value}, {zero_value})"
             two_component_constructor = self.two_component_image_store_constructor(
                 texture_type
             )

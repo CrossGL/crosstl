@@ -475,6 +475,8 @@ class MojoParser:
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "raises":
             self.eat("IDENTIFIER")
 
+        where_clause = self.parse_where_clause()
+
         if self.current_token[0] == "COLON":
             self.eat("COLON")
 
@@ -484,7 +486,44 @@ class MojoParser:
             return_type, name, params, body, qualifiers=[], attributes=attributes
         )
         func.qualifier = qualifier
+        func.where_clause = where_clause
         return func
+
+    def parse_where_clause(self):
+        if not (
+            self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "where"
+        ):
+            return None
+
+        self.eat("IDENTIFIER")
+        self.skip_layout_tokens()
+
+        if self.current_token[0] != "LPAREN":
+            raise SyntaxError("Expected parenthesized Mojo where clause")
+
+        parts = []
+        depth = 0
+        while True:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated Mojo where clause")
+
+            token_type, token_value = self.current_token
+            if token_type in {"NEWLINE", "INDENT", "DEDENT"}:
+                self.eat(token_type)
+                continue
+
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+
+            parts.append(str(token_value))
+            self.eat(token_type)
+
+            if depth == 0:
+                break
+
+        return " ".join(parts)
 
     def parse_parameters(self):
         params = []

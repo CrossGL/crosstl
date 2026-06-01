@@ -14008,24 +14008,47 @@ def test_directx_texture_resources_and_sampling():
     assert generated_code.count("// Fragment Shader") == 1
 
 
-def test_directx_rejects_non_resource_shadow_of_global_resource():
+def test_directx_allows_non_resource_shadow_of_global_resource_when_not_used_as_resource():
     shader = """
     shader ResourceShadow {
-        sampler2D colorMap;
-        sampler linearSampler;
+        sampler2D Luma;
+        sampler2D texNormal;
 
         struct FSInput {
             vec2 uv;
         };
 
-        vec4 shade(float colorMap, FSInput input) {
-            float linearSampler = 1.0;
-            return vec4(colorMap + linearSampler);
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float Luma = input.uv.x;
+                vec3 texNormal = vec3(input.uv, 1.0);
+                return vec4(Luma + texNormal.z);
+            }
         }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D Luma : register(t0);" in generated_code
+    assert "Texture2D texNormal : register(t1);" in generated_code
+    assert "float Luma = input.uv.x;" in generated_code
+    assert "float3 texNormal = float3(input.uv, 1.0);" in generated_code
+
+
+def test_directx_rejects_texture_call_with_shadowing_non_resource_local():
+    shader = """
+    shader InvalidResourceShadow {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv;
+        };
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return shade(1.0, input);
+                float colorMap = input.uv.x;
+                return texture(colorMap, input.uv);
             }
         }
     }
@@ -14034,8 +14057,8 @@ def test_directx_rejects_non_resource_shadow_of_global_resource():
     with pytest.raises(
         ValueError,
         match=(
-            "Non-resource local declaration\\(s\\) shadow DirectX global "
-            "resource\\(s\\): colorMap, linearSampler"
+            "DirectX texture operation 'texture' requires a declared texture "
+            "or image resource argument: colorMap"
         ),
     ):
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
@@ -16211,6 +16234,38 @@ def test_directx_explicit_rgba_float_image_formats():
     assert "image[pixelLayer] = (oldValue + value);" in generated_code
     assert "image[voxel] = (oldValue + value);" in generated_code
     assert "RWTexture2D<int> image" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_directx_default_float4_image_allows_three_component_load_store():
+    shader = """
+    shader ImageVec3 {
+        image2D target;
+
+        vec3 touch(image2D image, ivec2 pixel, vec3 value) {
+            vec3 oldValue = imageLoad(image, pixel);
+            imageStore(image, pixel, value);
+            return oldValue;
+        }
+
+        compute {
+            void main() {
+                vec3 color = touch(target, ivec2(0, 0), vec3(1.0, 0.5, 0.25));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "RWTexture2D<float4> target : register(u0);" in generated_code
+    assert (
+        "float3 touch(RWTexture2D<float4> image, int2 pixel, float3 value)"
+        in generated_code
+    )
+    assert "float3 oldValue = image[pixel].xyz;" in generated_code
+    assert "image[pixel] = float4(value, 0.0);" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
 

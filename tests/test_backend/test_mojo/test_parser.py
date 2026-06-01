@@ -431,6 +431,30 @@ def test_generic_function_signature_parsing():
     assert function.params[1].attributes[0].args == ["0"]
 
 
+def test_parenthesized_where_clause_with_and_constraints_parsing():
+    code = """
+    def outer_product_acc[
+        dtype: DType
+    ](
+        res: TileTensor[mut=True, ...],
+        lhs: TileTensor,
+        rhs: TileTensor,
+    ) where (
+        type_of(res).flat_rank == 2
+        and type_of(lhs).flat_rank == 1
+        and type_of(rhs).shape_known
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "outer_product_acc")
+
+    assert function.where_clause is not None
+    assert "&&" in function.where_clause
+    assert "type_of" in function.where_clause
+    assert function.body
+
+
 def test_else_if_parsing():
     code = """
     fn fragment_main(input: PSInput) -> PSOutput:

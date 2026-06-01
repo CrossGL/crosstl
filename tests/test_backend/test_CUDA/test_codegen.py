@@ -8862,6 +8862,30 @@ class TestCudaCodeGen:
         assert "var y: f32 = .5f;" in result
         assert "return ((mask | bits) | oct);" in result
 
+    def test_character_literal_conversion(self):
+        code = r"""
+        char helper() {
+            char c = 'x';
+            char escaped = '\n';
+            char hex = '\x7f';
+            char oct = '\377';
+            return c;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var c: i8 = 'x';" in result
+        assert "var escaped: i8 = '\\n';" in result
+        assert "var hex: i8 = '\\x7f';" in result
+        assert "var oct: i8 = '\\377';" in result
+        assert "return c;" in result
+
     def test_long_long_type_conversion(self):
         code = """
         __global__ void kernel(unsigned long long* out, long long x) {

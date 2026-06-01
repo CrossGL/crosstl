@@ -940,6 +940,22 @@ class RustParser:
         if self.current_token[0] == "LESS_THAN":
             generics = self.parse_generics()
 
+        supertraits = []
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            while self.current_token[0] not in {
+                "WHERE",
+                "LBRACE",
+                "EOF",
+            }:
+                supertrait = self.collect_token_text_until({"PLUS", "WHERE", "LBRACE"})
+                if supertrait:
+                    supertraits.append(supertrait)
+                if self.current_token[0] == "PLUS":
+                    self.eat("PLUS")
+                    continue
+                break
+
         where_clauses = []
         if self.current_token[0] == "WHERE":
             where_clauses = self.parse_where_clause({"LBRACE"})
@@ -968,6 +984,7 @@ class RustParser:
             visibility,
             where_clauses,
             associated_types,
+            supertraits,
         )
 
     def parse_generics(self):
@@ -990,6 +1007,10 @@ class RustParser:
         return generics
 
     def parse_type(self):
+        if self.current_token[0] == "IMPL":
+            self.eat("IMPL")
+            return f"impl {self.parse_type()}"
+
         if self.current_token[0] == "LPAREN":
             return self.parse_tuple_type()
 
@@ -1263,9 +1284,11 @@ class RustParser:
             field_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-            self.eat("COLON")
-
-            field_value = self.parse_expression()
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
+                field_value = self.parse_expression()
+            else:
+                field_value = field_name
 
             fields.append((field_name, field_value))
 

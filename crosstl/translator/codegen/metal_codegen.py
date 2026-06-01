@@ -7053,7 +7053,7 @@ class MetalCodeGen:
             self.validate_function_resource_argument_types(func_name, expr.args)
             self.validate_function_image_access_arguments(func_name, expr.args)
             args = self.generate_function_call_arguments(argument_func_name, expr.args)
-            if func_name in self.user_function_names:
+            if self.function_call_matches_known_signature(func_name, expr.args):
                 args.extend(
                     self.required_function_stage_parameter_argument_names(func_name)
                 )
@@ -11296,11 +11296,23 @@ class MetalCodeGen:
         )
 
     def collect_resource_array_size_hints(self, ast):
+        global_arrays = self.collect_unsized_resource_globals(ast)
+        function_arrays = self.collect_unsized_resource_parameters(ast)
+        fixed_global_array_sizes = self.collect_fixed_resource_global_sizes(ast)
+        fixed_function_array_sizes = self.collect_fixed_resource_parameter_sizes(ast)
+        if not (
+            global_arrays
+            or function_arrays
+            or fixed_global_array_sizes
+            or fixed_function_array_sizes
+        ):
+            return {}, {}
+
         return collect_resource_array_size_hints(
-            global_arrays=self.collect_unsized_resource_globals(ast),
-            function_arrays=self.collect_unsized_resource_parameters(ast),
-            fixed_global_array_sizes=self.collect_fixed_resource_global_sizes(ast),
-            fixed_function_array_sizes=self.collect_fixed_resource_parameter_sizes(ast),
+            global_arrays=global_arrays,
+            function_arrays=function_arrays,
+            fixed_global_array_sizes=fixed_global_array_sizes,
+            fixed_function_array_sizes=fixed_function_array_sizes,
             functions=self.all_functions(ast),
             walk_nodes=self.iter_ast_nodes,
             expression_name=self.expression_name,
@@ -13760,6 +13772,14 @@ class MetalCodeGen:
     def function_call_arguments(self, call):
         return getattr(call, "arguments", getattr(call, "args", []))
 
+    def function_call_matches_known_signature(self, func_name, args):
+        if func_name not in self.user_function_names:
+            return False
+        parameter_nodes = self.function_parameter_nodes.get(func_name)
+        if parameter_nodes is None:
+            return False
+        return len(args or []) == len(parameter_nodes)
+
     def collect_function_structured_buffer_length_dependencies(self, functions):
         parameter_types = {
             getattr(func, "name", None): self.structured_buffer_parameter_type_map(func)
@@ -14704,7 +14724,10 @@ class MetalCodeGen:
         ]
 
     def generate_function_call_arguments(self, func_name, call_args):
+        call_args = list(call_args or [])
         parameter_infos = self.function_parameter_infos.get(func_name, [])
+        if len(call_args) != len(parameter_infos):
+            parameter_infos = []
         args = []
         for index, arg in enumerate(call_args):
             param_name, param_type = (
@@ -16633,6 +16656,8 @@ class MetalCodeGen:
         callee_requirements = self.function_image_access_requirements.get(func_name)
         if not callee_requirements:
             return
+        if not self.function_call_matches_known_signature(func_name, args):
+            return
         param_names = self.function_parameter_names.get(func_name, [])
         for index, param_name in enumerate(param_names):
             required_access = callee_requirements.get(param_name)
@@ -16801,6 +16826,8 @@ class MetalCodeGen:
     def validate_function_resource_argument_types(self, func_name, args):
         parameter_nodes = self.function_parameter_nodes.get(func_name)
         if not parameter_nodes:
+            return
+        if not self.function_call_matches_known_signature(func_name, args):
             return
 
         for index, parameter in enumerate(parameter_nodes):

@@ -471,6 +471,23 @@ def test_generic_function_signature_codegen():
     assert "return transform;" in generated_code
 
 
+def test_where_clause_constraints_are_accepted_and_not_emitted_codegen():
+    code = """
+    fn constrained[BM: Int, BN: Int]() -> Int where (
+        BM == 32
+        and BN == 32
+    ):
+        return 1
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int constrained()" in generated_code
+    assert "return 1;" in generated_code
+    assert "where" not in generated_code
+
+
 def test_method_call_chain_codegen_preserves_receiver():
     code = """
     fn main():
