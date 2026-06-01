@@ -1245,6 +1245,32 @@ def test_comptime_assert_statement_parse():
     assert size_assert.args[1] == '"bad size"'
 
 
+def test_keyword_style_comptime_assert_statement_parse():
+    code = """
+    def main(size: Int):
+        comptime assert has_accelerator(), "This example requires a supported GPU"
+        comptime assert size > 0, "bad size"
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    gpu_assert = function.body[0]
+    size_assert = function.body[1]
+
+    assert isinstance(gpu_assert, FunctionCallNode)
+    assert getattr(gpu_assert, "is_comptime", False)
+    assert gpu_assert.name == "assert"
+    assert isinstance(gpu_assert.args[0], FunctionCallNode)
+    assert gpu_assert.args[0].name == "has_accelerator"
+    assert gpu_assert.args[1] == '"This example requires a supported GPU"'
+
+    assert isinstance(size_assert, FunctionCallNode)
+    assert getattr(size_assert, "is_comptime", False)
+    assert isinstance(size_assert.args[0], BinaryOpNode)
+    assert size_assert.args[0].op == ">"
+    assert size_assert.args[1] == '"bad size"'
+
+
 def test_nested_decorator_and_generic_function_signature_parse():
     code = """
     @compiler.register("vector_addition")

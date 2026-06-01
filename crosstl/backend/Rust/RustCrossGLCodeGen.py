@@ -701,10 +701,21 @@ class RustToCrossGLConverter:
                     self.get_local_function_item_helper_name(stmt),
                 )
 
-    def generate_scoped_function_body(self, body, indent=1, loop_contexts=None):
+    def generate_scoped_function_body(
+        self,
+        body,
+        indent=1,
+        loop_contexts=None,
+        allow_implicit_final_return=False,
+    ):
         self.push_local_callable_scope()
         try:
-            return self.generate_function_body(body, indent, loop_contexts)
+            return self.generate_function_body(
+                body,
+                indent,
+                loop_contexts,
+                allow_implicit_final_return=allow_implicit_final_return,
+            )
         finally:
             self.pop_local_callable_scope()
 
@@ -1816,7 +1827,11 @@ class RustToCrossGLConverter:
         self.push_value_type_scope(param_types)
         self.push_local_callable_scope()
         try:
-            body_code = self.generate_function_body(func.body, indent=indent + 1)
+            body_code = self.generate_function_body(
+                func.body,
+                indent=indent + 1,
+                allow_implicit_final_return=True,
+            )
             helper_code = "".join(self.current_closure_helpers)
             code += helper_code
             code += f"{indent_str}{return_type} {func_name}({params_str}) {{\n"
@@ -1857,7 +1872,11 @@ class RustToCrossGLConverter:
         self.push_name_alias_scope(name_aliases)
         self.local_binding_name_scopes.append(local_binding_names)
         try:
-            body_code = self.generate_function_body(func.body, indent=3)
+            body_code = self.generate_function_body(
+                func.body,
+                indent=3,
+                allow_implicit_final_return=True,
+            )
             helper_code = "".join(self.current_closure_helpers)
         finally:
             self.current_function_return_type = previous_return_type
@@ -1875,9 +1894,59 @@ class RustToCrossGLConverter:
         code += "    }\n\n"
         return code
 
-    def generate_function_body(self, body, indent=1, loop_contexts=None):
+    def function_returns_value(self):
+        return_type = self.current_function_return_type
+        if not return_type:
+            return False
+
+        return self.map_type(return_type) != "void"
+
+    def is_implicit_final_return_statement(self, stmt, index, body):
+        if index != len(body) - 1 or not self.function_returns_value():
+            return False
+
+        return not isinstance(
+            stmt,
+            (
+                ConstNode,
+                StaticNode,
+                FunctionNode,
+                LetNode,
+                AssignmentNode,
+                ReturnNode,
+                ForNode,
+                WhileNode,
+                BreakNode,
+                ContinueNode,
+            ),
+        )
+
+    def generate_implicit_final_return_statement(
+        self,
+        stmt,
+        indent,
+        loop_contexts=None,
+    ):
+        if isinstance(stmt, MatchesMacroNode):
+            return self.generate_matches_expression_return(stmt, indent, loop_contexts)
+
+        return self.generate_expression_result(
+            stmt,
+            indent,
+            self.return_result_target,
+            loop_contexts,
+        )
+
+    def generate_function_body(
+        self,
+        body,
+        indent=1,
+        loop_contexts=None,
+        allow_implicit_final_return=False,
+    ):
         code = ""
         indent_str = "    " * indent
+        body = body or []
         loop_contexts = loop_contexts or []
         scoped_aliases = self.local_aliasing_enabled()
         if scoped_aliases:
@@ -1889,8 +1958,21 @@ class RustToCrossGLConverter:
 
         try:
             self.predeclare_local_function_items(body)
-            for stmt in body:
-                if isinstance(stmt, ConstNode):
+            for index, stmt in enumerate(body):
+                if (
+                    allow_implicit_final_return
+                    and self.is_implicit_final_return_statement(
+                        stmt,
+                        index,
+                        body,
+                    )
+                ):
+                    code += self.generate_implicit_final_return_statement(
+                        stmt,
+                        indent,
+                        loop_contexts,
+                    )
+                elif isinstance(stmt, ConstNode):
                     code += self.generate_const_statement(stmt, indent)
                 elif isinstance(stmt, StaticNode):
                     code += self.generate_static_statement(stmt, indent)
@@ -2904,7 +2986,14 @@ class RustToCrossGLConverter:
                 branch, indent, result_target, loop_contexts
             )
         if isinstance(branch, list):
-            return self.generate_scoped_function_body(branch, indent, loop_contexts)
+            return self.generate_scoped_function_body(
+                branch,
+                indent,
+                loop_contexts,
+                allow_implicit_final_return=(
+                    result_target is self.return_result_target
+                ),
+            )
         if branch is not None:
             return self.generate_expression_result(
                 branch, indent, result_target, loop_contexts
@@ -9021,7 +9110,12 @@ class RustToCrossGLConverter:
     def visit_FunctionNode(self, node):
         shader_type = self.get_shader_type_from_attributes(node.attributes)
         if shader_type:
-            return f"{shader_type} {{\n{self.generate_function_body(node.body, 1)}}}\n"
+            body = self.generate_function_body(
+                node.body,
+                1,
+                allow_implicit_final_return=True,
+            )
+            return f"{shader_type} {{\n{body}}}\n"
         else:
             return self.generate_function(node, 0)
 

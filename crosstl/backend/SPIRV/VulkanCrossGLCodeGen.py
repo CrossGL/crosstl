@@ -318,7 +318,7 @@ class VulkanToCrossGLConverter:
             else:
                 code += (
                     f"    {self.map_type(node.data_type)} {node.variable_name}"
-                    f"{self.storage_image_layout_attribute_suffix(node)};\n"
+                    f"{self.uniform_resource_attribute_suffix(node)};\n"
                 )
         elif layout_type == "buffer":
             if node.struct_fields:
@@ -389,6 +389,14 @@ class VulkanToCrossGLConverter:
                 f"{declaration.name}{metadata}"
             )
         return f"{self.generate_expression(declaration)}{metadata}"
+
+    def uniform_resource_attribute_suffix(self, node):
+        storage_suffix = self.storage_image_layout_attribute_suffix(node)
+        if storage_suffix:
+            return storage_suffix
+        if getattr(node, "spirv_storage_class", None) == "UniformConstant":
+            return self.uniform_block_attribute_suffix(node)
+        return ""
 
     def storage_image_layout_attribute_suffix(self, node):
         if not self.is_storage_image_type(getattr(node, "data_type", None)):

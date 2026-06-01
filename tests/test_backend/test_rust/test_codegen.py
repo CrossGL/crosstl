@@ -114,6 +114,67 @@ def test_function_conversion():
         pytest.fail(f"Function conversion failed: {e}")
 
 
+def test_value_returning_function_uses_final_expression_as_return():
+    code = """
+    fn finish(value: u32) -> u32 {
+        let next = value + 1;
+        next
+    }
+
+    fn call_finish(value: u32) -> u32 {
+        finish(value)
+    }
+
+    fn passthrough(value: Option<u32>) -> Option<u32> {
+        value
+    }
+
+    fn choose(value: u32, fallback: u32, ready: bool) -> u32 {
+        if ready {
+            value
+        } else {
+            fallback
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint finish(uint value)" in result
+    assert "let next = (value + 1);" in result
+    assert "return next;" in result
+    assert "uint call_finish(uint value)" in result
+    assert "return finish(value);" in result
+    assert "Option<u32> passthrough(Option<u32> value)" in result
+    assert "return value;" in result
+    assert "uint choose(uint value, uint fallback, bool ready)" in result
+    assert "if (ready) {\n            return value;\n        } else {" in result
+    assert "return fallback;" in result
+
+
+def test_final_expression_return_is_limited_to_function_body():
+    code = """
+    fn value_after_branch(value: u32, ready: bool) -> u32 {
+        if ready {
+            tick();
+        }
+        value
+    }
+
+    fn void_observer(value: u32) {
+        value
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "if (ready) {\n            tick();\n        }" in result
+    assert "return value;" in result
+    assert "void void_observer(uint value)" in result
+    assert "return value;" not in result[result.index("void void_observer") :]
+    assert "value;" in result[result.index("void void_observer") :]
+
+
 def test_translate_api_accepts_rust_source_preserves_stage_entry(tmp_path):
     code = """
     #[vertex_shader]
@@ -287,7 +348,7 @@ def test_fragment_shader_conversion():
         result = parse_and_generate(code)
         assert "fragment fragment_main {" in result
         assert "vec4 main(vec2 input)" in result
-        assert "vec4" in result
+        assert "return vec4(input.x, input.y, 0.0, 1.0);" in result
     except Exception as e:
         pytest.fail(f"Fragment shader conversion failed: {e}")
 

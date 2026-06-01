@@ -867,12 +867,30 @@ class MojoParser:
             node = self.parse_for_statement()
             node.is_comptime = True
             return node
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "assert"
+            and self.peek_token()[0] != "LPAREN"
+        ):
+            return self.parse_keyword_comptime_assert_statement()
         if self.is_comptime_expression_statement():
             node = self.parse_expression()
             self.consume_statement_terminator()
             node.is_comptime = True
             return node
         return self.parse_comptime_declaration(after_keyword=True)
+
+    def parse_keyword_comptime_assert_statement(self):
+        self.eat("IDENTIFIER")
+        args = [self.parse_expression()]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            args.append(self.parse_expression())
+
+        self.consume_statement_terminator()
+        node = FunctionCallNode("assert", args)
+        node.is_comptime = True
+        return node
 
     def is_comptime_expression_statement(self):
         if self.current_token[0] != "IDENTIFIER":

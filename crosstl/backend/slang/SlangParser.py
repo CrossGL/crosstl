@@ -530,34 +530,49 @@ class SlangParser:
         conformances = self.parse_conformance_clause()
         self.eat("LBRACE")
         members = []
+        methods = []
         while self.current_token[0] != "RBRACE":
-            vtype = self.parse_type_name()
-            while True:
-                var_name = self.current_token[1]
-                self.eat("IDENTIFIER")
-                array_sizes = self.parse_array_suffixes()
-                semantic = None
-                if self.current_token[0] == "COLON":
-                    self.eat("COLON")
-                    semantic = self.current_token[1]
-                    self.eat(self.current_token[0])
-                members.append(
-                    VariableNode(
-                        vtype,
-                        var_name,
-                        array_sizes=array_sizes,
-                        semantic=semantic,
-                    )
-                )
-                if self.current_token[0] != "COMMA":
-                    break
-                self.eat("COMMA")
-            self.eat("SEMICOLON")
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated struct declaration")
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                continue
+            if self.is_function():
+                methods.append(self.parse_function(allow_signature=True))
+                continue
+            members.extend(self.parse_struct_field_members())
         self.eat("RBRACE")
         node = StructNode(name, members)
+        node.methods = methods
         node.generic_parameters = generic_parameters
         node.conformances = conformances
         return node
+
+    def parse_struct_field_members(self):
+        members = []
+        vtype = self.parse_type_name()
+        while True:
+            var_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            array_sizes = self.parse_array_suffixes()
+            semantic = None
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
+                semantic = self.current_token[1]
+                self.eat(self.current_token[0])
+            members.append(
+                VariableNode(
+                    vtype,
+                    var_name,
+                    array_sizes=array_sizes,
+                    semantic=semantic,
+                )
+            )
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+        self.eat("SEMICOLON")
+        return members
 
     def parse_extension(self):
         self.eat("EXTENSION")

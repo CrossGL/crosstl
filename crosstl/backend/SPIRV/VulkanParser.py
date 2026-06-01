@@ -287,6 +287,36 @@ class VulkanParser:
                 }
             elif result_id and opcode == "OpTypeStruct":
                 types[result_id] = {"kind": "struct", "member_types": operands}
+            elif result_id and opcode == "OpTypeImage" and len(operands) >= 7:
+                sampled_type = self.spirv_type_name(operands[0], types)
+                types[result_id] = {
+                    "kind": "image",
+                    "name": self.spirv_image_type_name(
+                        sampled_type,
+                        operands[1],
+                        operands[2],
+                        operands[3],
+                        operands[4],
+                        operands[5],
+                    ),
+                    "sampled_type": operands[0],
+                    "dim": operands[1],
+                    "depth": operands[2],
+                    "arrayed": operands[3],
+                    "multisampled": operands[4],
+                    "sampled": operands[5],
+                    "format": operands[6],
+                    "access_qualifier": operands[7] if len(operands) >= 8 else None,
+                }
+            elif result_id and opcode == "OpTypeSampledImage" and operands:
+                image_type = types.get(operands[0], {})
+                types[result_id] = {
+                    "kind": "sampled_image",
+                    "name": self.spirv_sampled_image_type_name(image_type, types),
+                    "image_type": operands[0],
+                }
+            elif result_id and opcode == "OpTypeSampler":
+                types[result_id] = {"kind": "sampler", "name": "sampler"}
             elif result_id and opcode == "OpTypePointer" and len(operands) >= 2:
                 types[result_id] = {
                     "kind": "pointer",
@@ -411,6 +441,14 @@ class VulkanParser:
             if pointer_type.get("kind") != "pointer":
                 continue
 
+            if storage_class == "UniformConstant":
+                resource_layout = self.spirv_assembly_uniform_constant_layout(
+                    variable, pointer_type, names, decorations, types, constants
+                )
+                if resource_layout is not None:
+                    layouts.append(resource_layout)
+                continue
+
             if storage_class in {"PushConstant", "StorageBuffer", "Uniform"}:
                 resource_block_layout = self.spirv_assembly_resource_block_layout(
                     variable,
@@ -476,6 +514,33 @@ class VulkanParser:
             )
 
         return layouts
+
+    def spirv_assembly_uniform_constant_layout(
+        self, variable, pointer_type, names, decorations, types, constants
+    ):
+        data_type, array_suffix = self.spirv_type_name_and_suffix(
+            pointer_type.get("type_id"), types, constants
+        )
+        if data_type is None:
+            return None
+
+        variable_decorations = decorations.get(variable["id"], [])
+        qualifiers = self.spirv_descriptor_qualifiers(variable_decorations)
+        qualifier_names = {name for name, _value in qualifiers}
+        if not {"set", "binding"}.issubset(qualifier_names):
+            return None
+
+        variable_name = names.get(variable["id"]) or variable["id"].lstrip("%")
+        variable_name += array_suffix
+        return LayoutNode(
+            qualifiers,
+            layout_type="UNIFORM",
+            data_type=data_type,
+            variable_name=variable_name,
+            spirv_id=variable["id"],
+            spirv_decorations=variable_decorations,
+            spirv_storage_class="UniformConstant",
+        )
 
     def spirv_assembly_specialization_constants(
         self, spec_constant_ids, names, decorations, types, constants, constant_types
@@ -739,6 +804,50 @@ class VulkanParser:
         if type_info is None:
             return None
         return type_info.get("name")
+
+    def spirv_sampled_image_type_name(self, image_type, types):
+        sampled_type = self.spirv_type_name(image_type.get("sampled_type"), types)
+        return self.spirv_image_type_name(
+            sampled_type,
+            image_type.get("dim"),
+            image_type.get("depth"),
+            image_type.get("arrayed"),
+            image_type.get("multisampled"),
+            "1",
+        )
+
+    def spirv_image_type_name(
+        self, sampled_type, dim, depth, arrayed, multisampled, sampled
+    ):
+        if dim == "SubpassData":
+            return "subpassInputMS" if multisampled == "1" else "subpassInput"
+
+        base_name = self.spirv_image_base_type_name(dim, arrayed, multisampled)
+        if base_name is None:
+            return None
+
+        if sampled == "2":
+            prefix = {"int": "i", "uint": "u"}.get(sampled_type, "")
+            return f"{prefix}image{base_name}"
+
+        prefix = {"int": "i", "uint": "u"}.get(sampled_type, "")
+        suffix = "Shadow" if depth == "1" and not prefix else ""
+        return f"{prefix}sampler{base_name}{suffix}"
+
+    def spirv_image_base_type_name(self, dim, arrayed, multisampled):
+        if dim == "Buffer":
+            return "Buffer"
+        if dim == "Cube":
+            return "CubeArray" if arrayed == "1" else "Cube"
+        if dim == "1D":
+            return "1DArray" if arrayed == "1" else "1D"
+        if dim == "2D":
+            if multisampled == "1":
+                return "2DMSArray" if arrayed == "1" else "2DMS"
+            return "2DArray" if arrayed == "1" else "2D"
+        if dim == "3D":
+            return "3D"
+        return None
 
     def spirv_matrix_type_name(self, component_type, row_count, column_count):
         if not component_type or not row_count or not column_count:

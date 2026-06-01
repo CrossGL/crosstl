@@ -218,6 +218,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
+; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main"
+OpName %combined "combinedTex"
+OpName %linear_sampler "linearSampler"
+OpDecorate %combined DescriptorSet 0
+OpDecorate %combined Binding 0
+OpDecorate %linear_sampler DescriptorSet 0
+OpDecorate %linear_sampler Binding 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%img = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %img
+%sampler = OpTypeSampler
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%ptr_sampler = OpTypePointer UniformConstant %sampler
+%combined = OpVariable %ptr_sampled UniformConstant
+%linear_sampler = OpVariable %ptr_sampler UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
@@ -359,6 +386,32 @@ def test_spirv_assembly_specialization_constants_parse():
     assert enable_shadows.declaration.left.vtype == "const bool"
     assert enable_shadows.declaration.left.name == "ENABLE_SHADOWS"
     assert enable_shadows.declaration.right == "true"
+
+
+def test_spirv_assembly_uniform_constant_resources_parse():
+    tokens = tokenize_code(SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY)
+    ast = parse_code(tokens)
+    combined = ast.global_variables[0]
+    linear_sampler = ast.global_variables[1]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_types["%img"]["kind"] == "image"
+    assert ast.spirv_types["%img"]["name"] == "sampler2D"
+    assert ast.spirv_types["%sampled"]["kind"] == "sampled_image"
+    assert ast.spirv_types["%sampled"]["name"] == "sampler2D"
+    assert ast.spirv_types["%sampler"]["name"] == "sampler"
+
+    assert combined.layout_type == "UNIFORM"
+    assert combined.data_type == "sampler2D"
+    assert combined.variable_name == "combinedTex"
+    assert combined.qualifiers == [("set", "0"), ("binding", "0")]
+    assert combined.spirv_storage_class == "UniformConstant"
+
+    assert linear_sampler.layout_type == "UNIFORM"
+    assert linear_sampler.data_type == "sampler"
+    assert linear_sampler.variable_name == "linearSampler"
+    assert linear_sampler.qualifiers == [("set", "0"), ("binding", "1")]
+    assert linear_sampler.spirv_storage_class == "UniformConstant"
 
 
 def test_spirv_assembly_without_location_interface_is_rejected():

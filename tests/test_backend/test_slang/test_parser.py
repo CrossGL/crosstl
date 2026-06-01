@@ -17,6 +17,7 @@ from crosstl.backend.slang.SlangAst import (
     ExtensionNode,
     ForNode,
     FunctionCallNode,
+    FunctionNode,
     GenericConstraintNode,
     IfNode,
     InitializerListNode,
@@ -143,6 +144,36 @@ def test_struct_comma_member_declarators_from_ray_tracing_example():
         ("float", "focalLength"),
         ("float", "frameHeight"),
     ]
+
+
+def test_struct_method_body_parsing_from_official_example():
+    code = """
+    struct Primitive {
+        float4 data0;
+
+        float3 getNormal() {
+            return data0.xyz;
+        }
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert [(member.vtype, member.name) for member in struct.members] == [
+        ("float4", "data0")
+    ]
+    assert len(struct.methods) == 1
+
+    method = struct.methods[0]
+    assert isinstance(method, FunctionNode)
+    assert method.return_type == "float3"
+    assert method.name == "getNormal"
+    assert method.params == []
+    assert not method.is_declaration
+    assert isinstance(method.body[0], ReturnNode)
+    assert isinstance(method.body[0].value, MemberAccessNode)
+    assert method.body[0].value.member == "xyz"
 
 
 def test_if_parsing():

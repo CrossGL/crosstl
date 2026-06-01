@@ -95,6 +95,25 @@ def test_struct_comma_member_declarators_codegen():
     assert "screenWidth, screenHeight" not in generated_code
 
 
+def test_struct_methods_do_not_break_field_codegen():
+    code = """
+    struct Primitive {
+        float4 data0;
+
+        float3 getNormal() {
+            return data0.xyz;
+        }
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct Primitive" in generated_code
+    assert "vec4 data0;" in generated_code
+    assert "FunctionNode(" not in generated_code
+
+
 def test_if_codegen():
     code = """
     [shader("vertex")]

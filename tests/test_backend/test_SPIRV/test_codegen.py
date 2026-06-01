@@ -246,6 +246,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
+; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main"
+OpName %combined "combinedTex"
+OpName %linear_sampler "linearSampler"
+OpDecorate %combined DescriptorSet 0
+OpDecorate %combined Binding 0
+OpDecorate %linear_sampler DescriptorSet 0
+OpDecorate %linear_sampler Binding 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%img = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %img
+%sampler = OpTypeSampler
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%ptr_sampler = OpTypePointer UniformConstant %sampler
+%combined = OpVariable %ptr_sampled UniformConstant
+%linear_sampler = OpVariable %ptr_sampler UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -557,6 +584,31 @@ def test_spirv_assembly_specialization_constants_codegen():
     assert "const uint MAX_LIGHTS @constant_id(0) = 4;" in generated_code
     assert "const bool ENABLE_SHADOWS @constant_id(1) = true;" in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_uniform_constant_resources_codegen():
+    tokens = tokenize_code(SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Texture2D combinedTex @set(0) @binding(0);" in generated_code
+    assert "sampler linearSampler @set(0) @binding(1);" in generated_code
+    assert "%combined" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_translate_api_accepts_spirv_assembly_uniform_constant_resources(tmp_path):
+    import crosstl
+
+    shader_path = tmp_path / "resources.spvasm"
+    shader_path.write_text(SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY, encoding="utf-8")
+
+    generated_code = crosstl.translate(
+        str(shader_path), backend="cgl", format_output=False
+    )
+
+    assert "Texture2D combinedTex @set(0) @binding(0);" in generated_code
+    assert "sampler linearSampler @set(0) @binding(1);" in generated_code
 
 
 def test_translate_api_accepts_spirv_assembly_specialization_constants(tmp_path):
