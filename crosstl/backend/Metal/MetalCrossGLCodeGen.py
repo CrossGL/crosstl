@@ -667,8 +667,18 @@ class MetalToCrossGLConverter:
                         code += f"    static_assert({cond});\n"
                     continue
                 if isinstance(glob, AssignmentNode):
+                    if isinstance(glob.left, VariableNode):
+                        self.global_variable_types[glob.left.name] = glob.left.vtype
                     left = self.generate_expression(glob.left, False)
-                    right = self.generate_expression(glob.right, False)
+                    right = self.generate_initializer_value(
+                        glob.right,
+                        False,
+                        (
+                            getattr(glob.left, "vtype", None)
+                            if isinstance(glob.left, VariableNode)
+                            else None
+                        ),
+                    )
                     code += f"    {left} {glob.operator} {right};\n"
                 elif isinstance(glob, VariableNode):
                     self.global_variable_types[glob.name] = glob.vtype
@@ -993,9 +1003,69 @@ class MetalToCrossGLConverter:
             if structured_store is not None:
                 return structured_store
         lhs = self.generate_expression(node.left, is_main)
-        rhs = self.generate_expression(node.right, is_main)
+        rhs = self.generate_initializer_value(
+            node.right,
+            is_main,
+            (
+                getattr(node.left, "vtype", None)
+                if isinstance(node.left, VariableNode)
+                else None
+            ),
+        )
         op = node.operator
         return f"{lhs} {op} {rhs}"
+
+    def generate_initializer_value(self, expr, is_main=False, expected_type=None):
+        if isinstance(expr, InitializerListNode):
+            return self.generate_initializer_list(expr, is_main, expected_type)
+        return self.generate_expression(expr, is_main)
+
+    def generate_initializer_list(self, node, is_main=False, expected_type=None):
+        mapped_type = self.map_type(expected_type) if expected_type else None
+        member_types = {}
+        if expected_type:
+            member_types = self.struct_member_types.get(
+                self.normalized_metal_type(expected_type), {}
+            )
+
+        named_elements = []
+        positional_elements = []
+        for element in node.elements:
+            if isinstance(element, DesignatedInitializerNode):
+                named_elements.append(
+                    self.generate_designated_initializer(element, is_main, member_types)
+                )
+            else:
+                positional_elements.append(
+                    self.generate_initializer_value(element, is_main)
+                )
+
+        elements = named_elements + positional_elements
+        if mapped_type and mapped_type.startswith(("vec", "ivec", "uvec", "bvec")):
+            return f"{mapped_type}({', '.join(elements)})"
+        if mapped_type and named_elements:
+            return f"{mapped_type}{{{', '.join(elements)}}}"
+        if mapped_type and positional_elements and not named_elements:
+            return f"{mapped_type}({', '.join(elements)})"
+        return "{" + ", ".join(elements) + "}"
+
+    def generate_designated_initializer(self, node, is_main=False, member_types=None):
+        member_types = member_types or {}
+        if len(node.designators) == 1 and node.designators[0][0] == "field":
+            field_name = node.designators[0][1]
+            value = self.generate_initializer_value(
+                node.value, is_main, member_types.get(field_name)
+            )
+            return f"{field_name}: {value}"
+
+        designators = []
+        for kind, target in node.designators:
+            if kind == "index":
+                designators.append(f"[{self.generate_expression(target, is_main)}]")
+            else:
+                designators.append(f".{target}")
+        value = self.generate_initializer_value(node.value, is_main)
+        return f"{''.join(designators)} = {value}"
 
     def generate_expression(self, expr, is_main=False):
         """Render a Metal backend expression node as CrossGL syntax."""
@@ -1015,6 +1085,12 @@ class MetalToCrossGLConverter:
             right = self.generate_expression(expr.right, is_main)
             return f"{left} {expr.op} {right}"
         elif isinstance(expr, FunctionCallNode):
+            if getattr(expr, "is_braced_constructor", False) and expr.args:
+                initializer = expr.args[0]
+                if isinstance(initializer, InitializerListNode):
+                    return self.generate_initializer_list(
+                        initializer, is_main, expr.name
+                    )
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
@@ -1124,6 +1200,10 @@ class MetalToCrossGLConverter:
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             return f"{self.map_type(expr.type_name)}({args})"
+        elif isinstance(expr, InitializerListNode):
+            return self.generate_initializer_list(expr, is_main)
+        elif isinstance(expr, DesignatedInitializerNode):
+            return self.generate_designated_initializer(expr, is_main)
         elif isinstance(expr, TextureSampleNode):
             diagnostic = self.unsupported_storage_texture_sampled_method(
                 expr.texture, "sample", is_main

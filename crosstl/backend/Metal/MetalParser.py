@@ -453,6 +453,11 @@ class MetalParser:
             self.eat("SEMICOLON")
             return AssignmentNode(var_node, value)
 
+        if self.current_token[0] == "LPAREN":
+            args = self.parse_parenthesized_arguments()
+            self.eat("SEMICOLON")
+            return AssignmentNode(var_node, VectorConstructorNode(vtype, args))
+
         self.eat("SEMICOLON")
         return var_node
 
@@ -498,6 +503,10 @@ class MetalParser:
         pointer_suffix = ""
         while self.current_token[0] in ["MULTIPLY", "BITWISE_AND"]:
             pointer_suffix += "*" if self.current_token[0] == "MULTIPLY" else "&"
+            self.eat(self.current_token[0])
+
+        while self.current_token[0] in QUALIFIER_TOKENS:
+            qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
 
         return base_type + pointer_suffix, qualifiers
@@ -794,6 +803,11 @@ class MetalParser:
             value = self.parse_expression()
             self.eat("SEMICOLON")
             return AssignmentNode(var_node, value, op)
+
+        if self.current_token[0] == "LPAREN":
+            args = self.parse_parenthesized_arguments()
+            self.eat("SEMICOLON")
+            return AssignmentNode(var_node, VectorConstructorNode(vtype, args))
 
         expr = self.parse_expression()
         self.eat("SEMICOLON")
@@ -1093,6 +1107,11 @@ class MetalParser:
             if self.current_token[0] == "LPAREN":
                 node = self.parse_call(node)
                 continue
+            if self.current_token[0] == "LBRACE" and isinstance(node, VariableNode):
+                initializer = self.parse_initializer_list()
+                node = FunctionCallNode(node.name, [initializer])
+                node.is_braced_constructor = True
+                continue
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
                 if self.current_token[0] not in [
@@ -1138,6 +1157,8 @@ class MetalParser:
             expr = self.parse_expression()
             self.eat("RPAREN")
             return expr
+        if self.current_token[0] == "LBRACE":
+            return self.parse_initializer_list()
         if self.current_token[0] in [
             "VECTOR",
             "MATRIX",
@@ -1160,6 +1181,46 @@ class MetalParser:
             name = self.parse_scoped_identifier()
             return VariableNode("", name)
         raise SyntaxError(f"Unexpected token in expression: {self.current_token[0]}")
+
+    def parse_initializer_list(self):
+        self.eat("LBRACE")
+        elements = []
+
+        while self.current_token[0] != "RBRACE":
+            elements.append(self.parse_initializer_element())
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                if self.current_token[0] == "RBRACE":
+                    break
+                continue
+            break
+
+        self.eat("RBRACE")
+        return InitializerListNode(elements)
+
+    def parse_initializer_element(self):
+        if self.current_token[0] in ("DOT", "LBRACKET"):
+            return self.parse_designated_initializer()
+        return self.parse_expression()
+
+    def parse_designated_initializer(self):
+        designators = []
+
+        while self.current_token[0] in ("DOT", "LBRACKET"):
+            if self.current_token[0] == "DOT":
+                self.eat("DOT")
+                field = self.current_token[1]
+                self.eat("IDENTIFIER")
+                designators.append(("field", field))
+                continue
+            self.eat("LBRACKET")
+            index = self.parse_expression()
+            self.eat("RBRACKET")
+            designators.append(("index", index))
+
+        self.eat("EQUALS")
+        value = self.parse_expression()
+        return DesignatedInitializerNode(designators, value)
 
     def parse_scoped_identifier(self):
         parts = []
@@ -1187,6 +1248,10 @@ class MetalParser:
         return "::".join(parts)
 
     def parse_vector_constructor(self, type_name):
+        args = self.parse_parenthesized_arguments()
+        return VectorConstructorNode(type_name, args)
+
+    def parse_parenthesized_arguments(self):
         self.eat("LPAREN")
         args = []
         while self.current_token[0] != "RPAREN":
@@ -1194,7 +1259,7 @@ class MetalParser:
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
         self.eat("RPAREN")
-        return VectorConstructorNode(type_name, args)
+        return args
 
     def parse_call(self, callee):
         self.eat("LPAREN")
