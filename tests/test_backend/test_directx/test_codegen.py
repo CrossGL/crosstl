@@ -349,9 +349,11 @@ BYTE_ADDRESS_VECTOR_OPS_HLSL = textwrap.dedent("""
     RWByteAddressBuffer rawOutput : register(u4);
 
     uint4 main(uint offset : TEXCOORD0) : SV_Target0 {
+        uint scalar = rawInput.Load<uint>(offset + 48u);
         uint2 pair = rawInput.Load2(offset);
         uint3 triple = rawOutput.Load3(offset + 16u);
         uint4 quad = rawOutput.Load4(offset + 32u);
+        rawOutput.Store<uint>(offset + 48u, scalar);
         rawOutput.Store2(offset, pair);
         rawOutput.Store3(offset + 16u, triple);
         rawOutput.Store4(offset + 32u, quad);
@@ -1157,21 +1159,27 @@ def test_codegen_byte_address_vector_method_mapping():
     assert "RWByteAddressBuffer rawOutput;" in output
     assert "@ register(t3)" in output
     assert "@ register(u4)" in output
+    assert "uint scalar = buffer_load(rawInput, offset + 48);" in output
     assert "uvec2 pair = buffer_load2(rawInput, offset);" in output
     assert "uvec3 triple = buffer_load3(rawOutput, offset + 16);" in output
     assert "uvec4 quad = buffer_load4(rawOutput, offset + 32);" in output
+    assert "buffer_store(rawOutput, offset + 48, scalar);" in output
     assert "buffer_store2(rawOutput, offset, pair);" in output
     assert "buffer_store3(rawOutput, offset + 16, triple);" in output
     assert "buffer_store4(rawOutput, offset + 32, quad);" in output
+    assert ".Load<uint>(" not in output
+    assert ".Store<uint>(" not in output
     assert ".Load2(" not in output
     assert ".Store4(" not in output
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
     assert "ByteAddressBuffer rawInput : register(t3);" in regenerated_hlsl
     assert "RWByteAddressBuffer rawOutput : register(u4);" in regenerated_hlsl
+    assert "uint scalar = rawInput.Load((offset + 48));" in regenerated_hlsl
     assert "uint2 pair = rawInput.Load2(offset);" in regenerated_hlsl
     assert "uint3 triple = rawOutput.Load3((offset + 16));" in regenerated_hlsl
     assert "uint4 quad = rawOutput.Load4((offset + 32));" in regenerated_hlsl
+    assert "rawOutput.Store((offset + 48), scalar);" in regenerated_hlsl
     assert "rawOutput.Store2(offset, pair);" in regenerated_hlsl
     assert "rawOutput.Store3((offset + 16), triple);" in regenerated_hlsl
     assert "rawOutput.Store4((offset + 32), quad);" in regenerated_hlsl

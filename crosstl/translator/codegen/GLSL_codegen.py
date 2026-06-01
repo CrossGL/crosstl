@@ -3409,9 +3409,39 @@ class GLSLCodeGen:
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
             value_code = self.generate_constant_expression(value)
-            code += f"const {self.map_type(const_type)} {name} = {value_code};\n"
+            layout = self.glsl_constant_layout_prefix(node)
+            code += (
+                f"{layout}const {self.map_type(const_type)} {name} = "
+                f"{value_code};\n"
+            )
 
         return f"{code}\n" if code else ""
+
+    def glsl_constant_layout_prefix(self, node):
+        constant_id = None
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).lower().replace("-", "_")
+            if normalized.startswith("glsl_"):
+                normalized = normalized[len("glsl_") :]
+            if normalized != "constant_id":
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) != 1:
+                continue
+            value = self.attribute_value_to_string(arguments[0])
+            if constant_id is not None and constant_id != value:
+                name = getattr(node, "name", "<unnamed>")
+                raise ValueError(
+                    "Conflicting OpenGL specialization constant ids for "
+                    f"'{name}': {constant_id} differs from {value}"
+                )
+            constant_id = value
+        if constant_id is None:
+            return ""
+        return f"layout(constant_id = {constant_id}) "
 
     def generate_constant_expression(self, expr):
         value_code = self.generate_expression(expr)

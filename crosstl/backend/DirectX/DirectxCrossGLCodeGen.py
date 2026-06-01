@@ -787,6 +787,7 @@ class HLSLToCrossGLConverter:
         return None
 
     def resource_method_descriptor(self, member, arg_count=None, resource_type=None):
+        member = self.templated_method_base(member)
         texture_descriptor = self.texture_method_descriptor(
             member, arg_count, resource_type
         )
@@ -852,9 +853,16 @@ class HLSLToCrossGLConverter:
             }
         return None
 
+    @staticmethod
+    def templated_method_base(member):
+        if isinstance(member, str) and "<" in member:
+            return member.split("<", 1)[0]
+        return member
+
     def resource_method_arguments(
         self, obj, member, rendered_args, descriptor, raw_args=None, is_main=False
     ):
+        member = self.templated_method_base(member)
         drop_trailing_args = descriptor.get("drop_trailing_args", 0)
         if drop_trailing_args and member != "SampleCmpBias":
             rendered_args = rendered_args[:-drop_trailing_args]
@@ -2151,7 +2159,8 @@ class HLSLToCrossGLConverter:
     def generate_get_dimensions_statement(self, stmt, indent=0, is_main=False):
         if not isinstance(stmt.name, MemberAccessNode):
             return None
-        if stmt.name.member != "GetDimensions":
+        member = self.templated_method_base(stmt.name.member)
+        if member != "GetDimensions":
             return None
 
         resource_type = self.expression_raw_type(stmt.name.object)
@@ -2174,7 +2183,7 @@ class HLSLToCrossGLConverter:
         )
         if assignments is None:
             descriptor = self.resource_method_descriptor(
-                "GetDimensions", len(stmt.args), resource_type
+                member, len(stmt.args), resource_type
             )
             function = descriptor["function"] if descriptor else "texture_dimensions"
             diagnostic = (
@@ -2488,6 +2497,7 @@ class HLSLToCrossGLConverter:
             if isinstance(expr.name, MemberAccessNode):
                 obj = self.generate_expression(expr.name.object, is_main)
                 member = expr.name.member
+                method_member = self.templated_method_base(member)
                 rendered_args = [
                     self.generate_expression(arg, is_main) for arg in expr.args
                 ]
@@ -2495,7 +2505,7 @@ class HLSLToCrossGLConverter:
                 resource_type = self.expression_raw_type(expr.name.object)
                 resource_base = self.raw_type_base(resource_type)
                 if (
-                    member == "GatherCmpRed"
+                    method_member == "GatherCmpRed"
                     and len(rendered_args) in {7, 8}
                     and resource_base in {"Texture2D", "Texture2DArray"}
                 ):
@@ -2504,23 +2514,23 @@ class HLSLToCrossGLConverter:
                     )
                     if len(rendered_args) == 8:
                         diagnostic = self.resource_method_diagnostic(
-                            member, {"dropped_parameters": ["status output"]}
+                            method_member, {"dropped_parameters": ["status output"]}
                         )
                         return f"{diagnostic} {call}"
                     return call
                 descriptor = self.resource_method_descriptor(
-                    member, len(expr.args), resource_type
+                    method_member, len(expr.args), resource_type
                 )
                 if descriptor:
                     descriptor = self.refine_texture_load_status_descriptor(
-                        member, expr.args, descriptor
+                        method_member, expr.args, descriptor
                     )
                     if descriptor.get("fallback_expression") is not None:
                         call = descriptor["fallback_expression"]
                     else:
                         method_args = self.resource_method_arguments(
                             obj,
-                            member,
+                            method_member,
                             rendered_args,
                             descriptor,
                             expr.args,
@@ -2530,7 +2540,9 @@ class HLSLToCrossGLConverter:
                         result_component = descriptor.get("result_component")
                         if result_component:
                             call = f"{call}{result_component}"
-                    diagnostic = self.resource_method_diagnostic(member, descriptor)
+                    diagnostic = self.resource_method_diagnostic(
+                        method_member, descriptor
+                    )
                     if diagnostic:
                         return f"{diagnostic} {call}"
                     return call

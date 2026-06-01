@@ -1257,6 +1257,29 @@ def test_parse_resource_method_ast_shapes():
     }.issubset(set(members))
 
 
+def test_parse_typed_resource_method_calls():
+    code = """
+    RWByteAddressBuffer rawBytes : register(u1);
+
+    void main(uint ix : IX) {
+        uint loaded = rawBytes.Load<uint>(ix);
+        rawBytes.Store<uint>(ix, loaded);
+        bool inRange = ix < 4u;
+    }
+    """
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    members = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert "Load<uint>" in members
+    assert "Store<uint>" in members
+
+
 def test_parse_upstream_default_parameter_value():
     ast = parse_code("""
     float4 ToRGBM(float3 rgb, float PeakValue = 255.0 / 16.0) {

@@ -1480,9 +1480,15 @@ class HLSLParser:
                 self.eat("DOT")
                 member = self.current_token[1]
                 self.eat("IDENTIFIER")
+                if self.looks_like_template_call_arguments():
+                    member = self.format_templated_name(
+                        member, self.parse_generic_arguments()
+                    )
                 expr = MemberAccessNode(expr, member)
             elif self.current_token_is_double_colon():
                 expr = self.parse_scoped_name(expr)
+            elif self.looks_like_template_call_arguments() and isinstance(expr, str):
+                expr = self.format_templated_name(expr, self.parse_generic_arguments())
             elif self.current_token[0] == "LPAREN":
                 args = self.parse_call_arguments()
 
@@ -1503,6 +1509,33 @@ class HLSLParser:
             else:
                 break
         return expr
+
+    def format_templated_name(self, name, args):
+        return f"{name}<{', '.join(args)}>"
+
+    def looks_like_template_call_arguments(self):
+        if self.current_token[0] != "LESS_THAN":
+            return False
+
+        depth = 0
+        idx = self.current_index
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    next_token = (
+                        self.tokens[idx + 1]
+                        if idx + 1 < len(self.tokens)
+                        else ("EOF", "")
+                    )
+                    return next_token[0] == "LPAREN"
+            elif token_type == "EOF":
+                return False
+            idx += 1
+        return False
 
     def parse_scoped_name(self, prefix):
         if not isinstance(prefix, str):

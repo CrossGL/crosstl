@@ -927,6 +927,38 @@ def test_codegen_texture_read_write_and_compare():
     assert "textureGather" not in result
 
 
+def test_codegen_metal_namespace_access_qualifiers_for_storage_textures():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct ImagePack {
+        metal::texture2d<uint, metal::access::read_write> image;
+        metal::array<metal::texture2d<uint, metal::access::read>, 2> inputs;
+    };
+
+    kernel void compute_main(
+        metal::texture2d<float, metal::access::read_write> image [[texture(0)]],
+        constant ImagePack& pack [[buffer(0)]],
+        uint2 tid [[thread_position_in_grid]]) {
+        float4 color = image.read(tid);
+        image.write(color, tid);
+        uint oldValue = pack.image.read(tid).x;
+        float4 inputValue = float4(pack.inputs[1].read(tid));
+    }
+    """
+    result = convert(code)
+
+    assert "image2D image @texture(0) @readwrite" in result
+    assert "uimage2D image @readwrite" in result
+    assert "uimage2D[2] inputs @readonly" in result
+    assert "imageLoad(image, tid)" in result
+    assert "imageStore(image, tid, color);" in result
+    assert "uint oldValue = imageLoad(pack.image, tid).x;" in result
+    assert "vec4 inputValue = vec4(imageLoad(pack.inputs[1], tid));" in result
+    assert "unsupported Metal sampled texture write" not in result
+
+
 def test_codegen_sampled_texture_write_emits_diagnostic():
     code = """
     #include <metal_stdlib>

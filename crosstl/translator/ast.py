@@ -561,6 +561,7 @@ class ConstantNode(ASTNode):
         name: str,
         const_type: TypeNode,
         value: "ExpressionNode",
+        attributes: List["AttributeNode"] = None,
         visibility: str = "public",
         **kwargs,
     ):
@@ -568,6 +569,7 @@ class ConstantNode(ASTNode):
         self.name = name
         self.const_type = const_type
         self.value = value
+        self.attributes = attributes or []
         self.visibility = visibility
 
     def __repr__(self):

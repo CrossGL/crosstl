@@ -70,6 +70,18 @@ def glsl_dynamic_texel_offset_diagnostic(category, operation, zero_value):
     )
 
 
+def test_glsl_specialization_constant_metadata_emits_layout():
+    shader = """
+    shader SpecializationConstants {
+        const int LIGHTING_MODEL @constant_id(0) = 0;
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "layout(constant_id = 0) const int LIGHTING_MODEL = 0;" in generated
+
+
 def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier():
     shader = """
     shader SynchronizationBuiltins {

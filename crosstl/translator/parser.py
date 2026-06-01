@@ -1894,12 +1894,15 @@ class Parser:
         const_type = self.parse_type()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        attributes = self.parse_post_declaration_attributes()
 
         self.eat("EQUALS")
         value = self.parse_expression()
         self.eat("SEMICOLON")
 
-        return ConstantNode(name=name, const_type=const_type, value=value)
+        return ConstantNode(
+            name=name, const_type=const_type, value=value, attributes=attributes
+        )
 
     def parse_type(self):
         """Parse a CrossGL type expression into a ``TypeNode``."""

@@ -74,6 +74,7 @@ class MetalToCrossGLConverter:
         "vertex",
         "while",
     }
+    storage_texture_accesses = {"access::read", "access::write", "access::read_write"}
 
     def __init__(self):
         self.rt_qualifiers = {
@@ -1583,10 +1584,18 @@ class MetalToCrossGLConverter:
         base_name, generic_args = self.generic_type_parts(type_to_check)
         if len(generic_args) < 2:
             return None, generic_args
-        access = generic_args[1].replace(" ", "")
-        if access not in {"access::read", "access::write", "access::read_write"}:
+        access = self.normalized_access_qualifier(generic_args[1])
+        if access not in self.storage_texture_accesses:
             return None, generic_args
+        generic_args = [*generic_args]
+        generic_args[1] = access
         return base_name, generic_args
+
+    def normalized_access_qualifier(self, access):
+        access = str(access).replace(" ", "")
+        while access.startswith("metal::"):
+            access = access.split("metal::", 1)[1]
+        return access
 
     def is_access_qualified_storage_texture_type(self, metal_type):
         base_name, generic_args = self.access_qualified_texture_parts(metal_type)
@@ -1622,7 +1631,7 @@ class MetalToCrossGLConverter:
         if len(generic_args) < 2:
             return ""
 
-        access = generic_args[1].replace(" ", "")
+        access = self.normalized_access_qualifier(generic_args[1])
         access_attributes = {
             "access::read": "@readonly",
             "access::write": "@writeonly",
@@ -1652,8 +1661,8 @@ class MetalToCrossGLConverter:
         if len(generic_args) < 2:
             return None
 
-        access = generic_args[1].replace(" ", "")
-        if access not in {"access::read", "access::write", "access::read_write"}:
+        access = self.normalized_access_qualifier(generic_args[1])
+        if access not in self.storage_texture_accesses:
             return None
 
         image_type = {

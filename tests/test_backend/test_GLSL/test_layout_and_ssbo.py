@@ -111,6 +111,31 @@ def test_codegen_layout_integer_constant_expression_values():
     assert "const int COMPONENT_BASE = 3;" in crossgl
 
 
+def test_parse_specialization_constant_layout_roundtrip():
+    code = """
+    #version 450 core
+    layout(constant_id = 0) const int LIGHTING_MODEL = 0;
+    layout(constant_id = 1) const uint MAX_LIGHTS = 4u;
+
+    void main() {
+    }
+    """
+    ast = parse_glsl(code, "fragment")
+
+    assert ast.constant[0].layout["constant_id"] == "0"
+    assert ast.constant[1].layout["constant_id"] == "1"
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "const int LIGHTING_MODEL @constant_id(0) = 0;" in crossgl
+    assert "const uint MAX_LIGHTS @constant_id(1) = 4u;" in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(constant_id = 0) const int LIGHTING_MODEL = 0;" in glsl
+    assert "layout(constant_id = 1) const uint MAX_LIGHTS = 4u;" in glsl
+
+
 def test_codegen_stage_layout_integer_constant_expression_values():
     code = """
     #version 450 core

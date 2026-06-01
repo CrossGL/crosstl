@@ -68,6 +68,7 @@ class GLSLToCrossGLConverter:
         "highp": "highp",
     }
     LAYOUT_ATTRIBUTE_NAMES = (
+        "constant_id",
         "location",
         "component",
         "index",
