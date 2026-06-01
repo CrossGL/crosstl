@@ -27,7 +27,6 @@ from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code."""
     lexer = Lexer(code)
     return lexer.get_tokens()
 
@@ -12400,7 +12399,6 @@ def test_bitwise_or_operator():
 
 
 def test_metal_texture_types():
-    """Test proper conversion of sampler types to Metal texture types."""
     code = """
     shader main {
         sampler2D albedoMap;
@@ -12429,13 +12427,10 @@ def test_metal_texture_types():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
 
-        # Verify proper Metal texture types
         assert "texture2d<float> albedoMap" in generated_code
         assert "texture2d<float> environmentMap" in generated_code
         assert "texture2d<float> depthMap" in generated_code
 
-        # Verify sampling operations
-        # Just check for texture operations, not specific syntax
         assert "albedoMap" in generated_code
         assert "normalize" in generated_code
     except SyntaxError as e:
@@ -12443,7 +12438,6 @@ def test_metal_texture_types():
 
 
 def test_metal_attributes_semantics():
-    """Test the conversion of CrossGL semantics to Metal attributes."""
     code = """
     shader main {
         struct VSInput {
@@ -12486,25 +12480,20 @@ def test_metal_attributes_semantics():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
 
-        # Check Metal attributes for vertex inputs
         assert "[[attribute(0)]]" in generated_code  # POSITION
         assert "[[attribute(1)]]" in generated_code  # NORMAL
         assert "[[attribute(5)]]" in generated_code  # TEXCOORD0
 
-        # Check Metal attributes for vertex outputs
         assert "[[position]]" in generated_code  # gl_Position
 
-        # Check Metal attributes for fragment outputs
         assert "[[color(0)]]" in generated_code  # gl_FragColor
 
-        # Check vertex ID
         assert "uint vertexID [[vertex_id]]" in generated_code
     except SyntaxError as e:
         pytest.fail(f"Metal attributes/semantics conversion failed: {e}")
 
 
 def test_metal_vector_type_conversions():
-    """Test proper conversion of vector types to Metal types."""
     code = """
     shader main {
         struct TestTypes {
@@ -12544,7 +12533,6 @@ def test_metal_vector_type_conversions():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
 
-        # Check vector type conversions
         assert "float2 vec2Field" in generated_code
         assert "float3 vec3Field" in generated_code
         assert "float4 vec4Field" in generated_code
@@ -12552,7 +12540,6 @@ def test_metal_vector_type_conversions():
         assert "int3 ivec3Field" in generated_code
         assert "int4 ivec4Field" in generated_code
 
-        # Matrix stage-output members are split into legal Metal varyings.
         assert "float2 mat2Field_0" in generated_code
         assert "float2 mat2Field_1" in generated_code
         assert "float3 mat3Field_0" in generated_code
@@ -12568,7 +12555,6 @@ def test_metal_vector_type_conversions():
 
 
 def test_metal_texture_sampling():
-    """Test the proper conversion of texture sampling operations to Metal."""
     code = """
     shader main {
         sampler2D colorMap;
@@ -12604,13 +12590,10 @@ def test_metal_texture_sampling():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
 
-        # Check texture declarations
         assert "texture2d<float> colorMap" in generated_code
         assert "texture2d<float> normalMap" in generated_code
         assert "texture2d<float> envMap" in generated_code
 
-        # Check that some form of texture access is happening
-        # Metal uses either .sample() or other methods
         assert "colorMap" in generated_code and "texCoord" in generated_code
         assert "normalMap" in generated_code
         assert "envMap" in generated_code
@@ -12619,7 +12602,6 @@ def test_metal_texture_sampling():
 
 
 def test_metal_constant_buffer():
-    """Test the conversion of constant buffers to Metal."""
     code = """
     shader main {
         struct MaterialParams {
@@ -12651,10 +12633,8 @@ def test_metal_constant_buffer():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
 
-        # Check material struct declaration
         assert "struct MaterialParams" in generated_code
 
-        # Check member access
         assert "material.baseColor" in generated_code
         assert "material.metallic" in generated_code
         assert "material.roughness" in generated_code
@@ -12664,7 +12644,6 @@ def test_metal_constant_buffer():
 
 
 def test_metal_array_handling(array_test_data):
-    """Test the Metal code generator's handling of array types and array access."""
     code = """
     shader main {
     struct Particle {
@@ -12713,7 +12692,6 @@ def test_metal_array_handling(array_test_data):
         generated_code = generate_code(ast)
         print(generated_code)
 
-        # Use the fixture data for verification
         for expected in array_test_data["metal"]["array_type_declarations"]:
             assert expected in generated_code
 

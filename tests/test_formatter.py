@@ -19,14 +19,12 @@ class TestShaderLanguage:
 
 class TestCodeFormatter:
     def test_init_with_no_tools(self):
-        # Test initialization when tools are not available
         with mock.patch("shutil.which", return_value=None):
             formatter = CodeFormatter()
             assert formatter.has_clang is False
             assert formatter.has_spirv_tools is False
 
     def test_init_with_tools(self):
-        # Test initialization when tools are available
         with mock.patch("shutil.which", return_value="/usr/bin/fake-tool"):
             formatter = CodeFormatter()
             assert formatter.has_clang is True
@@ -35,7 +33,6 @@ class TestCodeFormatter:
     def test_detect_language(self):
         formatter = CodeFormatter()
 
-        # Test different file extensions
         assert formatter.detect_language("shader.hlsl") == ShaderLanguage.HLSL
         assert formatter.detect_language("shader.fx") == ShaderLanguage.HLSL
         assert formatter.detect_language("shader.glsl") == ShaderLanguage.GLSL
@@ -49,11 +46,9 @@ class TestCodeFormatter:
     def test_format_code_language_detection(self):
         formatter = CodeFormatter()
 
-        # Mock format methods
         formatter._format_with_clang = mock.MagicMock(return_value="clang_formatted")
         formatter._format_spirv = mock.MagicMock(return_value="spirv_formatted")
 
-        # Test language detection from file path
         assert (
             formatter.format_code("code", file_path="shader.hlsl") == "clang_formatted"
         )
@@ -68,7 +63,6 @@ class TestCodeFormatter:
             == "spirv_formatted"
         )
 
-        # Test with explicit language
         assert (
             formatter.format_code("code", language=ShaderLanguage.HLSL)
             == "clang_formatted"
@@ -78,7 +72,6 @@ class TestCodeFormatter:
             == "spirv_formatted"
         )
 
-        # Test with string language
         assert formatter.format_code("code", language="hlsl") == "clang_formatted"
         assert formatter.format_code("code", language="spirv") == "spirv_formatted"
 
@@ -86,10 +79,8 @@ class TestCodeFormatter:
         formatter = CodeFormatter()
         formatter.has_clang = False
 
-        # Test when clang-format is not available
         assert formatter._format_with_clang("code", ShaderLanguage.HLSL) == "code"
 
-        # Mock subprocess.run for successful formatting
         formatter.has_clang = True
         formatter.clang_format_path = "clang-format"
 
@@ -107,7 +98,6 @@ class TestCodeFormatter:
             result = formatter._format_with_clang("code", ShaderLanguage.HLSL)
             assert result == "formatted_code"
 
-            # Test with failed formatting
             mock_run.return_value.returncode = 1
             result = formatter._format_with_clang("code", ShaderLanguage.HLSL)
             assert result == "code"
@@ -116,13 +106,10 @@ class TestCodeFormatter:
         formatter = CodeFormatter()
         formatter.has_spirv_tools = False
 
-        # Test when SPIRV-Tools are not available
         assert formatter._format_spirv("code") == "code"
 
-        # Mock _make_spirv_readable for failed formatting
         formatter._make_spirv_readable = mock.MagicMock(return_value="readable_code")
 
-        # Mock subprocess.run for successful formatting
         formatter.has_spirv_tools = True
         formatter.spirv_as_path = "spirv-as"
         formatter.spirv_dis_path = "spirv-dis"
@@ -133,14 +120,12 @@ class TestCodeFormatter:
 
             mock_tempfile.return_value.__enter__.return_value.name = "temp.spvasm"
 
-            # Test successful formatting
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "formatted_spirv"
 
             result = formatter._format_spirv("code")
             assert result == "formatted_spirv"
 
-            # Test failed assembly
             mock_run.side_effect = [
                 mock.MagicMock(returncode=1),  # spirv-as fails
                 mock.MagicMock(returncode=0),  # spirv-dis succeeds
@@ -152,7 +137,6 @@ class TestCodeFormatter:
     def test_make_spirv_readable(self):
         formatter = CodeFormatter()
 
-        # Test indentation
         spirv_code = """OpCapability Shader
 OpFunction
 OpLabel
@@ -166,7 +150,6 @@ OpFunction
     OpStore
 OpFunctionEnd"""
 
-        # Clean up whitespace before comparing
         formatted = formatter._make_spirv_readable(spirv_code).strip()
         formatted_lines = [line.rstrip() for line in formatted.split("\n")]
         expected_lines = [line.rstrip() for line in expected.split("\n")]
@@ -177,12 +160,10 @@ OpFunctionEnd"""
         formatter = CodeFormatter()
         formatter.has_spirv_tools = False
 
-        # Test when SPIRV-Tools are not available
         valid, msg = formatter.validate_spirv("code")
         assert valid is False
         assert "not available" in msg
 
-        # Mock subprocess.run for successful validation
         formatter.has_spirv_tools = True
         formatter.spirv_as_path = "spirv-as"
         formatter.spirv_val_path = "spirv-val"
@@ -193,14 +174,12 @@ OpFunctionEnd"""
 
             mock_tempfile.return_value.__enter__.return_value.name = "temp.spvasm"
 
-            # Test successful validation
             mock_run.return_value.returncode = 0
 
             valid, msg = formatter.validate_spirv("code")
             assert valid is True
             assert "Valid" in msg
 
-            # Test failed assembly
             mock_run.side_effect = [
                 mock.MagicMock(returncode=1, stderr="Assembly error"),  # spirv-as fails
                 mock.MagicMock(returncode=0),  # spirv-val succeeds
@@ -210,7 +189,6 @@ OpFunctionEnd"""
             assert valid is False
             assert "Assembly failed" in msg
 
-            # Test failed validation
             mock_run.side_effect = [
                 mock.MagicMock(returncode=0),  # spirv-as succeeds
                 mock.MagicMock(
@@ -224,32 +202,26 @@ OpFunctionEnd"""
 
 
 def test_format_file():
-    # Test successful formatting
     with mock.patch("builtins.open", mock.mock_open(read_data="code")), mock.patch(
         "crosstl.formatter.CodeFormatter.format_code", return_value="formatted_code"
     ):
 
         assert format_file("shader.hlsl") is True
 
-    # Test failed formatting
     with mock.patch("builtins.open", side_effect=Exception("File error")):
         assert format_file("shader.hlsl") is False
 
 
 def test_format_shader_code():
-    # Test backend mapping with direct calls to format_shader_code
     with mock.patch("crosstl.formatter.CodeFormatter") as MockFormatter:
-        # Set up the mock to return formatted_code
         mock_instance = MockFormatter.return_value
         mock_instance.format_code.return_value = "formatted_code"
 
-        # Test the function calls
         assert format_shader_code("code", "metal") == "formatted_code"
         assert format_shader_code("code", "directx") == "formatted_code"
         assert format_shader_code("code", "opengl") == "formatted_code"
         assert format_shader_code("code", "vulkan") == "formatted_code"
 
-        # Check the language was mapped correctly
         format_shader_code("code", "metal", "output.metal")
         mock_instance.format_code.assert_called_with(
             "code", ShaderLanguage.METAL, "output.metal"

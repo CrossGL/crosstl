@@ -2992,7 +2992,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         args_str = ", ".join(args)
 
-        # Convert built-in functions
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
 
@@ -5060,7 +5059,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         self.indent_level += 1
 
-        # Handle then branch
         if hasattr(node, "then_branch"):
             self.emit_body(node.then_branch)
         elif hasattr(node, "if_body"):
@@ -5068,7 +5066,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         self.indent_level -= 1
 
-        # Handle else branch
         if hasattr(node, "else_branch") and node.else_branch:
             self.emit("} else {")
             self.indent_level += 1
@@ -5102,7 +5099,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         self.indent_level += 1
 
-        # Handle body
         if hasattr(node, "body"):
             self.emit_body(node.body)
 
@@ -5493,7 +5489,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if ray_resource_type:
             return self.cuda_mapped_type_result(type_mapping[ray_resource_type])
 
-        # Handle arrays
         if crossgl_type.startswith("array<") and crossgl_type.endswith(">"):
             # Extract element type and size
             inner = crossgl_type[6:-1]  # Remove "array<" and ">"
@@ -5507,7 +5502,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 cuda_element_type = self.convert_crossgl_type_to_cuda(inner)
                 return f"{cuda_element_type}*"
 
-        # Handle pointers
         if crossgl_type.startswith("ptr<") and crossgl_type.endswith(">"):
             element_type = crossgl_type[4:-1]  # Remove "ptr<" and ">"
             cuda_element_type = self.convert_crossgl_type_to_cuda(element_type)

@@ -183,12 +183,10 @@ class GLSLToCrossGLConverter:
     }
 
     def __init__(self, shader_type="vertex"):
-        """Initialize GLSL-to-CrossGL mappings for a shader stage."""
         self.shader_type = shader_type
         self.indent_level = 0
         self.indent_str = "    "
 
-        # Mapping of GLSL built-in functions to CrossGL equivalents
         self.function_map = {
             "dot": "dot",
             "normalize": "normalize",
@@ -967,7 +965,6 @@ class GLSLToCrossGLConverter:
         return f"{' '.join(attributes)} " if attributes else ""
 
     def generate(self, ast):
-        """Generate a complete CrossGL shader from a parsed GLSL AST."""
         if ast is None:
             return "// Empty shader"
 
@@ -1231,13 +1228,11 @@ class GLSLToCrossGLConverter:
             for statement in self.generate_statement_sequence(main_function.body):
                 result += self.indent() + statement + "\n"
 
-            # Add implicit return for stages with output struct if not present
             if self.shader_type in ("vertex",) and not any(
                 isinstance(stmt, ReturnNode) for stmt in main_function.body
             ):
                 result += self.indent() + "return output;\n"
 
-            # Add implicit return for fragment shaders if not present
             if (
                 self.shader_type == "fragment"
                 and not fragment_uses_direct_outputs
@@ -1775,14 +1770,6 @@ class GLSLToCrossGLConverter:
         return f"{object_name}.{node.member}"
 
     def generate_array_access(self, node):
-        """Generate CrossGL code for an array access expression
-
-        Args:
-            node: ArrayAccessNode representing a GLSL array access
-
-        Returns:
-            str: The CrossGL array access expression
-        """
         structured_access = self.structured_buffer_access_parts(node)
         if structured_access is not None:
             buffer_expr, index_expr = structured_access
@@ -1860,18 +1847,9 @@ class GLSLToCrossGLConverter:
         return None
 
     def convert_type(self, type_name):
-        """Convert a GLSL type to its CrossGL equivalent
-
-        Args:
-            type_name: The GLSL type name
-
-        Returns:
-            str: The equivalent CrossGL type name
-        """
         return self.type_map.get(type_name, type_name)
 
     def variable_declaration_type(self, node):
-        """Return CrossGL type text for a GLSL variable declaration."""
         var_type = self.convert_type(node.vtype)
         if var_type == "mat4x3" and self.is_ray_query_transform_call(
             getattr(node, "value", None)
@@ -1888,14 +1866,6 @@ class GLSLToCrossGLConverter:
         return name in self.RAY_QUERY_TRANSFORM_FUNCTIONS
 
     def generate_variable_declaration(self, node, array_before_attributes=False):
-        """Generate CrossGL code for a variable declaration
-
-        Args:
-            node: VariableNode representing a GLSL variable declaration
-
-        Returns:
-            str: The CrossGL variable declaration
-        """
         var_type = self.variable_declaration_type(node)
         var_name = node.name
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
@@ -1927,18 +1897,9 @@ class GLSLToCrossGLConverter:
         return f"{prefix}{var_type} {declarator}"
 
     def generate_switch_statement(self, node):
-        """Generate CrossGL code for a switch statement
-
-        Args:
-            node: SwitchNode representing a GLSL switch statement
-
-        Returns:
-            str: The CrossGL switch statement
-        """
         expression = self.generate_expression(node.expression)
         result = f"switch ({expression}) {{\n"
 
-        # Generate case statements
         for case in node.cases:
             case_value = self.generate_expression(case.value)
             result += self.indent() + f"case {case_value}:\n"
@@ -1948,7 +1909,6 @@ class GLSLToCrossGLConverter:
                 result += self.indent() + self.generate_statement(statement) + "\n"
             self.decrease_indent()
 
-        # Generate default case if present
         if node.default:
             result += self.indent() + "default:\n"
 

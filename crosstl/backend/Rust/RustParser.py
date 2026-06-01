@@ -93,13 +93,11 @@ class RustParser:
     }
 
     def __init__(self, tokens):
-        """Initialize the parser with a token stream from ``RustLexer``."""
         self.tokens = tokens
         self.current_index = 0
         self.current_token = tokens[0] if tokens else None
 
     def parse(self):
-        """Parse the complete Rust token stream into a shader AST."""
         structs = []
         functions = []
         global_variables = []
@@ -183,7 +181,6 @@ class RustParser:
                     self.eat(self.current_token[0])
             elif self.current_token[0] == "POUND":
                 attrs = self.parse_attributes()
-                # The next item should use these attributes
                 if self.current_token[0] == "STRUCT":
                     s = self.parse_struct(attributes=attrs)
                     structs.append(s)
@@ -262,7 +259,6 @@ class RustParser:
         )
 
     def eat(self, expected_type):
-        """Consume and return the current token when it matches ``expected_type``."""
         if self.current_token[0] == expected_type:
             token = self.current_token
             self.current_index += 1
@@ -394,7 +390,6 @@ class RustParser:
                 self.current_token = ("EOF", "")
 
     def parse_control_label(self):
-        """Parse a Rust loop label or legacy bare identifier label."""
         label = self.current_token[1]
         self.eat(self.current_token[0])
         return label
@@ -1198,18 +1193,15 @@ class RustParser:
         return part.replace("_", "").isalnum()
 
     def parse_struct_initialization(self, struct_name):
-        """Parse struct initialization syntax: Name { field: value, ... }"""
         self.eat("LBRACE")
         fields = []
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            # Parse field name
             field_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
             self.eat("COLON")
 
-            # Parse field value
             field_value = self.parse_expression()
 
             fields.append((field_name, field_value))
@@ -2451,7 +2443,6 @@ class RustParser:
             name = self.current_token[1]
             self.eat("SELF")
 
-            # Check for struct initialization: Self { ... }
             if self.current_token[0] == "LBRACE":
                 return self.parse_struct_initialization(name)
 
@@ -2479,7 +2470,7 @@ class RustParser:
                 elements = [expr]
                 while self.current_token[0] == "COMMA":
                     self.eat("COMMA")
-                    if self.current_token[0] != "RPAREN":  # Handle trailing comma
+                    if self.current_token[0] != "RPAREN":
                         elements.append(self.parse_result_expression())
                 self.eat("RPAREN")
                 return TupleNode(elements)

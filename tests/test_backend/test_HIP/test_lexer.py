@@ -1,18 +1,9 @@
-"""
-Tests for HIP Lexer
-
-This module contains tests for the HIP lexer functionality,
-ensuring proper tokenization of HIP code constructs.
-"""
-
 from crosstl.backend.HIP.HipLexer import HipLexer
 
 
 class TestHipLexer:
-    """Test cases for HIP lexer"""
 
     def test_keywords_tokenization(self):
-        """Test HIP keyword tokenization"""
         code = """
         __global__ __device__ __host__ __shared__ __constant__
         __forceinline__ __noinline__ __launch_bounds__ template typename class
@@ -21,10 +12,8 @@ class TestHipLexer:
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
-        # Extract token types
         token_types = [token.type for token in tokens]
 
-        # Check for HIP-specific keywords
         assert "__GLOBAL__" in token_types
         assert "__DEVICE__" in token_types
         assert "__HOST__" in token_types
@@ -39,7 +28,6 @@ class TestHipLexer:
         assert "STRUCT" in token_types
 
     def test_device_lambda_capture_tokenization(self):
-        """Test HIP device lambda captures use existing bracket/operator tokens."""
         code = "[&] __device__ (int x) { return x; }"
         lexer = HipLexer(code)
         tokens = [token for token in lexer.tokenize() if token.type != "NEWLINE"]
@@ -56,7 +44,6 @@ class TestHipLexer:
         ]
 
     def test_hip_vector_types(self):
-        """Test HIP vector type tokenization"""
         code = """
         int2 int3 int4 float2 float3 float4
         double2 double3 double4 uint2 uint3 uint4
@@ -64,7 +51,6 @@ class TestHipLexer:
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
-        # Vector types should be tokenized as specific token types
         token_pairs = [
             (token.type, token.value) for token in tokens if token.type != "NEWLINE"
         ]
@@ -90,7 +76,6 @@ class TestHipLexer:
             ), f"Expected token {expected_token} not found in {token_pairs}"
 
     def test_hip_builtin_variables(self):
-        """Test HIP built-in variable tokenization"""
         code = """
         threadIdx.x blockIdx.y blockDim.z gridDim.x
         """
@@ -105,7 +90,6 @@ class TestHipLexer:
         assert "gridDim" in token_values
 
     def test_hip_memory_functions(self):
-        """Test HIP memory function tokenization"""
         code = """
         hipMalloc hipFree hipMemcpy hipMemset
         __syncthreads __threadfence __threadfence_block
@@ -113,22 +97,18 @@ class TestHipLexer:
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
-        # Check specific token types
         token_pairs = [
             (token.type, token.value) for token in tokens if token.type != "NEWLINE"
         ]
         token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
 
-        # These should be IDENTIFIER tokens
         assert "hipMalloc" in token_values
         assert "__threadfence" in token_values
         assert "__threadfence_block" in token_values
 
-        # __syncthreads should be a specific token type
         assert ("SYNCTHREADS", "__syncthreads") in token_pairs
 
     def test_operators_tokenization(self):
-        """Test operator tokenization"""
         code = """
         + - * / % == != < > <= >= && || ! & | ^ << >> ++ --
         += -= *= /= %= &= |= ^= <<= >>= = ? : . -> ::
@@ -152,14 +132,12 @@ class TestHipLexer:
         assert "SCOPE" in token_types
 
     def test_numeric_literals(self):
-        """Test numeric literal tokenization"""
         code = """
         42 3.14f 2.71828 0xFFu 0XCAFEull 0b1010u 0777u 1e5 2.5e-3f .5f
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
-        # Check for different numeric types
         integers = [token for token in tokens if token.type == "INTEGER"]
         floats = [token for token in tokens if token.type == "FLOAT"]
 
@@ -174,7 +152,6 @@ class TestHipLexer:
         assert ".5f" in float_values
 
     def test_string_literals(self):
-        """Test string literal tokenization"""
         code = """
         "hello world" 'c' "escaped \\"string\\"" "path/to/file"
         """
@@ -188,7 +165,6 @@ class TestHipLexer:
         assert len(chars) >= 1
 
     def test_preprocessor_directives(self):
-        """Test preprocessor directive tokenization"""
         code = """
         #include <hip/hip_runtime.h>
         #define MAX_SIZE 1024
@@ -204,7 +180,6 @@ class TestHipLexer:
         assert "IDENTIFIER" in token_types  # include, define, etc.
 
     def test_delimiters_tokenization(self):
-        """Test delimiter tokenization"""
         code = """
         ( ) [ ] { } , ; : ::
         """
@@ -225,7 +200,6 @@ class TestHipLexer:
         assert "SCOPE" in token_types
 
     def test_template_syntax(self):
-        """Test template syntax tokenization"""
         code = """
         template<typename T> class Vector<T, int N>
         """
@@ -241,7 +215,6 @@ class TestHipLexer:
         assert "TYPENAME" in token_types
 
     def test_function_declaration(self):
-        """Test function declaration tokenization"""
         code = """
         __global__ void kernel(float* data, int size) {
             int idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -260,7 +233,6 @@ class TestHipLexer:
         assert "RBRACE" in token_types
 
     def test_struct_declaration(self):
-        """Test struct declaration tokenization"""
         code = """
         struct Point {
             float x, y, z;
@@ -277,7 +249,6 @@ class TestHipLexer:
         assert "SEMICOLON" in token_types
 
     def test_control_flow_keywords(self):
-        """Test control flow keyword tokenization"""
         code = """
         if else for while do switch case default break continue return
         """
@@ -298,7 +269,6 @@ class TestHipLexer:
         assert "RETURN" in token_types
 
     def test_access_specifiers(self):
-        """Test access specifier tokenization"""
         code = """
         public: private: protected:
         """
@@ -312,7 +282,6 @@ class TestHipLexer:
         assert "PROTECTED" in token_types
 
     def test_memory_qualifiers(self):
-        """Test memory qualifier tokenization"""
         code = """
         __shared__ float shared_data[256];
         __constant__ int constant_value = 42;
@@ -326,7 +295,6 @@ class TestHipLexer:
         assert "__CONSTANT__" in token_types
 
     def test_math_functions(self):
-        """Test math function tokenization"""
         code = """
         sinf cosf tanf sqrtf powf fabsf floorf ceilf
         """
@@ -340,7 +308,6 @@ class TestHipLexer:
         assert "powf" in token_values
 
     def test_vector_constructors(self):
-        """Test vector constructor tokenization"""
         code = """
         make_float2(1.0f, 2.0f) make_int3(1, 2, 3) make_float4(0.0f)
         """
@@ -354,7 +321,6 @@ class TestHipLexer:
         assert "make_float4" in token_values
 
     def test_comments(self):
-        """Test comment tokenization"""
         code = """
         // Single line comment
         /* Multi-line
@@ -364,12 +330,10 @@ class TestHipLexer:
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
-        # Comments should be filtered out, but code should still tokenize
         token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
         assert "x" in token_values
 
     def test_multiline_comments_advance_token_locations(self):
-        """Test skipped block comments preserve following token locations."""
         code = "int a;\n/* line 2\n   line 3 */\nfloat b;"
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -381,7 +345,6 @@ class TestHipLexer:
         assert (name_token.line, name_token.column) == (4, 7)
 
     def test_inline_multiline_comments_advance_token_columns(self):
-        """Test skipped inline block comments preserve following columns."""
         code = "int a; /* gap */ float b;"
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -393,7 +356,6 @@ class TestHipLexer:
         assert (name_token.line, name_token.column) == (1, 24)
 
     def test_whitespace_handling(self):
-        """Test whitespace and newline handling"""
         code = """
 
         int    x   =   5   ;
@@ -404,7 +366,6 @@ class TestHipLexer:
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
-        # Should have proper tokens despite irregular whitespace
         token_types = [token.type for token in tokens if token.type != "NEWLINE"]
 
         assert "INT" in token_types
@@ -413,7 +374,6 @@ class TestHipLexer:
         assert "INTEGER" in token_types
 
     def test_complex_expression(self):
-        """Test complex expression tokenization"""
         code = """
         result = (a.x * b.y) + sqrt(c[i] - d->member) / 2.0f;
         """
@@ -433,7 +393,6 @@ class TestHipLexer:
         assert "SLASH" in token_types
 
     def test_hip_api_calls(self):
-        """Test HIP API call tokenization"""
         code = """
         hipError_t err = hipMalloc(&ptr, size);
         hipLaunchKernelGGL(kernel, gridSize, blockSize, 0, 0, args);
@@ -446,15 +405,12 @@ class TestHipLexer:
         ]
         token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
 
-        # hipError_t should be a specific token type
         assert ("HIPERROR", "hipError_t") in token_pairs
 
-        # These should be IDENTIFIER tokens
         assert "hipMalloc" in token_values
         assert "hipLaunchKernelGGL" in token_values
 
     def test_empty_input(self):
-        """Test empty input handling"""
         code = ""
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -462,11 +418,9 @@ class TestHipLexer:
         assert len(tokens) == 0
 
     def test_only_whitespace(self):
-        """Test whitespace-only input"""
         code = "   \n  \t  \n  "
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
-        # Should only contain newlines
         non_newline_tokens = [token for token in tokens if token.type != "NEWLINE"]
         assert len(non_newline_tokens) == 0

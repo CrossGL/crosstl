@@ -3507,7 +3507,6 @@ class RustCodeGen:
 
     def map_type_to_rust(self, type_str):
         """Enhanced type mapping for Rust."""
-        # Handle vector types first
         if type_str.startswith("float") and len(type_str) > 5:
             size = type_str[5:]
             if size.isdigit():
@@ -4996,7 +4995,6 @@ class RustCodeGen:
         elif hasattr(stmt, "__class__") and "ExpressionStatement" in str(
             stmt.__class__
         ):
-            # Handle ExpressionStatementNode
             if hasattr(stmt, "expression"):
                 expression = self.generate_expression(stmt.expression)
                 if getattr(stmt, "is_tail_expression", False):
@@ -8115,7 +8113,6 @@ class RustCodeGen:
                 )
                 code += f" else if {elif_condition} {{\n"
 
-                # Generate elif body
                 elif_body = getattr(
                     else_branch, "then_branch", getattr(else_branch, "if_body", None)
                 )
@@ -8192,7 +8189,6 @@ class RustCodeGen:
             self.for_contexts.pop()
             self.loop_depth -= 1
 
-        # Add update at the end of the loop
         code += f"{indent_str}    {update};\n"
         code += f"{indent_str}}}\n"
 

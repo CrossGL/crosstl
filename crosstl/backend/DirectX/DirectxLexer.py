@@ -505,12 +505,10 @@ class Token:
     """Simple typed token object used by DirectX compatibility paths."""
 
     def __init__(self, token_type: TokenType, text: str):
-        """Store the token kind and original source text."""
         self.token_type = token_type
         self.text = text
 
     def __repr__(self):
-        """Return a developer-readable token representation."""
         return f"Token({self.token_type}, '{self.text}')"
 
 
@@ -526,7 +524,6 @@ class HLSLLexer:
         defines: Optional[dict] = None,
         strict_preprocessor: bool = False,
     ):
-        """Initialize the lexer and optionally preprocess HLSL includes/macros."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.file_path = file_path
         self.include_paths = include_paths or []
@@ -596,13 +593,11 @@ class Lexer:
     """Compatibility wrapper around HLSLLexer for legacy code"""
 
     def __init__(self, input_str: str):
-        """Tokenize ``input_str`` and prepare cursor-based access."""
         self.lexer = HLSLLexer(input_str)
         self.tokens = self.lexer.tokenize()
         self.current_pos = 0
 
     def next(self) -> Tuple[str, str]:
-        """Return the next token and advance the cursor."""
         if self.current_pos < len(self.tokens):
             token = self.tokens[self.current_pos]
             self.current_pos += 1
@@ -610,11 +605,9 @@ class Lexer:
         return ("EOF", "")
 
     def peek(self) -> Tuple[str, str]:
-        """Return the next token without advancing the cursor."""
         if self.current_pos < len(self.tokens):
             return self.tokens[self.current_pos]
         return ("EOF", "")
 
     def reset(self):
-        """Reset the cursor to the beginning of the token stream."""
         self.current_pos = 0

@@ -39,7 +39,6 @@ class ResourceQueryMixin:
         }
 
         def mark_resource_name(func_name, resource_name):
-            """Record a resource as global or function-parameter metadata."""
             if not resource_name:
                 return False
             if resource_name in param_names.get(func_name, set()):
@@ -118,7 +117,6 @@ class ResourceQueryMixin:
         visited = set()
 
         def visit_node(current):
-            """Visit one AST value while collecting direct resource queries."""
             if current is None or isinstance(current, (str, int, float, bool)):
                 return
             if isinstance(current, (list, tuple, set)):
@@ -175,7 +173,6 @@ class ResourceQueryMixin:
         visited = set()
 
         def walk(value):
-            """Yield one AST value and recurse into child values."""
             if value is None or isinstance(value, (str, int, float, bool)):
                 return
             if isinstance(value, dict):

@@ -432,7 +432,6 @@ class SlangCodeGen:
         elif isinstance(ast, StructNode):
             return self.finish_generation(self.generate_struct(ast), outermost)
         else:
-            # Handle new AST structure
             result = ""
             result += self.generate_enum_support_code()
 
@@ -457,7 +456,6 @@ class SlangCodeGen:
 
             functions = getattr(ast, "functions", [])
             for function in functions:
-                # Handle both old and new AST function structures
                 if hasattr(function, "qualifiers") and function.qualifiers:
                     qualifier = function.qualifiers[0] if function.qualifiers else None
                 else:
@@ -472,7 +470,6 @@ class SlangCodeGen:
                 else:
                     result += self.generate_function(function) + "\n\n"
 
-            # Handle shader stages (new AST structure)
             if hasattr(ast, "stages") and ast.stages:
                 self.validate_slang_tessellation_stage_shapes(ast.stages)
                 self.slang_mesh_payload_parameter_types = (
@@ -9938,7 +9935,6 @@ class SlangCodeGen:
         if type_name in self.enum_struct_type_names:
             return type_name
 
-        # Map CrossGL types to Slang types
         type_map = {
             "vec2<f32>": "float2",
             "vec3<f32>": "float3",

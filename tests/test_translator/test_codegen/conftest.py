@@ -10,7 +10,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 # For array testing
 @pytest.fixture
 def array_test_data():
-    """Provide test data for array handling tests."""
     return {
         "hlsl": {
             "array_type_declarations": [

@@ -50,62 +50,26 @@
 </div>
 <br clear="all" />
 
-# CrossTL - Universal Programming Language & Translator
+# CrossTL - Universal Shader Translator
 
-CrossTL is a revolutionary universal programming language translator built around **CrossGL** - a powerful intermediate representation (IR) language that serves as the bridge between diverse programming languages, platforms, and computing paradigms. More than just a translation tool, CrossGL represents a complete programming language designed for universal code portability and cross-platform development.
+CrossTL is a shader and compute program translator built around **CrossGL** — an intermediate representation (IR) language that bridges graphics APIs, GPU-compute platforms, and systems-language targets.
 
-## 🌍 CrossGL: The Universal Programming Language
+## Supported Translation Targets
 
-### Beyond Shader Translation - A Complete Programming Ecosystem
+CrossTL provides bidirectional translation between CrossGL and:
 
-**CrossGL** has evolved far beyond its origins as a shader language into a comprehensive programming language with full support for:
-
-- **Advanced Control Flow**: Complex conditionals, loops, switch statements, and pattern matching
-- **Rich Data Structures**: Arrays, structs, enums, and custom types
-- **Memory Management**: Buffer handling, pointer operations, and memory layout control
-- **Function Systems**: First-class functions, generics, and polymorphism
-- **Compute Paradigms**: Parallel processing, GPU computing, and heterogeneous execution
-- **Modern Language Features**: Type inference, pattern matching, and algebraic data types
-
-#### 🚀 Write Once, Deploy Everywhere
-
-CrossGL enables you to write sophisticated programs **once** and deploy across:
-
-- **Graphics APIs**: Metal, DirectX (HLSL), OpenGL (GLSL), Vulkan (SPIRV)
-- **Systems Languages**: Rust, Mojo
-- **GPU Computing**: CUDA, HIP
-- **Specialized Domains**: Slang (real-time graphics), compute shaders
-
-## 🎯 Supported Translation Targets
-
-CrossTL provides comprehensive bidirectional translation between CrossGL and major programming ecosystems:
-
-### Graphics & Compute APIs
-
-- **Metal** - Apple's unified graphics and compute API
-- **DirectX (HLSL)** - Microsoft's graphics framework
-- **OpenGL (GLSL)** - Cross-platform graphics standard
+- **Metal** - Apple's graphics and compute API
+- **DirectX (HLSL)** - Microsoft's graphics API
+- **OpenGL (GLSL)** - Cross-platform graphics
 - **Vulkan (SPIRV)** - High-performance graphics and compute
+- **CUDA** - NVIDIA parallel computing
+- **HIP** - AMD GPU computing
+- **Rust** - GPU-oriented Rust shader code
+- **Mojo** - Mojo shader/compute modules
+- **Slang** - Real-time shading language
+- **CrossGL (.cgl)** - The IR/interchange format itself
 
-### Systems Programming Languages
-
-- **Rust** - Memory-safe systems programming with GPU support
-- **Mojo** - AI-first systems language with Python compatibility
-
-### Parallel Computing Platforms
-
-- **CUDA** - NVIDIA's parallel computing platform
-- **HIP** - AMD's GPU computing interface
-
-### Specialized Languages
-
-- **Slang** - Real-time shading and compute language
-
-### Universal Intermediate Representation
-
-- **CrossGL (.cgl)** - Our universal programming language and IR
-
-## ✅ Backend Readiness: DirectX / Metal / OpenGL
+## Backend Readiness: DirectX / Metal / OpenGL
 
 We maintain first-class, bidirectional support for the three cornerstone graphics APIs. Each backend is implemented as both a **source** (parse/import) and **codegen** (export) target, so you can round‑trip between native shaders and CrossGL without lossy hops.
 
@@ -128,108 +92,22 @@ We maintain first-class, bidirectional support for the three cornerstone graphic
 - Quick check: run `pytest tests/test_backend/test_directx tests/test_backend/test_metal tests/test_backend/test_GLSL -q` (currently 321 passing tests).
 - End‑to‑end translation: translate native HLSL/Metal/GLSL → CrossGL → HLSL/Metal/GLSL/Vulkan to ensure attributes, layouts, and semantics survive round‑trips.
 
-## 💡 Revolutionary Advantages
+## Translation Architecture
 
-1. **🔄 Universal Portability**: Write complex algorithms once, run on any platform
-2. **⚡ Performance Preservation**: Maintain optimization opportunities across translations
-3. **🧠 Simplified Development**: Master one language instead of platform-specific variants
-4. **🔍 Advanced Debugging**: Universal tooling for analysis and optimization
-5. **🔮 Future-Proof Architecture**: Easily adapt to emerging programming paradigms
-6. **🌐 Bidirectional Translation**: Migrate existing codebases to CrossGL or translate to any target
-7. **📈 Scalable Complexity**: From simple shaders to complex distributed algorithms
-8. **🎯 Domain Flexibility**: Graphics, AI, HPC, systems programming, and beyond
+CrossTL uses a multi-stage translation pipeline:
 
-## ⚙️ Translation Architecture
-
-CrossTL employs a sophisticated multi-stage translation pipeline:
-
-1. **Lexical Analysis**: Advanced tokenization with context-aware parsing
-2. **Syntax Analysis**: Robust AST generation with error recovery
-3. **Semantic Analysis**: Type checking, scope resolution, and semantic validation
+1. **Lexical Analysis**: Tokenization
+2. **Syntax Analysis**: AST generation
+3. **Semantic Analysis**: Type checking and scope resolution
 4. **IR Generation**: Conversion to CrossGL intermediate representation
-5. **Optimization Passes**: Platform-agnostic code optimization and analysis
-6. **Target Generation**: Backend-specific code generation with optimization
-7. **Post-Processing**: Platform-specific optimizations and formatting
+5. **Target Generation**: Backend-specific code generation
 
-## 🔄 Bidirectional Translation Capabilities
+## CrossGL Programming Language Examples
 
-CrossGL supports seamless translation in both directions - import existing code from any supported language or export CrossGL to any target platform.
-
-## 🌈 CrossGL Programming Language Examples
-
-### Complex Algorithm Implementation
+### PBR Shader Example
 
 ```cpp
-// Advanced pattern matching and algebraic data types
-enum Result<T, E> {
-    Ok(T),
-    Error(E)
-}
-
-struct Matrix<T> {
-    data: T[],
-    rows: u32,
-    cols: u32
-}
-
-function matrixMultiply<T>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>, String> {
-    if (a.cols != b.rows) {
-        return Result::Error("Matrix dimensions incompatible");
-    }
-
-    let result = Matrix<T> {
-        data: new T[a.rows * b.cols],
-        rows: a.rows,
-        cols: b.cols
-    };
-
-    parallel for i in 0..a.rows {
-        for j in 0..b.cols {
-            let mut sum = T::default();
-            for k in 0..a.cols {
-                sum += a.data[i * a.cols + k] * b.data[k * b.cols + j];
-            }
-            result.data[i * result.cols + j] = sum;
-        }
-    }
-
-    return Result::Ok(result);
-}
-
-// GPU compute shader with advanced memory management
-compute spawn matrixCompute {
-    buffer float* matrix_A;
-    buffer float* matrix_B;
-    buffer float* result;
-
-    local float shared_memory[256];
-
-    void main() {
-        let idx = workgroup_id() * workgroup_size() + local_id();
-
-        // Complex parallel reduction with shared memory
-        shared_memory[local_id()] = matrix_A[idx] * matrix_B[idx];
-        workgroup_barrier();
-
-        // Tree reduction
-        for stride in [128, 64, 32, 16, 8, 4, 2, 1] {
-            if (local_id() < stride) {
-                shared_memory[local_id()] += shared_memory[local_id() + stride];
-            }
-            workgroup_barrier();
-        }
-
-        if (local_id() == 0) {
-            result[workgroup_id()] = shared_memory[0];
-        }
-    }
-}
-```
-
-### Advanced Graphics Pipeline
-
-```cpp
-// Physically-based rendering with advanced material system
+// Physically-based rendering shader
 struct Material {
     albedo: vec3,
     metallic: float,
@@ -277,7 +155,6 @@ shader PBRShader {
         }
     }
 
-    // Advanced fragment shader with PBR lighting
     fragment {
         input vec3 worldPos;
         input vec3 worldNormal;
@@ -293,24 +170,20 @@ shader PBRShader {
 
         vec3 calculatePBR(vec3 albedo, float metallic, float roughness,
                          vec3 normal, vec3 viewDir, vec3 lightDir, vec3 lightColor) {
-            // Advanced PBR calculation with microfacet model
             vec3 halfVector = normalize(viewDir + lightDir);
             float NdotV = max(dot(normal, viewDir), 0.0);
             float NdotL = max(dot(normal, lightDir), 0.0);
             float NdotH = max(dot(normal, halfVector), 0.0);
             float VdotH = max(dot(viewDir, halfVector), 0.0);
 
-            // Fresnel term
             vec3 F0 = mix(vec3(0.04), albedo, metallic);
             vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
 
-            // Distribution term (GGX)
             float alpha = roughness * roughness;
             float alpha2 = alpha * alpha;
             float denom = NdotH * NdotH * (alpha2 - 1.0) + 1.0;
             float D = alpha2 / (3.14159 * denom * denom);
 
-            // Geometry term
             float G = geometrySmith(NdotV, NdotL, roughness);
 
             vec3 numerator = D * G * F;
@@ -342,10 +215,8 @@ shader PBRShader {
                                      material.roughness, normal, viewDir, lightDir, lightColor);
             }
 
-            // Add ambient lighting
             color += material.albedo * 0.03;
 
-            // Tone mapping and gamma correction
             color = color / (color + vec3(1.0));
             color = pow(color, vec3(1.0/2.2));
 
@@ -355,9 +226,9 @@ shader PBRShader {
 }
 ```
 
-# Getting Started
+## Getting Started
 
-Install CrossTL's universal translator:
+Install CrossTL:
 
 ```bash
 pip install crosstl
@@ -365,225 +236,92 @@ pip install crosstl
 
 ## Basic Usage
 
-### 1. Create CrossGL Program
+### 1. Create a CrossGL shader
 
 ```cpp
-// algorithm.cgl - Universal algorithm implementation
-function quicksort<T>(arr: T[], low: i32, high: i32) -> void {
-    if (low < high) {
-        let pivot = partition(arr, low, high);
-        quicksort(arr, low, pivot - 1);
-        quicksort(arr, pivot + 1, high);
-    }
-}
+shader SimpleShader {
+    vertex {
+        input vec3 position;
+        uniform mat4 modelViewProjection;
+        output vec4 fragPosition;
 
-function partition<T>(arr: T[], low: i32, high: i32) -> i32 {
-    let pivot = arr[high];
-    let i = low - 1;
-
-    for j in low..high {
-        if (arr[j] <= pivot) {
-            i++;
-            swap(arr[i], arr[j]);
+        void main() {
+            fragPosition = modelViewProjection * vec4(position, 1.0);
         }
     }
 
-    swap(arr[i + 1], arr[high]);
-    return i + 1;
-}
+    fragment {
+        input vec4 fragPosition;
+        output vec4 fragColor;
 
-compute parallel_sort {
-    buffer float* data;
-    uniform int size;
-
-    void main() {
-        let idx = global_id();
-        if (idx < size) {
-            // Parallel bitonic sort implementation
-            bitonicSort(data, size, idx);
+        void main() {
+            fragColor = vec4(1.0, 0.0, 0.0, 1.0);
         }
     }
 }
 ```
 
-### 2. Universal Translation
+### 2. Translate to a target
 
 ```python
 import crosstl
 
-# Translate to any target language/platform
-rust_code = crosstl.translate('algorithm.cgl', backend='rust', save_shader='algorithm.rs')
-cuda_code = crosstl.translate('algorithm.cgl', backend='cuda', save_shader='algorithm.cu')
-metal_code = crosstl.translate('algorithm.cgl', backend='metal', save_shader='algorithm.metal')
-mojo_code = crosstl.translate('algorithm.cgl', backend='mojo', save_shader='algorithm.mojo')
-```
-
-## Advanced Translation Examples
-
-### Cross-Platform AI Kernels
-
-```python
-import crosstl
-
-# Translate neural network kernels across AI platforms
-ai_kernel = """
-compute neuralNetwork {
-    buffer float* weights;
-    buffer float* inputs;
-    buffer float* outputs;
-    buffer float* biases;
-
-    uniform int input_size;
-    uniform int output_size;
-
-    void main() {
-        let neuron_id = global_id();
-        if (neuron_id >= output_size) return;
-
-        float sum = 0.0;
-        for i in 0..input_size {
-            sum += weights[neuron_id * input_size + i] * inputs[i];
-        }
-
-        outputs[neuron_id] = relu(sum + biases[neuron_id]);
-    }
-}
-"""
-
-# Deploy across AI hardware platforms
-cuda_ai = crosstl.translate(ai_kernel, backend='cuda')    # NVIDIA GPUs
-hip_ai = crosstl.translate(ai_kernel, backend='hip')      # AMD GPUs
-metal_ai = crosstl.translate(ai_kernel, backend='metal')  # Apple Silicon
-mojo_ai = crosstl.translate(ai_kernel, backend='mojo')    # Mojo AI runtime
-```
-
-### Systems Programming Translation
-
-```python
-# Translate systems-level code across platforms
-systems_code = """
-struct MemoryPool {
-    buffer u8* memory;
-    size_t capacity;
-    size_t used;
-    mutex lock;
-}
-
-function allocate(pool: MemoryPool*, size: size_t) -> void* {
-    lock_guard guard(pool.lock);
-
-    if (pool.used + size > pool.capacity) {
-        return null;
-    }
-
-    void* ptr = pool.memory + pool.used;
-    pool.used += size;
-    return ptr;
-}
-"""
-
-rust_systems = crosstl.translate(systems_code, backend='rust')  # Memory-safe systems code
-mojo_systems = crosstl.translate(systems_code, backend='mojo')  # AI-optimized systems code
+# Translate to any supported backend
+metal_code = crosstl.translate('shader.cgl', backend='metal', save_shader='shader.metal')
+hlsl_code = crosstl.translate('shader.cgl', backend='directx', save_shader='shader.hlsl')
+glsl_code = crosstl.translate('shader.cgl', backend='opengl', save_shader='shader.glsl')
 ```
 
 ## Reverse Translation - Import Existing Code
 
 ```python
-# Import and unify existing codebases
+# Import existing shaders into CrossGL
 conversions = [
     ('existing_shader.hlsl', 'unified.cgl'),     # DirectX to CrossGL
     ('gpu_kernel.cu', 'unified.cgl'),            # CUDA to CrossGL
     ('graphics.metal', 'unified.cgl'),           # Metal to CrossGL
-    ('algorithm.rs', 'unified.cgl'),             # Rust to CrossGL
-    ('compute.mojo', 'unified.cgl'),             # Mojo to CrossGL
 ]
 
 for source, target in conversions:
     unified_code = crosstl.translate(source, backend='cgl', save_shader=target)
-    print(f"✅ Unified {source} into CrossGL: {target}")
+    print(f"Unified {source} into CrossGL: {target}")
 ```
 
-## Comprehensive Platform Deployment
+## Deploying to All Backends
 
 ```python
 import crosstl
+from pathlib import Path
 
-# One CrossGL program, unlimited platforms
-program = 'universal_algorithm.cgl'
+program = 'universal_shader.cgl'
 
-# Deploy across all supported platforms
 deployment_targets = {
-    # Graphics APIs
-    'metal': '.metal',      # Apple ecosystems
-    'directx': '.hlsl',     # Windows/Xbox
-    'opengl': '.glsl',      # Cross-platform
-    'vulkan': '.spvasm',     # High-performance
-
-    # Systems languages
-    'rust': '.rs',          # Memory safety
-    'mojo': '.mojo',        # AI-optimized
-
-    # Parallel computing
-    'cuda': '.cu',          # NVIDIA
-    'hip': '.hip',          # AMD
-
-    # Specialized
-    'slang': '.slang',      # Real-time graphics (optional backend)
-    'cgl': '.cgl',          # Keep a CrossGL copy
+    'metal': '.metal',
+    'directx': '.hlsl',
+    'opengl': '.glsl',
+    'vulkan': '.spvasm',
+    'rust': '.rs',
+    'mojo': '.mojo',
+    'cuda': '.cu',
+    'hip': '.hip',
+    'slang': '.slang',
 }
 
+stem = Path(program).stem
 for backend, extension in deployment_targets.items():
-    output_file = f'deployments/{program.stem}_{backend}{extension}'
+    output_file = f'deployments/{stem}_{backend}{extension}'
     try:
-        code = crosstl.translate(program, backend=backend, save_shader=output_file)
-        print(f"✅ {backend.upper()}: {output_file}")
+        crosstl.translate(program, backend=backend, save_shader=output_file)
+        print(f"{backend}: {output_file}")
     except Exception as e:
-        print(f"⚠️ {backend.upper()}: {str(e)}")
-
-print(f"\n🚀 Universal deployment complete!")
-print(f"📁 Check deployments/ directory for platform-specific implementations")
+        print(f"{backend}: {str(e)}")
 ```
-
-## Language Features Deep Dive
-
-CrossGL provides comprehensive programming language features:
-
-### Type System
-
-- **Strong static typing** with type inference
-- **Generic programming** with type parameters
-- **Algebraic data types** (enums with associated data)
-- **Trait/interface system** for polymorphism
-- **Memory layout control** for performance
-
-### Control Flow
-
-- **Pattern matching** for complex conditional logic
-- **Advanced loops** (for, while, loop with break/continue)
-- **Exception handling** with Result types
-- **Async/await** for concurrent programming
-
-### Memory Management
-
-- **Explicit lifetime management** when needed
-- **Buffer abstractions** for GPU programming
-- **Pointer safety** with compile-time checks
-- **Reference semantics** for efficient data sharing
-
-### Parallelism
-
-- **Compute shaders** for GPU programming
-- **Parallel loops** for CPU vectorization
-- **Workgroup operations** for GPU synchronization
-- **Memory barriers** for consistency
 
 For comprehensive language documentation, visit our [Language Reference](https://crossgl.github.io/crossgl-docs/pages/graphica/language/).
 
 # Contributing
 
-CrossGL is a community-driven project. Whether you're contributing language features, backend implementations, optimizations, or documentation, your contributions shape the future of universal programming! 🌟
-
-Find out more in our [Contributing Guide](CONTRIBUTING.md)
+CrossGL is a community-driven project. Find out more in our [Contributing Guide](CONTRIBUTING.md).
 
 <a href="https://github.com/CrossGL/crosstl/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=CrossGL/crosstl" />
@@ -591,23 +329,15 @@ Find out more in our [Contributing Guide](CONTRIBUTING.md)
 
 # Community
 
-**Join the universal programming revolution**
-
-- [Twitter](https://x.com/crossGL_) - Latest updates and announcements
-- [LinkedIn](https://www.linkedin.com/company/crossgl/?viewAsMember=true) - Professional community
-- [Discord](https://discord.com/invite/uyRQKXhcyW) - Real-time discussions and support
-- [YouTube](https://www.youtube.com/channel/UCxv7_flRCHp7p0fjMxVSuVQ) - Tutorials and deep dives
-
-**Shape the future of programming languages!**
+- [Twitter](https://x.com/crossGL_)
+- [LinkedIn](https://www.linkedin.com/company/crossgl/?viewAsMember=true)
+- [Discord](https://discord.com/invite/uyRQKXhcyW)
+- [YouTube](https://www.youtube.com/channel/UCxv7_flRCHp7p0fjMxVSuVQ)
 
 ## License
 
 CrossTL is open-source and licensed under the [Apache License 2.0](https://github.com/CrossGL/crosstl/blob/main/LICENSE).
 
 ---
-
-**CrossGL: One Language, Infinite Possibilities** 🌍
-
-_Building the universal foundation for the next generation of programming_
 
 The CrossGL Team

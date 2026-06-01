@@ -16,7 +16,6 @@ class HLSLToCrossGLConverter:
     """Serialize DirectX backend AST nodes back into CrossGL source."""
 
     def __init__(self):
-        """Initialize HLSL-to-CrossGL type, function, and semantic mappings."""
         self.structured_buffer_types = {
             "Buffer",
             "RWBuffer",
@@ -1877,7 +1876,6 @@ class HLSLToCrossGLConverter:
         return self.generate_expression(node)
 
     def generate(self, ast):
-        """Generate a complete CrossGL shader from a parsed HLSL AST."""
         self.struct_member_types = self.collect_struct_member_types(ast.structs)
         self.shadow_texture_names = self.collect_shadow_texture_names(ast)
         self.global_variable_types = {}

@@ -213,7 +213,6 @@ class HipToCrossGLConverter:
     }
 
     def __init__(self):
-        """Initialize HIP-to-CrossGL visitor state."""
         self.indent_level = 0
         self.output = []
         self.packed_argument_scopes = []
@@ -232,7 +231,6 @@ class HipToCrossGLConverter:
         self.suppress_device_query_value_access = 0
 
     def generate(self, ast_node):
-        """Generate complete CrossGL source from a parsed HIP AST."""
         self.output = []
         self.indent_level = 0
         self.packed_argument_scopes = []
@@ -4077,7 +4075,6 @@ class HipToCrossGLConverter:
             self.indent_level -= 1
             self.emit(") {")
 
-            # Add built-in variable declarations
             self.indent_level += 1
             self.emit("let thread_id = gl_GlobalInvocationID;")
             self.emit("let block_id = gl_WorkGroupID;")
@@ -5413,11 +5410,9 @@ class HipToCrossGLConverter:
         if resource_type is not None:
             return resource_type
 
-        # Handle arrays
         if self.has_array_suffix(hip_type):
             return self.convert_hip_array_type(hip_type, type_mapping)
 
-        # Handle pointers
         if "*" in hip_type:
             return self.convert_hip_pointer_type(hip_type)
 
@@ -5503,7 +5498,6 @@ class HipToCrossGLConverter:
         return args
 
     def convert_hip_pointer_type(self, hip_type):
-        """Convert a HIP pointer type into nested CrossGL pointer syntax."""
         pointer_depth = hip_type.count("*")
         base_type = hip_type.replace("*", "").strip()
         mapped_type = self.convert_hip_type_to_crossgl(base_type)
@@ -5553,7 +5547,6 @@ class HipToCrossGLConverter:
         return mapped_type
 
     def convert_hip_builtin_function(self, func_name):
-        """Convert HIP built-in functions to CrossGL equivalents."""
         function_mapping = {
             # Math functions
             "sqrtf": "sqrt",

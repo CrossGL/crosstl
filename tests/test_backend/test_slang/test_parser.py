@@ -41,7 +41,6 @@ def parse_code(tokens: List):
 
 
 def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code."""
     lexer = SlangLexer(code)
     return lexer.tokenize()
 

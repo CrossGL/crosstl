@@ -32,7 +32,6 @@ class VulkanToCrossGLConverter:
     """Serialize Vulkan backend AST nodes back into CrossGL source."""
 
     def __init__(self):
-        """Initialize Vulkan-to-CrossGL type and semantic mappings."""
         self.type_map = {
             "void": "void",
             "vec2": "float2",
@@ -152,11 +151,9 @@ class VulkanToCrossGLConverter:
         self.flattened_uniform_block_instances = {}
 
     def get_indent(self):
-        """Return whitespace for the current indentation level."""
         return "    " * self.indentation
 
     def generate(self, ast):
-        """Generate complete CrossGL source from a parsed Vulkan backend AST."""
         self.flattened_uniform_block_instances = {}
         code = "shader main {\n"
         compute_layouts = [
@@ -215,7 +212,6 @@ class VulkanToCrossGLConverter:
         return code
 
     def is_compute_layout(self, node):
-        """Return true for GLSL compute local-size layout declarations."""
         if not isinstance(node, LayoutNode):
             return False
         if (node.layout_type or "").lower() != "in":
@@ -233,7 +229,6 @@ class VulkanToCrossGLConverter:
         return f"        layout({qualifiers}) in;\n"
 
     def is_position_assignment(self, stmt):
-        """Check if a statement is assigning to gl_Position"""
         if isinstance(stmt, AssignmentNode):
             lhs = self.assignment_left(stmt)
             if isinstance(lhs, str) and "gl_Position" in lhs:
@@ -742,7 +737,6 @@ class VulkanToCrossGLConverter:
         return code
 
     def switch_case_body(self, case):
-        """Return statements for parser and AST switch case variants."""
         if case is None:
             return []
         if hasattr(case, "body"):

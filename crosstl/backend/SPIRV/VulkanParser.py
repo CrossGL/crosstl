@@ -43,7 +43,6 @@ class VulkanParser:
     )
 
     def __init__(self, tokens):
-        """Initialize the parser with a token stream from ``VulkanLexer``."""
         self.tokens = tokens
         self.pos = 0
         self.current_token = self.tokens[self.pos]
@@ -52,28 +51,22 @@ class VulkanParser:
         self.skip_comments()
 
     def skip_comments(self):
-        """Advance past comment tokens before parsing syntax."""
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
             self.eat(self.current_token[0])
 
     def peek(self, offset):
-        """Look ahead by offset tokens without consuming them."""
         peek_index = self.pos + offset
         if peek_index < len(self.tokens):
-            return self.tokens[peek_index][
-                0
-            ]  # Return the type of the token at the peeked index
+            return self.tokens[peek_index][0]
         return None
 
     def peek_value(self, offset):
-        """Look ahead by offset tokens and return the token value."""
         peek_index = self.pos + offset
         if peek_index < len(self.tokens):
             return self.tokens[peek_index][1]
         return None
 
     def skip_until(self, token_type):
-        """Skip tokens until the specified token type is found"""
         while self.current_token[0] != token_type and self.current_token[0] != "EOF":
             self.pos += 1
             if self.pos < len(self.tokens):
@@ -83,7 +76,6 @@ class VulkanParser:
         return
 
     def eat(self, token_type):
-        """Consume the current token when it matches ``token_type``."""
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -94,13 +86,11 @@ class VulkanParser:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
     def parse(self):
-        """Parse the complete token stream into a module AST."""
         module = self.parse_module()
         self.eat("EOF")
         return module
 
     def parse_module(self):
-        """Parse top-level Vulkan/SPIR-V declarations and functions."""
         functions = []
         structs = []
         global_variables = []
@@ -214,7 +204,6 @@ class VulkanParser:
                 self.eat("LBRACE")
                 struct_fields = []
 
-                # Parse structured fields within the uniform/push_constant/buffer block
                 while self.current_token[0] != "RBRACE":
                     field_type = self.parse_data_type(
                         allow_identifier=True,

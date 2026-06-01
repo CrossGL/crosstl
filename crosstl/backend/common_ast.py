@@ -103,7 +103,7 @@ class EnumNode(ASTNode):
 
     def __init__(self, name, members):
         self.name = name
-        self.members = members  # list of (name, value_or_None)
+        self.members = members
 
     def __repr__(self):
         return f"EnumNode(name={self.name}, members={self.members})"
@@ -303,7 +303,6 @@ class IfNode(ASTNode):
             self.if_chain = if_chain or []
             self.else_if_chain = else_if_chain or []
             self.else_body = else_body
-            # Extract condition and if_body from if_chain if available
             if self.if_chain:
                 self.condition = condition or (
                     self.if_chain[0][0] if self.if_chain else None

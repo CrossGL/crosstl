@@ -3496,7 +3496,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if bitwise is not None:
             return bitwise
 
-        # Handle special operators
         if operator == "and":
             return f"({left} && {right})"
         elif operator == "or":
@@ -3664,10 +3663,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
 
-        # Map function name
         mapped_name = self.function_map.get(func_name, func_name)
 
-        # Handle special functions
         if func_name == "abs":
             if len(args) == 1:
                 abs_call = self.generate_abs_call(raw_args, args)
@@ -3723,7 +3720,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 if smoothstep_call is not None:
                     return smoothstep_call
         elif func_name in ["texture", "tex2D"]:
-            # Handle texture sampling
             if len(args) >= 2:
                 return (
                     f"tex2D<float4>({args[0]}, "
@@ -7613,7 +7609,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         ray_builtin = self.hip_ray_builtin_expression(name)
         if ray_builtin is not None and name not in self.variable_types:
             return ray_builtin
-        # Handle built-in variables mapping
         return self.builtin_map.get(name, name)
 
     def hip_ray_builtin_expression(self, name):
@@ -7797,7 +7792,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if tessellation_patch_type is not None:
             return tessellation_patch_type
 
-        # Handle array types
         if "[" in type_str and "]" in type_str:
             base_type = type_str.split("[")[0]
             array_part = type_str[type_str.find("[") :]
@@ -8690,7 +8684,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         """Generate a host-side HIP launch wrapper for a kernel node."""
         wrapper_lines = []
 
-        # Generate wrapper function
         wrapper_name = f"launch_{kernel_node.name}"
         params = []
         args = []
@@ -8700,7 +8693,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             params.append(f"{param_type} {param.name}")
             args.append(param.name)
 
-        # Add grid and block size parameters
         params.extend(["dim3 gridSize", "dim3 blockSize", "hipStream_t stream = 0"])
 
         wrapper_lines.extend(

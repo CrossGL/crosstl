@@ -273,7 +273,6 @@ class TraitNode(ASTNode):
         self.where_clauses = where_clauses or []
         self.associated_types = associated_types or []
 
-        # Handle additional arguments for compatibility
         for key, value in kwargs.items():
             if not hasattr(self, key):
                 setattr(self, key, value)

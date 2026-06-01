@@ -1,5 +1,3 @@
-"""Test CUDA Code Generation from CrossGL"""
-
 import shutil
 import subprocess
 
@@ -106,7 +104,6 @@ def compile_matrix_helpers_if_cxx_available(helper_code, tmp_path):
 
 class TestCudaCodeGen:
     def test_simple_function_generation(self):
-        """Test generating a simple CUDA function from CrossGL"""
         source_code = """
         shader TestShader {
             vertex {
@@ -129,7 +126,6 @@ class TestCudaCodeGen:
         assert "__device__ void main()" in cuda_code
 
     def test_global_constants_are_emitted(self):
-        """Test CUDA emits parsed shader constants before generated functions."""
         source_code = """
         shader TestShader {
             const float PI = 3.14159;
@@ -156,7 +152,6 @@ class TestCudaCodeGen:
         assert "out[0] = ((PI + float(WARP_SIZE)) + UP_VECTOR.y);" in cuda_code
 
     def test_compute_shader_to_kernel(self):
-        """Test converting a compute shader to CUDA kernel"""
         source_code = """
         shader TestShader {
             compute {
@@ -182,7 +177,6 @@ class TestCudaCodeGen:
         assert "int3 gridDim =" not in cuda_code
 
     def test_non_void_compute_entry_point_lowers_to_void_kernel(self, tmp_path):
-        """Test CUDA kernels discard invalid source return values."""
         ast = ShaderNode(
             name="NonVoidCudaKernel",
             execution_model=ExecutionModel.COMPUTE_KERNEL,
@@ -723,7 +717,6 @@ class TestCudaCodeGen:
         assert "__device__ void main()" in cuda_code
 
     def test_compute_stage_local_helper_functions_emit_before_kernel(self):
-        """Test compute-stage helper functions are emitted before kernel calls."""
         source_code = """
         shader TestShader {
             compute {
@@ -754,7 +747,6 @@ class TestCudaCodeGen:
         assert "float y = scale(3.0);" in cuda_code
 
     def test_user_defined_mix_function_is_not_lowered_to_cuda_builtin(self):
-        """Test user-defined functions shadow CUDA builtin remapping."""
         source_code = """
         shader TestShader {
             compute {
@@ -780,10 +772,8 @@ class TestCudaCodeGen:
         assert "float adjusted = lerp(0.0, 1.0, 0.25);" not in cuda_code
 
     def test_type_conversion(self):
-        """Test CrossGL to CUDA type conversion"""
         codegen = CudaCodeGen()
 
-        # Test basic types
         assert codegen.convert_crossgl_type_to_cuda("i32") == "int"
         assert codegen.convert_crossgl_type_to_cuda("f32") == "float"
         assert codegen.convert_crossgl_type_to_cuda("f64") == "double"
@@ -827,7 +817,6 @@ class TestCudaCodeGen:
             == "cudaTextureObject_t[2]"
         )
 
-        # Test vector types
         assert codegen.convert_crossgl_type_to_cuda("vec2<f32>") == "float2"
         assert codegen.convert_crossgl_type_to_cuda("vec3<f32>") == "float3"
         assert codegen.convert_crossgl_type_to_cuda("vec4<f32>") == "float4"
@@ -841,10 +830,8 @@ class TestCudaCodeGen:
         assert codegen.convert_crossgl_type_to_cuda("dmat4x3") == "double4x3"
 
     def test_function_conversion(self):
-        """Test CrossGL to CUDA function conversion"""
         codegen = CudaCodeGen()
 
-        # Test math functions
         assert codegen.convert_builtin_function("sqrt") == "sqrtf"
         assert codegen.convert_builtin_function("pow") == "powf"
         assert codegen.convert_builtin_function("sin") == "sinf"
@@ -859,7 +846,6 @@ class TestCudaCodeGen:
         assert codegen.convert_builtin_function("mod") == "fmodf"
         assert codegen.convert_builtin_function("mix") == "lerp"
 
-        # Test vector constructors
         assert codegen.convert_builtin_function("vec2") == "make_float2"
         assert codegen.convert_builtin_function("vec3") == "make_float3"
         assert codegen.convert_builtin_function("vec4") == "make_float4"
@@ -876,13 +862,11 @@ class TestCudaCodeGen:
         assert codegen.convert_builtin_function("mat3x4") == "float3x4"
         assert codegen.convert_builtin_function("dmat2") == "double2x2"
 
-        # Test atomic operations
         assert codegen.convert_builtin_function("atomicAdd") == "atomicAdd"
         assert codegen.convert_builtin_function("atomicExchange") == "atomicExch"
         assert codegen.convert_builtin_function("atomicInc") == "atomicInc"
         assert codegen.convert_builtin_function("atomicDec") == "atomicDec"
 
-        # Test synchronization
         assert codegen.convert_builtin_function("barrier") == "__syncthreads"
         assert (
             codegen.convert_builtin_function("groupMemoryBarrier")
@@ -899,13 +883,11 @@ class TestCudaCodeGen:
         assert codegen.convert_builtin_function("memoryBarrierImage") == "__threadfence"
         assert codegen.convert_builtin_function("workgroupBarrier") == "__syncthreads"
 
-        # Test texture functions
         assert codegen.convert_builtin_function("texture") == "tex2D"
         assert codegen.convert_builtin_function("textureLod") == "tex2DLod"
         assert codegen.convert_builtin_function("textureGrad") == "tex2DGrad"
 
     def test_lambda_call_emits_cuda_device_lambda(self):
-        """Test CrossGL pseudo-lambda calls lower to CUDA device lambdas."""
         source_code = """
         shader TestShader {
             compute {
@@ -938,7 +920,6 @@ class TestCudaCodeGen:
         assert "lambda(" not in cuda_code
 
     def test_synchronization_functions_emit_cuda_intrinsics(self, tmp_path):
-        """Test CrossGL synchronization functions lower to CUDA intrinsics."""
         source_code = """
         shader TestShader {
             compute {
@@ -976,7 +957,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_wave_intrinsics_lower_to_cuda_subgroup_helpers(self):
-        """Test basic Wave* calls lower to CUDA subgroup helper expressions."""
         source_code = """
         shader CudaWaveShader {
             compute {
@@ -1025,7 +1005,6 @@ class TestCudaCodeGen:
         assert "Unsupported CUDA wave intrinsic" not in cuda_code
 
     def test_wave_match_count_quad_and_multi_prefix_lower_to_cuda_helpers(self):
-        """Test extended Wave* forms lower to typed CUDA helper calls."""
         source_code = """
         shader CudaWaveExtended {
             compute {
@@ -1084,7 +1063,6 @@ class TestCudaCodeGen:
         assert "Unsupported CUDA wave intrinsic" not in cuda_code
 
     def test_wave_intrinsic_type_gaps_emit_cuda_diagnostics(self):
-        """Test CUDA emits compile-safe diagnostics for unsupported wave shapes."""
         source_code = """
         shader CudaWaveDiagnostics {
             compute {
@@ -1121,7 +1099,6 @@ class TestCudaCodeGen:
         )
 
     def test_direct_wave_ir_node_lowers_to_cuda_helper(self):
-        """Test direct WaveOpNode emission avoids AST repr fallbacks."""
         codegen = CudaCodeGen()
 
         generated_expr = codegen.visit(
@@ -1156,7 +1133,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_user_defined_synchronization_names_are_not_lowered(self):
-        """Test CUDA does not remap user-defined synchronization names."""
         source_code = """
         shader SynchronizationShadowing {
             compute {
@@ -1235,7 +1211,6 @@ class TestCudaCodeGen:
         ],
     )
     def test_synchronization_builtins_reject_arguments(self, builtin):
-        """Test CUDA synchronization builtins reject invalid arguments."""
         source_code = f"""
         shader BadSynchronizationBuiltinArgs {{
             compute {{
@@ -1255,7 +1230,6 @@ class TestCudaCodeGen:
             CudaCodeGen().generate(ast)
 
     def test_shared_memory_synchronization_helper_lowers_to_cuda(self, tmp_path):
-        """Test shared memory and barriers lower through compute helpers."""
         source_code = """
         shader SharedSynchronizationHelper {
             compute {
@@ -1291,7 +1265,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_builtin_invocation_ids_emit_cuda_names(self):
-        """Test CUDA maps CrossGL invocation built-ins in member access form."""
         source_code = """
         shader TestShader {
             compute {
@@ -1338,7 +1311,6 @@ class TestCudaCodeGen:
         assert ".xy" not in cuda_code
 
     def test_hlsl_compute_builtin_parameters_lower_to_cuda_expressions(self):
-        """Test CUDA does not expose HLSL compute built-ins as kernel params."""
         source_code = """
         shader TestShader {
             compute {
@@ -1374,7 +1346,6 @@ class TestCudaCodeGen:
         assert "SV_GroupID" not in cuda_code
 
     def test_vector_swizzles_emit_cuda_make_functions(self):
-        """Test CUDA lowers vector swizzles to scalar fields and constructors."""
         source_code = """
         shader TestShader {
             compute {
@@ -1411,7 +1382,6 @@ class TestCudaCodeGen:
         assert ".ag" not in cuda_code
 
     def test_complex_vector_swizzles_use_cuda_helpers(self):
-        """Test CUDA swizzles evaluate complex vector expressions once."""
         source_code = """
         shader TestShader {
             compute {
@@ -1470,7 +1440,6 @@ class TestCudaCodeGen:
         assert "make_float4(makeColor().z, makeColor().y" not in cuda_code
 
     def test_vector_array_accesses_infer_cuda_element_types(self):
-        """Test CUDA infers vector element types through array/member chains."""
         source_code = """
         struct InnerPayload {
             vec3 color;
@@ -1566,7 +1535,6 @@ class TestCudaCodeGen:
         assert "make_float3(makePayload().colors[0])" not in cuda_code
 
     def test_direct_builtin_identifier_nodes_emit_cuda_names(self, tmp_path):
-        """Test CUDA maps direct AST built-in identifiers with component suffixes."""
         ast = ShaderNode(
             name="DirectBuiltins",
             execution_model=ExecutionModel.GENERAL_PURPOSE,
@@ -1639,7 +1607,6 @@ class TestCudaCodeGen:
         )
 
     def test_struct_generation(self):
-        """Test struct generation"""
         source_code = """
         shader TestShader {
             struct Vertex {
@@ -1661,7 +1628,6 @@ class TestCudaCodeGen:
         assert "float3 normal;" in cuda_code
 
     def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda(self):
-        """Test CUDA preserves and validates struct member builtin semantics."""
         valid_code = """
         shader CudaStructSemantics {
             struct FSOutput {
@@ -1729,7 +1695,6 @@ class TestCudaCodeGen:
             CudaCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
 
     def test_return_semantics_validate_builtin_types_and_stage_context_for_cuda(self):
-        """Test CUDA validates direct builtin return semantics."""
         invalid_depth_type = """
         shader BadCudaDepthType {
             fragment {
@@ -1767,7 +1732,6 @@ class TestCudaCodeGen:
             CudaCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
 
     def test_direct_return_semantics_emit_metadata_for_cuda(self, tmp_path):
-        """Test CUDA preserves direct return semantics as comments."""
         color_code = """
         shader CudaDirectReturnSemantics {
             vertex {
@@ -1810,7 +1774,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(depth_cuda_code, tmp_path)
 
     def test_stage_parameter_semantics_emit_metadata_for_cuda(self, tmp_path):
-        """Test CUDA preserves builtin stage parameter semantics as comments."""
         vertex_code = """
         shader CudaVertexStageParameterSemantics {
             vertex {
@@ -1895,7 +1858,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(compute_cuda, tmp_path)
 
     def test_stage_parameter_semantics_validate_builtin_stage_type_for_cuda(self):
-        """Test CUDA rejects invalid builtin stage parameter semantics."""
         invalid_stage = """
         shader BadCudaStageParameterStage {
             fragment {
@@ -1941,7 +1903,6 @@ class TestCudaCodeGen:
             CudaCodeGen().generate(Parser(Lexer(duplicate_system_value).tokens).parse())
 
     def test_enum_generation_and_compute_use(self):
-        """Test CUDA emits top-level enums before kernels that use them."""
         source_code = """
         shader TestShader {
             enum Mode {
@@ -1974,7 +1935,6 @@ class TestCudaCodeGen:
         )
 
     def test_variable_with_qualifiers(self):
-        """Test variable generation with memory qualifiers"""
         source_code = """
         shader TestShader {
             compute {
@@ -2035,7 +1995,6 @@ class TestCudaCodeGen:
         assert "__shared__ float tile[32];" in direct_ast_cuda_code
 
     def test_for_in_statement_lowers_to_counted_cuda_loops(self):
-        """Test CUDA lowers CrossGL for-in loops to counted integer loops."""
         source_code = """
         shader TestShader {
             compute {
@@ -2072,7 +2031,6 @@ class TestCudaCodeGen:
         assert "RangeNode" not in cuda_code
 
     def test_vector_constructors_emit_cuda_make_functions(self):
-        """Test CUDA maps parser-produced vector constructors."""
         source_code = """
         shader TestShader {
             compute {
@@ -2112,7 +2070,6 @@ class TestCudaCodeGen:
         assert " = uvec4(" not in cuda_code
 
     def test_composite_vector_constructors_flatten_cuda_lanes(self):
-        """Test CUDA vector constructors flatten vector and swizzle arguments."""
         source_code = """
         shader TestShader {
             compute {
@@ -2145,7 +2102,6 @@ class TestCudaCodeGen:
         assert "make_float3(make_float3(color.x, color.y, color.z))" not in cuda_code
 
     def test_complex_scalar_vector_constructor_splats_use_cuda_helpers(self):
-        """Test CUDA scalar splats evaluate complex expressions once."""
         source_code = """
         shader TestShader {
             compute {
@@ -2192,7 +2148,6 @@ class TestCudaCodeGen:
         assert "make_uchar2(nextIndex(), nextIndex())" not in cuda_code
 
     def test_complex_composite_vector_constructors_use_cuda_helpers(self):
-        """Test CUDA composite vector constructors evaluate vector inputs once."""
         source_code = """
         shader TestShader {
             compute {
@@ -2264,7 +2219,6 @@ class TestCudaCodeGen:
         )
 
     def test_vector_scalar_arithmetic_expands_cuda_components(self):
-        """Test CUDA lowers vector math through component-wise helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -2307,7 +2261,6 @@ class TestCudaCodeGen:
         assert "make_float4(1.0);" not in cuda_code
 
     def test_vector_unary_negation_uses_cuda_helpers(self):
-        """Test CUDA lowers vector unary negation through component-wise helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -2350,7 +2303,6 @@ class TestCudaCodeGen:
         assert "int3 negi = -iv;" not in cuda_code
 
     def test_bool_vector_logical_not_uses_cuda_helpers(self):
-        """Test CUDA lowers bool-vector logical not through component-wise helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -2387,7 +2339,6 @@ class TestCudaCodeGen:
         assert "uchar4 inv4 = !m4;" not in cuda_code
 
     def test_bool_vector_logical_binary_ops_expand_cuda_components(self):
-        """Test CUDA lowers bool-vector logical binary operators component-wise."""
         source_code = """
         shader TestShader {
             compute {
@@ -2437,7 +2388,6 @@ class TestCudaCodeGen:
         assert "uchar3 scalarLeft = (false || b);" not in cuda_code
 
     def test_bool_vector_ternary_condition_expands_cuda_components(self):
-        """Test CUDA lowers bool-vector ternary conditions component-wise."""
         source_code = """
         shader TestShader {
             compute {
@@ -2479,7 +2429,6 @@ class TestCudaCodeGen:
         assert "float3 mixedArm = (mask ? a : 0.0);" not in cuda_code
 
     def test_integer_vector_bitwise_ops_expand_cuda_components(self):
-        """Test CUDA lowers integer-vector bitwise operators component-wise."""
         source_code = """
         shader TestShader {
             compute {
@@ -2541,7 +2490,6 @@ class TestCudaCodeGen:
         assert "uint4 ushift = (ua >> 1);" not in cuda_code
 
     def test_integer_vector_compound_bitwise_assignments_expand_cuda_components(self):
-        """Test CUDA lowers vector compound bitwise assignments component-wise."""
         source_code = """
         shader TestShader {
             compute {
@@ -2593,7 +2541,6 @@ class TestCudaCodeGen:
         assert "ua >>= 1;" not in cuda_code
 
     def test_vector_modulo_uses_cuda_helpers(self):
-        """Test CUDA lowers vector modulo expressions and assignments."""
         source_code = """
         shader TestShader {
             compute {
@@ -2672,7 +2619,6 @@ class TestCudaCodeGen:
         assert "ua %= ub;" not in cuda_code
 
     def test_scalar_float_modulo_uses_cuda_fmod(self):
-        """Test CUDA lowers floating scalar modulo while preserving integer modulo."""
         source_code = """
         shader TestShader {
             compute {
@@ -2720,7 +2666,6 @@ class TestCudaCodeGen:
         assert "da %= db;" not in cuda_code
 
     def test_vector_comparisons_emit_cuda_bool_vector_constructors(self):
-        """Test CUDA lowers vector comparisons component-wise."""
         source_code = """
         shader TestShader {
             compute {
@@ -2779,7 +2724,6 @@ class TestCudaCodeGen:
         assert "uchar2 ne = (ia != ib);" not in cuda_code
 
     def test_complex_vector_conditionals_emit_cuda_single_eval_helpers(self):
-        """Test CUDA vector logical/comparison/select operands evaluate once."""
         source_code = """
         shader TestShader {
             compute {
@@ -2906,7 +2850,6 @@ class TestCudaCodeGen:
         assert "makeMask().x ? nextWeight()" not in cuda_code
 
     def test_vector_geometric_builtins_emit_cuda_helpers(self):
-        """Test CUDA lowers vector geometric builtins to helper calls."""
         source_code = """
         shader TestShader {
             compute {
@@ -2984,7 +2927,6 @@ class TestCudaCodeGen:
         assert "float l = length(a);" not in cuda_code
 
     def test_matrix_types_and_constructors_emit_cuda_names(self, tmp_path):
-        """Test CUDA maps parser-produced matrix types and constructors."""
         source_code = """
         shader TestShader {
             compute {
@@ -3045,7 +2987,6 @@ class TestCudaCodeGen:
         )
 
     def test_bool_vector_constructors_emit_cuda_names(self):
-        """Test CUDA maps boolean vectors to supported uchar vector types."""
         source_code = """
         shader TestShader {
             compute {
@@ -3071,7 +3012,6 @@ class TestCudaCodeGen:
         assert "bool3 flags" not in cuda_code
 
     def test_generic_vector_constructors_emit_cuda_names(self):
-        """Test CUDA maps parser-produced generic vector forms."""
         source_code = """
         shader TestShader {
             compute {
@@ -3101,7 +3041,6 @@ class TestCudaCodeGen:
         assert "vec4<" not in cuda_code
 
     def test_extended_math_builtins_emit_cuda_functions(self):
-        """Test CUDA maps parser-produced math builtins to CUDA functions."""
         source_code = """
         shader TestShader {
             compute {
@@ -3144,7 +3083,6 @@ class TestCudaCodeGen:
         assert "atan2(" not in cuda_code
 
     def test_double_math_builtins_emit_cuda_double_functions(self):
-        """Test CUDA preserves double precision for scalar math builtins."""
         source_code = """
         shader TestShader {
             compute {
@@ -3207,7 +3145,6 @@ class TestCudaCodeGen:
         assert "truncf(x)" not in cuda_code
 
     def test_vector_atan2_builtin_lowers_componentwise(self):
-        """Test CUDA lowers vector atan2 through component-wise helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -3249,7 +3186,6 @@ class TestCudaCodeGen:
         assert "double2 da = atan2f(" not in cuda_code
 
     def test_sign_builtin_lowers_to_cuda_expressions(self):
-        """Test CUDA lowers scalar and vector sign without a raw sign builtin."""
         source_code = """
         shader TestShader {
             compute {
@@ -3306,7 +3242,6 @@ class TestCudaCodeGen:
         assert " = sign(" not in cuda_code
 
     def test_vector_min_max_lowers_to_cuda_helpers(self):
-        """Test CUDA lowers vector min/max through component-wise helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -3373,7 +3308,6 @@ class TestCudaCodeGen:
         assert "float3 capped = fminf(a, nextWeight());" not in cuda_code
 
     def test_mix_builtin_lowers_vector_cases_to_cuda_helpers(self):
-        """Test CUDA lowers vector mix without relying on a vector lerp intrinsic."""
         source_code = """
         shader TestShader {
             compute {
@@ -3427,7 +3361,6 @@ class TestCudaCodeGen:
         assert " = mix(" not in cuda_code
 
     def test_bool_vector_mix_lowers_to_cuda_select(self):
-        """Test CUDA lowers bool-mask vector mix to component selection."""
         source_code = """
         shader TestShader {
             compute {
@@ -3484,7 +3417,6 @@ class TestCudaCodeGen:
         assert " = mix(" not in cuda_code
 
     def test_bool_scalar_mix_lowers_to_cuda_select(self):
-        """Test CUDA lowers scalar bool mix to selector semantics."""
         source_code = """
         shader TestShader {
             compute {
@@ -3532,7 +3464,6 @@ class TestCudaCodeGen:
         assert " = mix(" not in cuda_code
 
     def test_abs_builtin_uses_cuda_type_appropriate_operations(self):
-        """Test CUDA abs preserves scalar types and lowers vector operands."""
         source_code = """
         shader TestShader {
             compute {
@@ -3578,7 +3509,6 @@ class TestCudaCodeGen:
         assert "int3 aiv = fabsf(iv);" not in cuda_code
 
     def test_fract_builtin_lowers_to_cuda_helpers(self):
-        """Test CUDA lowers fract/frac through scalar and vector helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -3628,7 +3558,6 @@ class TestCudaCodeGen:
         assert " = fract(make_" not in cuda_code
 
     def test_scalar_clamp_uses_cuda_type_appropriate_operations(self):
-        """Test CUDA scalar clamp preserves float, double, and integer semantics."""
         source_code = """
         shader TestShader {
             compute {
@@ -3661,7 +3590,6 @@ class TestCudaCodeGen:
         assert "clamp(" not in cuda_code
 
     def test_complex_integer_clamp_uses_cuda_single_eval_helper(self):
-        """Test CUDA integer clamp evaluates complex scalar operands once."""
         source_code = """
         shader TestShader {
             compute {
@@ -3708,7 +3636,6 @@ class TestCudaCodeGen:
         assert "int i = ((nextIndex()) <" not in cuda_code
 
     def test_vector_clamp_lowers_to_cuda_helper(self):
-        """Test CUDA lowers vector clamp to a component-wise helper."""
         source_code = """
         shader TestShader {
             compute {
@@ -3736,7 +3663,6 @@ class TestCudaCodeGen:
         assert "float3 c = clamp(" not in cuda_code
 
     def test_vector_clamp_with_scalar_bounds_lowers_to_cuda_helper(self):
-        """Test CUDA lowers vector clamp with scalar bounds to a helper."""
         source_code = """
         shader TestShader {
             compute {
@@ -3766,7 +3692,6 @@ class TestCudaCodeGen:
         assert "float3 c = clamp(" not in cuda_code
 
     def test_saturate_builtin_lowers_through_cuda_clamp(self):
-        """Test CUDA lowers shader-style saturate through scalar/vector clamp."""
         source_code = """
         shader TestShader {
             compute {
@@ -3805,7 +3730,6 @@ class TestCudaCodeGen:
         assert "float3 v = saturate(" not in cuda_code
 
     def test_texture_calls_emit_cuda_texture_functions(self, tmp_path):
-        """Test CUDA maps parser-produced texture calls."""
         source_code = """
         shader TestShader {
             fragment {
@@ -3856,7 +3780,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(CudaCodeGen().generate(smoke_ast), tmp_path)
 
     def test_explicit_sampler_texture_calls_emit_cuda_texture_coordinates(self):
-        """Test CUDA accepts split sampler operands without using them as coords."""
         source_code = """
         shader ExplicitSamplerTextureCalls {
             sampler2D colorMap;
@@ -3907,7 +3830,6 @@ class TestCudaCodeGen:
         assert "texture(colorMap, linearSampler" not in cuda_code
 
     def test_hlsl_style_texture_resource_types_emit_cuda_sampler_types(self):
-        """Test CUDA treats HLSL-style Texture resource names like sampler types."""
         source_code = """
         shader Resources {
             Texture2D tex;
@@ -4076,7 +3998,6 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
 
     def test_typed_hlsl_extended_writable_resources_emit_cuda_surfaces(self):
-        """Test CUDA maps non-2D HLSL RWTexture aliases and query metadata."""
         source_code = """
         shader TypedWritableExtendedCUDA {
             RWTexture1DArray<float4> lineLayers;
@@ -4233,7 +4154,6 @@ class TestCudaCodeGen:
         assert "imageSize(" not in cuda_code
 
     def test_typed_hlsl_sampled_resources_emit_cuda_sampler_calls(self, tmp_path):
-        """Test CUDA maps typed HLSL sampled Texture resources."""
         source_code = """
         shader TypedSampledCUDA {
             Texture1D<float4> ramp;
@@ -4705,7 +4625,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(CudaCodeGen().generate(smoke_ast), tmp_path)
 
     def test_hlsl_style_cube_and_array_surfaces_emit_cuda_surface_calls(self, tmp_path):
-        """Test CUDA maps HLSL-style writable cube/array resources to surfaces."""
         source_code = """
         shader HlslSurfaceAliasesCUDA {
             RWTexture1DArray<float4> lineLayers;
@@ -4798,7 +4717,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_structured_buffer_resources_emit_cuda_pointer_access(self):
-        """Test CUDA lowers structured-buffer declarations and accessors."""
         source_code = """
         shader StructuredBufferCUDA {
             struct Particle {
@@ -4884,7 +4802,6 @@ class TestCudaCodeGen:
         assert "buffer_store(" not in cuda_code
 
     def test_glsl_buffer_blocks_emit_cuda_structs_pointers_and_metadata(self):
-        """Test CUDA lowers GLSL buffer blocks to C++ struct/pointer placeholders."""
         source_code = """
         layout(std430, binding = 3) readonly buffer float values[];
 
@@ -4925,7 +4842,6 @@ class TestCudaCodeGen:
         assert "particles.positions[index] = value;" in cuda_code
 
     def test_glsl_buffer_block_arrays_preserve_cuda_placeholder_contracts(self):
-        """Test CUDA covers fixed block arrays and access diagnostics."""
         source_code = """
         layout(std430, binding = 5) readonly buffer ReadBlock {
             uint values[4];
@@ -4978,7 +4894,6 @@ class TestCudaCodeGen:
         ) in cuda_code
 
     def test_glsl_buffer_block_runtime_arrays_and_atomics_emit_cuda(self):
-        """Test CUDA lowers GLSL buffer-block runtime-array atomics."""
         source_code = """
         layout(std430, binding = 1) buffer CounterBlock {
             uint counters[];
@@ -5014,7 +4929,6 @@ class TestCudaCodeGen:
         assert "atomicAdd(counters.counters[index]" not in cuda_code
 
     def test_glsl_buffer_block_access_diagnostics_emit_cuda(self):
-        """Test CUDA emits deterministic diagnostics for invalid buffer-block access."""
         source_code = """
         layout(std430, binding = 1) readonly buffer ReadonlyBlock {
             uint counters[];
@@ -5058,7 +4972,6 @@ class TestCudaCodeGen:
         ) in cuda_code
 
     def test_structured_buffer_dimensions_emit_cuda_length_sidecars(self):
-        """Test CUDA lowers structured-buffer dimensions through length sidecars."""
         source_code = """
         shader StructuredBufferDimensionsCUDA {
             RWStructuredBuffer<int> values;
@@ -5137,7 +5050,6 @@ class TestCudaCodeGen:
         assert ".GetDimensions(" not in cuda_code
 
     def test_buffer_reference_dimensions_emit_cuda_length_sidecars(self):
-        """Test CUDA length sidecars follow buffer reference parameters."""
         source_code = """
         shader BufferReferenceDimensionsCUDA {
             RWStructuredBuffer<int> values;
@@ -5303,7 +5215,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_append_consume_buffer_references_forward_cuda_counters(self, tmp_path):
-        """Test append/consume reference parameters keep CUDA counter sidecars."""
         source_code = """
         shader AppendConsumeReferenceCUDA {
             struct Particle {
@@ -5415,7 +5326,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_append_consume_untraceable_counters_emit_cuda_diagnostics(self, tmp_path):
-        """Test CUDA rejects append/consume calls when no counter sidecar is known."""
         source_code = """
         shader AppendConsumeCounterDiagnosticCUDA {
             struct Particle {
@@ -5480,7 +5390,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_plain_shared_array_atomics_emit_cuda_pointer_atomics(self, tmp_path):
-        """Test CUDA atomics on ordinary shared/array lvalues use pointer operands."""
         source_code = """
         shader SharedArrayAtomicsCUDA {
             compute {
@@ -5549,7 +5458,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_plain_pointer_reference_atomics_emit_cuda_diagnostics(self, tmp_path):
-        """Test CUDA atomics on pointer/reference targets validate mutability."""
         source_code = """
         shader PointerReferenceAtomicsCUDA {
             struct AtomicHolder {
@@ -5690,7 +5598,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_pointer_reference_helper_returns_and_aliases_emit_cuda(self, tmp_path):
-        """Test CUDA pointer/reference helper returns preserve native aliases."""
         source_code = """
         shader PointerReferenceHelpersCUDA {
             struct Holder {
@@ -5767,7 +5674,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_pointer_address_and_dereference_unary_ir_emit_cuda(self, tmp_path):
-        """Test CUDA emits pointer address-of and dereference from canonical IR."""
         uint_type = PrimitiveType("uint")
         uint_pointer_type = PointerType(uint_type)
         ast = ShaderNode(
@@ -6013,7 +5919,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_structured_buffer_reference_atomics_keep_cuda_metadata(self, tmp_path):
-        """Test CUDA preserves structured-buffer atomic metadata through references."""
         source_code = """
         shader StructuredBufferReferenceAtomicsCUDA {
             struct Particle {
@@ -6146,7 +6051,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_uint_structured_buffer_inc_dec_emit_cuda_bounded_atomics(self, tmp_path):
-        """Test CUDA emits native bounded inc/dec atomics only for uint buffers."""
         source_code = """
         shader BoundedStructuredBufferAtomicsCUDA {
             RWStructuredBuffer<uint> counters;
@@ -6296,7 +6200,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_byte_address_buffer_dimensions_emit_cuda_length_sidecars(self, tmp_path):
-        """Test CUDA lowers byte-address dimensions through byte-length sidecars."""
         source_code = """
         shader ByteAddressBufferDimensionsCUDA {
             ByteAddressBuffer rawBytes;
@@ -6366,7 +6269,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_byte_address_buffer_atomics_emit_cuda_atomic_helpers(self, tmp_path):
-        """Test CUDA lowers RWByteAddressBuffer interlocked operations."""
         source_code = """
         shader ByteAddressBufferAtomicsCUDA {
             ByteAddressBuffer readBytes;
@@ -6501,7 +6403,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_byte_address_buffer_reference_atomics_keep_cuda_metadata(self, tmp_path):
-        """Test CUDA preserves byte-address atomic metadata through references."""
         source_code = """
         shader ByteAddressBufferReferenceAtomicsCUDA {
             RWByteAddressBuffer output;
@@ -6571,7 +6472,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_array_and_3d_texture_calls_emit_cuda_texture_functions(self):
-        """Test CUDA maps array and 3D sampled texture calls by resource type."""
         source_code = """
         shader Resources {
             sampler2darray layers;
@@ -6641,7 +6541,6 @@ class TestCudaCodeGen:
         assert " = textureGrad(" not in cuda_code
 
     def test_1d_and_cube_texture_calls_emit_cuda_texture_functions(self):
-        """Test CUDA maps 1D and cube sampled texture calls by resource type."""
         source_code = """
         shader Resources {
             sampler1d ramp;
@@ -6699,7 +6598,6 @@ class TestCudaCodeGen:
         assert " = textureGrad(" not in cuda_code
 
     def test_sampler_1d_array_sampling_and_queries_emit_cuda_helpers(self):
-        """Test CUDA maps 1D-array samplers to layered texture helpers."""
         source_code = """
         shader Resources {
             sampler1DArray lineArray;
@@ -6781,7 +6679,6 @@ class TestCudaCodeGen:
         assert "textureQueryLevels(" not in cuda_code
 
     def test_cube_array_texture_calls_emit_cuda_texture_functions(self):
-        """Test CUDA maps cube-array sampled texture calls by resource type."""
         source_code = """
         shader Resources {
             samplercubearray probes;
@@ -6831,7 +6728,6 @@ class TestCudaCodeGen:
         assert " = textureGrad(" not in cuda_code
 
     def test_shadow_sampler_calls_emit_cuda_diagnostics(self):
-        """Test CUDA makes unsupported shadow sampler calls explicit."""
         source_code = """
         shader Resources {
             sampler2dshadow shadowMap;
@@ -7051,7 +6947,6 @@ class TestCudaCodeGen:
         assert " = tex2D<float4>(cubeArrayShadow" not in cuda_code
 
     def test_texture_gather_calls_emit_cuda_helpers_and_diagnostics(self):
-        """Test CUDA lowers supported advanced texture calls and diagnoses the rest."""
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -7229,7 +7124,6 @@ class TestCudaCodeGen:
         assert "texelFetchOffset(" not in cuda_code
 
     def test_texture_gather_coordinate_shapes_emit_cuda_helpers_or_diagnostics(self):
-        """Test CUDA textureGather rejects known invalid coordinate ranks."""
         source_code = """
         shader GatherCoordinateShapes {
             sampler2d colorMap;
@@ -7315,7 +7209,6 @@ class TestCudaCodeGen:
         assert "textureGather(" not in cuda_code
 
     def test_texture_offset_argument_shapes_emit_cuda_helpers_or_diagnostics(self):
-        """Test CUDA texture offsets lower valid ranks and diagnose bad ranks."""
         source_code = """
         shader OffsetCoordinateShapes {
             sampler1d lineTex;
@@ -7418,7 +7311,6 @@ class TestCudaCodeGen:
         assert "texelFetchOffset(" not in cuda_code
 
     def test_texture_projected_shapes_emit_cuda_helpers_or_diagnostics(self):
-        """Test CUDA projected texture calls lower supported coordinate shapes."""
         source_code = """
         shader ProjectedTextureShapes {
             sampler1d lineTex;
@@ -7738,7 +7630,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(CudaCodeGen().generate(smoke_ast), tmp_path)
 
     def test_resource_type_keywords_emit_cuda_resource_types(self):
-        """Test CUDA maps all parser resource keywords instead of leaking CrossGL types."""
         source_code = """
         shader Resources {
             sampler linearState;
@@ -7856,7 +7747,6 @@ class TestCudaCodeGen:
             )
 
     def test_resource_builtins_emit_cuda_texture_and_surface_calls(self):
-        """Test CUDA lowers non-multisample resource calls with tracked resource types."""
         source_code = """
         shader Resources {
             sampler1d lineTex;
@@ -8035,7 +7925,6 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo" not in cuda_code
 
     def test_image_coordinate_shapes_emit_cuda_surface_helpers_or_diagnostics(self):
-        """Test CUDA imageLoad/imageStore lowers only representable coordinate ranks."""
         source_code = """
         shader ImageCoordinateShapes {
             image1D lineImage;
@@ -8191,7 +8080,6 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
 
     def test_image_access_qualifiers_emit_cuda_diagnostics(self):
-        """Test CUDA rejects storage-image operations that violate access metadata."""
         source_code = """
         shader ImageAccessQualifiers {
             readonly image2D readOnlyImage @rgba16f;
@@ -8310,7 +8198,6 @@ class TestCudaCodeGen:
         assert "imageAtomicAdd(" not in cuda_code
 
     def test_resource_memory_qualifiers_map_cuda_access_contracts(self):
-        """Test resource memory qualifiers select CUDA access forms/diagnostics."""
         source_code = """
         shader CUDAResourceMemoryQualifiers {
             readonly RWStructuredBuffer<int> readOnlyValues;
@@ -8452,7 +8339,6 @@ class TestCudaCodeGen:
         assert "access(" not in cuda_code
 
     def test_image_access_aliases_inherit_cuda_diagnostics(self):
-        """Test CUDA preserves storage-image access metadata through local aliases."""
         source_code = """
         shader ImageAccessAliases {
             readonly image2D readOnlyImage @rgba16f;
@@ -8517,7 +8403,6 @@ class TestCudaCodeGen:
         assert "imageAtomicAdd(" not in cuda_code
 
     def test_image_access_struct_members_emit_cuda_diagnostics(self):
-        """Test CUDA preserves storage-image access metadata on struct members."""
         source_code = """
         struct ImageBundle {
             readonly image2D readImage @rgba16f;
@@ -8590,7 +8475,6 @@ class TestCudaCodeGen:
         assert "imageAtomicAdd(" not in cuda_code
 
     def test_image_access_struct_reference_members_emit_cuda_diagnostics(self):
-        """Test CUDA preserves image access metadata through struct refs/pointers."""
         source_code = """
         struct ImageBundle {
             readonly image2D readImage @rgba16f;
@@ -8663,7 +8547,6 @@ class TestCudaCodeGen:
         assert "imageAtomicAdd(" not in cuda_code
 
     def test_image_access_returned_pointer_members_emit_cuda_diagnostics(self):
-        """Test CUDA tracks access metadata for returned pointer struct members."""
         source_code = """
         struct ImageBundle {
             readonly image2D readImage @rgba16f;
@@ -9545,7 +9428,6 @@ class TestCudaCodeGen:
         assert "imageAtomicAdd(" not in cuda_code
 
     def test_image_access_returned_local_aliases_emit_cuda_diagnostics(self):
-        """Test CUDA preserves storage-image access metadata through returns."""
         source_code = """
         shader ImageAccessReturnedLocalAliases {
             readonly image2D readOnlyImage @rgba16f;
@@ -9639,7 +9521,6 @@ class TestCudaCodeGen:
         assert "imageAtomicAdd(" not in cuda_code
 
     def test_image_access_returned_chains_and_ternaries_emit_cuda_diagnostics(self):
-        """Test CUDA preserves access through returned helper chains."""
         source_code = """
         shader ImageAccessReturnedChains {
             readonly image2D readOnlyA @rgba16f;
@@ -9719,7 +9600,6 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
 
     def test_image_access_returned_array_elements_emit_cuda_diagnostics(self):
-        """Test CUDA access checks follow returned storage-image array elements."""
         source_code = """
         shader ImageAccessReturnedArrayElements {
             readonly image2D readImages @rgba16f[4];
@@ -9863,7 +9743,6 @@ class TestCudaCodeGen:
         assert "imageAtomicAdd(" not in cuda_code
 
     def test_image_access_returned_struct_member_arrays_emit_cuda_diagnostics(self):
-        """Test CUDA access checks follow returned storage-image struct members."""
         source_code = """
         struct CounterBundle {
             uimage2D writeCounters[4] @access(read_write) @r32ui;
@@ -10004,7 +9883,6 @@ class TestCudaCodeGen:
         assert "imageAtomicCompSwap(" not in cuda_code
 
     def test_image_access_returned_struct_objects_emit_cuda_diagnostics(self):
-        """Test CUDA access checks follow image members on returned structs."""
         source_code = """
         struct CounterBundle {
             readonly image2D readImage @rgba16f;
@@ -10211,7 +10089,6 @@ class TestCudaCodeGen:
         assert "imageSize(" not in cuda_code
 
     def test_texture_coordinate_shapes_emit_cuda_helpers_or_diagnostics(self):
-        """Test CUDA texture sampling rejects known invalid coordinate ranks."""
         source_code = """
         shader TextureCoordinateShapes {
             sampler1d lineTex;
@@ -10376,7 +10253,6 @@ class TestCudaCodeGen:
         assert "textureGrad(" not in cuda_code
 
     def test_texture_grad_derivative_shapes_emit_cuda_helpers_or_diagnostics(self):
-        """Test CUDA textureGrad validates derivative ranks by resource type."""
         source_code = """
         shader TextureGradientShapes {
             sampler1d lineTex;
@@ -10518,7 +10394,6 @@ class TestCudaCodeGen:
         assert "textureGrad(" not in cuda_code
 
     def test_texel_fetch_coordinate_shapes_emit_cuda_helpers_or_diagnostics(self):
-        """Test CUDA texelFetch lowers only coordinate shapes it can represent."""
         source_code = """
         shader TexelFetchShapes {
             sampler1d lineTex;
@@ -10644,7 +10519,6 @@ class TestCudaCodeGen:
         assert "texelFetch(" not in cuda_code
 
     def test_nested_resource_arrays_emit_cuda_texture_and_surface_calls(self):
-        """Test CUDA preserves nested resource-array indices in resource calls."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -10774,7 +10648,6 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo" not in cuda_code
 
     def test_dynamic_resource_array_params_emit_cuda_pointer_shapes(self):
-        """Test CUDA preserves dynamic resource-array parameter shapes."""
         source_code = """
         shader Resources {
             sampler2d textures[4];
@@ -10902,7 +10775,6 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo" not in cuda_code
 
     def test_resource_binding_metadata_comments_emit_cuda_bindings(self):
-        """Test CUDA emits deterministic CrossGL resource binding metadata."""
         source_code = """
         shader CudaResourceBindings {
             sampler2D colorMap @set(2) @binding(5);
@@ -10998,7 +10870,6 @@ class TestCudaCodeGen:
             )
 
     def test_duplicate_resource_bindings_are_rejected_for_cuda_codegen(self):
-        """Test CUDA rejects duplicate explicit resource bindings."""
         duplicate_texture_binding = """
         shader DuplicateCudaTextureBindings {
             @binding(2) sampler2D firstTexture;
@@ -11035,7 +10906,6 @@ class TestCudaCodeGen:
             )
 
     def test_typed_hlsl_dynamic_resource_arrays_emit_cuda_shapes_and_metadata(self):
-        """Test CUDA preserves typed HLSL dynamic resource-array shapes."""
         source_code = """
         shader TypedDynamicCUDA {
             Texture2D<float4> textures[4];
@@ -11211,7 +11081,6 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
 
     def test_typed_hlsl_writable_resource_arrays_forward_cuda_image_metadata(self):
-        """Test CUDA forwards imageSize metadata for typed HLSL writable arrays."""
         source_code = """
         shader TypedWritableArrayQueriesCUDA {
             RWTexture2D<float4> imageGrid[2][3];
@@ -11361,7 +11230,6 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
 
     def test_forwarded_dynamic_resource_arrays_emit_cuda_metadata_arguments(self):
-        """Test CUDA forwards query metadata sidecars through dynamic arrays."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -11521,7 +11389,6 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
 
     def test_mixed_fixed_dynamic_resource_arrays_emit_cuda_metadata_arguments(self):
-        """Test CUDA forwards fixed rows and dynamic grids with metadata sidecars."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -11660,7 +11527,6 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
 
     def test_multihop_reordered_resource_arrays_emit_cuda_metadata_arguments(self):
-        """Test CUDA forwards reordered rows/grids and duplicate metadata sidecars."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -11864,7 +11730,6 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
 
     def test_resource_calls_in_control_flow_emit_cuda_metadata_arguments(self):
-        """Test CUDA forwards metadata in assignments, returns, and ternaries."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -12064,7 +11929,6 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
 
     def test_resource_calls_in_loops_emit_cuda_metadata_arguments(self):
-        """Test CUDA forwards metadata through loop-carried resource indices."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -12191,7 +12055,6 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
 
     def test_nested_loop_resource_indices_emit_cuda_metadata_arguments(self):
-        """Test CUDA forwards metadata when both resource indices are loop-carried."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -12283,7 +12146,6 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
 
     def test_struct_and_scalar_params_preserve_cuda_metadata_argument_order(self):
-        """Test CUDA keeps metadata aligned around non-resource parameters."""
         source_code = """
         struct SampleParams {
             vec2 uv;
@@ -12440,7 +12302,6 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
 
     def test_resource_values_in_struct_returns_emit_cuda_metadata_arguments(self):
-        """Test CUDA forwards metadata through struct assignment and constructors."""
         source_code = """
         struct SampleResult {
             vec4 sampled;
@@ -12595,7 +12456,6 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
 
     def test_nested_struct_resource_assignments_emit_cuda_metadata_arguments(self):
-        """Test CUDA handles resource calls assigned into nested struct members."""
         source_code = """
         struct SampleResult {
             vec4 sampled;
@@ -12999,7 +12859,6 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
 
     def test_struct_parameter_resource_values_round_trip_cuda_metadata_arguments(self):
-        """Test CUDA forwards resource-derived structs through helper parameters."""
         source_code = """
         struct SampleResult {
             vec4 sampled;
@@ -13120,7 +12979,6 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
 
     def test_mutable_scalar_and_array_params_emit_cuda_updates(self):
-        """Test CUDA emits scalar and array parameter updates directly."""
         source_code = """
         shader MutableParams {
             float bumpScalar(float weight) {
@@ -13166,7 +13024,6 @@ class TestCudaCodeGen:
         assert "float b = bumpArray(values, 1);" in cuda_code
 
     def test_nested_array_and_struct_member_params_emit_cuda_updates(self):
-        """Test CUDA emits nested array and struct-member array parameter updates."""
         source_code = """
         struct Payload {
             float values[3];
@@ -13229,7 +13086,6 @@ class TestCudaCodeGen:
         assert "float b = bumpPayload(payload, 1);" in cuda_code
 
     def test_returned_nested_struct_params_emit_cuda_updates(self):
-        """Test CUDA mutates nested struct params built from returned values."""
         source_code = """
         struct InnerPayload {
             float values[3];
@@ -13308,7 +13164,6 @@ class TestCudaCodeGen:
         assert "float value = consumeAdjustedOuter(1);" in cuda_code
 
     def test_conditional_returned_nested_structs_emit_cuda_expressions(self):
-        """Test CUDA preserves branch and ternary selected returned structs."""
         source_code = """
         struct InnerPayload {
             float values[3];
@@ -13395,7 +13250,6 @@ class TestCudaCodeGen:
         assert "float value = consumeConditional(1, true);" in cuda_code
 
     def test_temporary_struct_array_member_reads_emit_cuda_expressions(self):
-        """Test CUDA emits array-field reads from returned struct temporaries."""
         source_code = """
         struct Payload {
             float values[3];
@@ -13450,7 +13304,6 @@ class TestCudaCodeGen:
         assert "float value = readTemporary(1);" in cuda_code
 
     def test_nested_temporary_struct_array_member_reads_emit_cuda_expressions(self):
-        """Test CUDA emits nested array-field reads from returned struct temporaries."""
         source_code = """
         struct InnerPayload {
             float values[3];
@@ -13524,7 +13377,6 @@ class TestCudaCodeGen:
         )
 
     def test_returned_local_nested_struct_array_writes_emit_cuda_expressions(self):
-        """Test CUDA mutates locals initialized from returned nested structs."""
         source_code = """
         struct InnerPayload {
             float values[3];
@@ -13664,7 +13516,6 @@ class TestCudaCodeGen:
         assert "float value = mutateReturnedLocalControl(1);" in cuda_code
 
     def test_image_atomic_builtins_emit_cuda_diagnostics(self, tmp_path):
-        """Test CUDA makes unsupported storage image atomics explicit."""
         source_code = """
         shader Resources {
             iimage2d signedImage;
@@ -13774,7 +13625,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_image_atomic_coordinate_shapes_emit_cuda_diagnostics(self):
-        """Test CUDA image atomic diagnostics distinguish bad coordinate ranks."""
         source_code = """
         shader ImageAtomicCoordinateShapes {
             uimage1D lineCounters;
@@ -13834,7 +13684,6 @@ class TestCudaCodeGen:
         assert "imageAtomicMax(" not in cuda_code
 
     def test_resource_query_builtins_emit_cuda_metadata_helpers(self):
-        """Test CUDA lowers resource queries through explicit metadata sidecars."""
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -14036,7 +13885,6 @@ class TestCudaCodeGen:
         assert "textureQueryLevels(" not in cuda_code
 
     def test_texture_query_lod_emits_cuda_diagnostics(self):
-        """Test CUDA makes unsupported textureQueryLod explicit."""
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -14090,7 +13938,6 @@ class TestCudaCodeGen:
         assert "textureQueryLod(" not in cuda_code
 
     def test_invalid_sample_count_queries_emit_cuda_diagnostics(self):
-        """Test CUDA diagnoses sample-count queries on non-MS resources."""
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -14136,7 +13983,6 @@ class TestCudaCodeGen:
         assert "imageSamples(" not in cuda_code
 
     def test_target_invalid_resource_queries_emit_cuda_diagnostics(self):
-        """Test CUDA diagnoses query builtins used on incompatible resources."""
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -14230,7 +14076,6 @@ class TestCudaCodeGen:
         assert "textureQueryLevels(" not in cuda_code
 
     def test_resource_query_arrays_emit_indexed_cuda_metadata(self):
-        """Test CUDA resource queries preserve resource-array metadata indexing."""
         source_code = """
         shader Resources {
             sampler2d textures[4];
@@ -14325,7 +14170,6 @@ class TestCudaCodeGen:
         assert "cgl_imageSize_imageCubeArray(cubeImages_metadata)" not in cuda_code
 
     def test_resource_query_local_aliases_forward_cuda_metadata(self):
-        """Test CUDA resource query sidecars follow local resource aliases."""
         source_code = """
         shader ResourceQueryAliases {
             sampler2d colorMap;
@@ -14447,7 +14291,6 @@ class TestCudaCodeGen:
         assert "imageSize(" not in cuda_code
 
     def test_resource_query_local_aliases_avoid_unsafe_cuda_metadata_indices(self):
-        """Test CUDA local alias sidecars avoid side-effecting resource indices."""
         source_code = """
         shader ResourceQueryAliasIndexSafety {
             sampler2d textureGrid[4][4];
@@ -14574,7 +14417,6 @@ class TestCudaCodeGen:
         assert "imageSize(" not in cuda_code
 
     def test_resource_query_ternary_resource_aliases_forward_cuda_metadata(self):
-        """Test CUDA sidecars follow ternary-selected resource aliases safely."""
         source_code = """
         shader ResourceQueryTernaryAliases {
             sampler2d colorMap;
@@ -14705,7 +14547,6 @@ class TestCudaCodeGen:
         assert "imageSize(" not in cuda_code
 
     def test_resource_query_assigned_resource_aliases_update_cuda_metadata(self):
-        """Test CUDA metadata snapshots track reassigned resource aliases."""
         source_code = """
         shader ResourceQueryAssignedAliases {
             sampler2d colorMap;
@@ -14806,7 +14647,6 @@ class TestCudaCodeGen:
         assert "imageSize(" not in cuda_code
 
     def test_resource_query_control_flow_assigned_aliases_update_cuda_metadata(self):
-        """Test CUDA metadata snapshots update inside loops, switch, and match."""
         source_code = """
         shader ResourceQueryControlFlowAssignedAliases {
             sampler2d colorMap;
@@ -14947,7 +14787,6 @@ class TestCudaCodeGen:
         assert "imageSize(" not in cuda_code
 
     def test_resource_query_for_clause_assignments_update_cuda_metadata(self):
-        """Test CUDA metadata snapshots update from for init/update clauses."""
         source_code = """
         shader ResourceQueryForClauseAssignedAliases {
             sampler2d colorMap;
@@ -15043,7 +14882,6 @@ class TestCudaCodeGen:
         assert "imageSize(" not in cuda_code
 
     def test_resource_query_ternary_returned_aliases_update_cuda_metadata(self):
-        """Test CUDA snapshots track ternary-selected returned resources."""
         source_code = """
         shader ResourceQueryTernaryReturnedAliases {
             sampler2d colorMap;
@@ -15160,7 +14998,6 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
 
     def test_resource_query_chained_returned_aliases_update_cuda_metadata(self):
-        """Test CUDA snapshots track helper-call returned resource chains."""
         source_code = """
         shader ResourceQueryChainedReturnedAliases {
             sampler2d colorMap;
@@ -15237,7 +15074,6 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
 
     def test_resource_query_local_returned_aliases_update_cuda_metadata(self):
-        """Test CUDA sidecars follow returned local resource aliases."""
         source_code = """
         shader ResourceQueryLocalReturnedAliases {
             sampler2d colorMap;
@@ -15310,7 +15146,6 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
 
     def test_resource_query_local_returned_aliases_reject_non_resource_locals(self):
-        """Test CUDA sidecars reject helpers with non-resource local work."""
         source_code = """
         shader ResourceQueryLocalReturnedAliasWithWork {
             sampler2d colorMap;
@@ -15355,7 +15190,6 @@ class TestCudaCodeGen:
         assert "cgl_textureSize_sampler2D(colorMap_metadata" not in cuda_code
 
     def test_resource_query_returned_resources_emit_cuda_metadata_diagnostics(self):
-        """Test CUDA query sidecars remain well-formed for returned resources."""
         source_code = """
         struct ResourceBundle {
             sampler2d tex;
@@ -15696,7 +15530,6 @@ class TestCudaCodeGen:
         assert "imageSamples(" not in cuda_code
 
     def test_resource_query_struct_constructors_forward_cuda_member_metadata(self):
-        """Test resource struct constructors carry embedded metadata sidecars."""
         source_code = """
         struct ResourceBundle {
             sampler2d tex;
@@ -15740,7 +15573,6 @@ class TestCudaCodeGen:
         assert "imageSize(" not in cuda_code
 
     def test_resource_query_reference_parameters_emit_cuda_metadata(self):
-        """Test CUDA metadata follows resource reference helper parameters."""
         source_code = """
         shader ResourceReferenceQueries {
             sampler2d colorMap;
@@ -15786,7 +15618,6 @@ class TestCudaCodeGen:
         assert "imageSize(" not in cuda_code
 
     def test_resource_query_simple_returned_resources_forward_cuda_metadata(self):
-        """Test CUDA query sidecars follow directly returned resources."""
         source_code = """
         shader ReturnedResourceQueries {
             sampler2d colorMap;
@@ -16263,7 +16094,6 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
 
     def test_resource_query_safe_ternary_indices_forward_cuda_metadata(self):
-        """Test CUDA sidecars allow side-effect-free ternary array indices."""
         source_code = """
         shader ReturnedResourceArrayTernaryMetadata {
             sampler2d textures[8];
@@ -16330,7 +16160,6 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
 
     def test_dynamic_and_nested_resource_query_arrays_emit_cuda_metadata(self):
-        """Test CUDA metadata sidecars cover dynamic and nested resource arrays."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -16692,7 +16521,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_multisample_resource_builtins_emit_cuda_diagnostics(self, tmp_path):
-        """Test CUDA does not silently lower MS resource calls to non-MS functions."""
         source_code = """
         shader Resources {
             sampler2dms msTex;
@@ -16817,7 +16645,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_empty_shader(self):
-        """Test empty shader generation"""
         source_code = ""
 
         lexer = Lexer(source_code)
@@ -16831,7 +16658,6 @@ class TestCudaCodeGen:
         assert "#include <device_launch_parameters.h>" in cuda_code
 
     def test_prefix_and_postfix_unary_operators_preserve_position(self):
-        """Test CUDA preserves prefix/postfix increment and decrement operators."""
         source_code = """
         shader TestShader {
             compute {
@@ -16866,7 +16692,6 @@ class TestCudaCodeGen:
         assert "++i++" not in cuda_code
 
     def test_for_header_assignment_expressions_do_not_emit_stray_statements(self):
-        """Test CUDA formats assignment init/update expressions inside for headers."""
         source_code = """
         shader TestShader {
             compute {
@@ -16898,7 +16723,6 @@ class TestCudaCodeGen:
         assert "None)" not in cuda_code
 
     def test_bool_string_and_char_literals_emit_cuda_syntax(self):
-        """Test CUDA literal output uses target-language spelling."""
         source_code = """
         shader TestShader {
             compute {
@@ -16937,7 +16761,6 @@ class TestCudaCodeGen:
         assert "False" not in cuda_code
 
     def test_inferred_let_declarations_emit_cuda_auto(self):
-        """Test typeless let declarations emit CUDA declarations, not bare names."""
         source_code = """
         shader LetProbe {
             compute {
@@ -16963,7 +16786,6 @@ class TestCudaCodeGen:
         assert "    inferred;" not in cuda_code
 
     def test_direct_literal_nodes_emit_cuda_escaping(self):
-        """Test direct CUDA literal formatting escapes quotes."""
         codegen = CudaCodeGen()
 
         assert codegen.visit(LiteralNode(True, PrimitiveType("bool"))) == "true"
@@ -16974,7 +16796,6 @@ class TestCudaCodeGen:
         assert codegen.visit(LiteralNode("'", PrimitiveType("char"))) == "'\\''"
 
     def test_while_loop_generation(self):
-        """Test CUDA emits while loops for block and single-statement bodies."""
         source_code = """
         shader TestShader {
             compute {
@@ -17004,7 +16825,6 @@ class TestCudaCodeGen:
         assert "WhileNode" not in cuda_code
 
     def test_do_while_loop_generation(self):
-        """Test CUDA emits do-while loops."""
         source_code = """
         shader TestShader {
             compute {
@@ -17031,7 +16851,6 @@ class TestCudaCodeGen:
         assert "DoWhileNode" not in cuda_code
 
     def test_break_and_continue_generation(self):
-        """Test CUDA emits break and continue statements in loop bodies."""
         source_code = """
         shader TestShader {
             compute {
@@ -17065,7 +16884,6 @@ class TestCudaCodeGen:
         assert "if ((value == 4)) {\n            break;\n        }" in cuda_code
 
     def test_switch_generation(self):
-        """Test CUDA emits switch, case, default, and case bodies."""
         source_code = """
         shader TestShader {
             compute {
@@ -17105,7 +16923,6 @@ class TestCudaCodeGen:
         assert "SwitchNode" not in cuda_code
 
     def test_match_literal_and_wildcard_arms_lower_to_switch(self):
-        """Test CUDA lowers simple match arms to switch cases."""
         source_code = """
         shader TestShader {
             compute {
@@ -17141,7 +16958,6 @@ class TestCudaCodeGen:
         assert "MatchNode" not in cuda_code
 
     def test_match_guarded_arm_lowers_to_cuda_if_chain(self):
-        """Test CUDA lowers guarded match arms to ordered if chains."""
         source_code = """
         shader TestShader {
             compute {
@@ -17177,7 +16993,6 @@ class TestCudaCodeGen:
         assert "MatchNode" not in cuda_code
 
     def test_match_identifier_binding_arm_lowers_to_cuda_scoped_else_body(self):
-        """Test CUDA lowers identifier binding match arms."""
         source_code = """
         shader TestShader {
             compute {
@@ -17211,7 +17026,6 @@ class TestCudaCodeGen:
         assert "MatchNode" not in cuda_code
 
     def test_match_guarded_identifier_binding_falls_through_to_later_cuda_arm(self):
-        """Test guarded CUDA binding arms fall through to later match arms."""
         source_code = """
         shader TestShader {
             compute {
@@ -17250,7 +17064,6 @@ class TestCudaCodeGen:
         assert "MatchNode" not in cuda_code
 
     def test_match_plain_struct_pattern_binds_fields_for_cuda(self):
-        """Test CUDA lowers plain struct field pattern bindings."""
         source_code = """
         shader TestShader {
             struct Pair {
@@ -17286,7 +17099,6 @@ class TestCudaCodeGen:
         assert "MatchNode" not in cuda_code
 
     def test_match_expression_initializes_cuda_local_with_bindings(self):
-        """Test CUDA lowers typed local match expressions to assignments."""
         source_code = """
         shader TestShader {
             compute {
@@ -17317,7 +17129,6 @@ class TestCudaCodeGen:
         assert "MatchNode" not in cuda_code
 
     def test_return_match_expression_in_cuda_kernel_discards_return_value(self):
-        """Test CUDA kernels do not preserve return-position match values."""
         source_code = """
         shader TestShader {
             compute {
@@ -17346,7 +17157,6 @@ class TestCudaCodeGen:
         assert "MatchNode" not in cuda_code
 
     def test_match_plain_enum_path_arms_lower_for_cuda(self):
-        """Test CUDA lowers plain enum path patterns to enumerator comparisons."""
         source_code = """
         shader TestShader {
             enum Mode {
@@ -17436,7 +17246,6 @@ class TestCudaCodeGen:
         assert "MatchNode" not in cuda_code
 
     def test_direct_ast_expression_statements_are_emitted(self):
-        """Test direct CUDA AST function bodies emit expression-returning nodes."""
         ast = ShaderNode(
             name="DirectAst",
             execution_model=ExecutionModel.GENERAL_PURPOSE,
@@ -17475,7 +17284,6 @@ class TestCudaCodeGen:
         assert "value += 1;" in cuda_code
 
     def test_array_declarations_emit_c_style_declarators(self):
-        """Test CUDA array declarations place dimensions after the variable name."""
         source_code = """
         shader TestShader {
             struct Material {
@@ -17520,7 +17328,6 @@ class TestCudaCodeGen:
         assert "float3[2] local_colors" not in cuda_code
 
     def test_array_literals_emit_cuda_brace_initializers(self):
-        """Test CUDA lowers parsed array literals to C-style initializers."""
         source_code = """
         float globalWeights[4] = {1.0, 2.0};
 
@@ -17551,7 +17358,6 @@ class TestCudaCodeGen:
         assert "ArrayLiteralNode" not in cuda_code
 
     def test_match_multiple_literal_arms_lower_to_switch(self):
-        """Test CUDA lowers match with multiple literal arms to switch/case."""
         source_code = """
         shader TestShader {
             compute {
@@ -17595,7 +17401,6 @@ class TestCudaCodeGen:
         assert "result = -1;" in cuda_code
 
     def test_match_wildcard_only_emits_default_case(self):
-        """Test CUDA match with only a wildcard arm emits a default-only switch."""
         source_code = """
         shader TestShader {
             compute {
@@ -17625,7 +17430,6 @@ class TestCudaCodeGen:
         assert "case " not in cuda_code
 
     def test_match_with_complex_body_expressions(self):
-        """Test CUDA match arms with multi-statement complex bodies."""
         source_code = """
         shader TestShader {
             compute {
@@ -17669,7 +17473,6 @@ class TestCudaCodeGen:
         assert "default:" in cuda_code
 
     def test_empty_shader_produces_valid_cuda_output(self):
-        """Test an empty shader still produces minimal valid CUDA includes."""
         source_code = """
         shader EmptyShader {
         }
@@ -17686,7 +17489,6 @@ class TestCudaCodeGen:
         assert "#include <device_launch_parameters.h>" in cuda_code
 
     def test_struct_only_shader_without_compute_stage(self):
-        """Test shader containing only struct definitions and no compute stage."""
         source_code = """
         shader StructOnly {
             struct Particle {
@@ -17712,7 +17514,6 @@ class TestCudaCodeGen:
         assert "__global__" not in cuda_code
 
     def test_match_arm_with_return_skips_break(self):
-        """Test CUDA match arms that terminate with return omit the break."""
         source_code = """
         shader TestShader {
             compute {
@@ -17751,7 +17552,6 @@ class TestCudaCodeGen:
         assert "break;" not in cuda_code
 
     def test_texture_sampling_basic_tex2d_float4(self, tmp_path):
-        """Test basic texture sampling emits tex2D with float4 texture type."""
         source_code = """
         shader TextureSamplingBasic {
             sampler2D diffuseMap;
@@ -17780,7 +17580,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_texture_lod_emits_tex2dlod(self, tmp_path):
-        """Test textureLod maps to tex2DLod in CUDA output."""
         source_code = """
         shader TextureLodCUDA {
             sampler2D mipMap;
@@ -17809,7 +17608,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_cbuffer_members_lowered_to_constant_memory(self, tmp_path):
-        """Test cbuffer members emit __constant__ qualified declarations."""
         source_code = """
         shader CBufferConstantCUDA {
             cbuffer SceneParams {
@@ -17848,7 +17646,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_cbuffer_multiple_buffers_all_constant(self, tmp_path):
-        """Test multiple cbuffers all produce __constant__ declarations."""
         source_code = """
         shader MultiCBufferCUDA {
             cbuffer PerFrame {
@@ -17896,7 +17693,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_structured_buffer_maps_to_const_pointer_parameter(self, tmp_path):
-        """Test StructuredBuffer<T> maps to const T* in function parameters."""
         source_code = """
         shader StructuredBufferParamCUDA {
             StructuredBuffer<float4> positions;
@@ -17931,7 +17727,6 @@ class TestCudaCodeGen:
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_rw_structured_buffer_maps_to_device_pointer_readwrite(self, tmp_path):
-        """Test RWStructuredBuffer<T> maps to T* with read/write access."""
         source_code = """
         shader RWStructuredBufferCUDA {
             RWStructuredBuffer<float> output;

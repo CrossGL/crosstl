@@ -9,7 +9,6 @@ class MetalToCrossGLConverter:
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
     def __init__(self):
-        """Initialize Metal-to-CrossGL type, function, and semantic mappings."""
         self.rt_qualifiers = {
             "intersection",
             "anyhit",
@@ -576,7 +575,6 @@ class MetalToCrossGLConverter:
         return self.resource_size_query_call(first, lod)
 
     def generate(self, ast):
-        """Generate a complete CrossGL shader from a parsed Metal AST."""
         self.prepare_texture_usage(ast)
         code = ""
         includes = getattr(ast, "includes", []) or []
@@ -1140,7 +1138,6 @@ class MetalToCrossGLConverter:
                 sample_args.append(sampler)
             sample_args.append(coords)
 
-            # Handle LOD parameter if present
             if hasattr(expr, "lod") and expr.lod is not None:
                 options = getattr(expr, "options", None) or [expr.lod]
                 option_call = self.texture_sample_options_call(
@@ -1591,7 +1588,6 @@ class MetalToCrossGLConverter:
                 else:
                     code += self.generate_expression(stmt, is_main) + ";\n"
 
-            # Add implicit break if not present
             code += "    " * (indent + 2) + "break;\n"
 
         if node.default:
@@ -1608,7 +1604,6 @@ class MetalToCrossGLConverter:
                 else:
                     code += self.generate_expression(stmt, is_main) + ";\n"
 
-            # Add implicit break if not present
             code += "    " * (indent + 2) + "break;\n"
 
         code += "    " * indent + "}\n"

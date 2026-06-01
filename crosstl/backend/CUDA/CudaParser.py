@@ -168,7 +168,6 @@ class CudaParser:
     }
 
     def __init__(self, tokens):
-        """Initialize the parser with a token stream from ``CudaLexer``."""
         self.tokens = tokens
         self.current_index = 0
         self.current_token = tokens[0] if tokens else None
@@ -237,7 +236,6 @@ class CudaParser:
         return None
 
     def parse(self):
-        """Parse the entire CUDA program into a ``ShaderNode``."""
         includes = []
         functions = []
         structs = []
@@ -270,7 +268,6 @@ class CudaParser:
             ):
                 global_variables.append(self.parse_global_variable())
             else:
-                # Skip unexpected tokens
                 self.eat(self.current_token[0])
 
         return ShaderNode(
@@ -278,8 +275,6 @@ class CudaParser:
         )
 
     def peek_function(self):
-        """Check if the next tokens form a function declaration"""
-        # Look ahead for function pattern: [qualifiers] type name (
         saved_index = self.current_index
 
         while (
@@ -307,7 +302,6 @@ class CudaParser:
         return False
 
     def peek_variable(self):
-        """Check if the next tokens form a variable declaration"""
         saved_index = self.current_index
 
         while (
@@ -437,7 +431,6 @@ class CudaParser:
         return index
 
     def eat(self, expected_type):
-        """Consume a token of the expected type"""
         if self.current_token[0] == expected_type:
             token = self.current_token
             self.current_index += 1
@@ -470,7 +463,6 @@ class CudaParser:
         return name
 
     def parse_preprocessor(self):
-        """Parse preprocessor directives"""
         directive_token = self.eat("PREPROCESSOR")
         directive_text = directive_token[1].strip()
 
@@ -536,7 +528,6 @@ class CudaParser:
             self.eat("SEMICOLON")
 
     def parse_struct(self):
-        """Parse struct declaration"""
         self.eat("STRUCT")
         name = self.eat("IDENTIFIER")[1]
         self.struct_names.add(name)
@@ -554,7 +545,6 @@ class CudaParser:
         return StructNode(name, members)
 
     def parse_function(self):
-        """Parse function declaration including kernels"""
         qualifiers = []
 
         while self.current_token[0] in self.FUNCTION_SPECIFIER_TOKENS:
@@ -573,7 +563,6 @@ class CudaParser:
             return FunctionNode(return_type, name, params, body, qualifiers)
 
     def parse_parameters(self):
-        """Parse function parameters"""
         self.eat("LPAREN")
         params = []
 
@@ -588,14 +577,12 @@ class CudaParser:
         return params
 
     def parse_parameter(self):
-        """Parse a single parameter"""
         param_type = self.parse_type()
         param_name = self.eat("IDENTIFIER")[1]
         param_type += self.parse_array_suffix()
         return VariableNode(param_type, param_name)
 
     def parse_type(self):
-        """Parse type specification"""
         type_parts = []
 
         while self.current_token[0] in self.TYPE_QUALIFIER_TOKENS:
@@ -674,7 +661,6 @@ class CudaParser:
         return type_name
 
     def parse_global_variable(self):
-        """Parse global variable declaration"""
         qualifiers = []
 
         while self.current_token[0] in ["CONSTANT", "SHARED", "DEVICE", "MANAGED"]:
@@ -693,7 +679,6 @@ class CudaParser:
             return var
 
     def parse_variable_declaration(self):
-        """Parse variable declaration"""
         qualifiers = []
 
         while self.current_token[0] in [
@@ -731,7 +716,6 @@ class CudaParser:
             return var
 
     def parse_variable_declaration_list(self):
-        """Parse one or more comma-separated variable declarations."""
         qualifiers = []
 
         while self.current_token[0] in [
@@ -811,7 +795,6 @@ class CudaParser:
         return " ".join(parts)
 
     def parse_array_suffix(self):
-        """Parse one or more C-style array declarator suffixes."""
         suffixes = []
 
         while self.current_token[0] == "LBRACKET":
@@ -837,7 +820,6 @@ class CudaParser:
         return args
 
     def parse_block(self):
-        """Parse a block of statements"""
         self.eat("LBRACE")
         statements = []
 
@@ -853,7 +835,6 @@ class CudaParser:
         return statements
 
     def parse_statement(self):
-        """Parse a single statement"""
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -889,7 +870,6 @@ class CudaParser:
             self.eat("SEMICOLON")
             return declarations if len(declarations) > 1 else declarations[0]
         else:
-            # Expression statement or assignment
             expr = self.parse_assignment_expression()
             self.eat("SEMICOLON")
             return expr
@@ -910,7 +890,6 @@ class CudaParser:
         return DeleteNode(expression, is_array)
 
     def is_variable_declaration(self):
-        """Check if current position is a variable declaration"""
         saved_index = self.current_index
 
         while (
@@ -940,7 +919,6 @@ class CudaParser:
         return False
 
     def parse_if_statement(self):
-        """Parse if statement"""
         self.eat("IF")
         self.eat("LPAREN")
         condition = self.parse_expression()
@@ -956,7 +934,6 @@ class CudaParser:
         return IfNode(condition, if_body, else_body)
 
     def parse_for_statement(self):
-        """Parse for loop"""
         self.eat("FOR")
         self.eat("LPAREN")
 
@@ -991,7 +968,6 @@ class CudaParser:
         return ForNode(init, condition, update, body)
 
     def parse_for_update_expression(self):
-        """Parse one or more comma-separated expressions in a for update."""
         updates = [self.parse_assignment_expression()]
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
@@ -999,7 +975,6 @@ class CudaParser:
         return updates if len(updates) > 1 else updates[0]
 
     def is_range_for_statement(self):
-        """Check if the current parenthesized for header is a range-for loop."""
         index = self.skip_range_for_type_at_index(self.current_index)
         if index is None:
             return False
@@ -1047,7 +1022,6 @@ class CudaParser:
         return self.skip_array_suffix_at_index(index)
 
     def parse_range_for_statement(self):
-        """Parse a C++ range-based for loop after 'for (' has been consumed."""
         vtype = self.parse_type()
         name = self.eat("IDENTIFIER")[1]
         self.eat("COLON")
@@ -1058,7 +1032,6 @@ class CudaParser:
         return RangeForNode(vtype, name, iterable, body)
 
     def parse_while_statement(self):
-        """Parse while loop"""
         self.eat("WHILE")
         self.eat("LPAREN")
         condition = self.parse_expression()
@@ -1068,7 +1041,6 @@ class CudaParser:
         return WhileNode(condition, body)
 
     def parse_do_while_statement(self):
-        """Parse do-while loop"""
         self.eat("DO")
         body = self.parse_statement()
         self.eat("WHILE")
@@ -1080,7 +1052,6 @@ class CudaParser:
         return DoWhileNode(body, condition)
 
     def parse_switch_statement(self):
-        """Parse switch statement"""
         self.eat("SWITCH")
         self.eat("LPAREN")
         expression = self.parse_expression()
@@ -1114,7 +1085,7 @@ class CudaParser:
                     default_case.append(self.parse_statement())
                 ordered_cases.append(CaseNode(None, default_case))
             else:
-                self.eat(self.current_token[0])  # Skip unexpected tokens
+                self.eat(self.current_token[0])
 
         self.eat("RBRACE")
         switch = SwitchNode(expression, cases, default_case)
@@ -1122,7 +1093,6 @@ class CudaParser:
         return switch
 
     def parse_return_statement(self):
-        """Parse return statement"""
         self.eat("RETURN")
 
         value = None
@@ -1133,7 +1103,6 @@ class CudaParser:
         return ReturnNode(value)
 
     def parse_sync_statement(self):
-        """Parse CUDA synchronization statements"""
         sync_type = self.current_token[1]
         self.eat(self.current_token[0])
 
@@ -1150,11 +1119,9 @@ class CudaParser:
         return SyncNode(sync_type, args)
 
     def parse_expression(self):
-        """Parse expression with precedence"""
         return self.parse_assignment_expression()
 
     def parse_ternary_expression(self):
-        """Parse ternary conditional operator"""
         expr = self.parse_logical_or_expression()
 
         if self.current_token[0] == "QUESTION":
@@ -1167,7 +1134,6 @@ class CudaParser:
         return expr
 
     def parse_logical_or_expression(self):
-        """Parse logical OR expression"""
         left = self.parse_logical_and_expression()
 
         while self.current_token[0] == "LOGICAL_OR":
@@ -1179,7 +1145,6 @@ class CudaParser:
         return left
 
     def parse_logical_and_expression(self):
-        """Parse logical AND expression"""
         left = self.parse_bitwise_or_expression()
 
         while self.current_token[0] == "LOGICAL_AND":
@@ -1191,7 +1156,6 @@ class CudaParser:
         return left
 
     def parse_bitwise_or_expression(self):
-        """Parse bitwise OR expression"""
         left = self.parse_bitwise_xor_expression()
 
         while self.current_token[0] == "BITWISE_OR":
@@ -1203,7 +1167,6 @@ class CudaParser:
         return left
 
     def parse_bitwise_xor_expression(self):
-        """Parse bitwise XOR expression"""
         left = self.parse_bitwise_and_expression()
 
         while self.current_token[0] == "BITWISE_XOR":
@@ -1215,7 +1178,6 @@ class CudaParser:
         return left
 
     def parse_bitwise_and_expression(self):
-        """Parse bitwise AND expression"""
         left = self.parse_equality_expression()
 
         while self.current_token[0] == "BITWISE_AND":
@@ -1227,7 +1189,6 @@ class CudaParser:
         return left
 
     def parse_equality_expression(self):
-        """Parse equality expression"""
         left = self.parse_relational_expression()
 
         while self.current_token[0] in ["EQUAL", "NOT_EQUAL"]:
@@ -1239,7 +1200,6 @@ class CudaParser:
         return left
 
     def parse_relational_expression(self):
-        """Parse relational expression"""
         left = self.parse_shift_expression()
 
         while self.current_token[0] in [
@@ -1256,7 +1216,6 @@ class CudaParser:
         return left
 
     def parse_shift_expression(self):
-        """Parse bit shift expression"""
         left = self.parse_additive_expression()
 
         while self.current_token[0] in ["SHIFT_LEFT", "SHIFT_RIGHT"]:
@@ -1268,7 +1227,6 @@ class CudaParser:
         return left
 
     def parse_additive_expression(self):
-        """Parse additive expression"""
         left = self.parse_multiplicative_expression()
 
         while self.current_token[0] in ["PLUS", "MINUS"]:
@@ -1280,7 +1238,6 @@ class CudaParser:
         return left
 
     def parse_multiplicative_expression(self):
-        """Parse multiplicative expression"""
         left = self.parse_unary_expression()
 
         while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MODULO"]:
@@ -1292,7 +1249,6 @@ class CudaParser:
         return left
 
     def parse_unary_expression(self):
-        """Parse unary expression"""
         if self.current_token[0] in [
             "PLUS",
             "MINUS",
@@ -1314,7 +1270,6 @@ class CudaParser:
             return self.parse_postfix_expression()
 
     def parse_postfix_expression(self):
-        """Parse postfix expression"""
         left = self.parse_primary_expression()
 
         while True:
@@ -1358,7 +1313,6 @@ class CudaParser:
                 else:
                     left = self.parse_function_call_node(left, args)
             elif self.current_token[0] == "KERNEL_LAUNCH_START":
-                # Kernel launch: kernel<<<blocks, threads>>>(args)
                 return self.parse_kernel_launch(left)
             elif self.current_token[0] in ["INCREMENT", "DECREMENT"]:
                 op = self.current_token[1]
@@ -1558,7 +1512,6 @@ class CudaParser:
             self.current_token = self.tokens[self.current_index]
 
     def parse_kernel_launch(self, kernel_name):
-        """Parse CUDA kernel launch syntax"""
         self.eat("KERNEL_LAUNCH_START")
 
         blocks = self.parse_expression()
@@ -1591,7 +1544,6 @@ class CudaParser:
         return KernelLaunchNode(kernel_name, blocks, threads, shared_mem, stream, args)
 
     def parse_primary_expression(self):
-        """Parse primary expression"""
         if self.current_token[0] == "LBRACKET" and self.is_lambda_expression_start():
             return self.parse_lambda_expression()
         if self.current_token[0] == "NUMBER":
@@ -1642,7 +1594,6 @@ class CudaParser:
             builtin_name = self.current_token[1]
             self.eat(self.current_token[0])
 
-            # Check for component access (.x, .y, .z)
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
                 component = self.eat("IDENTIFIER")[1]
@@ -2090,7 +2041,6 @@ class CudaParser:
         return str(expr)
 
     def parse_assignment_expression(self):
-        """Parse assignment expression"""
         left = self.parse_ternary_expression()
 
         if self.current_token[0] in [

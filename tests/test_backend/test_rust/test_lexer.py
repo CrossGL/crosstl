@@ -6,7 +6,6 @@ from crosstl.backend.Rust.RustLexer import RustLexer
 
 
 def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code."""
     lexer = RustLexer(code)
     return lexer.tokenize()
 

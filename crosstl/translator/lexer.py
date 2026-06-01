@@ -5,12 +5,9 @@ from collections import OrderedDict
 
 TOKENS = OrderedDict(
     [
-        # Comments
         ("COMMENT_SINGLE", r"//.*"),
         ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
-        # Preprocessor directives
         ("PREPROCESSOR", r"#[^\n]*"),
-        # Keywords - Core Language
         ("SHADER", r"\bshader\b"),
         ("STRUCT", r"\bstruct\b"),
         ("ENUM", r"\benum\b"),
@@ -24,14 +21,12 @@ TOKENS = OrderedDict(
         ("USE", r"\buse\b"),
         ("FROM", r"\bfrom\b"),
         ("AS", r"\bas\b"),
-        # Function/Method Keywords
         ("FUNCTION", r"\bfn\b"),
         ("VOID", r"\bvoid\b"),
         ("RETURN", r"\breturn\b"),
         ("YIELD", r"\byield\b"),
         ("ASYNC", r"\basync\b"),
         ("AWAIT", r"\bawait\b"),
-        # Control Flow
         ("IF", r"\bif\b"),
         ("ELSE", r"\belse\b"),
         ("ELIF", r"\belif\b"),
@@ -46,7 +41,6 @@ TOKENS = OrderedDict(
         ("IN", r"\bin\b"),
         ("BREAK", r"\bbreak\b"),
         ("CONTINUE", r"\bcontinue\b"),
-        # Variable/Memory Keywords
         ("LET", r"\blet\b"),
         ("VAR", r"\bvar\b"),
         ("MUT", r"\bmut\b"),
@@ -56,24 +50,20 @@ TOKENS = OrderedDict(
         ("UNIFORM", r"\buniform\b"),
         ("CBUFFER", r"\bcbuffer\b"),
         ("BUFFER", r"\bbuffer\b"),
-        # Visibility/Access
         ("PUBLIC", r"\bpub\b"),
         ("PRIVATE", r"\bpriv\b"),
         ("PROTECTED", r"\bprotected\b"),
         ("INTERNAL", r"\binternal\b"),
-        # Safety/Memory
         ("UNSAFE", r"\bunsafe\b"),
         ("SAFE", r"\bsafe\b"),
         ("REF", r"\bref\b"),
         ("BOX", r"\bbox\b"),
         ("MOVE", r"\bmove\b"),
-        # Shader Stages
         ("VERTEX", r"\bvertex\b"),
         ("FRAGMENT", r"\bfragment\b"),
         ("COMPUTE", r"\bcompute\b"),
         ("GEOMETRY", r"\bgeometry\b"),
         ("TESSELLATION", r"\btessellation\b"),
-        # GPU/Parallel Keywords
         ("KERNEL", r"\bkernel\b"),
         ("GLOBAL", r"\bglobal\b"),
         ("LOCAL", r"\blocal\b"),
@@ -81,7 +71,6 @@ TOKENS = OrderedDict(
         ("THREADGROUP", r"\bthreadgroup\b"),
         ("WORKGROUP", r"\bworkgroup\b"),
         ("LAYOUT", r"\blayout\b"),
-        # Types - Primitives
         ("BOOL", r"\bbool\b"),
         ("I8", r"\bi8\b"),
         ("I16", r"\bi16\b"),
@@ -101,7 +90,6 @@ TOKENS = OrderedDict(
         ("HALF", r"\bhalf\b"),
         ("CHAR", r"\bchar\b"),
         ("STRING", r"\bstring\b"),
-        # Types - Vectors
         ("VEC2", r"\bvec2\b"),
         ("VEC3", r"\bvec3\b"),
         ("VEC4", r"\bvec4\b"),
@@ -117,7 +105,6 @@ TOKENS = OrderedDict(
         ("BVEC2", r"\bbvec2\b"),
         ("BVEC3", r"\bbvec3\b"),
         ("BVEC4", r"\bbvec4\b"),
-        # Types - Matrices
         ("MAT2", r"\bmat2\b"),
         ("MAT3", r"\bmat3\b"),
         ("MAT4", r"\bmat4\b"),
@@ -142,7 +129,6 @@ TOKENS = OrderedDict(
         ("DMAT4X2", r"\bdmat4x2\b"),
         ("DMAT4X3", r"\bdmat4x3\b"),
         ("DMAT4X4", r"\bdmat4x4\b"),
-        # Types - Textures/Samplers
         ("TEXTURE1D", r"\btexture1d\b"),
         ("TEXTURE2D", r"\btexture2d\b"),
         ("TEXTURE3D", r"\btexture3d\b"),
@@ -189,14 +175,11 @@ TOKENS = OrderedDict(
         ("IMAGE2DARRAY", r"\bimage2[Dd][Aa]rray\b"),
         ("IMAGE2DMS", r"\bimage2[Dd][Mm][Ss]\b"),
         ("IMAGE2DMSARRAY", r"\bimage2[Dd][Mm][Ss][Aa]rray\b"),
-        # Generics/Templates
         ("WHERE", r"\bwhere\b"),
         ("IMPL_FOR", r"\bfor\b"),  # Different context from for loop
-        # Attributes/Annotations
         ("ATTRIBUTE", r"@[a-zA-Z_][a-zA-Z_0-9]*"),
         ("HASH", r"#"),
         ("DOLLAR", r"\$"),
-        # Literals
         ("FLOAT_NUMBER", r"\d*\.\d+[fF]?|\d+\.(?!\.)\d*[fF]?|\d+[fF]"),
         ("HEX_NUMBER", r"0[xX][0-9a-fA-F]+[uU]?"),
         ("BIN_NUMBER", r"0[bB][01]+[uU]?"),
@@ -204,7 +187,6 @@ TOKENS = OrderedDict(
         ("NUMBER", r"\d+[uU]?"),
         ("STRING_LITERAL", r'"(?:[^"\\]|\\.)*"'),
         ("CHAR_LITERAL", r"'(?:[^'\\]|\\.)'"),
-        # Operators - Assignment
         ("ASSIGN_ADD", r"\+="),
         ("ASSIGN_SUB", r"-="),
         ("ASSIGN_MUL", r"\*="),
@@ -215,7 +197,6 @@ TOKENS = OrderedDict(
         ("ASSIGN_XOR", r"\^="),
         ("ASSIGN_SHIFT_LEFT", r"<<="),
         ("ASSIGN_SHIFT_RIGHT", r">>="),
-        # Operators - Comparison
         ("SPACESHIP", r"<=>"),
         ("EQUAL", r"=="),
         ("NOT_EQUAL", r"!="),
@@ -225,14 +206,12 @@ TOKENS = OrderedDict(
         ("LOGICAL_AND", r"&&"),
         ("LOGICAL_OR", r"\|\|"),
         ("NOT", r"!"),
-        # Operators - Bitwise
         ("BITWISE_SHIFT_LEFT", r"<<"),
         ("BITWISE_SHIFT_RIGHT", r">>"),
         ("BITWISE_AND", r"&"),
         ("BITWISE_OR", r"\|"),
         ("BITWISE_XOR", r"\^"),
         ("BITWISE_NOT", r"~"),
-        # Operators - Arithmetic
         ("INCREMENT", r"\+\+"),
         ("DECREMENT", r"--"),
         ("ARROW", r"->"),
@@ -242,7 +221,6 @@ TOKENS = OrderedDict(
         ("MULTIPLY", r"\*"),
         ("DIVIDE", r"/"),
         ("MOD", r"%"),
-        # Operators - Other
         ("FAT_ARROW", r"=>"),
         ("DOUBLE_COLON", r"::"),
         ("RANGE_INCLUSIVE", r"\.\.="),
@@ -250,13 +228,11 @@ TOKENS = OrderedDict(
         ("ELVIS", r"\?:"),
         ("QUESTION", r"\?"),
         ("PIPE", r"\|"),
-        # Punctuation
         ("SEMICOLON", r";"),
         ("COMMA", r","),
         ("DOT", r"\."),
         ("COLON", r":"),
         ("EQUALS", r"="),
-        # Brackets
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),
         ("LPAREN", r"\("),
@@ -265,12 +241,9 @@ TOKENS = OrderedDict(
         ("RBRACKET", r"\]"),
         ("LESS_THAN", r"<"),
         ("GREATER_THAN", r">"),
-        # Special Characters
         ("AT", r"@"),
         ("AMPERSAND", r"&"),
-        # Identifier (must be last)
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
-        # Whitespace
         ("WHITESPACE", r"\s+"),
     ]
 )
@@ -278,7 +251,6 @@ TOKENS = OrderedDict(
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
 KEYWORDS = {
-    # Core Language
     "shader": "SHADER",
     "struct": "STRUCT",
     "enum": "ENUM",
@@ -292,14 +264,12 @@ KEYWORDS = {
     "use": "USE",
     "from": "FROM",
     "as": "AS",
-    # Functions
     "fn": "FUNCTION",
     "void": "VOID",
     "return": "RETURN",
     "yield": "YIELD",
     "async": "ASYNC",
     "await": "AWAIT",
-    # Control Flow
     "if": "IF",
     "else": "ELSE",
     "elif": "ELIF",
@@ -314,7 +284,6 @@ KEYWORDS = {
     "in": "IN",
     "break": "BREAK",
     "continue": "CONTINUE",
-    # Variables
     "let": "LET",
     "var": "VAR",
     "mut": "MUT",
@@ -325,18 +294,15 @@ KEYWORDS = {
     "cbuffer": "CBUFFER",
     "buffer": "BUFFER",
     "precision": "PRECISION",
-    # Visibility
     "pub": "PUBLIC",
     "priv": "PRIVATE",
     "protected": "PROTECTED",
     "internal": "INTERNAL",
-    # Safety
     "unsafe": "UNSAFE",
     "safe": "SAFE",
     "ref": "REF",
     "box": "BOX",
     "move": "MOVE",
-    # Shader Stages
     "vertex": "VERTEX",
     "fragment": "FRAGMENT",
     "compute": "COMPUTE",
@@ -361,7 +327,6 @@ KEYWORDS = {
     "closesthit": "RAY_CLOSEST_HIT",
     "miss": "RAY_MISS",
     "callable": "RAY_CALLABLE",
-    # GPU
     "kernel": "KERNEL",
     "global": "GLOBAL",
     "local": "LOCAL",
@@ -369,7 +334,6 @@ KEYWORDS = {
     "threadgroup": "THREADGROUP",
     "workgroup": "WORKGROUP",
     "layout": "LAYOUT",
-    # Types
     "bool": "BOOL",
     "i8": "I8",
     "i16": "I16",
@@ -389,7 +353,6 @@ KEYWORDS = {
     "half": "HALF",
     "char": "CHAR",
     "string": "STRING",
-    # Vectors
     "vec2": "VEC2",
     "vec3": "VEC3",
     "vec4": "VEC4",
@@ -405,7 +368,6 @@ KEYWORDS = {
     "bvec2": "BVEC2",
     "bvec3": "BVEC3",
     "bvec4": "BVEC4",
-    # Matrices
     "mat2": "MAT2",
     "mat3": "MAT3",
     "mat4": "MAT4",
@@ -430,7 +392,6 @@ KEYWORDS = {
     "dmat4x2": "DMAT4X2",
     "dmat4x3": "DMAT4X3",
     "dmat4x4": "DMAT4X4",
-    # Textures/Samplers
     "texture1d": "TEXTURE1D",
     "texture2d": "TEXTURE2D",
     "texture3d": "TEXTURE3D",
@@ -463,16 +424,13 @@ KEYWORDS = {
     "uimage2darray": "UIMAGE2DARRAY",
     "uimage2dms": "UIMAGE2DMS",
     "uimage2dmsarray": "UIMAGE2DMSARRAY",
-    "image2d": "IMAGE2D",
-    "image3d": "IMAGE3D",
+    "image2d": "IMAGE2D",    "image3d": "IMAGE3D",
     "imagecube": "IMAGECUBE",
     "imagecubearray": "IMAGECUBEARRAY",
     "image2darray": "IMAGE2DARRAY",
     "image2dms": "IMAGE2DMS",
     "image2dmsarray": "IMAGE2DMSARRAY",
-    # Generics
     "where": "WHERE",
-    # Literals
     "true": "BOOLEAN_LITERAL",
     "false": "BOOLEAN_LITERAL",
 }
@@ -482,7 +440,6 @@ class Lexer:
     """Tokenizer for CrossGL Universal IR."""
 
     def __init__(self, code):
-        """Tokenize CrossGL source text immediately on construction."""
         self.code = code
         self.tokens = []
         self.token_cache = {}
@@ -490,7 +447,6 @@ class Lexer:
         self.tokenize()
 
     def _compile_patterns(self):
-        """Compile the ordered token specification into one regex."""
         combined_pattern = "|".join(
             f"(?P<{name}>{pattern})" for name, pattern in TOKENS.items()
         )
@@ -504,7 +460,6 @@ class Lexer:
         return self.token_cache[cache_key]
 
     def tokenize(self):
-        """Scan source text into parser-ready tokens."""
         pos = 0
         length = len(self.code)
 
@@ -543,7 +498,6 @@ class Lexer:
         self.tokens.append(self._get_cached_token(None, "EOF"))
 
     def get_tokens(self):
-        """Return the token list produced by the lexer."""
         return self.tokens
 
     def debug_print(self):

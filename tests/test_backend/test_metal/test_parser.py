@@ -8,13 +8,11 @@ from crosstl.backend.Metal.MetalParser import MetalParser
 
 
 def tokenize_code(code: str) -> List:
-    """Tokenize Metal code."""
     lexer = MetalLexer(code)
     return lexer.tokenize()
 
 
 def parse_code(code: str):
-    """Parse Metal code into an AST."""
     tokens = tokenize_code(code)
     parser = MetalParser(tokens)
     return parser.parse()

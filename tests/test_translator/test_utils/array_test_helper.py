@@ -10,7 +10,6 @@ import pytest
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
-# Common shader template with comprehensive array handling scenarios
 ARRAY_TEST_SHADER = """
 shader ArrayTest {
     struct Particle {
@@ -64,13 +63,11 @@ shader ArrayTest {
 
 
 def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code."""
     lexer = Lexer(code)
     return lexer.tokens
 
 
 def parse_code(tokens: List):
-    """Helper function to parse tokens into an AST."""
     parser = Parser(tokens)
     return parser.parse()
 
@@ -91,22 +88,18 @@ def run_array_test(code_generator_class, verification_tests: Dict[str, Any] = No
         code_gen = code_generator_class()
         generated_code = code_gen.generate(ast)
 
-        # Run verification tests
         if verification_tests:
             for test_name, test_case in verification_tests.items():
                 if isinstance(test_case, list):
-                    # List of strings to check for in the output
                     for expected in test_case:
                         assert (
                             expected in generated_code
                         ), f"Test '{test_name}' failed: '{expected}' not found in generated code"
                 elif isinstance(test_case, str):
-                    # Single string to check for
                     assert (
                         test_case in generated_code
                     ), f"Test '{test_name}' failed: '{test_case}' not found in generated code"
                 elif callable(test_case):
-                    # Custom verification function
                     assert test_case(
                         generated_code
                     ), f"Test '{test_name}' failed: custom verification function returned false"
@@ -117,7 +110,6 @@ def run_array_test(code_generator_class, verification_tests: Dict[str, Any] = No
         return None
 
 
-# Common verification tests for different backends
 DIRECTX_VERIFICATION = {
     "array_type_declarations": [
         "float values[4]",

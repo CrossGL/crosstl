@@ -8270,7 +8270,6 @@ class MojoCodeGen:
             if func_name == "__shfl_down_sync":
                 return self.generate_cuda_shuffle_down_call(expr.args)
 
-            # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
             if func_name in MOJO_MATH_HELPERS:
                 self.required_math_helpers.add(func_name)
@@ -8289,7 +8288,6 @@ class MojoCodeGen:
                     return f"{mapped_constructor_name}({arg})"
                 func_name = mapped_constructor_name
 
-            # Handle vector constructors
             vector_constructor_name = self.normalize_generic_vector_type_name(func_name)
             if vector_constructor_name in self.vector_constructor_info:
                 return self.generate_vector_constructor(
@@ -8304,7 +8302,6 @@ class MojoCodeGen:
                     expr, func_name, target_context, target_type
                 )
 
-            # Handle standard function calls
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             call_name = func_name if func_name is not None else callee
             return f"{call_name}({args})"
@@ -8342,7 +8339,6 @@ class MojoCodeGen:
             )
             return f"({true_expr} if {condition} else {false_expr})"
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
-            # Handle LiteralNode
             if hasattr(expr, "value"):
                 literal_type = getattr(
                     getattr(expr, "literal_type", None), "name", None
@@ -8350,7 +8346,6 @@ class MojoCodeGen:
                 return self.format_literal(expr.value, literal_type)
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
-            # Handle IdentifierNode
             name = getattr(expr, "name", str(expr))
             if name in self.expression_identifier_replacements:
                 return self.expression_identifier_replacements[name]
@@ -8364,7 +8359,6 @@ class MojoCodeGen:
         elif hasattr(expr, "__class__") and "ExpressionStatement" in str(
             expr.__class__
         ):
-            # Handle ExpressionStatementNode
             if hasattr(expr, "expression"):
                 return self.generate_expression(expr.expression)
             else:

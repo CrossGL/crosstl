@@ -73,7 +73,6 @@ class SlangToCrossGLConverter:
     }
 
     def __init__(self):
-        """Initialize Slang-to-CrossGL type, semantic, and resource mappings."""
         self.vertex_inputs = []
         self.vertex_outputs = []
         self.fragment_inputs = []
@@ -232,7 +231,6 @@ class SlangToCrossGLConverter:
         }
 
     def generate(self, ast):
-        """Generate complete CrossGL source from a parsed Slang AST."""
         self.user_function_names = {
             getattr(func, "name", None) for func in getattr(ast, "functions", [])
         }
@@ -614,7 +612,6 @@ class SlangToCrossGLConverter:
             return str(expr)
 
     def normalize_numeric_literal(self, value):
-        """Convert Slang decimal float forms to CrossGL lexer-friendly literals."""
         if not isinstance(value, str):
             return value
         if self.HEX_NUMERIC_LITERAL.match(value):

@@ -13,29 +13,24 @@ class MojoParser:
     TYPE_START_TOKENS = {"IDENTIFIER", "INT", "FLOAT", "BOOL", "STRING"}
 
     def __init__(self, tokens):
-        """Initialize the parser with a token stream from ``MojoLexer``."""
         self.tokens = tokens
         self.pos = 0
         self.current_token = self.tokens[self.pos]
         self.skip_comments()
 
     def skip_comments(self):
-        """Advance past comment tokens before parsing syntax."""
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
             self.eat(self.current_token[0])
 
     def skip_newlines(self):
-        """Advance past statement-separating newline tokens."""
         while self.current_token[0] == "NEWLINE":
             self.eat("NEWLINE")
 
     def skip_layout_tokens(self):
-        """Advance past layout tokens inside delimited expression lists."""
         while self.current_token[0] in ["NEWLINE", "INDENT", "DEDENT"]:
             self.eat(self.current_token[0])
 
     def consume_statement_terminator(self):
-        """Require the current simple statement to end cleanly."""
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return
@@ -46,14 +41,12 @@ class MojoParser:
         raise SyntaxError(f"Expected end of statement, got {self.current_token[0]}")
 
     def attach_attributes(self, node, attributes):
-        """Attach pending declaration attributes to an AST node."""
         if attributes:
             existing_attributes = getattr(node, "attributes", [])
             node.attributes = attributes + existing_attributes
         return node
 
     def eat(self, token_type):
-        """Consume the current token when it matches ``token_type``."""
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -64,20 +57,17 @@ class MojoParser:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
     def peek_token(self, offset=1):
-        """Return a token ahead of the current position without consuming it."""
         index = self.pos + offset
         if index < len(self.tokens):
             return self.tokens[index]
         return ("EOF", None)
 
     def parse(self):
-        """Parse the complete Mojo token stream into a module AST."""
         module = self.parse_module()
         self.eat("EOF")
         return module
 
     def parse_module(self):
-        """Parse top-level Mojo imports, declarations, and functions."""
         imports = []
         structs = []
         functions = []
@@ -632,7 +622,6 @@ class MojoParser:
             vtype = None
             if self.current_token[0] == "COLON":
                 self.eat("COLON")
-                # Parse the type, which might be a generic type with square brackets
                 vtype = self.parse_type()
                 attributes.extend(self.parse_attributes(skip_trailing_newlines=False))
 
@@ -672,7 +661,6 @@ class MojoParser:
         if_body = self.parse_block()
         self.skip_newlines()
 
-        # Handle elif and else statements properly
         else_body = None
         while self.current_token[0] == "ELIF":
             self.eat("ELIF")
@@ -740,7 +728,6 @@ class MojoParser:
         )
 
     def parse_for_iterable(self):
-        """Parse the iterable in ``for name in iterable:`` without eating ':'."""
         if self.current_token[0] == "IDENTIFIER" and self.peek_token()[0] == "COLON":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -1159,7 +1146,6 @@ class MojoParser:
         return False
 
     def parse_type(self):
-        """Parse a type, which might be a generic type with square brackets"""
         if self.current_token[0] not in self.TYPE_START_TOKENS:
             raise SyntaxError(f"Expected type name, got {self.current_token[0]}")
 

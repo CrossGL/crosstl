@@ -121,7 +121,6 @@ def main(argv=None):
     """Test comprehensive translation functionality across all example categories."""
     args = parse_args(argv)
 
-    # Define the organized example structure
     examples_by_category = {
         "graphics": ["SimpleShader.cgl", "PerlinNoise.cgl", "ComplexShader.cgl"],
         "advanced": ["ArrayTest.cgl", "GenericPatternMatching.cgl"],
@@ -130,7 +129,6 @@ def main(argv=None):
         "gpu_computing": ["MatrixMultiplication.cgl"],
     }
 
-    # Define backend mappings with appropriate extensions
     backends = {
         "metal": ".metal",
         "directx": ".hlsl",
@@ -143,7 +141,6 @@ def main(argv=None):
         "slang": ".slang",
     }
 
-    # Backend compatibility matrix - some examples work better with certain backends
     backend_compatibility = {
         "graphics": [
             "metal",
@@ -175,7 +172,6 @@ def main(argv=None):
     print("[CROSSGL] CrossGL Comprehensive Translation Test")
     print("=" * 60)
 
-    # Ensure output directories exist
     for backend in backends:
         os.makedirs(f"output/{backend}", exist_ok=True)
 
@@ -184,7 +180,6 @@ def main(argv=None):
     failed_tests = []
     skipped_tests = []
 
-    # Test each category
     for category, examples in examples_by_category.items():
         print(f"\n[TESTING] {category.upper()} examples:")
         print("-" * 40)
@@ -218,7 +213,6 @@ def main(argv=None):
 
                 total_tests += 1
                 try:
-                    # Create organized output structure: output/backend/category/
                     backend_output_dir = f"output/{backend}/{category}"
                     os.makedirs(backend_output_dir, exist_ok=True)
 
@@ -226,12 +220,10 @@ def main(argv=None):
                         f"{backend_output_dir}/{example_name}{backends[backend]}"
                     )
 
-                    # Perform translation
                     result = crosstl.translate(
                         example_path, backend=backend, save_shader=output_file
                     )
 
-                    # Verify the output file was created and has content
                     if (
                         Path(output_file).exists()
                         and Path(output_file).stat().st_size > 100
@@ -248,7 +240,6 @@ def main(argv=None):
                     print(f"  [ERROR] {backend:8} -> Error: {str(e)[:50]}...")
                     failed_tests.append((example_name, backend, str(e)))
 
-    # Summary
     print("\n" + "=" * 60)
     print("[SUMMARY] TRANSLATION TEST SUMMARY")
     print("=" * 60)
@@ -264,7 +255,6 @@ def main(argv=None):
         for example, backend, error in failed_tests:
             print(f"  - {example} -> {backend}: {error[:60]}...")
 
-    # Test cross-backend consistency
     print(f"\n[TESTING] Testing cross-backend consistency...")
     consistency_summary = test_cross_backend_consistency()
     summary = build_summary(

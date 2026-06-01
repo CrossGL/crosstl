@@ -130,7 +130,6 @@ class CudaToCrossGLConverter:
     }
 
     def __init__(self):
-        """Initialize CUDA-to-CrossGL visitor state."""
         self.indent_level = 0
         self.output = []
         self.packed_argument_scopes = []
@@ -144,7 +143,6 @@ class CudaToCrossGLConverter:
         self.cuda_async_sync_scopes = [{}]
 
     def generate(self, ast_node):
-        """Generate complete CrossGL source from a parsed CUDA AST."""
         self.output = []
         self.indent_level = 0
         self.packed_argument_scopes = []
@@ -164,13 +162,11 @@ class CudaToCrossGLConverter:
         return "\n".join(self.output)
 
     def visit(self, node):
-        """Dispatch a CUDA backend AST node to its converter method."""
         method_name = f"visit_{type(node).__name__}"
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node)
 
     def generic_visit(self, node):
-        """Fallback converter for primitive values, lists, and unknown nodes."""
         if isinstance(node, str):
             return node
         elif isinstance(node, list):
@@ -179,7 +175,6 @@ class CudaToCrossGLConverter:
             return str(node)
 
     def emit(self, code):
-        """Append a line of CrossGL output using the current indentation level."""
         if code.strip():
             self.output.append("    " * self.indent_level + code)
         else:
@@ -559,7 +554,6 @@ class CudaToCrossGLConverter:
         return self.global_resource_object_type_hints.get(name)
 
     def emit_statement(self, stmt):
-        """Render and append one converted statement."""
         if isinstance(stmt, list):
             for item in stmt:
                 self.emit_statement(item)
@@ -3568,7 +3562,6 @@ class CudaToCrossGLConverter:
         self.emit("}")
 
     def visit_kernel_as_compute_shader(self, kernel):
-        """Render a CUDA kernel as a CrossGL compute shader block."""
         self.emit("@compute")
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
@@ -3580,7 +3573,6 @@ class CudaToCrossGLConverter:
         )
         try:
             for param in kernel.params:
-                # Add storage buffer qualifiers for pointer parameters
                 if "*" in param.vtype:
                     element_type = self.convert_cuda_pointer_element_type(param.vtype)
                     params.append(
@@ -4807,7 +4799,6 @@ class CudaToCrossGLConverter:
         return self.convert_cuda_type_to_crossgl(cuda_type)
 
     def convert_cuda_struct_member_type_to_crossgl(self, struct_name, cuda_type, name):
-        """Convert struct members, using CUDA resource call-site hints."""
         hint = self.struct_resource_member_hints.get((struct_name, name))
         if hint is not None:
             resource_type = self.convert_cuda_resource_object_type_with_hint(
@@ -4876,7 +4867,6 @@ class CudaToCrossGLConverter:
         return mapped_type
 
     def convert_cuda_type_to_crossgl(self, cuda_type):
-        """Convert CUDA types to CrossGL equivalents"""
         cuda_type = self.strip_type_qualifiers(cuda_type)
 
         type_mapping = {
@@ -4910,11 +4900,9 @@ class CudaToCrossGLConverter:
         if unique_ptr_type is not None:
             return unique_ptr_type
 
-        # Handle arrays
         if self.has_array_suffix(cuda_type):
             return self.convert_cuda_array_type(cuda_type, type_mapping)
 
-        # Handle pointers
         if "*" in cuda_type:
             return self.convert_cuda_pointer_type(cuda_type)
 
@@ -5000,7 +4988,6 @@ class CudaToCrossGLConverter:
         return args
 
     def convert_cuda_pointer_type(self, cuda_type):
-        """Convert a CUDA pointer type into nested CrossGL pointer syntax."""
         pointer_depth = cuda_type.count("*")
         base_type = cuda_type.replace("*", "").strip()
         mapped_type = self.convert_cuda_type_to_crossgl(base_type)
@@ -5050,7 +5037,6 @@ class CudaToCrossGLConverter:
         return mapped_type
 
     def convert_cuda_builtin_function(self, func_name):
-        """Convert CUDA built-in functions to CrossGL equivalents."""
         function_mapping = {
             "sqrtf": "sqrt",
             "powf": "pow",

@@ -1982,7 +1982,6 @@ class VectorArithmeticMixin:
         return helper_name
 
     def vector_scalar_parameter_type(self, vector_info):
-        """Return the scalar parameter type used by generated vector helpers."""
         if vector_info["component_type"] == "uint":
             return "unsigned int"
         return vector_info["component_type"]

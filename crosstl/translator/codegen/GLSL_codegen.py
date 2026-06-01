@@ -962,7 +962,6 @@ class GLSLCodeGen:
         }
 
         self.type_mapping = {
-            # Most types are the same in CrossGL and GLSL
             "vec2": "vec2",
             "vec3": "vec3",
             "vec4": "vec4",
@@ -2669,7 +2668,6 @@ class GLSLCodeGen:
         for func in functions:
             if id(func) in deferred_top_level_helper_ids:
                 continue
-            # Handle both old and new AST function structures
             if hasattr(func, "qualifiers") and func.qualifiers:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
             else:
@@ -2754,7 +2752,6 @@ class GLSLCodeGen:
                     stage_context=helper_stage_context,
                 )
 
-        # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
                 stage_name = normalize_stage_name(stage_type)
@@ -7197,7 +7194,6 @@ class GLSLCodeGen:
             if self.is_void_stage_entry_return_value():
                 return f"{indent_str}return;\n"
             if isinstance(stmt.value, list):
-                # Multiple return values
                 values = ", ".join(self.generate_expression(val) for val in stmt.value)
                 return f"{indent_str}return {values};\n"
             else:
@@ -7208,7 +7204,6 @@ class GLSLCodeGen:
         elif hasattr(stmt, "__class__") and "ExpressionStatementNode" in str(
             type(stmt)
         ):
-            # Handle ExpressionStatementNode
             tail_return = self.generate_tail_expression_statement(stmt, indent)
             if tail_return is not None:
                 return tail_return
@@ -7248,7 +7243,6 @@ class GLSLCodeGen:
             expr_code = self.generate_expression_statement(stmt)
             return f"{indent_str}{expr_code};\n"
         else:
-            # Handle expressions that may be used as statements
             mesh_intrinsic = self.generate_mesh_intrinsic_statement(stmt, indent)
             if mesh_intrinsic is not None:
                 return mesh_intrinsic
@@ -9003,7 +8997,6 @@ class GLSLCodeGen:
                 expr.operation, expr.query_expr, expr.arguments
             )
         elif hasattr(expr, "__class__") and "ArrayAccessNode" in str(type(expr)):
-            # Handle array access properly
             if hasattr(expr, "array") and hasattr(expr, "index"):
                 array = self.generate_expression(expr.array)
                 index = self.glsl_resource_array_index_expression(expr)
@@ -9019,7 +9012,6 @@ class GLSLCodeGen:
                 return constructor
             return str(expr)
         elif hasattr(expr, "__class__") and "FunctionCallNode" in str(type(expr)):
-            # Map function names to GLSL equivalents
             func_expr = getattr(expr, "function", getattr(expr, "name", expr))
             numeric_trait_call = generate_numeric_trait_method_call(
                 self,
@@ -15210,5 +15202,4 @@ class GLSLCodeGen:
             expr = self.generate_expression(stmt.expression)
             return expr
         else:
-            # Fallback for direct expression
             return self.generate_expression(stmt)

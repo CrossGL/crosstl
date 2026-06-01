@@ -9,7 +9,6 @@ from crosstl.backend.GLSL.OpenglParser import GLSLParser
 
 
 def tokenize_code(code: str) -> List:
-    """Helper function to tokenize GLSL code."""
     lexer = GLSLLexer(code)
     return lexer.tokenize()
 

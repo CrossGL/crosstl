@@ -10,14 +10,12 @@ class Token:
     """Token object carrying HIP token type, text, and source location."""
 
     def __init__(self, token_type: str, value: str, line: int = 1, column: int = 1):
-        """Store token metadata produced by ``HipLexer``."""
         self.type = token_type
         self.value = value
         self.line = line
         self.column = column
 
     def __repr__(self):
-        """Return a developer-readable token representation."""
         return f"Token({self.type}, '{self.value}')"
 
 
@@ -300,7 +298,6 @@ class HipLexer:
         return tokens
 
     def _advance_position(self, text: str):
-        """Advance source location after consuming ``text``."""
         newline_count = text.count("\n")
         if newline_count == 0:
             self.column += len(text)
@@ -310,7 +307,6 @@ class HipLexer:
         self.column = len(text.rsplit("\n", 1)[1]) + 1
 
     def _next_token(self, pos: int):
-        """Match the next token at ``pos`` and return its end offset."""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:

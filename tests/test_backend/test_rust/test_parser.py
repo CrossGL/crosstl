@@ -56,7 +56,6 @@ from crosstl.backend.Rust.RustParser import RustParser
 
 
 def parse_code(code: str):
-    """Helper function to parse code."""
     lexer = RustLexer(code)
     tokens = lexer.tokenize()
     parser = RustParser(tokens)
@@ -3598,7 +3597,6 @@ def test_trait_default_method_body_parsing():
 
 
 def test_error_handling():
-    """Test that the parser handles invalid syntax gracefully"""
     invalid_codes = [
         "fn incomplete(",
         "struct { missing_name }",

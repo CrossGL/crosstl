@@ -1178,13 +1178,11 @@ class HLSLCodeGen:
             global_vars, used_resource_registers
         )
         for i, node in enumerate(global_vars):
-            # Handle both old and new AST variable structures
             resource_count = 1
             if hasattr(node, "var_type"):
                 if hasattr(node.var_type, "name") or hasattr(
                     node.var_type, "element_type"
                 ):
-                    # Check if it's an ArrayType and handle specially for global variables
                     if (
                         hasattr(node.var_type, "element_type")
                         and str(type(node.var_type)).find("ArrayType") != -1
@@ -1208,7 +1206,6 @@ class HLSLCodeGen:
                             node.var_type.size if node.var_type.size else array_size
                         )
                     else:
-                        # Use the proper type conversion for TypeNode objects
                         vtype = self.convert_type_node_to_string(node.var_type)
                         array_suffix = ""
                 else:
@@ -1686,7 +1683,6 @@ class HLSLCodeGen:
         self.current_hlsl_available_functions = global_functions_by_name
         functions_code = ""
         for func in functions:
-            # Handle both old and new AST function structures
             if hasattr(func, "qualifiers") and func.qualifiers:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
             else:
@@ -1725,7 +1721,6 @@ class HLSLCodeGen:
                     entry_name=stage_entry_names.get(id(func)),
                 )
 
-        # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
                 stage_name = normalize_stage_name(stage_type)
@@ -2825,12 +2820,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
-                            # Dynamic arrays in cbuffers usually not supported, so we'll make it fixed size
                             code += (
                                 f"    {self.map_type(element_type)} {member.name}[1];\n"
                             )
                     else:
-                        # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(member.member_type)
                         else:
@@ -2854,12 +2847,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
-                            # Dynamic arrays in cbuffers usually not supported
                             code += (
                                 f"    {self.map_type(element_type)} {member.name}[1];\n"
                             )
                     else:
-                        # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(member.member_type)
                         else:
@@ -3409,13 +3400,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
 
         elif isinstance(stmt, ArrayNode):
-            # Improved array node handling
             element_type = self.map_type(stmt.element_type)
             size = get_array_size_from_node(stmt)
 
             if size is None:
-                # HLSL dynamic arrays need a size, but can be accessed with buffer types
-                # For basic shaders, use a fixed size as fallback
                 return f"{indent_str}{element_type}[1024] {stmt.name};\n"
             else:
                 return f"{indent_str}{element_type}[{size}] {stmt.name};\n"
@@ -3479,9 +3467,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         elif isinstance(stmt, ReturnNode):
             if hasattr(stmt, "value") and stmt.value is not None:
-                # Handle both single values and lists
                 if isinstance(stmt.value, list):
-                    # Multiple return values
                     code = ""
                     for i, return_stmt in enumerate(stmt.value):
                         code += f"{self.generate_expression(return_stmt)}"
@@ -3489,7 +3475,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             code += ", "
                     return f"{indent_str}return {code};\n"
                 else:
-                    # Single return value
                     ternary_return = (
                         self.generate_hlsl_typed_buffer_atomic_ternary_return(
                             stmt.value, indent
@@ -3527,13 +3512,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         f"{self.generate_expression_with_expected(stmt.value, self.current_function_return_type)};\n"
                     )
             else:
-                # Void return
                 return f"{indent_str}return;\n"
 
         elif hasattr(stmt, "__class__") and "ExpressionStatement" in str(
             stmt.__class__
         ):
-            # Handle ExpressionStatementNode
             if hasattr(stmt, "expression"):
                 tail_return = self.generate_tail_expression_statement(stmt, indent)
                 if tail_return is not None:
@@ -3587,7 +3570,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"{indent_str}{self.generate_expression(stmt)};\n"
 
         else:
-            # Try to generate as expression
             atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(stmt)
             if atomic_statement is not None:
                 return self.generate_statement_code(atomic_statement, indent)
@@ -4281,14 +4263,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return None
 
     def generate_assignment(self, node):
-        # Handle both old and new AST assignment structures
         if hasattr(node, "target") and hasattr(node, "value"):
-            # New AST structure
             target = node.target
             value = node.value
             op = getattr(node, "operator", "=")
         else:
-            # Old AST structure
             target = node.left
             value = node.right
             op = getattr(node, "operator", "=")
@@ -4362,7 +4341,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
         try:
-            # Handle for loop components
             init = ""
             condition = ""
             update = ""
@@ -4647,7 +4625,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"mul({left}, {right})"
             return f"({left} {self.map_operator(op)} {right})"
         elif isinstance(expr, AssignmentNode):
-            # Handle assignment as expression
             return self.generate_assignment(expr)
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
             operand = self.generate_expression(getattr(expr, "operand", ""))

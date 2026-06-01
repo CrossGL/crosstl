@@ -1,5 +1,3 @@
-"""Test HIP Code Generation from CrossGL"""
-
 import shutil
 import subprocess
 
@@ -109,7 +107,6 @@ def compile_matrix_helpers_if_cxx_available(helper_code, tmp_path):
 
 class TestHipCodeGen:
     def test_simple_function_generation(self):
-        """Test generating a simple HIP function from CrossGL"""
         source_code = """
         shader TestShader {
             vertex {
@@ -132,7 +129,6 @@ class TestHipCodeGen:
         assert "__device__ void main()" in hip_code
 
     def test_global_constants_are_emitted(self):
-        """Test HIP emits parsed shader constants before generated functions."""
         source_code = """
         shader TestShader {
             const float PI = 3.14159;
@@ -159,7 +155,6 @@ class TestHipCodeGen:
         assert "out[0] = ((PI + float(WARP_SIZE)) + UP_VECTOR.y);" in hip_code
 
     def test_compute_shader_to_kernel(self):
-        """Test converting a compute shader to HIP kernel"""
         source_code = """
         shader TestShader {
             compute {
@@ -180,7 +175,6 @@ class TestHipCodeGen:
         assert "__global__ void compute_main()" in hip_code
 
     def test_non_void_compute_entry_point_lowers_to_void_kernel(self, tmp_path):
-        """Test HIP kernels discard invalid source return values."""
         ast = ShaderNode(
             name="NonVoidHipKernel",
             execution_model=ExecutionModel.COMPUTE_KERNEL,
@@ -873,7 +867,6 @@ class TestHipCodeGen:
         compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_compute_stage_local_helper_functions_emit_before_kernel(self):
-        """Test compute-stage helper functions are emitted before kernel calls."""
         source_code = """
         shader TestShader {
             compute {
@@ -904,7 +897,6 @@ class TestHipCodeGen:
         assert "float y = helper(1.0);" in hip_code
 
     def test_user_defined_mix_function_is_not_lowered_to_hip_builtin(self):
-        """Test user-defined functions shadow HIP builtin lowering."""
         source_code = """
         shader TestShader {
             compute {
@@ -930,17 +922,14 @@ class TestHipCodeGen:
         assert "float adjusted = (0.0 + ((1.0 - 0.0) * 0.25));" not in hip_code
 
     def test_type_conversion(self):
-        """Test CrossGL to HIP type conversion"""
         codegen = HipCodeGen()
 
-        # Test basic types
         assert codegen.map_type("int") == "int"
         assert codegen.map_type("float") == "float"
         assert codegen.map_type("double") == "double"
         assert codegen.map_type("bool") == "bool"
         assert codegen.map_type("void") == "void"
 
-        # Test vector types
         assert codegen.map_type("vec2") == "float2"
         assert codegen.map_type("vec3") == "float3"
         assert codegen.map_type("vec4") == "float4"
@@ -956,16 +945,13 @@ class TestHipCodeGen:
         assert codegen.map_type("dmat4x3") == "double4x3"
 
     def test_function_conversion(self):
-        """Test CrossGL to HIP function conversion"""
         codegen = HipCodeGen()
 
-        # Test math functions
         assert codegen.function_map.get("sqrt") == "sqrtf"
         assert codegen.function_map.get("pow") == "powf"
         assert codegen.function_map.get("sin") == "sinf"
         assert codegen.function_map.get("cos") == "cosf"
 
-        # Test vector constructors
         assert codegen.function_map.get("vec2") == "make_float2"
         assert codegen.function_map.get("vec3") == "make_float3"
         assert codegen.function_map.get("vec4") == "make_float4"
@@ -981,7 +967,6 @@ class TestHipCodeGen:
         assert codegen.function_map.get("atomicCompSwap") == "atomicCAS"
 
     def test_lambda_call_emits_hip_device_lambda(self):
-        """Test CrossGL pseudo-lambda calls lower to HIP device lambdas."""
         source_code = """
         shader TestShader {
             compute {
@@ -1014,7 +999,6 @@ class TestHipCodeGen:
         assert "lambda(" not in hip_code
 
     def test_vector_constructors_emit_hip_make_functions(self):
-        """Test HIP maps parser-produced vector constructors."""
         source_code = """
         shader TestShader {
             compute {
@@ -1048,7 +1032,6 @@ class TestHipCodeGen:
         assert " = uvec4(" not in hip_code
 
     def test_composite_vector_constructors_flatten_hip_lanes(self):
-        """Test HIP vector constructors flatten vector and swizzle arguments."""
         source_code = """
         shader TestShader {
             compute {
@@ -1084,7 +1067,6 @@ class TestHipCodeGen:
         assert "make_float2(make_float2(color.x, color.y))" not in hip_code
 
     def test_complex_scalar_vector_constructor_splats_use_hip_helpers(self):
-        """Test HIP scalar splats evaluate complex expressions once."""
         source_code = """
         shader TestShader {
             compute {
@@ -1131,7 +1113,6 @@ class TestHipCodeGen:
         assert "make_uchar2(nextIndex(), nextIndex())" not in hip_code
 
     def test_complex_composite_vector_constructors_use_hip_helpers(self):
-        """Test HIP composite vector constructors evaluate vector inputs once."""
         source_code = """
         shader TestShader {
             compute {
@@ -1203,7 +1184,6 @@ class TestHipCodeGen:
         )
 
     def test_vector_swizzles_emit_hip_make_functions(self):
-        """Test HIP lowers vector swizzles to scalar fields and constructors."""
         source_code = """
         shader TestShader {
             compute {
@@ -1240,7 +1220,6 @@ class TestHipCodeGen:
         assert ".ag" not in hip_code
 
     def test_complex_vector_swizzles_use_hip_helpers(self):
-        """Test HIP swizzles evaluate complex vector expressions once."""
         source_code = """
         shader TestShader {
             compute {
@@ -1299,7 +1278,6 @@ class TestHipCodeGen:
         assert "make_float4(makeColor().z, makeColor().y" not in hip_code
 
     def test_vector_array_accesses_infer_hip_element_types(self):
-        """Test HIP infers vector element types through array/member chains."""
         source_code = """
         struct InnerPayload {
             vec3 color;
@@ -1395,7 +1373,6 @@ class TestHipCodeGen:
         assert "make_float3(makePayload().colors[0])" not in hip_code
 
     def test_vector_scalar_arithmetic_expands_hip_components(self):
-        """Test HIP lowers vector math through component-wise helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -1438,7 +1415,6 @@ class TestHipCodeGen:
         assert "make_float4(1.0);" not in hip_code
 
     def test_vector_unary_negation_uses_hip_helpers(self):
-        """Test HIP lowers vector unary negation through component-wise helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -1481,7 +1457,6 @@ class TestHipCodeGen:
         assert "int3 negi = -iv;" not in hip_code
 
     def test_bool_vector_logical_not_uses_hip_helpers(self):
-        """Test HIP lowers bool-vector logical not through component-wise helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -1518,7 +1493,6 @@ class TestHipCodeGen:
         assert "uchar4 inv4 = !m4;" not in hip_code
 
     def test_bool_vector_logical_binary_ops_expand_hip_components(self):
-        """Test HIP lowers bool-vector logical binary operators component-wise."""
         source_code = """
         shader TestShader {
             compute {
@@ -1568,7 +1542,6 @@ class TestHipCodeGen:
         assert "uchar3 scalarLeft = (false || b);" not in hip_code
 
     def test_bool_vector_ternary_condition_expands_hip_components(self):
-        """Test HIP lowers bool-vector ternary conditions component-wise."""
         source_code = """
         shader TestShader {
             compute {
@@ -1610,7 +1583,6 @@ class TestHipCodeGen:
         assert "float3 mixedArm = (mask ? a : 0.0);" not in hip_code
 
     def test_integer_vector_bitwise_ops_expand_hip_components(self):
-        """Test HIP lowers integer-vector bitwise operators component-wise."""
         source_code = """
         shader TestShader {
             compute {
@@ -1670,7 +1642,6 @@ class TestHipCodeGen:
         assert "uint4 ushift = (ua >> 1);" not in hip_code
 
     def test_integer_vector_compound_bitwise_assignments_expand_hip_components(self):
-        """Test HIP lowers vector compound bitwise assignments component-wise."""
         source_code = """
         shader TestShader {
             compute {
@@ -1722,7 +1693,6 @@ class TestHipCodeGen:
         assert "ua >>= 1;" not in hip_code
 
     def test_vector_modulo_uses_hip_helpers(self):
-        """Test HIP lowers vector modulo expressions and assignments."""
         source_code = """
         shader TestShader {
             compute {
@@ -1799,7 +1769,6 @@ class TestHipCodeGen:
         assert "ua %= ub;" not in hip_code
 
     def test_scalar_float_modulo_uses_hip_fmod(self):
-        """Test HIP lowers floating scalar modulo while preserving integer modulo."""
         source_code = """
         shader TestShader {
             compute {
@@ -1847,7 +1816,6 @@ class TestHipCodeGen:
         assert "da %= db;" not in hip_code
 
     def test_vector_comparisons_emit_hip_bool_vector_constructors(self):
-        """Test HIP lowers vector comparisons component-wise."""
         source_code = """
         shader TestShader {
             compute {
@@ -1906,7 +1874,6 @@ class TestHipCodeGen:
         assert "uchar2 ne = (ia != ib);" not in hip_code
 
     def test_complex_vector_conditionals_emit_hip_single_eval_helpers(self):
-        """Test HIP vector logical/comparison/select operands evaluate once."""
         source_code = """
         shader TestShader {
             compute {
@@ -2033,7 +2000,6 @@ class TestHipCodeGen:
         assert "makeMask().x ? nextWeight()" not in hip_code
 
     def test_vector_geometric_builtins_emit_hip_helpers(self):
-        """Test HIP lowers vector geometric builtins to helper calls."""
         source_code = """
         shader TestShader {
             compute {
@@ -2106,7 +2072,6 @@ class TestHipCodeGen:
         assert "float l = length(a);" not in hip_code
 
     def test_vector_atan2_builtin_lowers_componentwise(self):
-        """Test HIP lowers vector atan2 through component-wise helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -2148,7 +2113,6 @@ class TestHipCodeGen:
         assert "double2 da = atan2f(" not in hip_code
 
     def test_sign_builtin_lowers_to_hip_expressions(self):
-        """Test HIP lowers scalar and vector sign without a raw sign builtin."""
         source_code = """
         shader TestShader {
             compute {
@@ -2204,7 +2168,6 @@ class TestHipCodeGen:
         assert " = sign(" not in hip_code
 
     def test_vector_min_max_expands_hip_components(self):
-        """Test HIP lowers vector min/max through component-wise helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -2280,7 +2243,6 @@ class TestHipCodeGen:
         assert "int3 ilo = fminf(ia, ib);" not in hip_code
 
     def test_vector_clamp_expands_hip_components(self):
-        """Test HIP lowers vector clamp through a component-wise helper."""
         source_code = """
         shader TestShader {
             compute {
@@ -2312,7 +2274,6 @@ class TestHipCodeGen:
         assert " = clamp(" not in hip_code
 
     def test_scalar_clamp_uses_hip_type_appropriate_operations(self):
-        """Test HIP scalar clamp preserves double and integer semantics."""
         source_code = """
         shader TestShader {
             compute {
@@ -2343,7 +2304,6 @@ class TestHipCodeGen:
         assert " = clamp(" not in hip_code
 
     def test_complex_integer_clamp_uses_hip_single_eval_helper(self):
-        """Test HIP integer clamp evaluates complex scalar operands once."""
         source_code = """
         shader TestShader {
             compute {
@@ -2390,7 +2350,6 @@ class TestHipCodeGen:
         assert "int i = ((nextIndex()) <" not in hip_code
 
     def test_saturate_builtin_lowers_through_hip_clamp(self):
-        """Test HIP lowers shader-style saturate through scalar/vector clamp."""
         source_code = """
         shader TestShader {
             compute {
@@ -2428,7 +2387,6 @@ class TestHipCodeGen:
         assert " = saturate(" not in hip_code
 
     def test_mix_builtin_lowers_to_hip_arithmetic(self):
-        """Test HIP lowers mix without relying on a non-HIP lerp intrinsic."""
         source_code = """
         shader TestShader {
             compute {
@@ -2508,7 +2466,6 @@ class TestHipCodeGen:
         assert " = lerp(" not in hip_code
 
     def test_bool_vector_mix_lowers_to_hip_select(self):
-        """Test HIP lowers bool-mask vector mix to component selection."""
         source_code = """
         shader TestShader {
             compute {
@@ -2565,7 +2522,6 @@ class TestHipCodeGen:
         assert " = lerp(" not in hip_code
 
     def test_bool_scalar_mix_lowers_to_hip_select(self):
-        """Test HIP lowers scalar bool mix to selector semantics."""
         source_code = """
         shader TestShader {
             compute {
@@ -2615,7 +2571,6 @@ class TestHipCodeGen:
         assert " = lerp(" not in hip_code
 
     def test_abs_builtin_uses_hip_type_appropriate_operations(self):
-        """Test HIP abs preserves scalar types and lowers vector operands."""
         source_code = """
         shader TestShader {
             compute {
@@ -2659,7 +2614,6 @@ class TestHipCodeGen:
         assert "int3 aiv = fabsf(iv);" not in hip_code
 
     def test_fract_scalar_builtin_lowers_to_hip_helper(self):
-        """Test HIP lowers scalar fract without relying on a non-HIP fracf call."""
         source_code = """
         shader TestShader {
             compute {
@@ -2691,7 +2645,6 @@ class TestHipCodeGen:
         assert " = frac(" not in hip_code
 
     def test_fract_vector_builtin_lowers_componentwise(self):
-        """Test HIP lowers vector fract through component-wise helpers."""
         source_code = """
         shader TestShader {
             compute {
@@ -2730,7 +2683,6 @@ class TestHipCodeGen:
         assert " = fract(" not in hip_code
 
     def test_matrix_types_and_constructors_emit_hip_names(self, tmp_path):
-        """Test HIP maps parser-produced matrix types and constructors."""
         source_code = """
         shader TestShader {
             compute {
@@ -2791,7 +2743,6 @@ class TestHipCodeGen:
         )
 
     def test_bool_vector_constructors_emit_hip_names(self):
-        """Test HIP maps boolean vectors to supported uchar vector types."""
         source_code = """
         shader TestShader {
             compute {
@@ -2817,7 +2768,6 @@ class TestHipCodeGen:
         assert "bool3 flags" not in hip_code
 
     def test_generic_vector_constructors_emit_hip_names(self):
-        """Test HIP maps parser-produced generic vector forms."""
         source_code = """
         shader TestShader {
             compute {
@@ -2847,26 +2797,21 @@ class TestHipCodeGen:
         assert "vec4<" not in hip_code
 
     def test_builtin_variable_conversion(self):
-        """Test built-in variable conversion"""
         codegen = HipCodeGen()
 
-        # Test thread index mapping
         assert codegen.builtin_map.get("gl_LocalInvocationID.x") == "threadIdx.x"
         assert codegen.builtin_map.get("gl_LocalInvocationID.y") == "threadIdx.y"
         assert codegen.builtin_map.get("gl_LocalInvocationID.z") == "threadIdx.z"
 
-        # Test workgroup index mapping
         assert codegen.builtin_map.get("gl_WorkGroupID.x") == "blockIdx.x"
         assert codegen.builtin_map.get("gl_WorkGroupID.y") == "blockIdx.y"
         assert codegen.builtin_map.get("gl_WorkGroupID.z") == "blockIdx.z"
 
-        # Test workgroup size mapping
         assert codegen.builtin_map.get("gl_WorkGroupSize.x") == "blockDim.x"
         assert codegen.builtin_map.get("gl_WorkGroupSize.y") == "blockDim.y"
         assert codegen.builtin_map.get("gl_WorkGroupSize.z") == "blockDim.z"
 
     def test_builtin_invocation_ids_emit_hip_names(self):
-        """Test HIP maps CrossGL invocation built-ins in member access form."""
         source_code = """
         shader TestShader {
             compute {
@@ -2909,7 +2854,6 @@ class TestHipCodeGen:
         assert ".xy" not in hip_code
 
     def test_hlsl_compute_builtins_emit_hip_names(self):
-        """Test HIP maps HLSL compute built-in aliases to native indices."""
         source_code = """
         shader TestShader {
             compute {
@@ -2947,7 +2891,6 @@ class TestHipCodeGen:
         assert "gl_LocalInvocationIndex" not in hip_code
 
     def test_hlsl_compute_builtin_parameters_lower_to_hip_expressions(self):
-        """Test HIP does not expose HLSL compute built-ins as kernel params."""
         source_code = """
         shader TestShader {
             compute {
@@ -2983,7 +2926,6 @@ class TestHipCodeGen:
         assert "SV_GroupID" not in hip_code
 
     def test_direct_hlsl_compute_vector_builtins_emit_hip_vectors(self):
-        """Test direct AST HLSL compute vector built-ins map to uint3 values."""
         ast = ShaderNode(
             name="DirectHlslBuiltins",
             execution_model=ExecutionModel.GENERAL_PURPOSE,
@@ -3035,7 +2977,6 @@ class TestHipCodeGen:
         assert "SV_GroupID" not in hip_code
 
     def test_direct_builtin_identifier_nodes_emit_hip_names(self):
-        """Test HIP maps direct AST built-in identifiers with component suffixes."""
         ast = ShaderNode(
             name="DirectBuiltins",
             execution_model=ExecutionModel.GENERAL_PURPOSE,
@@ -3092,7 +3033,6 @@ class TestHipCodeGen:
         assert "gl_NumWorkGroups" not in hip_code
 
     def test_struct_generation(self):
-        """Test struct generation"""
         source_code = """
         shader TestShader {
             struct Vertex {
@@ -3114,7 +3054,6 @@ class TestHipCodeGen:
         assert "float3 normal;" in hip_code
 
     def test_variable_with_qualifiers(self):
-        """Test variable generation with memory qualifiers"""
         source_code = """
         shader TestShader {
             uniform float constants;
@@ -3138,7 +3077,6 @@ class TestHipCodeGen:
         assert "__constant__ float constants;" in hip_code
 
     def test_for_in_statement_lowers_to_counted_hip_loops(self):
-        """Test HIP lowers CrossGL for-in loops to counted integer loops."""
         source_code = """
         shader TestShader {
             compute {
@@ -3175,7 +3113,6 @@ class TestHipCodeGen:
         assert "RangeNode" not in hip_code
 
     def test_atomic_operations(self):
-        """Test atomic operations code generation"""
         source_code = """
         shader TestShader {
             struct Counters {
@@ -3227,7 +3164,6 @@ class TestHipCodeGen:
         assert "atomicCompSwap(" not in hip_code
 
     def test_synchronization_functions(self):
-        """Test synchronization function generation"""
         source_code = """
         shader TestShader {
             compute {
@@ -3255,7 +3191,6 @@ class TestHipCodeGen:
         assert "workgroupBarrier();" not in hip_code
 
     def test_vector_operations(self):
-        """Test vector operations generation"""
         source_code = """
         shader TestShader {
             compute {
@@ -3275,11 +3210,9 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        # Check for basic structure with HIP includes
         assert "#include <hip/hip_runtime.h>" in hip_code
 
     def test_math_functions(self):
-        """Test math function generation"""
         source_code = """
         shader TestShader {
             compute {
@@ -3298,11 +3231,9 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        # Check for basic structure with HIP includes
         assert "#include <hip/hip_runtime.h>" in hip_code
 
     def test_double_math_builtins_emit_hip_double_functions(self):
-        """Test HIP preserves double precision for scalar math builtins."""
         source_code = """
         shader TestShader {
             compute {
@@ -3365,7 +3296,6 @@ class TestHipCodeGen:
         assert "truncf(x)" not in hip_code
 
     def test_texture_operations(self):
-        """Test texture operation generation"""
         source_code = """
         shader TestShader {
             fragment {
@@ -3404,7 +3334,6 @@ class TestHipCodeGen:
         assert " = textureGrad(" not in hip_code
 
     def test_split_sampler_texture_calls_use_hip_texture_object_coordinates(self):
-        """Test HIP accepts explicit sampler operands without using them as UVs."""
         source_code = """
         shader SplitSampler {
             sampler2D colorMap @texture(0);
@@ -3471,7 +3400,6 @@ class TestHipCodeGen:
         assert "textureGrad(" not in hip_code
 
     def test_hlsl_sampler_state_aliases_emit_hip_sampler_resources(self):
-        """Test HLSL sampler-state aliases participate in HIP sampler metadata."""
         source_code = """
         shader AliasSampler {
             Texture2D colorMap @register(t3, space2);
@@ -3516,7 +3444,6 @@ class TestHipCodeGen:
         assert "state.y" not in hip_code
 
     def test_array_and_3d_texture_calls_emit_hip_texture_functions(self):
-        """Test HIP maps array and 3D sampled texture calls by resource type."""
         source_code = """
         shader Resources {
             sampler2darray layers;
@@ -3586,7 +3513,6 @@ class TestHipCodeGen:
         assert " = textureGrad(" not in hip_code
 
     def test_1d_and_cube_texture_calls_emit_hip_texture_functions(self):
-        """Test HIP maps 1D and cube sampled texture calls by resource type."""
         source_code = """
         shader Resources {
             sampler1d ramp;
@@ -3669,7 +3595,6 @@ class TestHipCodeGen:
         assert " = textureGrad(" not in hip_code
 
     def test_cube_array_texture_calls_emit_hip_texture_functions(self):
-        """Test HIP maps cube-array sampled texture calls by resource type."""
         source_code = """
         shader Resources {
             samplercubearray probes;
@@ -3718,7 +3643,6 @@ class TestHipCodeGen:
         assert " = textureGrad(" not in hip_code
 
     def test_shadow_sampler_calls_emit_hip_diagnostics(self):
-        """Test HIP makes unsupported shadow sampler calls explicit."""
         source_code = """
         shader Resources {
             sampler2dshadow shadowMap;
@@ -3938,7 +3862,6 @@ class TestHipCodeGen:
         assert " = tex2D<float4>(cubeArrayShadow" not in hip_code
 
     def test_texture_gather_calls_emit_hip_intrinsics_and_diagnostics(self):
-        """Test HIP lowers 2D gather and diagnoses unsupported gather forms."""
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -4042,7 +3965,6 @@ class TestHipCodeGen:
         assert "textureGatherOffsets(" not in hip_code
 
     def test_offset_and_projected_texture_calls_emit_hip_diagnostics(self):
-        """Test HIP lowers projected calls and diagnoses unsupported offset forms."""
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -4213,7 +4135,6 @@ class TestHipCodeGen:
         assert "textureCompareLodOffset(" not in hip_code
 
     def test_resource_type_keywords_emit_hip_resource_types(self):
-        """Test HIP maps all parser resource keywords instead of leaking CrossGL types."""
         source_code = """
         shader Resources {
             sampler linearState;
@@ -4332,7 +4253,6 @@ class TestHipCodeGen:
             )
 
     def test_resource_builtins_emit_hip_texture_and_surface_calls(self):
-        """Test HIP lowers non-multisample resource calls with tracked resource types."""
         source_code = """
         shader Resources {
             sampler2d tex;
@@ -4433,7 +4353,6 @@ class TestHipCodeGen:
         assert "CglResourceQueryInfo" not in hip_code
 
     def test_texture_coordinate_shapes_emit_hip_helpers_or_diagnostics(self):
-        """Test HIP texture sampling rejects known invalid coordinate ranks."""
         source_code = """
         shader TextureCoordinateShapes {
             sampler1d lineTex;
@@ -4557,7 +4476,6 @@ class TestHipCodeGen:
         assert "textureGrad(" not in hip_code
 
     def test_texel_fetch_coordinate_shapes_emit_hip_helpers_or_diagnostics(self):
-        """Test HIP texelFetch lowers only representable coordinate ranks."""
         source_code = """
         shader TexelFetchShapes {
             sampler1d lineTex;
@@ -4682,7 +4600,6 @@ class TestHipCodeGen:
         assert "texelFetchOffset(" not in hip_code
 
     def test_image_coordinate_shapes_emit_hip_surface_helpers_or_diagnostics(self):
-        """Test HIP imageLoad/imageStore lowers only representable coordinate ranks."""
         source_code = """
         shader ImageCoordinateShapes {
             image2D colorImage;
@@ -4795,7 +4712,6 @@ class TestHipCodeGen:
         assert "imageStore(" not in hip_code
 
     def test_1d_and_cube_image_calls_emit_hip_surface_helpers_or_diagnostics(self):
-        """Test HIP lowers 1D, 1D-array, and cube storage image calls."""
         source_code = """
         shader ImageSurfaceShapes {
             image1D lineImage;
@@ -4903,7 +4819,6 @@ class TestHipCodeGen:
         assert "imageStore(" not in hip_code
 
     def test_cube_array_image_ir_calls_emit_hip_surface_helpers_or_diagnostics(self):
-        """Test HIP lowers cube-array storage image IR shapes."""
         cube_array_ast = ShaderNode(
             "CubeArrayImages",
             ExecutionModel.COMPUTE_KERNEL,
@@ -5018,7 +4933,6 @@ class TestHipCodeGen:
         assert "imageStore(" not in hip_code
 
     def test_nested_resource_arrays_emit_hip_texture_and_surface_calls(self):
-        """Test HIP preserves nested resource-array indices in resource calls."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -5147,7 +5061,6 @@ class TestHipCodeGen:
         assert "CglResourceQueryInfo" not in hip_code
 
     def test_dynamic_resource_array_params_emit_hip_pointer_shapes(self):
-        """Test HIP preserves dynamic resource-array parameter shapes."""
         source_code = """
         shader Resources {
             sampler2d textures[4];
@@ -5273,7 +5186,6 @@ class TestHipCodeGen:
         assert "CglResourceQueryInfo" not in hip_code
 
     def test_unsized_resource_arrays_emit_hip_pointer_shapes(self):
-        """Test HIP lowers unsized global resource arrays to pointer shapes."""
         source_code = """
         shader UnsizedHIPResources {
             sampler linearSamplers[];
@@ -5350,7 +5262,6 @@ class TestHipCodeGen:
         assert "imageStore(" not in hip_code
 
     def test_resource_binding_metadata_comments_emit_hip_bindings(self):
-        """Test HIP emits deterministic CrossGL resource binding metadata."""
         source_code = """
         shader HipResourceBindings {
             sampler2D colorMap @set(2) @binding(5);
@@ -5399,7 +5310,6 @@ class TestHipCodeGen:
         )
 
     def test_duplicate_resource_bindings_are_rejected_for_hip_codegen(self):
-        """Test HIP rejects duplicate explicit resource bindings."""
         duplicate_texture_binding = """
         shader DuplicateHipTextureBindings {
             @binding(2) sampler2D firstTexture;
@@ -5436,7 +5346,6 @@ class TestHipCodeGen:
             )
 
     def test_forwarded_dynamic_resource_arrays_emit_hip_metadata_arguments(self):
-        """Test HIP forwards query metadata sidecars through dynamic arrays."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -5597,7 +5506,6 @@ class TestHipCodeGen:
         assert "imageStore(" not in hip_code
 
     def test_mixed_fixed_dynamic_resource_arrays_emit_hip_metadata_arguments(self):
-        """Test HIP forwards fixed rows and dynamic grids with metadata sidecars."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -5736,7 +5644,6 @@ class TestHipCodeGen:
         assert "imageStore(" not in hip_code
 
     def test_multihop_reordered_resource_arrays_emit_hip_metadata_arguments(self):
-        """Test HIP forwards reordered rows/grids and duplicate metadata sidecars."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -5940,7 +5847,6 @@ class TestHipCodeGen:
         assert "imageStore(" not in hip_code
 
     def test_resource_calls_in_control_flow_emit_hip_metadata_arguments(self):
-        """Test HIP forwards metadata in assignments, returns, and ternaries."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -6140,7 +6046,6 @@ class TestHipCodeGen:
         assert "imageLoad(" not in hip_code
 
     def test_resource_calls_in_loops_emit_hip_metadata_arguments(self):
-        """Test HIP forwards metadata through loop-carried resource indices."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -6267,7 +6172,6 @@ class TestHipCodeGen:
         assert "imageLoad(" not in hip_code
 
     def test_nested_loop_resource_indices_emit_hip_metadata_arguments(self):
-        """Test HIP forwards metadata when both resource indices are loop-carried."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -6359,7 +6263,6 @@ class TestHipCodeGen:
         assert "imageStore(" not in hip_code
 
     def test_struct_and_scalar_params_preserve_hip_metadata_argument_order(self):
-        """Test HIP keeps metadata aligned around non-resource parameters."""
         source_code = """
         struct SampleParams {
             vec2 uv;
@@ -6515,7 +6418,6 @@ class TestHipCodeGen:
         assert "imageLoad(" not in hip_code
 
     def test_resource_values_in_struct_returns_emit_hip_metadata_arguments(self):
-        """Test HIP forwards metadata through struct assignment and constructors."""
         source_code = """
         struct SampleResult {
             vec4 sampled;
@@ -6670,7 +6572,6 @@ class TestHipCodeGen:
         assert "imageLoad(" not in hip_code
 
     def test_nested_struct_resource_assignments_emit_hip_metadata_arguments(self):
-        """Test HIP handles resource calls assigned into nested struct members."""
         source_code = """
         struct SampleResult {
             vec4 sampled;
@@ -6791,7 +6692,6 @@ class TestHipCodeGen:
         assert "imageLoad(" not in hip_code
 
     def test_struct_member_array_resource_assignments_emit_hip_metadata_arguments(self):
-        """Test HIP handles resource calls assigned into struct member arrays."""
         source_code = """
         struct SampleResult {
             vec4 sampled;
@@ -6911,7 +6811,6 @@ class TestHipCodeGen:
         assert "imageLoad(" not in hip_code
 
     def test_control_flow_struct_resource_assignments_emit_hip_metadata_arguments(self):
-        """Test HIP keeps metadata aligned through branch and loop struct writes."""
         source_code = """
         struct SampleResult {
             vec4 sampled;
@@ -7070,7 +6969,6 @@ class TestHipCodeGen:
         assert "imageLoad(" not in hip_code
 
     def test_struct_parameter_resource_values_round_trip_hip_metadata_arguments(self):
-        """Test HIP forwards resource-derived structs through helper parameters."""
         source_code = """
         struct SampleResult {
             vec4 sampled;
@@ -7191,7 +7089,6 @@ class TestHipCodeGen:
         assert "imageLoad(" not in hip_code
 
     def test_mutable_scalar_and_array_params_emit_hip_updates(self):
-        """Test HIP emits scalar and array parameter updates directly."""
         source_code = """
         shader MutableParams {
             float bumpScalar(float weight) {
@@ -7237,7 +7134,6 @@ class TestHipCodeGen:
         assert "float b = bumpArray(values, 1);" in hip_code
 
     def test_nested_array_and_struct_member_params_emit_hip_updates(self):
-        """Test HIP emits nested array and struct-member array parameter updates."""
         source_code = """
         struct Payload {
             float values[3];
@@ -7300,7 +7196,6 @@ class TestHipCodeGen:
         assert "float b = bumpPayload(payload, 1);" in hip_code
 
     def test_returned_nested_struct_params_emit_hip_updates(self):
-        """Test HIP mutates nested struct params built from returned values."""
         source_code = """
         struct InnerPayload {
             float values[3];
@@ -7379,7 +7274,6 @@ class TestHipCodeGen:
         assert "float value = consumeAdjustedOuter(1);" in hip_code
 
     def test_conditional_returned_nested_structs_emit_hip_expressions(self):
-        """Test HIP preserves branch and ternary selected returned structs."""
         source_code = """
         struct InnerPayload {
             float values[3];
@@ -7466,7 +7360,6 @@ class TestHipCodeGen:
         assert "float value = consumeConditional(1, true);" in hip_code
 
     def test_temporary_struct_array_member_reads_emit_hip_expressions(self):
-        """Test HIP emits array-field reads from returned struct temporaries."""
         source_code = """
         struct Payload {
             float values[3];
@@ -7520,7 +7413,6 @@ class TestHipCodeGen:
         assert "float value = readTemporary(1);" in hip_code
 
     def test_nested_temporary_struct_array_member_reads_emit_hip_expressions(self):
-        """Test HIP emits nested array-field reads from returned struct temporaries."""
         source_code = """
         struct InnerPayload {
             float values[3];
@@ -7594,7 +7486,6 @@ class TestHipCodeGen:
         )
 
     def test_returned_local_nested_struct_array_writes_emit_hip_expressions(self):
-        """Test HIP mutates locals initialized from returned nested structs."""
         source_code = """
         struct InnerPayload {
             float values[3];
@@ -7733,7 +7624,6 @@ class TestHipCodeGen:
         assert "float value = mutateReturnedLocalControl(1);" in hip_code
 
     def test_structured_and_byte_address_buffers_emit_hip_pointer_helpers(self):
-        """Test HIP lowers buffer resource aliases to pointer access/helpers."""
         source_code = """
         shader HIPBufferResources {
             struct Particle {
@@ -7901,7 +7791,6 @@ class TestHipCodeGen:
         assert "buffer_store(" not in hip_code
 
     def test_structured_buffer_dimensions_emit_hip_length_sidecars(self):
-        """Test HIP lowers structured-buffer dimensions through length sidecars."""
         source_code = """
         shader StructuredBufferDimensionsHIP {
             RWStructuredBuffer<int> values;
@@ -7977,7 +7866,6 @@ class TestHipCodeGen:
         assert ".GetDimensions(" not in hip_code
 
     def test_glsl_buffer_blocks_emit_hip_structs_pointers_and_metadata(self):
-        """Test HIP lowers GLSL buffer blocks to C++ struct/pointer placeholders."""
         source_code = """
         layout(std430, binding = 3) readonly buffer float values[];
 
@@ -8018,7 +7906,6 @@ class TestHipCodeGen:
         assert "particles.positions[index] = value;" in hip_code
 
     def test_glsl_buffer_block_runtime_arrays_and_atomics_emit_hip(self):
-        """Test HIP lowers GLSL buffer-block runtime-array atomics."""
         source_code = """
         layout(std430, binding = 1) buffer CounterBlock {
             uint counters[];
@@ -8054,7 +7941,6 @@ class TestHipCodeGen:
         assert "atomicAdd(counters.counters[index]" not in hip_code
 
     def test_glsl_buffer_block_access_diagnostics_emit_hip(self):
-        """Test HIP emits deterministic diagnostics for invalid buffer-block access."""
         source_code = """
         layout(std430, binding = 1) readonly buffer ReadonlyBlock {
             uint counters[];
@@ -8098,7 +7984,6 @@ class TestHipCodeGen:
         ) in hip_code
 
     def test_glsl_buffer_block_arrays_emit_hip_contract_evidence(self):
-        """Test HIP buffer-block arrays use deterministic placeholder lowering."""
         source_code = """
         struct RuntimeLeaf {
             float mass;
@@ -8182,7 +8067,6 @@ class TestHipCodeGen:
         ) in hip_code
 
     def test_byte_address_buffer_dimensions_emit_hip_length_sidecars(self, tmp_path):
-        """Test HIP lowers byte-address dimensions through byte-length sidecars."""
         source_code = """
         shader ByteAddressBufferDimensionsHIP {
             ByteAddressBuffer rawBytes;
@@ -8255,7 +8139,6 @@ class TestHipCodeGen:
             compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_append_consume_structured_buffers_emit_hip_counter_helpers(self, tmp_path):
-        """Test HIP lowers append/consume buffers through explicit counters."""
         source_code = """
         shader AppendConsumeHIP {
             struct Particle {
@@ -8354,7 +8237,6 @@ class TestHipCodeGen:
             compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_structured_buffer_element_atomics_emit_hip_pointer_atomics(self, tmp_path):
-        """Test HIP atomics on RWStructuredBuffer scalar element lvalues."""
         source_code = """
         shader StructuredBufferAtomicsHIP {
             struct Particle {
@@ -8537,7 +8419,6 @@ class TestHipCodeGen:
             compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_uint_structured_buffer_inc_dec_emit_hip_bounded_atomics(self, tmp_path):
-        """Test HIP emits native bounded inc/dec atomics only for uint buffers."""
         source_code = """
         shader BoundedStructuredBufferAtomicsHIP {
             RWStructuredBuffer<uint> counters;
@@ -8584,7 +8465,6 @@ class TestHipCodeGen:
             compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_byte_address_buffer_atomics_emit_hip_atomic_helpers(self, tmp_path):
-        """Test HIP lowers RWByteAddressBuffer interlocked operations."""
         source_code = """
         shader HIPByteAddressBufferAtomics {
             ByteAddressBuffer readBytes;
@@ -8736,7 +8616,6 @@ class TestHipCodeGen:
             compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_hlsl_texture_aliases_emit_hip_resources_and_metadata(self):
-        """Test HIP canonicalizes HLSL texture aliases before resource lowering."""
         source_code = """
         shader Resources {
             Texture2D<float4> colorMap;
@@ -8841,7 +8720,6 @@ class TestHipCodeGen:
         assert "imageSize(" not in hip_code
 
     def test_image_atomic_builtins_emit_hip_diagnostics(self):
-        """Test HIP makes unsupported storage image atomics explicit."""
         source_code = """
         shader Resources {
             iimage2d signedImage;
@@ -8940,7 +8818,6 @@ class TestHipCodeGen:
         assert "imageAtomicXor(" not in hip_code
 
     def test_image_atomic_coordinate_shapes_emit_hip_diagnostics(self):
-        """Test HIP image atomic diagnostics distinguish coordinate-rank errors."""
         source_code = """
         shader ImageAtomicCoordinateShapes {
             uimage2D counters;
@@ -9004,7 +8881,6 @@ class TestHipCodeGen:
         assert "imageAtomicMax(" not in hip_code
 
     def test_cubemap_image_atomic_builtins_emit_hip_diagnostics(self):
-        """Test HIP cubemap storage image atomics emit typed diagnostics."""
         source_code = """
         shader ImageAtomicCubeShapes {
             iimageCube signedCube;
@@ -9085,7 +8961,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in hip_code
 
     def test_resource_query_builtins_emit_hip_metadata_helpers(self):
-        """Test HIP lowers resource queries through explicit metadata sidecars."""
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -9257,7 +9132,6 @@ class TestHipCodeGen:
         assert "textureQueryLevels(" not in hip_code
 
     def test_storage_image_query_shapes_emit_hip_metadata_helpers(self):
-        """Test HIP lowers 1D/cubemap storage image size queries via metadata."""
         source_code = """
         shader Resources {
             image1D lineImage;
@@ -9371,7 +9245,6 @@ class TestHipCodeGen:
         assert "RWTextureCube<" not in hip_code
 
     def test_texture_query_lod_emits_hip_diagnostics(self):
-        """Test HIP makes unsupported textureQueryLod explicit."""
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -9425,7 +9298,6 @@ class TestHipCodeGen:
         assert "textureQueryLod(" not in hip_code
 
     def test_target_invalid_resource_queries_emit_hip_diagnostics(self):
-        """Test HIP diagnoses query builtins used on incompatible resources."""
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -9517,7 +9389,6 @@ class TestHipCodeGen:
         assert "textureQueryLevels(" not in hip_code
 
     def test_resource_query_arrays_emit_indexed_hip_metadata(self):
-        """Test HIP resource queries preserve resource-array metadata indexing."""
         source_code = """
         shader Resources {
             sampler2d textures[4];
@@ -9577,7 +9448,6 @@ class TestHipCodeGen:
         assert "cgl_imageSize_image2D(images_metadata)" not in hip_code
 
     def test_dynamic_and_nested_resource_query_arrays_emit_hip_metadata(self):
-        """Test HIP metadata sidecars cover dynamic and nested resource arrays."""
         source_code = """
         shader Resources {
             sampler2d textureGrid[2][3];
@@ -9667,7 +9537,6 @@ class TestHipCodeGen:
         assert "cgl_imageSize_image2D(imageGrid_metadata)" not in hip_code
 
     def test_multisample_resource_builtins_emit_hip_diagnostics(self):
-        """Test HIP does not silently lower MS resource calls to non-MS functions."""
         source_code = """
         shader Resources {
             sampler2dms msTex;
@@ -9791,7 +9660,6 @@ class TestHipCodeGen:
         assert "surf2DLayeredwrite" not in hip_code
 
     def test_control_flow(self):
-        """Test control flow generation"""
         source_code = """
         shader TestShader {
             compute {
@@ -9823,7 +9691,6 @@ class TestHipCodeGen:
         assert "int j = 0;\n    for" not in hip_code
 
     def test_compound_assignments_preserve_operator(self):
-        """Test HIP preserves compound assignment operators."""
         source_code = """
         shader TestShader {
             compute {
@@ -9860,7 +9727,6 @@ class TestHipCodeGen:
         assert "total = j;" not in hip_code
 
     def test_while_loop_generation(self):
-        """Test HIP emits while loops for block and single-statement bodies."""
         source_code = """
         shader TestShader {
             compute {
@@ -9890,7 +9756,6 @@ class TestHipCodeGen:
         assert "NotImplemented" not in hip_code
 
     def test_do_while_loop_generation(self):
-        """Test HIP emits do-while loops."""
         source_code = """
         shader TestShader {
             compute {
@@ -9917,7 +9782,6 @@ class TestHipCodeGen:
         assert "DoWhileNode" not in hip_code
 
     def test_switch_generation(self):
-        """Test HIP emits switch, case, default, and case bodies."""
         source_code = """
         shader TestShader {
             compute {
@@ -9957,7 +9821,6 @@ class TestHipCodeGen:
         assert "NotImplemented" not in hip_code
 
     def test_match_literal_and_wildcard_arms_lower_to_switch(self):
-        """Test HIP lowers simple match arms to switch cases."""
         source_code = """
         shader TestShader {
             compute {
@@ -9993,7 +9856,6 @@ class TestHipCodeGen:
         assert "MatchNode" not in hip_code
 
     def test_match_guarded_arm_lowers_to_hip_if_chain(self):
-        """Test HIP lowers guarded match arms to ordered if chains."""
         source_code = """
         shader TestShader {
             compute {
@@ -10029,7 +9891,6 @@ class TestHipCodeGen:
         assert "MatchNode" not in hip_code
 
     def test_match_identifier_binding_arm_lowers_to_hip_scoped_else_body(self):
-        """Test HIP lowers identifier binding match arms."""
         source_code = """
         shader TestShader {
             compute {
@@ -10063,7 +9924,6 @@ class TestHipCodeGen:
         assert "MatchNode" not in hip_code
 
     def test_match_guarded_identifier_binding_falls_through_to_later_hip_arm(self):
-        """Test guarded HIP binding arms fall through to later match arms."""
         source_code = """
         shader TestShader {
             compute {
@@ -10102,7 +9962,6 @@ class TestHipCodeGen:
         assert "MatchNode" not in hip_code
 
     def test_match_plain_struct_pattern_binds_fields_for_hip(self):
-        """Test HIP lowers plain struct field pattern bindings."""
         source_code = """
         shader TestShader {
             struct Pair {
@@ -10138,7 +9997,6 @@ class TestHipCodeGen:
         assert "MatchNode" not in hip_code
 
     def test_match_plain_enum_path_patterns_lower_to_hip_if_chain(self):
-        """Test HIP lowers enum path patterns through generated enum constants."""
         source_code = """
         shader TestShader {
             enum Mode {
@@ -10174,7 +10032,6 @@ class TestHipCodeGen:
         assert "MatchNode" not in hip_code
 
     def test_match_generic_enum_constructor_pattern_binds_payload_for_hip(self):
-        """Test HIP lowers generic enum tuple payload patterns."""
         source_code = """
         shader TestShader {
             generic<T> struct Option {
@@ -10219,7 +10076,6 @@ class TestHipCodeGen:
         assert "MatchNode" not in hip_code
 
     def test_match_enum_struct_pattern_binds_fields_for_hip(self):
-        """Test HIP lowers struct-like enum payload patterns."""
         source_code = """
         shader TestShader {
             enum Command {
@@ -10263,7 +10119,6 @@ class TestHipCodeGen:
         assert "MatchNode" not in hip_code
 
     def test_match_expression_initializes_hip_local_with_bindings(self):
-        """Test HIP lowers typed local match expressions to assignments."""
         source_code = """
         shader TestShader {
             compute {
@@ -10294,7 +10149,6 @@ class TestHipCodeGen:
         assert "MatchNode" not in hip_code
 
     def test_return_match_expression_in_hip_kernel_discards_return_value(self):
-        """Test HIP kernels do not preserve return-position match values."""
         source_code = """
         shader TestShader {
             compute {
@@ -10323,7 +10177,6 @@ class TestHipCodeGen:
         assert "MatchNode" not in hip_code
 
     def test_direct_ast_expression_statements_are_emitted(self):
-        """Test direct HIP AST function bodies emit expression-returning nodes."""
         ast = ShaderNode(
             name="DirectAst",
             execution_model=ExecutionModel.GENERAL_PURPOSE,
@@ -10362,7 +10215,6 @@ class TestHipCodeGen:
         assert "value += 1;" in hip_code
 
     def test_bool_string_and_char_literals_emit_hip_syntax(self):
-        """Test HIP literal output uses target-language spelling."""
         source_code = """
         shader TestShader {
             compute {
@@ -10401,7 +10253,6 @@ class TestHipCodeGen:
         assert "False" not in hip_code
 
     def test_inferred_let_declarations_emit_inferred_hip_types(self):
-        """Test typeless let declarations infer HIP types from literal initializers."""
         source_code = """
         shader TestShader {
             compute {
@@ -10430,7 +10281,6 @@ class TestHipCodeGen:
         assert "None flag" not in hip_code
 
     def test_direct_literal_nodes_emit_hip_escaping(self):
-        """Test direct HIP literal formatting escapes quotes."""
         codegen = HipCodeGen()
 
         assert codegen.visit(LiteralNode(True, PrimitiveType("bool"))) == "true"
@@ -10441,7 +10291,6 @@ class TestHipCodeGen:
         assert codegen.visit(LiteralNode("'", PrimitiveType("char"))) == "'\\''"
 
     def test_array_operations(self):
-        """Test array operation generation"""
         source_code = """
         shader TestShader {
             compute {
@@ -10461,11 +10310,9 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        # Check for basic structure
         assert "#include <hip/hip_runtime.h>" in hip_code
 
     def test_array_declarations_emit_c_style_declarators(self):
-        """Test HIP array declarations place dimensions after the variable name."""
         source_code = """
         shader TestShader {
             struct Material {
@@ -10510,7 +10357,6 @@ class TestHipCodeGen:
         assert "float3[2] local_colors" not in hip_code
 
     def test_array_literals_emit_hip_brace_initializers(self):
-        """Test HIP lowers parsed array literals to C-style initializers."""
         source_code = """
         float globalWeights[4] = {1.0, 2.0};
 
@@ -10541,7 +10387,6 @@ class TestHipCodeGen:
         assert "ArrayLiteralNode" not in hip_code
 
     def test_empty_shader(self):
-        """Test empty shader generation"""
         source_code = ""
 
         lexer = Lexer(source_code)
@@ -10555,7 +10400,6 @@ class TestHipCodeGen:
         assert "#include <hip/hip_runtime_api.h>" in hip_code
 
     def test_prefix_and_postfix_unary_operators_preserve_position(self):
-        """Test HIP preserves prefix/postfix increment and decrement operators."""
         source_code = """
         shader TestShader {
             compute {
@@ -10588,7 +10432,6 @@ class TestHipCodeGen:
         assert "++i++" not in hip_code
 
     def test_multiple_functions(self):
-        """Test multiple function generation"""
         source_code = """
         shader TestShader {
             vertex {
@@ -10611,12 +10454,10 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        # Check for HIP includes
         assert "#include <hip/hip_runtime.h>" in hip_code
         assert "#include <hip/hip_runtime_api.h>" in hip_code
 
     def test_barrier_emits_syncthreads(self):
-        """Test barrier() call lowers to __syncthreads() in HIP."""
         source_code = """
         shader BarrierShader {
             compute {
@@ -10637,7 +10478,6 @@ class TestHipCodeGen:
         assert "barrier()" not in hip_code
 
     def test_memory_barrier_emits_threadfence(self):
-        """Test memoryBarrier() call lowers to __threadfence() in HIP."""
         source_code = """
         shader MemoryBarrierShader {
             compute {
@@ -10658,7 +10498,6 @@ class TestHipCodeGen:
         assert "memoryBarrier()" not in hip_code
 
     def test_workgroup_barrier_emits_syncthreads(self):
-        """Test workgroupBarrier() call lowers to __syncthreads() in HIP."""
         source_code = """
         shader WorkgroupBarrierShader {
             compute {
@@ -10679,7 +10518,6 @@ class TestHipCodeGen:
         assert "workgroupBarrier()" not in hip_code
 
     def test_hip_memory_barrier_variants_emit_sync_intrinsics(self):
-        """Test CrossGL memory barrier variants lower to HIP fences."""
         source_code = """
         shader HipMemoryBarrierVariants {
             compute {
@@ -10708,7 +10546,6 @@ class TestHipCodeGen:
         assert "deviceMemoryBarrier();" not in hip_code
 
     def test_hip_user_defined_synchronization_names_are_not_lowered(self):
-        """Test HIP does not remap user-defined synchronization names."""
         source_code = """
         shader HipSynchronizationShadowing {
             compute {
@@ -10803,7 +10640,6 @@ class TestHipCodeGen:
         ],
     )
     def test_hip_synchronization_builtins_reject_arguments(self, builtin):
-        """Test HIP synchronization builtins reject invalid arguments."""
         source_code = f"""
         shader BadHipSynchronizationBuiltinArgs {{
             compute {{
@@ -10823,7 +10659,6 @@ class TestHipCodeGen:
             HipCodeGen().generate(ast)
 
     def test_wave_intrinsics_lower_to_hip_subgroup_helpers(self):
-        """Test basic Wave* calls lower to HIP subgroup helper expressions."""
         source_code = """
         shader HipWaveShader {
             compute {
@@ -10868,7 +10703,6 @@ class TestHipCodeGen:
         assert "Unsupported HIP wave intrinsic" not in hip_code
 
     def test_direct_shfl_down_sync_lowers_to_guarded_hip_helper(self):
-        """Test raw CUDA-style shuffle calls do not leak into HIP kernels."""
         source_code = """
         shader HipDirectShuffle {
             compute {
@@ -10897,7 +10731,6 @@ class TestHipCodeGen:
         )
 
     def test_wave_match_count_quad_and_multi_prefix_lower_to_hip_helpers(self):
-        """Test extended Wave* forms lower to typed HIP helper calls."""
         source_code = """
         shader HipWaveExtended {
             compute {
@@ -10953,7 +10786,6 @@ class TestHipCodeGen:
         assert "Unsupported HIP wave intrinsic" not in hip_code
 
     def test_direct_wave_ir_node_lowers_to_hip_helper(self):
-        """Test direct WaveOpNode emission avoids AST repr fallbacks."""
         codegen = HipCodeGen()
 
         generated_expr = codegen.visit(
@@ -10964,7 +10796,6 @@ class TestHipCodeGen:
         assert "cgl_hip_wave_active_sum_uint_uint" in codegen.helper_functions
 
     def test_wave_intrinsics_emit_hip_diagnostics_for_invalid_argument_shapes(self):
-        """Test HIP wave calls diagnose shapes that cannot lower to helpers."""
         source_code = """
         shader HipWaveDiagnostics {
             compute {
@@ -11003,7 +10834,6 @@ class TestHipCodeGen:
         assert "WaveActiveBallot(predicateValue)" not in hip_code
 
     def test_wave_intrinsics_reject_hip_wrong_arity(self):
-        """Test HIP wave intrinsics raise deterministic arity errors."""
         source_code = """
         shader BadHipWaveArity {
             compute {
@@ -11046,7 +10876,6 @@ class TestHipCodeGen:
         compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_cbuffer_members_lowered_to_constant_memory(self):
-        """Test cbuffer members emit __constant__ qualified declarations."""
         source_code = """
         shader CbufferShader {
             cbuffer Params {
@@ -11085,7 +10914,6 @@ class TestHipCodeGen:
         assert "cbuffer Params" not in hip_code
 
     def test_uniform_and_multiple_cbuffers_lower_to_constant_memory(self):
-        """Test uniform buffer blocks and multiple cbuffers emit constants."""
         source_code = """
         shader MultiCbufferShader {
             uniform PerFrame {
@@ -11133,7 +10961,6 @@ class TestHipCodeGen:
         assert "cbuffer PerObject" not in hip_code
 
     def test_cbuffer_struct_nodes_lower_to_constant_memory(self):
-        """Test direct cbuffer struct nodes share parsed cbuffer lowering."""
         cbuffer = StructNode(
             "Params",
             [
@@ -11159,7 +10986,6 @@ class TestHipCodeGen:
         ) in hip_code
 
     def test_structured_buffer_maps_to_device_pointer(self):
-        """Test StructuredBuffer<T> maps to const T* device pointer in HIP."""
         source_code = """
         shader StructuredBufferPointerShader {
             StructuredBuffer<float> inputData;
@@ -11185,7 +11011,6 @@ class TestHipCodeGen:
         assert "StructuredBuffer" not in hip_code
 
     def test_rw_structured_buffer_maps_to_device_pointer_readwrite(self):
-        """Test RWStructuredBuffer<T> maps to T* device pointer with read/write."""
         source_code = """
         shader RWStructuredBufferShader {
             RWStructuredBuffer<int> outputData;
@@ -11212,7 +11037,6 @@ class TestHipCodeGen:
         assert "RWStructuredBuffer" not in hip_code
 
     def test_texture_sampling_tex3d_and_combined_sampler2d(self):
-        """Test HIP generates tex3D for 3D textures and tex2D for combined sampler2D."""
         source_code = """
         shader TextureSamplingShader {
             sampler3d volumeTex;
@@ -11265,7 +11089,6 @@ class TestHipCodeGen:
         assert " = textureLod(" not in hip_code
 
     def test_struct_members_with_semantics_produce_hip_struct_fields(self):
-        """Test struct members with CrossGL semantics generate proper HIP struct fields."""
         source_code = """
         struct VertexInput {
             vec3 position;
@@ -11316,7 +11139,6 @@ class TestHipCodeGen:
         assert "VertexOutput output;" in hip_code
 
     def test_struct_semantics_validate_builtin_types_and_stage_context_for_hip(self):
-        """Test HIP preserves and validates struct member builtin semantics."""
         valid_code = """
         shader HipStructSemantics {
             struct FSOutput {
@@ -11384,7 +11206,6 @@ class TestHipCodeGen:
             HipCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
 
     def test_return_semantics_validate_builtin_types_and_stage_context_for_hip(self):
-        """Test HIP validates direct builtin return semantics."""
         invalid_depth_type = """
         shader BadHipDepthType {
             fragment {
@@ -11422,7 +11243,6 @@ class TestHipCodeGen:
             HipCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
 
     def test_direct_return_semantics_emit_metadata_for_hip(self, tmp_path):
-        """Test HIP preserves direct return semantics as comments."""
         color_code = """
         shader HipDirectReturnSemantics {
             vertex {
@@ -11464,7 +11284,6 @@ class TestHipCodeGen:
             compile_hip_if_hipcc_available(depth_hip_code, tmp_path)
 
     def test_stage_parameter_semantics_emit_metadata_for_hip(self, tmp_path):
-        """Test HIP preserves builtin stage parameter semantics as comments."""
         vertex_code = """
         shader HipVertexStageParameterSemantics {
             vertex {
@@ -11550,7 +11369,6 @@ class TestHipCodeGen:
             compile_hip_if_hipcc_available(compute_hip, tmp_path)
 
     def test_stage_parameter_semantics_validate_builtin_stage_type_for_hip(self):
-        """Test HIP rejects invalid builtin stage parameter semantics."""
         invalid_stage = """
         shader BadHipStageParameterStage {
             fragment {
@@ -11596,7 +11414,6 @@ class TestHipCodeGen:
             HipCodeGen().generate(Parser(Lexer(duplicate_system_value).tokens).parse())
 
     def test_stage_parameter_semantics_thread_position_in_grid(self):
-        """Test HIP maps compute stage builtins to threadIdx/blockIdx/blockDim."""
         source_code = """
         shader ComputeBuiltinsShader {
             compute {
@@ -11642,7 +11459,6 @@ class TestHipCodeGen:
         assert "gl_WorkGroupSize" not in hip_code
 
     def test_vertex_stage_with_position_output(self):
-        """Test HIP generates a device function for vertex stage with position output."""
         source_code = """
         shader VertexPositionShader {
             vertex {
@@ -11670,7 +11486,6 @@ class TestHipCodeGen:
         assert "vec2(" not in hip_code
 
     def test_texture_sampling_with_cubemap_and_1d_types(self):
-        """Test HIP generates correct texture intrinsics for cubemap and 1D types."""
         source_code = """
         shader CubeAndLinearShader {
             void sampleVariety(
@@ -11711,7 +11526,6 @@ class TestHipCodeGen:
         assert " = textureLod(" not in hip_code
 
     def test_match_multiple_literal_arms_emit_switch_cases(self):
-        """Test HIP emits multiple case labels for match with several literals."""
         source_code = """
         shader TestShader {
             compute {
@@ -11756,7 +11570,6 @@ class TestHipCodeGen:
         assert hip_code.count("break;") == 4
 
     def test_match_wildcard_only_emits_default_case(self):
-        """Test HIP emits only a default case when match has just a wildcard."""
         source_code = """
         shader TestShader {
             compute {
@@ -11786,7 +11599,6 @@ class TestHipCodeGen:
         assert "case " not in hip_code
 
     def test_match_constructor_pattern_rejected_for_hip(self):
-        """Test HIP rejects constructor patterns that cannot lower to switch."""
         match_ast = ShaderNode(
             name="ConstructorMatch",
             execution_model=ExecutionModel.COMPUTE_KERNEL,
@@ -11838,7 +11650,6 @@ class TestHipCodeGen:
             codegen.generate(match_ast)
 
     def test_shader_with_only_structs_produces_valid_output(self):
-        """Test HIP generates struct definitions even without any kernel or function."""
         struct_ast = ShaderNode(
             name="StructsOnly",
             execution_model=ExecutionModel.GENERAL_PURPOSE,
@@ -11866,7 +11677,6 @@ class TestHipCodeGen:
         assert "__global__" not in hip_code
 
     def test_invalid_mixed_stage_vertex_and_compute_still_generates(self):
-        """Test HIP handles shader with both vertex and compute stages."""
         source_code = """
         shader MixedStageShader {
             vertex {
@@ -11895,7 +11705,6 @@ class TestHipCodeGen:
         assert "int b = 2;" in hip_code
 
     def test_match_literals_without_wildcard_emits_no_default(self):
-        """Test HIP match with only literal arms produces no default case."""
         source_code = """
         shader TestShader {
             compute {
@@ -11930,7 +11739,6 @@ class TestHipCodeGen:
         assert "default:" not in hip_code
 
     def test_readonly_qualifier_on_buffer_produces_const_pointer(self):
-        """Test StructuredBuffer (readonly) generates const pointer in HIP."""
         source_code = """
         shader ReadonlyBufferShader {
             StructuredBuffer<float> weights;
@@ -11970,7 +11778,6 @@ class TestHipCodeGen:
         assert "RWStructuredBuffer" not in hip_code
 
     def test_writeonly_buffer_produces_mutable_pointer(self):
-        """Test RWStructuredBuffer (read-write) generates mutable pointer in HIP."""
         source_code = """
         shader WriteBufferShader {
             struct Pixel {
@@ -12013,7 +11820,6 @@ class TestHipCodeGen:
         assert "counters[0] = 1;" in hip_code
 
     def test_resource_memory_qualifiers_map_hip_access_contracts(self):
-        """Test resource memory qualifiers select HIP access forms/diagnostics."""
         source_code = """
         shader HIPResourceMemoryQualifiers {
             readonly RWStructuredBuffer<int> readOnlyValues;
@@ -12085,7 +11891,6 @@ class TestHipCodeGen:
         assert "access(" not in hip_code
 
     def test_resource_memory_qualifiers_reject_writeonly_hip_buffer_reads(self):
-        """Test writeonly HIP buffer resources reject read and atomic operations."""
         source_code = """
         shader HIPWriteOnlyBufferDiagnostics {
             writeonly StructuredBuffer<int> writeOnlyValues;
@@ -12164,7 +11969,6 @@ class TestHipCodeGen:
         assert "InterlockedAdd(" not in hip_code
 
     def test_resource_memory_qualifiers_emit_hip_pointer_qualifiers(self):
-        """Test HIP-native volatile/restrict and readonly pointer qualifiers."""
         source_code = """
         shader HIPNativeResourceMemoryQualifiers {
             struct BlockData {
@@ -12219,7 +12023,6 @@ class TestHipCodeGen:
         assert " restrict " not in hip_code
 
     def test_explicit_binding_annotations_on_resources_parse_without_error(self):
-        """Test explicit @binding annotations on resources produce valid HIP code."""
         source_code = """
         shader ExplicitBindingShader {
             sampler2D albedoTex @texture(0);
@@ -12250,7 +12053,6 @@ class TestHipCodeGen:
         assert "__global__ void compute_main()" in hip_code
 
     def test_automatic_sequential_binding_for_multiple_resources(self):
-        """Test multiple resources without explicit bindings all generate valid globals."""
         source_code = """
         shader MultiResourceShader {
             StructuredBuffer<float> positionBuffer;
@@ -12306,7 +12108,6 @@ class TestHipCodeGen:
         assert pos_idx < norm_idx < uv_idx < out_idx
 
     def test_multiple_textures_with_explicit_binding_slots(self):
-        """Test multiple texture resources with explicit binding slots produce valid HIP."""
         source_code = """
         shader MultiTextureBindingShader {
             sampler2D diffuse @texture(0);

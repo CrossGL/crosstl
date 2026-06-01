@@ -6,7 +6,6 @@ from crosstl.backend.Mojo.MojoLexer import MojoLexer
 
 
 def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code."""
     lexer = MojoLexer(code)
     return lexer.tokenize()
 
@@ -328,7 +327,6 @@ def test_comments_tokenization():
     """
     try:
         tokens = tokenize_code(code)
-        # Comments should be tokenized but filtered out
         comment_found = any(
             token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"] for token in tokens
         )
@@ -363,7 +361,6 @@ def test_mod_tokenization():
     """
     tokens = tokenize_code(code)
 
-    # Find the modulus operator in tokens
     has_mod = False
     for token in tokens:
         if token == ("MOD", "%"):

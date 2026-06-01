@@ -1415,14 +1415,12 @@ class MetalCodeGen:
             global_vars, used_resource_bindings
         )
         for i, node in enumerate(global_vars):
-            # Handle both old and new AST variable structures
             resource_count = 1
             array_size = None
             if hasattr(node, "var_type"):
                 if hasattr(node.var_type, "name") or hasattr(
                     node.var_type, "element_type"
                 ):
-                    # Check if it's an ArrayType and handle specially for global variables
                     if (
                         hasattr(node.var_type, "element_type")
                         and str(type(node.var_type)).find("ArrayType") != -1
@@ -1441,7 +1439,6 @@ class MetalCodeGen:
                             node.var_type.size if node.var_type.size else array_size
                         )
                     else:
-                        # Use the proper type conversion for TypeNode objects
                         vtype = self.convert_type_node_to_string(node.var_type)
                         array_suffix = ""
                 else:
@@ -1813,7 +1810,6 @@ class MetalCodeGen:
         functions = getattr(ast, "functions", [])
         functions_code = ""
         for func in functions:
-            # Handle both old and new AST function structures
             if hasattr(func, "qualifiers") and func.qualifiers:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
             else:
@@ -1852,7 +1848,6 @@ class MetalCodeGen:
             else:
                 functions_code += self.generate_function(func)
 
-        # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
                 stage_name = normalize_stage_name(stage_type)
@@ -2148,7 +2143,6 @@ class MetalCodeGen:
                                 f"{member.name}[1024];\n"
                             )
                     else:
-                        # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(member.member_type)
                         else:
@@ -2178,7 +2172,6 @@ class MetalCodeGen:
                                 f"{member.name}[1024];\n"
                             )
                     else:
-                        # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(member.member_type)
                         else:
@@ -4658,7 +4651,6 @@ class MetalCodeGen:
             else:
                 return f"{indent_str}{declaration};\n"
         elif isinstance(stmt, ArrayNode):
-            # Improved array node handling
             element_type = self.map_type(stmt.element_type)
             size = get_array_size_from_node(stmt)
 
@@ -4703,7 +4695,6 @@ class MetalCodeGen:
             if getattr(stmt, "value", None) is None:
                 return f"{indent_str}return;\n"
             if isinstance(stmt.value, list):
-                # Multiple return values
                 code = ""
                 for i, return_stmt in enumerate(stmt.value):
                     code += f"{self.generate_expression(return_stmt)}"
@@ -4711,7 +4702,6 @@ class MetalCodeGen:
                         code += ", "
                 return f"{indent_str}return {code};\n"
             else:
-                # Single return value
                 return_wrapper = self.current_function_return_wrapper
                 if return_wrapper is not None:
                     value = self.generate_expression_with_expected(
@@ -4728,7 +4718,6 @@ class MetalCodeGen:
         elif hasattr(stmt, "__class__") and "ExpressionStatementNode" in str(
             type(stmt)
         ):
-            # Handle ExpressionStatementNode
             tail_return = self.generate_tail_expression_statement(stmt, indent)
             if tail_return is not None:
                 return tail_return
@@ -6029,13 +6018,10 @@ class MetalCodeGen:
             expr = self.generate_expression(stmt.expression)
             return expr
         else:
-            # Fallback for direct expression
             return self.generate_expression(stmt)
 
     def generate_assignment(self, node):
-        # Handle both old and new AST assignment structures
         if hasattr(node, "target") and hasattr(node, "value"):
-            # New AST structure
             target = node.target
             value = node.value
             rhs = self.generate_expression_with_expected(
@@ -6043,7 +6029,6 @@ class MetalCodeGen:
             )
             op = getattr(node, "operator", "=")
         else:
-            # Old AST structure
             target = node.left
             value = node.right
             rhs = self.generate_expression_with_expected(
@@ -6218,12 +6203,9 @@ class MetalCodeGen:
 
         code += f"{indent_str}}}"
 
-        # Handle else branch - check if it's another if statement (else-if chain)
         else_branch = getattr(node, "else_branch", None)
         if else_branch:
-            # Check if else branch is another IfNode (else-if chain)
             if hasattr(else_branch, "__class__") and "If" in str(else_branch.__class__):
-                # Generate else if by recursively generating the nested if with else if prefix
                 elif_condition = self.generate_expression(
                     else_branch.condition
                     if hasattr(else_branch, "condition")
@@ -6231,7 +6213,6 @@ class MetalCodeGen:
                 )
                 code += f" else if ({elif_condition}) {{\n"
 
-                # Generate elif body
                 elif_body = getattr(
                     else_branch, "then_branch", getattr(else_branch, "if_body", None)
                 )
@@ -6239,13 +6220,11 @@ class MetalCodeGen:
 
                 code += f"{indent_str}}}"
 
-                # Recursively handle any remaining else-if chain
                 nested_else = getattr(else_branch, "else_branch", None)
                 if nested_else:
                     if hasattr(nested_else, "__class__") and "If" in str(
                         nested_else.__class__
                     ):
-                        # Another else if - recursively handle
                         remaining_code = self.generate_if(nested_else, indent)
                         # Remove the "if" prefix and replace with "else if"
                         remaining_lines = remaining_code.split("\n")
@@ -6257,14 +6236,12 @@ class MetalCodeGen:
                             remaining_lines[1:]
                         )  # Skip first line as we already handled it
                     else:
-                        # Final else clause
                         code += " else {\n"
                         code += self.generate_scoped_statement_body(
                             nested_else, indent + 1
                         )
                         code += f"{indent_str}}}"
             else:
-                # Regular else clause
                 code += " else {\n"
                 code += self.generate_scoped_statement_body(else_branch, indent + 1)
                 code += f"{indent_str}}}"
@@ -6712,7 +6689,6 @@ class MetalCodeGen:
             block_load = self.generate_glsl_buffer_block_array_load(expr)
             if block_load is not None:
                 return block_load
-            # Handle array access
             array = self.generate_expression(expr.array)
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
@@ -6738,7 +6714,6 @@ class MetalCodeGen:
                 return f"{metal_type}({args})"
             return str(expr)
         elif isinstance(expr, FunctionCallNode):
-            # Resolve callee expression (can be Identifier/Member/Array access)
             func_expr = getattr(expr, "function", None)
             if func_expr is None:
                 func_expr = expr.name
@@ -6851,7 +6826,6 @@ class MetalCodeGen:
             if specialized_func_name is not None:
                 callee = specialized_func_name
                 func_name = specialized_func_name
-            # Special handling for common GLSL functions
             if func_name == "normalize":
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"normalize({args})"
@@ -6862,10 +6836,8 @@ class MetalCodeGen:
                     arg = self.generate_expression(expr.args[0])
                     return f"__crossgl_inverse_{arg_type}({arg})"
             if func_name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
-                # These function names are the same in GLSL and Metal
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"{func_name}({args})"
-            # Vector constructors
             if func_name in [
                 "float",
                 "half",
@@ -7037,7 +7009,6 @@ class MetalCodeGen:
                 "min10float4x3",
                 "min10float4x4",
             ]:
-                # Map to Metal's float2, float3, float4
                 metal_type = self.map_type(func_name)
                 matrix_resize = self.generate_metal_matrix_resize_constructor(
                     metal_type, expr.args
@@ -7049,7 +7020,6 @@ class MetalCodeGen:
                     for arg in expr.args
                 )
                 return f"{metal_type}({args})"
-            # Standard function call
             readonly_raw_buffer_call = self.readonly_raw_buffer_call_diagnostic(
                 argument_func_name, expr.args
             )
@@ -7135,7 +7105,6 @@ class MetalCodeGen:
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition)} ? {self.generate_expression(expr.true_expr)} : {self.generate_expression(expr.false_expr)}"
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
-            # Handle LiteralNode
             if hasattr(expr, "value"):
                 value = expr.value
                 literal_type = getattr(
@@ -7156,7 +7125,6 @@ class MetalCodeGen:
                 return str(value)
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
-            # Handle IdentifierNode
             name = getattr(expr, "name", str(expr))
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
@@ -19546,11 +19514,9 @@ class MetalCodeGen:
             if self.is_metal_tessellation_helper_semantic(semantic):
                 return ""
             mapped_semantic = self.semantic_map.get(semantic, semantic)
-            # If the mapped semantic already has brackets, use it as-is
             if mapped_semantic.startswith("[[") and mapped_semantic.endswith("]]"):
                 return f" {mapped_semantic}"
             else:
-                # Add brackets for Metal attribute syntax
                 return f" [[{mapped_semantic}]]"
         else:
             return ""
