@@ -40,6 +40,37 @@ class TestCudaCodeGen:
         assert "// CUDA launch bounds: (128)" in result
         assert "// Kernel: bounded" in result
 
+    def test_cuda_function_attributes_and_inline_asm_conversion(self):
+        code = r"""
+        __cluster_dims__(2, 1, 1) __block_size__(128) __global__ void clustered(
+            unsigned int* out,
+            unsigned int in) {
+            unsigned int lane = 0;
+            asm volatile(
+                "add.u32 %0, %1, 1;"
+                : [result] "=r"(lane)
+                : [source] "r"(in)
+                : "memory"
+            );
+            out[threadIdx.x] = lane;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA cluster dims: (2, 1, 1)" in result
+        assert "// CUDA block size: (128)" in result
+        assert '// CUDA inline PTX volatile: "add.u32 %0, %1, 1;"' in result
+        assert '// CUDA inline PTX outputs: [result] "=r"(lane)' in result
+        assert '// CUDA inline PTX inputs: [source] "r"(in)' in result
+        assert '// CUDA inline PTX clobbers: "memory"' in result
+        assert "CudaAsmNode" not in result
+
     def test_grid_constant_kernel_parameter_conversion(self):
         code = """
         __global__ void kernelLargeParam(__grid_constant__ const int scale,

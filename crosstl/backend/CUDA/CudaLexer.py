@@ -28,7 +28,10 @@ TOKENS = tuple(
         ("NOINLINE", r"\b__noinline__\b"),
         ("FORCEINLINE", r"\b__forceinline__\b"),
         ("LAUNCH_BOUNDS", r"\b__launch_bounds__\b"),
+        ("CLUSTER_DIMS", r"\b__cluster_dims__\b"),
+        ("BLOCK_SIZE", r"\b__block_size__\b"),
         ("GRID_CONSTANT", r"\b__grid_constant__\b"),
+        ("ASM", r"\b(?:asm|__asm__)\b"),
         # CUDA built-in variables
         ("THREADIDX", r"\bthreadIdx\b"),
         ("BLOCKIDX", r"\bblockIdx\b"),
@@ -63,7 +66,7 @@ TOKENS = tuple(
         ("CONSTEXPR", r"\bconstexpr\b"),
         ("INLINE", r"\binline\b"),
         ("CONST", r"\bconst\b"),
-        ("VOLATILE", r"\bvolatile\b"),
+        ("VOLATILE", r"\b(?:volatile|__volatile__)\b"),
         ("MUTABLE", r"\bmutable\b"),
         ("VIRTUAL", r"\bvirtual\b"),
         ("PUBLIC", r"\bpublic\b"),
@@ -218,7 +221,12 @@ KEYWORDS = {
     "__noinline__": "NOINLINE",
     "__forceinline__": "FORCEINLINE",
     "__launch_bounds__": "LAUNCH_BOUNDS",
+    "__cluster_dims__": "CLUSTER_DIMS",
+    "__block_size__": "BLOCK_SIZE",
     "__grid_constant__": "GRID_CONSTANT",
+    "asm": "ASM",
+    "__asm__": "ASM",
+    "__volatile__": "VOLATILE",
     "threadIdx": "THREADIDX",
     "blockIdx": "BLOCKIDX",
     "gridDim": "GRIDDIM",
@@ -302,6 +310,11 @@ class TokenType(Enum):
     MANAGED = auto()
     NOINLINE = auto()
     FORCEINLINE = auto()
+    LAUNCH_BOUNDS = auto()
+    CLUSTER_DIMS = auto()
+    BLOCK_SIZE = auto()
+    GRID_CONSTANT = auto()
+    ASM = auto()
     THREADIDX = auto()
     BLOCKIDX = auto()
     GRIDDIM = auto()

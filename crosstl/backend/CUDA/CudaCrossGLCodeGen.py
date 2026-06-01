@@ -3601,6 +3601,12 @@ class CudaToCrossGLConverter:
             if attribute_text.startswith("__launch_bounds__"):
                 bounds = attribute_text[len("__launch_bounds__") :]
                 self.emit(f"// CUDA launch bounds: {bounds}")
+            elif attribute_text.startswith("__cluster_dims__"):
+                dims = attribute_text[len("__cluster_dims__") :]
+                self.emit(f"// CUDA cluster dims: {dims}")
+            elif attribute_text.startswith("__block_size__"):
+                size = attribute_text[len("__block_size__") :]
+                self.emit(f"// CUDA block size: {size}")
         for param in kernel.params:
             if "__grid_constant__" in str(param.vtype).split():
                 self.emit(f"// CUDA grid constant parameter: {param.name}")
@@ -4633,6 +4639,39 @@ class CudaToCrossGLConverter:
             self.emit(f"// __syncwarp({args}) not directly supported in CrossGL")
         else:
             self.emit(f"// {node.sync_type}();")
+
+    def visit_CudaAsmNode(self, node):
+        volatility = " volatile" if node.is_volatile else ""
+        self.emit(f"// CUDA inline PTX{volatility}: {node.template}")
+        if node.outputs:
+            self.emit(
+                f"// CUDA inline PTX outputs: {self.format_cuda_asm_operands(node.outputs)}"
+            )
+        if node.inputs:
+            self.emit(
+                f"// CUDA inline PTX inputs: {self.format_cuda_asm_operands(node.inputs)}"
+            )
+        if node.clobbers:
+            self.emit(f"// CUDA inline PTX clobbers: {', '.join(node.clobbers)}")
+
+    def format_cuda_asm_operands(self, operands):
+        formatted = []
+        for operand in operands:
+            prefix = (
+                f"[{operand.symbolic_name}] "
+                if operand.symbolic_name is not None
+                else ""
+            )
+            expression = (
+                self.visit(operand.expression)
+                if operand.expression is not None
+                else None
+            )
+            if expression is None:
+                formatted.append(f"{prefix}{operand.constraint}")
+            else:
+                formatted.append(f"{prefix}{operand.constraint}({expression})")
+        return ", ".join(formatted)
 
     def visit_CudaBuiltinNode(self, node):
         builtin_map = {

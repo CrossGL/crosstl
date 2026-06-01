@@ -137,6 +137,48 @@ class CudaBuiltinNode(ASTNode):
         return f"CudaBuiltinNode(builtin_name={self.builtin_name})"
 
 
+class CudaAsmOperandNode(ASTNode):
+    """Node representing one inline PTX asm operand."""
+
+    def __init__(self, constraint, expression=None, symbolic_name=None):
+        self.constraint = constraint
+        self.expression = expression
+        self.symbolic_name = symbolic_name
+
+    def __repr__(self):
+        return (
+            "CudaAsmOperandNode("
+            f"constraint={self.constraint}, expression={self.expression}, "
+            f"symbolic_name={self.symbolic_name})"
+        )
+
+
+class CudaAsmNode(ASTNode):
+    """Node representing a CUDA inline PTX asm statement."""
+
+    def __init__(
+        self,
+        template,
+        outputs=None,
+        inputs=None,
+        clobbers=None,
+        is_volatile=False,
+    ):
+        self.template = template
+        self.outputs = outputs or []
+        self.inputs = inputs or []
+        self.clobbers = clobbers or []
+        self.is_volatile = is_volatile
+
+    def __repr__(self):
+        return (
+            "CudaAsmNode("
+            f"template={self.template}, outputs={self.outputs}, "
+            f"inputs={self.inputs}, clobbers={self.clobbers}, "
+            f"is_volatile={self.is_volatile})"
+        )
+
+
 class TextureAccessNode(ASTNode):
     """Node representing texture memory access"""
 

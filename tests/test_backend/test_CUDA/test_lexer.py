@@ -22,6 +22,21 @@ class TestCudaLexer:
 
         assert tokens == expected_tokens
 
+    def test_cuda_function_attributes_and_inline_asm_tokens(self):
+        code = "__cluster_dims__ __block_size__ asm __asm__ __volatile__ volatile"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        assert tokens == [
+            ("CLUSTER_DIMS", "__cluster_dims__"),
+            ("BLOCK_SIZE", "__block_size__"),
+            ("ASM", "asm"),
+            ("ASM", "__asm__"),
+            ("VOLATILE", "__volatile__"),
+            ("VOLATILE", "volatile"),
+            ("EOF", ""),
+        ]
+
     def test_restrict_qualifier_spellings(self):
         code = "__restrict__ __restrict"
         lexer = CudaLexer(code)

@@ -10,6 +10,8 @@ from .CudaAst import (
     CastNode,
     ConstantMemoryNode,
     ContinueNode,
+    CudaAsmNode,
+    CudaAsmOperandNode,
     CudaBuiltinNode,
     DeleteNode,
     DesignatedInitializerNode,
@@ -107,6 +109,7 @@ class CudaParser:
         "DEVICE",
         "MANAGED",
     }
+    FUNCTION_ATTRIBUTE_TOKENS = {"LAUNCH_BOUNDS", "CLUSTER_DIMS", "BLOCK_SIZE"}
     FUNCTION_SPECIFIER_TOKENS = {
         "GLOBAL",
         "DEVICE",
@@ -117,7 +120,7 @@ class CudaParser:
         "CONSTEXPR",
         "FORCEINLINE",
         "NOINLINE",
-        "LAUNCH_BOUNDS",
+        *FUNCTION_ATTRIBUTE_TOKENS,
     }
     TYPE_TOKENS = {
         "VOID",
@@ -223,8 +226,8 @@ class CudaParser:
             index < len(self.tokens)
             and self.tokens[index][0] in self.FUNCTION_SPECIFIER_TOKENS
         ):
-            if self.tokens[index][0] == "LAUNCH_BOUNDS":
-                index = self.skip_launch_bounds_at_index(index)
+            if self.tokens[index][0] in self.FUNCTION_ATTRIBUTE_TOKENS:
+                index = self.skip_function_attribute_at_index(index)
                 continue
             if (
                 self.tokens[index][0] == "EXTERN"
@@ -244,6 +247,12 @@ class CudaParser:
         index = self.skip_type_at_index(index)
         if index is None:
             return None
+
+        while (
+            index < len(self.tokens)
+            and self.tokens[index][0] in self.FUNCTION_ATTRIBUTE_TOKENS
+        ):
+            index = self.skip_function_attribute_at_index(index)
 
         if (
             index + 1 < len(self.tokens)
@@ -312,8 +321,8 @@ class CudaParser:
             saved_index < len(self.tokens)
             and self.tokens[saved_index][0] in self.FUNCTION_SPECIFIER_TOKENS
         ):
-            if self.tokens[saved_index][0] == "LAUNCH_BOUNDS":
-                saved_index = self.skip_launch_bounds_at_index(saved_index)
+            if self.tokens[saved_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS:
+                saved_index = self.skip_function_attribute_at_index(saved_index)
                 continue
             if (
                 self.tokens[saved_index][0] == "EXTERN"
@@ -331,6 +340,13 @@ class CudaParser:
             saved_index += 1
 
         saved_index = self.skip_type_at_index(saved_index)
+
+        while (
+            saved_index is not None
+            and saved_index < len(self.tokens)
+            and self.tokens[saved_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS
+        ):
+            saved_index = self.skip_function_attribute_at_index(saved_index)
 
         if saved_index is not None:
             if (
@@ -467,7 +483,7 @@ class CudaParser:
             index += 1
         return index
 
-    def skip_launch_bounds_at_index(self, index):
+    def skip_function_attribute_at_index(self, index):
         index += 1
         if index >= len(self.tokens) or self.tokens[index][0] != "LPAREN":
             return index
@@ -486,6 +502,9 @@ class CudaParser:
             index += 1
 
         return index
+
+    def skip_launch_bounds_at_index(self, index):
+        return self.skip_function_attribute_at_index(index)
 
     def skip_template_at_index(self, index):
         depth = 0
@@ -692,8 +711,8 @@ class CudaParser:
         linkage = None
 
         while self.current_token[0] in self.FUNCTION_SPECIFIER_TOKENS:
-            if self.current_token[0] == "LAUNCH_BOUNDS":
-                attributes.append(self.parse_launch_bounds_attribute())
+            if self.current_token[0] in self.FUNCTION_ATTRIBUTE_TOKENS:
+                attributes.append(self.parse_function_attribute())
                 continue
 
             qualifier = self.current_token[1]
@@ -704,6 +723,9 @@ class CudaParser:
                 self.eat("STRING")
 
         return_type = self.parse_type()
+        while self.current_token[0] in self.FUNCTION_ATTRIBUTE_TOKENS:
+            attributes.append(self.parse_function_attribute())
+
         name = self.consume_function_name()
         self.user_function_names.add(name)
         params = self.parse_parameters()
@@ -730,8 +752,9 @@ class CudaParser:
         function.linkage = linkage
         return function
 
-    def parse_launch_bounds_attribute(self):
-        self.eat("LAUNCH_BOUNDS")
+    def parse_function_attribute(self):
+        attribute_name = self.current_token[1]
+        self.eat(self.current_token[0])
         values = []
 
         if self.current_token[0] == "LPAREN":
@@ -754,7 +777,10 @@ class CudaParser:
                     values.append(token_value)
                     self.eat(token_type)
 
-        return f"__launch_bounds__({self.format_attribute_tokens(values)})"
+        return f"{attribute_name}({self.format_attribute_tokens(values)})"
+
+    def parse_launch_bounds_attribute(self):
+        return self.parse_function_attribute()
 
     def format_attribute_tokens(self, values):
         text = "".join(values).strip()
@@ -1097,6 +1123,8 @@ class CudaParser:
             return ContinueNode()
         elif self.current_token[0] in ["SYNCTHREADS", "SYNCWARP"]:
             return self.parse_sync_statement()
+        elif self.current_token[0] == "ASM":
+            return self.parse_asm_statement()
         elif self.current_token[0] == "LBRACE":
             return self.parse_block()
         elif self.is_type_alias_start():
@@ -1357,6 +1385,96 @@ class CudaParser:
         self.eat("SEMICOLON")
 
         return SyncNode(sync_type, args)
+
+    def parse_asm_statement(self):
+        self.eat("ASM")
+        is_volatile = False
+        if self.current_token[0] == "VOLATILE":
+            is_volatile = True
+            self.eat("VOLATILE")
+
+        self.eat("LPAREN")
+        template = self.parse_asm_string_literal()
+        outputs = []
+        inputs = []
+        clobbers = []
+
+        section_index = self.consume_asm_section_delimiters()
+        if section_index == 1:
+            outputs = self.parse_asm_operands()
+        elif section_index == 2:
+            inputs = self.parse_asm_operands()
+        elif section_index >= 3:
+            clobbers = self.parse_asm_clobbers()
+
+        while self.current_token[0] in {"COLON", "SCOPE"}:
+            section_index += self.consume_asm_section_delimiters()
+            if section_index == 2:
+                inputs = self.parse_asm_operands()
+            elif section_index >= 3:
+                clobbers = self.parse_asm_clobbers()
+                break
+
+        self.eat("RPAREN")
+        self.eat("SEMICOLON")
+        return CudaAsmNode(template, outputs, inputs, clobbers, is_volatile)
+
+    def consume_asm_section_delimiters(self):
+        delimiter_count = 0
+        while self.current_token[0] in {"COLON", "SCOPE"}:
+            if self.current_token[0] == "COLON":
+                delimiter_count += 1
+                self.eat("COLON")
+            else:
+                delimiter_count += 2
+                self.eat("SCOPE")
+        return delimiter_count
+
+    def parse_asm_string_literal(self):
+        value = self.eat("STRING")[1]
+        while self.current_token[0] == "STRING":
+            next_value = self.eat("STRING")[1]
+            if value.endswith('"') and next_value.startswith('"'):
+                value = value[:-1] + next_value[1:]
+            else:
+                value += next_value
+        return value
+
+    def parse_asm_operands(self):
+        operands = []
+
+        while self.current_token[0] not in {"COLON", "SCOPE", "RPAREN", "EOF"}:
+            symbolic_name = None
+            if self.current_token[0] == "LBRACKET":
+                self.eat("LBRACKET")
+                symbolic_name = self.eat("IDENTIFIER")[1]
+                self.eat("RBRACKET")
+
+            constraint = self.eat("STRING")[1]
+            expression = None
+            if self.current_token[0] == "LPAREN":
+                self.eat("LPAREN")
+                if self.current_token[0] != "RPAREN":
+                    expression = self.parse_expression()
+                self.eat("RPAREN")
+
+            operands.append(CudaAsmOperandNode(constraint, expression, symbolic_name))
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+
+        return operands
+
+    def parse_asm_clobbers(self):
+        clobbers = []
+
+        while self.current_token[0] not in {"RPAREN", "EOF"}:
+            clobbers.append(self.eat("STRING")[1])
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+
+        return clobbers
 
     def parse_expression(self):
         return self.parse_assignment_expression()

@@ -6,6 +6,7 @@ from crosstl.backend.CUDA.CudaAst import (
     AtomicOperationNode,
     BinaryOpNode,
     CastNode,
+    CudaAsmNode,
     CudaBuiltinNode,
     DeleteNode,
     DesignatedInitializerNode,
@@ -654,6 +655,32 @@ class TestCudaParser:
         assert ast.kernels[0].attributes == ["__launch_bounds__(128)"]
         assert ast.kernels[1].attributes == ["__launch_bounds__(256, 2)"]
         assert ast.kernels[0].params[0].vtype == "float2 * __restrict"
+        assert ast.kernels[1].qualifiers == ["extern", "__global__"]
+        assert ast.kernels[1].linkage == "C"
+
+    def test_cuda_function_attribute_parsing(self):
+        code = """
+        __cluster_dims__(2, 1, 1) __block_size__(128) __global__ void clustered(
+            float* out) {
+            out[threadIdx.x] = 1.0f;
+        }
+
+        extern "C" __global__ void __block_size__((256, 1, 1), (2, 2, 2))
+        shaped(float* out) {
+            out[threadIdx.x] = 2.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [kernel.name for kernel in ast.kernels] == ["clustered", "shaped"]
+        assert ast.kernels[0].attributes == [
+            "__cluster_dims__(2, 1, 1)",
+            "__block_size__(128)",
+        ]
+        assert ast.kernels[1].attributes == ["__block_size__((256, 1, 1), (2, 2, 2))"]
         assert ast.kernels[1].qualifiers == ["extern", "__global__"]
         assert ast.kernels[1].linkage == "C"
 
@@ -1724,6 +1751,42 @@ class TestCudaParser:
         assert isinstance(unmasked_sync, SyncNode)
         assert unmasked_sync.sync_type == "__syncwarp"
         assert unmasked_sync.args == []
+
+    def test_inline_ptx_asm_parsing(self):
+        code = r"""
+        __global__ void asmKernel(unsigned int* out, unsigned int in) {
+            unsigned int lane = 0;
+            asm volatile("bar.sync 0;");
+            asm("mov.u32 %0, %%tid.x;" : "=r"(lane));
+            asm volatile(
+                "add.u32 %0, %1, 1;"
+                : [result] "=r"(lane)
+                : [source] "r"(in)
+                : "memory"
+            );
+            asm __volatile__("membar.gl;" ::: "memory");
+            out[threadIdx.x] = lane;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        asm_statements = [
+            stmt for stmt in ast.kernels[0].body if isinstance(stmt, CudaAsmNode)
+        ]
+        assert len(asm_statements) == 4
+        assert asm_statements[0].is_volatile is True
+        assert asm_statements[0].template == '"bar.sync 0;"'
+        assert asm_statements[1].outputs[0].constraint == '"=r"'
+        assert asm_statements[1].outputs[0].expression == "lane"
+        assert asm_statements[2].outputs[0].symbolic_name == "result"
+        assert asm_statements[2].inputs[0].symbolic_name == "source"
+        assert asm_statements[2].clobbers == ['"memory"']
+        assert asm_statements[3].outputs == []
+        assert asm_statements[3].inputs == []
+        assert asm_statements[3].clobbers == ['"memory"']
 
     def test_cooperative_groups_thread_block_parsing(self):
         code = """
