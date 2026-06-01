@@ -308,21 +308,27 @@ def issue(number, key, state="open", labels=None):
     }
 
 
-def test_build_desired_issues_creates_backend_frontend_and_backlog_entries():
+def test_build_desired_issues_creates_parent_and_backlog_entries():
     module = load_sync_module()
 
     desired = module.build_desired_issues(sample_matrix())
 
-    assert set(desired) == {
-        "parent:directx",
-        "parent:frontend",
-        "backlog:directx:textures.gather",
-    }
+    assert set(desired) == {"parent:directx", "backlog:directx:textures.gather"}
     child = desired["backlog:directx:textures.gather"]
     assert child.parent_key == "parent:directx"
     assert module.LABEL_BACKLOG in child.labels
     assert "Cube gather is not audited." in child.body
     assert "`tests/example.py::def test_gather`" in child.body
+
+
+def test_build_desired_issues_skips_empty_parent_trackers():
+    module = load_sync_module()
+    matrix = sample_matrix()
+    matrix["backlog"] = []
+
+    desired = module.build_desired_issues(matrix, {"issues": []})
+
+    assert desired == {}
 
 
 def test_build_desired_issues_includes_generated_support_signal_issues():
@@ -347,6 +353,39 @@ def test_build_desired_issues_includes_generated_support_signal_issues():
     child = desired["backlog:directx:textures.gather"]
     assert "Extractor state: `tested`" in child.body
     assert "test_gather" in child.body
+
+
+def test_duplicate_signal_keys_do_not_create_childless_parent_trackers():
+    module = load_sync_module()
+    matrix = sample_matrix()
+    matrix["backlog"] = []
+    signals = sample_signals()
+    duplicate = dict(signals["issues"][0])
+    duplicate.update(
+        {
+            "backend_id": module.FRONTEND_ID,
+            "backend": module.FRONTEND_NAME,
+        }
+    )
+    signals["issues"] = [signals["issues"][0], duplicate]
+
+    desired = module.build_desired_issues(matrix, signals)
+
+    key = "extracted:directx:target.codegen:supported_without_detected_tests"
+    assert set(desired) == {"parent:directx", key}
+    assert desired[key].parent_key == "parent:directx"
+
+    errors = module.validate_desired_issues(
+        matrix,
+        signals,
+        desired,
+        min_desired_issues=0,
+    )
+    assert errors == [
+        "desired extracted issue "
+        "extracted:directx:target.codegen:supported_without_detected_tests "
+        "references parent parent:directx, expected parent:frontend"
+    ]
 
 
 def test_build_desired_issues_renders_pytest_failure_signals():
@@ -431,7 +470,7 @@ def test_build_desired_issues_ignores_signal_issues_for_backends_missing_from_ma
         sample_matrix(),
         signals,
         desired,
-        min_desired_issues=5,
+        min_desired_issues=4,
     )
 
     for key in foreign_signal_keys:
@@ -488,8 +527,8 @@ def test_desired_issue_counts_summarizes_planned_parent_backlog_and_signal_issue
     desired = module.build_desired_issues(sample_matrix(), sample_signals())
 
     assert module.desired_issue_counts(desired) == {
-        "total": 5,
-        "parents": 2,
+        "total": 4,
+        "parents": 1,
         "backlog": 1,
         "extracted": 2,
     }
@@ -506,7 +545,7 @@ def test_validate_desired_issues_accepts_complete_plan():
             matrix,
             signals,
             desired,
-            min_desired_issues=5,
+            min_desired_issues=4,
         )
         == []
     )
@@ -519,12 +558,10 @@ def test_validate_desired_issues_catches_empty_or_incomplete_plan():
         sample_matrix(),
         sample_signals(),
         {},
-        min_desired_issues=5,
+        min_desired_issues=4,
     )
 
-    assert "desired issue plan has 0 issues, below minimum 5" in errors
-    assert "missing desired parent issue: parent:directx" in errors
-    assert "missing desired parent issue: parent:frontend" in errors
+    assert "desired issue plan has 0 issues, below minimum 4" in errors
     assert "missing desired backlog issue: backlog:directx:textures.gather" in errors
     assert (
         "missing desired extracted issue: extracted:directx:target.codegen:supported_without_detected_tests"
@@ -579,15 +616,14 @@ def test_sync_issues_updates_existing_creates_missing_closes_stale_and_attaches(
     )
 
     assert summary["updated"] == 1
-    assert summary["created"] == 2
+    assert summary["created"] == 1
     assert summary["closed"] == 1
     assert summary["attached"] == 1
     assert client.updated[0]["number"] == existing_parent["number"]
     assert client.closed[0]["number"] == stale_child["number"]
-    assert client.attached == [(existing_parent["number"], client.created[1]["number"])]
+    assert client.attached == [(existing_parent["number"], client.created[0]["number"])]
     assert [entry["action"] for entry in operation_ledger] == [
         "updated",
-        "created",
         "created",
         "attached",
         "closed",
@@ -595,20 +631,18 @@ def test_sync_issues_updates_existing_creates_missing_closes_stale_and_attaches(
     assert operation_ledger[0]["key"] == "parent:directx"
     assert operation_ledger[0]["reason"] == "desired_issue_drift"
     assert operation_ledger[0]["reasons"] == ["title", "body", "labels"]
-    assert operation_ledger[1]["key"] == "parent:frontend"
-    assert operation_ledger[1]["reason"] == "missing_parent_issue"
-    assert operation_ledger[2]["key"] == "backlog:directx:textures.gather"
-    assert operation_ledger[2]["reason"] == "missing_backlog_issue"
-    assert operation_ledger[3] == {
+    assert operation_ledger[1]["key"] == "backlog:directx:textures.gather"
+    assert operation_ledger[1]["reason"] == "missing_backlog_issue"
+    assert operation_ledger[2] == {
         "action": "attached",
         "parent_key": "parent:directx",
         "parent_number": existing_parent["number"],
         "child_key": "backlog:directx:textures.gather",
-        "child_number": client.created[1]["number"],
+        "child_number": client.created[0]["number"],
         "reason": "missing_sub_issue_relationship",
     }
-    assert operation_ledger[4]["key"] == "backlog:directx:old.feature"
-    assert operation_ledger[4]["reason"] == "stale_managed_marker"
+    assert operation_ledger[3]["key"] == "backlog:directx:old.feature"
+    assert operation_ledger[3]["reason"] == "stale_managed_marker"
 
 
 def test_sync_issues_reports_partial_summary_on_mutation_failure():
@@ -618,7 +652,7 @@ def test_sync_issues_reports_partial_summary_on_mutation_failure():
 
     class FailingCreateClient(FakeClient):
         def create_issue(self, desired_issue):
-            if desired_issue.key == "parent:frontend":
+            if desired_issue.key == "backlog:directx:textures.gather":
                 raise RuntimeError("create failed")
             return super().create_issue(desired_issue)
 
@@ -635,8 +669,9 @@ def test_sync_issues_reports_partial_summary_on_mutation_failure():
     except module.SupportIssueSyncMutationError as exc:
         assert exc.phase == "create_issue"
         assert exc.operation == {
-            "key": "parent:frontend",
-            "title": "[Support Matrix] Frontend / IR / Parser coverage",
+            "key": "backlog:directx:textures.gather",
+            "title": "[Support Matrix][DirectX / HLSL] Texture gather (partial)",
+            "parent_key": "parent:directx",
         }
         assert exc.summary == {
             "created": 0,
@@ -675,7 +710,7 @@ def test_planned_issue_actions_reports_mutations_without_touching_client():
     )
 
     assert planned == {
-        "created": 2,
+        "created": 1,
         "updated": 1,
         "closed": 1,
         "attached": 1,
@@ -701,16 +736,11 @@ def test_planned_issue_action_samples_explain_mutation_plan():
     assert samples["sample_limit"] == 4
     assert samples["created"] == [
         {
-            "key": "parent:frontend",
-            "title": "[Support Matrix] Frontend / IR / Parser coverage",
-            "reason": "missing_parent_issue",
-        },
-        {
             "key": "backlog:directx:textures.gather",
             "title": "[Support Matrix][DirectX / HLSL] Texture gather (partial)",
             "reason": "missing_backlog_issue",
             "parent_key": "parent:directx",
-        },
+        }
     ]
     assert samples["updated"][0]["key"] == "parent:directx"
     assert set(samples["updated"][0]["reasons"]) == {"title", "body", "labels"}
@@ -802,8 +832,8 @@ def test_issue_sync_report_includes_desired_counts_and_planned_actions():
     assert report["schema_version"] == 1
     assert report["mode"] == "dry-run"
     assert report["desired"] == {
-        "total": 5,
-        "parents": 2,
+        "total": 4,
+        "parents": 1,
         "backlog": 1,
         "extracted": 2,
     }
@@ -813,7 +843,7 @@ def test_issue_sync_report_includes_desired_counts_and_planned_actions():
         "duplicates": 0,
         "unmarked": 0,
     }
-    assert report["planned_actions"]["created"] == 4
+    assert report["planned_actions"]["created"] == 3
     assert report["planned_actions"]["updated"] == 1
     assert report["planned_closures"] == {
         "total": 0,
@@ -822,7 +852,9 @@ def test_issue_sync_report_includes_desired_counts_and_planned_actions():
         "stale_extracted": 0,
         "duplicate_marker": 0,
     }
-    assert report["planned_action_samples"]["created"][0]["key"] == "parent:frontend"
+    assert report["planned_action_samples"]["created"][0]["key"].startswith(
+        ("backlog:", "extracted:")
+    )
     assert report["planned_action_samples"]["updated"][0]["key"] == "parent:directx"
     assert report["workflow_source"] == {
         "event": "workflow_run",
@@ -1162,18 +1194,18 @@ def test_issue_sync_report_flags_planned_action_budget_violations():
     assert budget["violations"] == [
         {
             "action": "created",
-            "actual": 3,
+            "actual": 2,
             "limit": 1,
         },
         {
             "action": "total",
-            "actual": 4,
+            "actual": 3,
             "limit": 2,
         },
     ]
     assert module.planned_action_budget_errors(budget) == [
-        "planned issue action budget exceeded for created: 3 > 1",
-        "planned issue action budget exceeded for total: 4 > 2",
+        "planned issue action budget exceeded for created: 2 > 1",
+        "planned issue action budget exceeded for total: 3 > 2",
     ]
 
 
@@ -1237,14 +1269,8 @@ def test_issue_sync_report_reconciles_operation_ledger_with_plan():
             },
             {
                 "action": "created",
-                "key": "parent:frontend",
-                "number": 2,
-                "reason": "missing_parent_issue",
-            },
-            {
-                "action": "created",
                 "key": "backlog:directx:textures.gather",
-                "number": 3,
+                "number": 2,
                 "reason": "missing_backlog_issue",
             },
             {
@@ -1252,7 +1278,7 @@ def test_issue_sync_report_reconciles_operation_ledger_with_plan():
                 "parent_key": "parent:directx",
                 "parent_number": 1,
                 "child_key": "backlog:directx:textures.gather",
-                "child_number": 3,
+                "child_number": 2,
                 "reason": "missing_sub_issue_relationship",
             },
         ],
@@ -1261,9 +1287,9 @@ def test_issue_sync_report_reconciles_operation_ledger_with_plan():
     reconciliation = report["operation_reconciliation"]
     assert reconciliation["evaluated"] is True
     assert reconciliation["ok"] is True
-    assert reconciliation["planned_actions"]["created"] == 3
+    assert reconciliation["planned_actions"]["created"] == 2
     assert reconciliation["actual_actions"] == {
-        "created": 3,
+        "created": 2,
         "updated": 0,
         "closed": 0,
         "attached": 1,
@@ -1271,7 +1297,7 @@ def test_issue_sync_report_reconciles_operation_ledger_with_plan():
     assert reconciliation["actual_action_reasons"] == {
         "created": {
             "missing_backlog_issue": 1,
-            "missing_parent_issue": 2,
+            "missing_parent_issue": 1,
         },
         "updated": {},
         "closed": {},
@@ -1345,7 +1371,7 @@ def test_issue_sync_report_flags_operation_ledger_overruns():
         {
             "action": "created",
             "actual": 0,
-            "planned": 3,
+            "planned": 2,
         },
     ]
     assert reconciliation["closure_shortfalls"] == []
@@ -1437,7 +1463,7 @@ def test_main_writes_dry_run_plan_without_github_access(tmp_path, capsys, monkey
     assert result == 0
     report = json.loads(plan_path.read_text(encoding="utf-8"))
     assert report["mode"] == "dry-run"
-    assert report["desired"]["total"] == 3
+    assert report["desired"]["total"] == 2
     assert report["existing"]["inspected"] is False
     assert report["planned_actions"] is None
     assert report["support_matrix_check"]["provided"] is True
@@ -1450,7 +1476,7 @@ def test_main_writes_dry_run_plan_without_github_access(tmp_path, capsys, monkey
         "head_sha": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
     }
     captured = capsys.readouterr()
-    assert "Dry run: would manage 3 desired issues" in captured.out
+    assert "Dry run: would manage 2 desired issues" in captured.out
     assert "Stale extracted support issue closure is disabled" in captured.out
     assert "Stale pytest-failure support issue closure is disabled" in captured.out
     assert "Preserving existing" not in captured.out
@@ -1506,9 +1532,9 @@ def test_main_dry_run_with_inspection_prints_planned_summary(
     assert report["planned_closures"]["stale_backlog"] == 1
     assert report["planned_closures"]["stale_extracted"] == 1
     captured = capsys.readouterr()
-    assert "Dry run: would manage 5 desired issues" in captured.out
+    assert "Dry run: would manage 4 desired issues" in captured.out
     assert (
-        "Support issue sync: created=4, updated=1, closed=2, " "attached=3, unchanged=0"
+        "Support issue sync: created=3, updated=1, closed=2, " "attached=3, unchanged=0"
     ) in captured.out
     assert "Preserving existing pytest-failure support issues" not in captured.out
     assert InspectClient.instance is not None
@@ -1659,7 +1685,7 @@ def test_main_writes_dry_run_plan_with_malformed_matrix_check_report(tmp_path, c
     assert matrix_check["ok"] is False
     assert matrix_check["load_error"]["path"] == str(matrix_check_path)
     assert matrix_check["load_error"]["type"] == "JSONDecodeError"
-    assert "Dry run: would manage 3 desired issues" in capsys.readouterr().out
+    assert "Dry run: would manage 2 desired issues" in capsys.readouterr().out
 
 
 def test_main_writes_plan_on_malformed_matrix_input(tmp_path, capsys):
@@ -1724,13 +1750,13 @@ def test_main_continues_with_malformed_signals_input(tmp_path, capsys):
 
     assert result == 0
     report = json.loads(plan_path.read_text(encoding="utf-8"))
-    assert report["desired"]["total"] == 3
+    assert report["desired"]["total"] == 2
     assert report["close_extracted_issues"] is False
     assert report["input_failures"][0]["input"] == "signals"
     assert report["input_failures"][0]["path"] == str(signals_path)
     assert report["input_failures"][0]["error"]["type"] == "JSONDecodeError"
     captured = capsys.readouterr()
-    assert "Dry run: would manage 3 desired issues" in captured.out
+    assert "Dry run: would manage 2 desired issues" in captured.out
     assert "continuing without signals" in captured.err
 
 
@@ -1847,7 +1873,7 @@ def test_main_continues_with_invalid_signals_contract(tmp_path, capsys):
 
     assert result == 0
     report = json.loads(plan_path.read_text(encoding="utf-8"))
-    assert report["desired"]["total"] == 3
+    assert report["desired"]["total"] == 2
     assert report["desired"]["extracted"] == 0
     assert report["close_extracted_issues"] is False
     assert report["input_failures"][0]["input"] == "signals"
@@ -1857,7 +1883,7 @@ def test_main_continues_with_invalid_signals_contract(tmp_path, capsys):
         "message": "issues[0].key must start with extracted:",
     }
     captured = capsys.readouterr()
-    assert "Dry run: would manage 3 desired issues" in captured.out
+    assert "Dry run: would manage 2 desired issues" in captured.out
     assert "continuing without signals" in captured.err
 
 
@@ -1956,7 +1982,7 @@ def test_main_writes_plan_before_failing_planned_action_budget(
     assert report["planned_action_budget"]["violations"] == [
         {
             "action": "created",
-            "actual": 3,
+            "actual": 2,
             "limit": 1,
         }
     ]
@@ -2021,7 +2047,7 @@ def test_main_writes_sync_failure_summary_on_mutation_failure(
             super().__init__(existing=[issue(1, "parent:directx")])
 
         def create_issue(self, desired_issue):
-            if desired_issue.key == "parent:frontend":
+            if desired_issue.key == "backlog:directx:textures.gather":
                 raise RuntimeError("create failed")
             return super().create_issue(desired_issue)
 
@@ -2065,8 +2091,9 @@ def test_main_writes_sync_failure_summary_on_mutation_failure(
     assert report["sync_failure"] == {
         "phase": "create_issue",
         "operation": {
-            "key": "parent:frontend",
-            "title": "[Support Matrix] Frontend / IR / Parser coverage",
+            "key": "backlog:directx:textures.gather",
+            "title": "[Support Matrix][DirectX / HLSL] Texture gather (partial)",
+            "parent_key": "parent:directx",
         },
         "partial_summary": {
             "created": 0,
@@ -2353,7 +2380,7 @@ def test_parse_args_exposes_rate_limit_controls():
             "--throttle-seconds",
             "2",
             "--min-desired-issues",
-            "10",
+            "0",
             "--inspect-existing",
             "--matrix-check-report",
             "support/generated/support-matrix-check.json",
@@ -2370,7 +2397,7 @@ def test_parse_args_exposes_rate_limit_controls():
             "--max-planned-total",
             "600",
             "--max-planned-stale-parent-closures",
-            "0",
+            "10",
             "--max-planned-stale-backlog-closures",
             "250",
             "--max-planned-stale-extracted-closures",
@@ -2389,7 +2416,7 @@ def test_parse_args_exposes_rate_limit_controls():
     assert args.retry_base_seconds == 60
     assert args.retry_max_seconds == 600
     assert args.throttle_seconds == 2
-    assert args.min_desired_issues == 10
+    assert args.min_desired_issues == 0
     assert args.inspect_existing is True
     assert args.matrix_check_report == Path(
         "support/generated/support-matrix-check.json"
@@ -2400,7 +2427,7 @@ def test_parse_args_exposes_rate_limit_controls():
     assert args.max_planned_closed == 500
     assert args.max_planned_attached == 300
     assert args.max_planned_total == 600
-    assert args.max_planned_stale_parent_closures == 0
+    assert args.max_planned_stale_parent_closures == 10
     assert args.max_planned_stale_backlog_closures == 250
     assert args.max_planned_stale_extracted_closures == 250
     assert args.max_planned_duplicate_marker_closures == 25

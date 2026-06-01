@@ -1,3 +1,4 @@
+import configparser
 import subprocess
 import sys
 from pathlib import Path
@@ -51,3 +52,20 @@ def test_pre_commit_config_keeps_repo_wide_formatters_and_safe_support_checks():
     assert "python tools/support_signals.py update" not in text
     assert "python tools/support_matrix.py update" not in text
     assert "stages: [manual]" in text
+
+
+def test_pull_request_template_mentions_support_traceability_marker():
+    text = (ROOT / ".github" / "PULL_REQUEST_TEMPLATE.md").read_text(encoding="utf-8")
+
+    assert "Support issue traceability: no issue closed" in text
+
+
+def test_local_worker_worktrees_are_ignored_by_developer_tooling():
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    pre_commit = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    config = configparser.ConfigParser()
+    config.read(ROOT / "setup.cfg", encoding="utf-8")
+
+    assert "worktrees/" in gitignore
+    assert "worktrees/" in pre_commit
+    assert "worktrees" in config["tool:pytest"]["norecursedirs"].split()

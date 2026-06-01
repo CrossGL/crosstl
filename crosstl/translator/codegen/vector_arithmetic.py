@@ -130,6 +130,40 @@ class VectorArithmeticMixin:
             if resource_result_type is not None:
                 return resource_result_type
             raw_args = getattr(node, "arguments", getattr(node, "args", []))
+            if func_name == "normalize" and raw_args:
+                return self.expression_result_type(raw_args[0])
+            if func_name == "cross" and raw_args:
+                return self.expression_result_type(raw_args[0])
+            if func_name in {"dot", "length"} and raw_args:
+                vector_info = self.vector_type_info(
+                    self.expression_result_type(raw_args[0])
+                )
+                if vector_info is not None:
+                    return vector_info["component_type"]
+            if (
+                func_name
+                in {
+                    "abs",
+                    "sign",
+                    "fract",
+                    "frac",
+                    "floor",
+                    "ceil",
+                    "round",
+                    "trunc",
+                    "saturate",
+                }
+                and raw_args
+            ):
+                return self.expression_result_type(raw_args[0])
+            if func_name in {"mod", "min", "max", "atan2", "pow"} and raw_args:
+                return self.expression_result_type(raw_args[0]) or (
+                    self.expression_result_type(raw_args[1])
+                    if len(raw_args) > 1
+                    else None
+                )
+            if func_name == "clamp" and raw_args:
+                return self.expression_result_type(raw_args[0])
             if func_name == "mix" and raw_args:
                 return self.expression_result_type(raw_args[0]) or (
                     self.expression_result_type(raw_args[1])
@@ -769,14 +803,14 @@ class VectorArithmeticMixin:
             if helper_name is None:
                 return None
             return f"{helper_name}({left_expr}, {right_expr})"
-        if left_info and right_type is not None:
+        if left_info and self.scalar_component_type(right_type) is not None:
             helper_name = self.require_vector_binary_helper(
                 left_info, operator, "scalar_right"
             )
             if helper_name is None:
                 return None
             return f"{helper_name}({left_expr}, {right_expr})"
-        if right_info and left_type is not None:
+        if right_info and self.scalar_component_type(left_type) is not None:
             helper_name = self.require_vector_binary_helper(
                 right_info, operator, "scalar_left"
             )
@@ -1605,6 +1639,171 @@ class VectorArithmeticMixin:
 
         target = signatures[scalar_type]
         return f"{target}({', '.join(args)})"
+
+    def generate_vector_scalar_math_call(self, func_name, raw_args, args):
+        """Lower unary scalar math builtins applied to vectors component-wise."""
+        function_map = self.scalar_float_math_functions()
+        signatures = function_map.get(func_name)
+        if func_name == "pow":
+            return self.generate_vector_pow_call(raw_args, args)
+        if signatures is None or len(raw_args) != len(args) or len(raw_args) != 1:
+            return None
+
+        vector_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
+        if vector_info is None:
+            return None
+
+        component_type = vector_info["component_type"]
+        if component_type not in {"float", "double"}:
+            return None
+
+        helper_name = self.require_vector_scalar_math_helper(
+            func_name,
+            component_type,
+            vector_info,
+        )
+        if helper_name is None:
+            return None
+        return f"{helper_name}({args[0]})"
+
+    def require_vector_scalar_math_helper(
+        self,
+        func_name,
+        component_type,
+        vector_info,
+    ):
+        """Register and return a helper for component-wise vector math calls."""
+        vector_type = vector_info["type"]
+        helper_name = f"cgl_{vector_type}_{func_name}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        components = [
+            self.format_scalar_math_component(
+                func_name,
+                component_type,
+                f"value.{component}",
+            )
+            for component in vector_info["components"]
+        ]
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}({vector_type} value)\n"
+            "{\n"
+            f"    return {vector_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def generate_vector_pow_call(self, raw_args, args):
+        """Lower vector pow(base, exponent) component-wise."""
+        if len(raw_args) != 2 or len(args) != 2:
+            return None
+
+        base_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
+        if base_info is None or base_info["component_type"] not in {"float", "double"}:
+            return None
+
+        exponent_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
+        if exponent_info is not None:
+            if exponent_info["component_type"] != base_info["component_type"] or len(
+                exponent_info["components"]
+            ) != len(base_info["components"]):
+                return None
+            helper_name = self.require_vector_pow_helper(base_info, exponent_info)
+            return f"{helper_name}({args[0]}, {args[1]})"
+
+        exponent_type = self.scalar_component_type(
+            self.expression_result_type(raw_args[1])
+        )
+        if exponent_type not in {"float", "double", None}:
+            return None
+        helper_name = self.require_vector_pow_helper(base_info, None)
+        return f"{helper_name}({args[0]}, {args[1]})"
+
+    def require_vector_pow_helper(self, base_info, exponent_info):
+        vector_type = base_info["type"]
+        component_type = base_info["component_type"]
+        exponent_shape = "vector" if exponent_info is not None else "scalar"
+        helper_name = f"cgl_{vector_type}_pow_{exponent_shape}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        exponent_type = (
+            exponent_info["type"]
+            if exponent_info is not None
+            else self.vector_scalar_parameter_type(base_info)
+        )
+        components = []
+        for component in base_info["components"]:
+            exponent_component = (
+                f"exponent.{component}" if exponent_info is not None else "exponent"
+            )
+            components.append(
+                self.format_scalar_math_component(
+                    "pow", component_type, f"base.{component}, {exponent_component}"
+                )
+            )
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}"
+            f"({vector_type} base, {exponent_type} exponent)\n"
+            "{\n"
+            f"    return {base_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def generate_smoothstep_call(self, raw_args, args):
+        """Lower scalar smoothstep through a CUDA/HIP-compatible helper."""
+        if len(raw_args) != 3 or len(args) != 3:
+            return None
+        if self.vector_type_info(self.expression_result_type(raw_args[2])) is not None:
+            return None
+
+        component_types = [
+            self.scalar_component_type(self.expression_result_type(raw_arg))
+            for raw_arg in raw_args
+        ]
+        if any(
+            component_type not in {"float", "double", None}
+            for component_type in component_types
+        ):
+            return None
+        scalar_type = "double" if "double" in component_types else "float"
+        helper_name = self.require_smoothstep_helper(scalar_type)
+        return f"{helper_name}({', '.join(args)})"
+
+    def require_smoothstep_helper(self, scalar_type):
+        helper_name = f"cgl_smoothstep_{scalar_type}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        min_func = "fmin" if scalar_type == "double" else "fminf"
+        max_func = "fmax" if scalar_type == "double" else "fmaxf"
+        zero = "0.0" if scalar_type == "double" else "0.0f"
+        one = "1.0" if scalar_type == "double" else "1.0f"
+        three = "3.0" if scalar_type == "double" else "3.0f"
+        two = "2.0" if scalar_type == "double" else "2.0f"
+        helper = (
+            f"__device__ inline {scalar_type} {helper_name}"
+            f"({scalar_type} edge0, {scalar_type} edge1, {scalar_type} value)\n"
+            "{\n"
+            f"    {scalar_type} t = {max_func}({zero}, "
+            f"{min_func}({one}, (value - edge0) / (edge1 - edge0)));\n"
+            f"    return t * t * ({three} - {two} * t);\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_scalar_math_component(self, func_name, component_type, value):
+        """Format one scalar component for a precision-aware math builtin."""
+        signatures = self.scalar_float_math_functions()[func_name]
+        if func_name == "inversesqrt" and component_type == "double":
+            return f"(1.0 / sqrt({value}))"
+        target = signatures[component_type]
+        return f"{target}({value})"
 
     def scalar_float_math_functions(self):
         return {

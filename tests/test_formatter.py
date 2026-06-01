@@ -42,7 +42,7 @@ class TestCodeFormatter:
         assert formatter.detect_language("shader.vert") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.frag") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.metal") == ShaderLanguage.METAL
-        assert formatter.detect_language("shader.spirv") == ShaderLanguage.SPIRV
+        assert formatter.detect_language("shader.spvasm") == ShaderLanguage.SPIRV
         assert formatter.detect_language("shader.vulkan") == ShaderLanguage.SPIRV
         assert formatter.detect_language("shader.txt") == ShaderLanguage.UNKNOWN
 
@@ -64,7 +64,8 @@ class TestCodeFormatter:
             formatter.format_code("code", file_path="shader.metal") == "clang_formatted"
         )
         assert (
-            formatter.format_code("code", file_path="shader.spirv") == "spirv_formatted"
+            formatter.format_code("code", file_path="shader.spvasm")
+            == "spirv_formatted"
         )
 
         # Test with explicit language
@@ -264,7 +265,7 @@ def test_format_shader_code():
             "code", ShaderLanguage.GLSL, "output.glsl"
         )
 
-        format_shader_code("code", "vulkan", "output.spirv")
+        format_shader_code("code", "vulkan", "output.spvasm")
         mock_instance.format_code.assert_called_with(
-            "code", ShaderLanguage.SPIRV, "output.spirv"
+            "code", ShaderLanguage.SPIRV, "output.spvasm"
         )

@@ -314,7 +314,7 @@ def register_default_sources() -> None:
     _register(
         SourceSpec(
             name="vulkan",
-            extensions=(".spv", ".spirv"),
+            extensions=(".spvasm",),
             load_lexer_parser=_load_spirv,
             reverse_codegen_factory=_reverse_spirv,
             aliases=("spirv", "spv"),

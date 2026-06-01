@@ -43,15 +43,15 @@ def translate(
     discover_backend_plugins()
     backend = (backend or "cgl").strip().lower()
 
-    with open(file_path, encoding="utf-8") as file:
-        shader_code = file.read()
-
     source_spec = SOURCE_REGISTRY.get_by_extension(file_path)
     if not source_spec:
         supported = ", ".join(SOURCE_REGISTRY.extensions())
         raise ValueError(
             f"Unsupported shader file type: {file_path}. Supported: {supported}"
         )
+
+    with open(file_path, encoding="utf-8") as file:
+        shader_code = file.read()
 
     ast = source_spec.parse(shader_code)
 

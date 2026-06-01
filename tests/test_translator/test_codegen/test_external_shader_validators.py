@@ -1557,7 +1557,7 @@ def _require_glslang_stage(glslang, stage):
     help_text = "\n".join(
         part for part in (result.stdout, result.stderr) if part.strip()
     )
-    if result.returncode != 0:
+    if result.returncode != 0 and not help_text.strip():
         detail = help_text.strip() or "no diagnostic output"
         pytest.skip(f"glslangValidator stage probe failed: {detail}")
     if stage not in help_text:
@@ -1589,6 +1589,41 @@ def _run_validator(command):
         part for part in (result.stdout, result.stderr) if part.strip()
     )
     assert result.returncode == 0, diagnostics
+
+
+def _run_glslang_mesh_task_validator(glslang, stage, source_path):
+    output_path = source_path.with_suffix(source_path.suffix + ".spv")
+    _run_validator(
+        [
+            glslang,
+            "-S",
+            stage,
+            "--target-env",
+            "vulkan1.3",
+            "-o",
+            str(output_path),
+            str(source_path),
+        ]
+    )
+
+
+def _run_hlsl_glslang_spirv_validator(glslang, spirv_val, stage, entry, source_path):
+    output_path = source_path.with_suffix(source_path.suffix + ".spv")
+    _run_validator(
+        [
+            glslang,
+            "-D",
+            "-V",
+            "-e",
+            entry,
+            "-S",
+            stage,
+            str(source_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    _run_validator([spirv_val, str(output_path)])
 
 
 def _compile_slang_hlsl_entry(
@@ -1913,6 +1948,35 @@ def test_generated_hlsl_typed_buffer_atomics_compile_with_dxc(tmp_path):
         ]
     )
     assert output_path.exists()
+
+
+def test_generated_hlsl_struct_buffer_atomics_validate_with_glslang_spirv_val(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    spirv_val = _require_tool("spirv-val")
+    shader_path = tmp_path / "struct_buffer_atomics.hlsl"
+
+    code = HLSLCodeGen().generate(crosstl.translator.parse("""
+            shader ExternalValidatorStructBufferAtomics {
+                struct Counters {
+                    int active;
+                }
+
+                compute {
+                    buffer Counters counters;
+
+                    void main() {
+                        atomicAdd(counters.active, 1);
+                    }
+                }
+            }
+            """))
+    assert "RWStructuredBuffer<Counters> counters : register(u0);" in code
+    assert "InterlockedAdd(counters[0].active, 1);" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_hlsl_glslang_spirv_validator(glslang, spirv_val, "comp", "CSMain", shader_path)
 
 
 def test_generated_hlsl_rasterizer_ordered_resources_compile_with_dxc(tmp_path):
@@ -3285,7 +3349,7 @@ def test_generated_glsl_mesh_shader_validates_with_glslangvalidator(
     assert index_assignment in code
     shader_path.write_text(code, encoding="utf-8")
 
-    _run_validator([glslang, "-S", "mesh", str(shader_path)])
+    _run_glslang_mesh_task_validator(glslang, "mesh", shader_path)
 
 
 def test_generated_glsl_mesh_output_signature_validates_with_glslangvalidator(
@@ -3338,7 +3402,7 @@ def test_generated_glsl_mesh_output_signature_validates_with_glslangvalidator(
     assert "prims[0]" not in code
     shader_path.write_text(code, encoding="utf-8")
 
-    _run_validator([glslang, "-S", "mesh", str(shader_path)])
+    _run_glslang_mesh_task_validator(glslang, "mesh", shader_path)
 
 
 def test_generated_glsl_mesh_whole_output_constructor_validates_with_glslangvalidator(
@@ -3394,7 +3458,7 @@ def test_generated_glsl_mesh_whole_output_constructor_validates_with_glslangvali
     assert "prims[0]" not in code
     shader_path.write_text(code, encoding="utf-8")
 
-    _run_validator([glslang, "-S", "mesh", str(shader_path)])
+    _run_glslang_mesh_task_validator(glslang, "mesh", shader_path)
 
 
 def test_generated_glsl_mesh_helper_intrinsics_validate_with_glslangvalidator(
@@ -3432,7 +3496,7 @@ def test_generated_glsl_mesh_helper_intrinsics_validate_with_glslangvalidator(
     assert "SetPrimitive" not in code
     shader_path.write_text(code, encoding="utf-8")
 
-    _run_validator([glslang, "-S", "mesh", str(shader_path)])
+    _run_glslang_mesh_task_validator(glslang, "mesh", shader_path)
 
 
 def test_generated_glsl_task_dispatch_payload_validates_with_glslangvalidator(
@@ -3465,7 +3529,7 @@ def test_generated_glsl_task_dispatch_payload_validates_with_glslangvalidator(
     assert "EmitMeshTasksEXT(2, 3, 4, localPayload)" not in code
     shader_path.write_text(code, encoding="utf-8")
 
-    _run_validator([glslang, "-S", "task", str(shader_path)])
+    _run_glslang_mesh_task_validator(glslang, "task", shader_path)
 
 
 def test_generated_glsl_ray_generation_validates_with_glslangvalidator(tmp_path):

@@ -3,6 +3,8 @@
 import re
 from decimal import Decimal, InvalidOperation
 
+from crosstl.translator.stage_utils import normalize_stage_name
+
 from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
@@ -267,18 +269,23 @@ class SlangToCrossGLConverter:
             code += self.generate_cbuffers(ast)
 
         for func in ast.functions:
-            if func.qualifier == "vertex":
+            qualifier = normalize_stage_name(func.qualifier)
+            if qualifier == "vertex":
                 code += "    vertex {\n"
                 code += self.generate_function(func)
                 code += "    }\n\n"
-            elif func.qualifier == "fragment":
+            elif qualifier == "fragment":
                 code += "    fragment {\n"
                 code += self.generate_function(func)
                 code += "    }\n\n"
 
-            elif func.qualifier == "compute":
+            elif qualifier == "compute":
                 code += "    compute {\n"
                 code += self.generate_numthreads_layout(func)
+                code += self.generate_function(func)
+                code += "    }\n\n"
+            elif qualifier:
+                code += f"    {qualifier} {{\n"
                 code += self.generate_function(func)
                 code += "    }\n\n"
             else:

@@ -49,6 +49,61 @@ def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
     assert result.returncode == 0, result.stderr + "\n\n" + cuda_code
 
 
+def compile_matrix_helpers_if_cxx_available(helper_code, tmp_path):
+    """Compile CUDA/HIP-neutral matrix helper overloads with a C++ compiler."""
+    compiler = shutil.which("c++") or shutil.which("clang++") or shutil.which("g++")
+    if compiler is None:
+        return
+
+    source_path = tmp_path / "matrix_helpers.cpp"
+    object_path = tmp_path / "matrix_helpers.o"
+    source_path.write_text(
+        "\n".join(
+            [
+                "#define __host__",
+                "#define __device__",
+                "struct float2 { float x; float y; };",
+                "struct float3 { float x; float y; float z; };",
+                "struct float4 { float x; float y; float z; float w; };",
+                "struct double2 { double x; double y; };",
+                "struct double3 { double x; double y; double z; };",
+                "struct double4 { double x; double y; double z; double w; };",
+                "inline float2 make_float2(float x, float y) { return {x, y}; }",
+                "inline float3 make_float3(float x, float y, float z) { return {x, y, z}; }",
+                "inline float4 make_float4(float x, float y, float z, float w) { return {x, y, z, w}; }",
+                "inline double2 make_double2(double x, double y) { return {x, y}; }",
+                "inline double3 make_double3(double x, double y, double z) { return {x, y, z}; }",
+                "inline double4 make_double4(double x, double y, double z, double w) { return {x, y, z, w}; }",
+                helper_code,
+                "int main() {",
+                "    float2x2 a(1.0f);",
+                "    float2x2 b(1.0f, 2.0f, 3.0f, 4.0f);",
+                "    float2x2 c = a + b;",
+                "    c += b;",
+                "    c *= 2.0f;",
+                "    float2x2 d = a * b;",
+                "    float2 v = make_float2(1.0f, 2.0f);",
+                "    float2 mv = a * v;",
+                "    float2 vm = v * a;",
+                "    double4x3 da(1.0);",
+                "    double2x4 db(1.0);",
+                "    double2x3 dc = da * db;",
+                "    (void)c; (void)d; (void)mv; (void)vm; (void)dc;",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [compiler, "-std=c++17", "-c", str(source_path), "-o", str(object_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr + "\n\n" + helper_code
+
+
 class TestCudaCodeGen:
     def test_simple_function_generation(self):
         """Test generating a simple CUDA function from CrossGL"""
@@ -73,6 +128,33 @@ class TestCudaCodeGen:
         assert "#include <device_launch_parameters.h>" in cuda_code
         assert "__device__ void main()" in cuda_code
 
+    def test_global_constants_are_emitted(self):
+        """Test CUDA emits parsed shader constants before generated functions."""
+        source_code = """
+        shader TestShader {
+            const float PI = 3.14159;
+            const int WARP_SIZE = 32;
+            const vec3 UP_VECTOR = vec3(0.0, 1.0, 0.0);
+
+            compute {
+                void main(float *out) {
+                    out[0] = PI + float(WARP_SIZE) + UP_VECTOR.y;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "const float PI = 3.14159;" in cuda_code
+        assert "const int WARP_SIZE = 32;" in cuda_code
+        assert "const float3 UP_VECTOR = make_float3(0.0, 1.0, 0.0);" in cuda_code
+        assert "out[0] = ((PI + float(WARP_SIZE)) + UP_VECTOR.y);" in cuda_code
+
     def test_compute_shader_to_kernel(self):
         """Test converting a compute shader to CUDA kernel"""
         source_code = """
@@ -92,11 +174,47 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "__global__ void main()" in cuda_code
+        assert "__global__ void compute_main()" in cuda_code
+        assert 'extern "C" __global__ void compute_main()' in cuda_code
         assert "int3 threadIdx =" not in cuda_code
         assert "int3 blockIdx =" not in cuda_code
         assert "int3 blockDim =" not in cuda_code
         assert "int3 gridDim =" not in cuda_code
+
+    def test_non_void_compute_entry_point_lowers_to_void_kernel(self, tmp_path):
+        """Test CUDA kernels discard invalid source return values."""
+        ast = ShaderNode(
+            name="NonVoidCudaKernel",
+            execution_model=ExecutionModel.COMPUTE_KERNEL,
+            functions=[
+                FunctionNode(
+                    "returnsValue",
+                    PrimitiveType("float"),
+                    [ParameterNode("out", "float *")],
+                    BlockNode(
+                        [
+                            AssignmentNode(
+                                ArrayAccessNode(
+                                    IdentifierNode("out"),
+                                    LiteralNode(0, PrimitiveType("int")),
+                                ),
+                                LiteralNode(1.0, PrimitiveType("float")),
+                            ),
+                            ReturnNode(LiteralNode(2.0, PrimitiveType("float"))),
+                        ]
+                    ),
+                    qualifiers=["compute"],
+                )
+            ],
+        )
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert 'extern "C" __global__ void returnsValue(float* out)' in cuda_code
+        assert "__global__ float returnsValue" not in cuda_code
+        assert "return 2.0;" not in cuda_code
+        assert "return;" in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_mesh_task_stages_lower_to_cuda_metadata_and_placeholder_hooks(self):
         """Mesh/task stages lower to deterministic CUDA helper representation."""
@@ -629,7 +747,7 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         helper_signature = "__device__ float scale(float value)"
-        kernel_signature = "__global__ void main()"
+        kernel_signature = "__global__ void compute_main()"
         assert helper_signature in cuda_code
         assert kernel_signature in cuda_code
         assert cuda_code.index(helper_signature) < cuda_code.index(kernel_signature)
@@ -671,8 +789,12 @@ class TestCudaCodeGen:
         assert codegen.convert_crossgl_type_to_cuda("f64") == "double"
         assert codegen.convert_crossgl_type_to_cuda("bool") == "bool"
         assert codegen.convert_crossgl_type_to_cuda("void") == "void"
-        assert codegen.convert_crossgl_type_to_cuda("sampler2D") == "texture<float4, 2>"
-        assert codegen.convert_crossgl_type_to_cuda("Texture2D") == "texture<float4, 2>"
+        assert (
+            codegen.convert_crossgl_type_to_cuda("sampler2D") == "cudaTextureObject_t"
+        )
+        assert (
+            codegen.convert_crossgl_type_to_cuda("Texture2D") == "cudaTextureObject_t"
+        )
         assert (
             codegen.convert_crossgl_type_to_cuda("StructuredBuffer<float4>")
             == "const float4*"
@@ -698,11 +820,11 @@ class TestCudaCodeGen:
         )
         assert (
             codegen.convert_crossgl_type_to_cuda("Texture2D<float4>")
-            == "texture<float4, 2>"
+            == "cudaTextureObject_t"
         )
         assert (
             codegen.convert_crossgl_type_to_cuda("array<Texture2D, 2>")
-            == "texture<float4, 2>[2]"
+            == "cudaTextureObject_t[2]"
         )
 
         # Test vector types
@@ -1155,7 +1277,7 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         helper_signature = "__device__ void synchronizeTile()"
-        kernel_signature = "__global__ void main()"
+        kernel_signature = "__global__ void compute_main()"
         assert helper_signature in cuda_code
         assert kernel_signature in cuda_code
         assert cuda_code.index(helper_signature) < cuda_code.index(kernel_signature)
@@ -1176,6 +1298,8 @@ class TestCudaCodeGen:
                 void main() {
                     int lx = gl_LocalInvocationID.x;
                     int gx = gl_GlobalInvocationID.x;
+                    ivec2 globalXY = ivec2(gl_GlobalInvocationID.xy);
+                    uvec2 groupXY = gl_WorkGroupID.xy;
                     int wy = gl_WorkGroupID.y;
                     int bz = gl_WorkGroupSize.z;
                     int nz = gl_NumWorkGroups.z;
@@ -1193,6 +1317,12 @@ class TestCudaCodeGen:
 
         assert "int lx = threadIdx.x;" in cuda_code
         assert "int gx = (blockIdx.x * blockDim.x + threadIdx.x);" in cuda_code
+        assert (
+            "int2 globalXY = make_int2("
+            "(blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y));"
+        ) in cuda_code
+        assert "uint2 groupXY = make_uint2(blockIdx.x, blockIdx.y);" in cuda_code
         assert "int wy = blockIdx.y;" in cuda_code
         assert "int bz = blockDim.z;" in cuda_code
         assert "int nz = gridDim.z;" in cuda_code
@@ -1205,6 +1335,43 @@ class TestCudaCodeGen:
         assert "gl_WorkGroupID" not in cuda_code
         assert "gl_WorkGroupSize" not in cuda_code
         assert "gl_NumWorkGroups" not in cuda_code
+        assert ".xy" not in cuda_code
+
+    def test_hlsl_compute_builtin_parameters_lower_to_cuda_expressions(self):
+        """Test CUDA does not expose HLSL compute built-ins as kernel params."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main(
+                    uvec3 dispatchId @ SV_DispatchThreadID,
+                    uvec3 groupId @ SV_GroupID
+                ) {
+                    uvec3 full = dispatchId;
+                    uint gy = dispatchId.y;
+                    uint bx = groupId.x;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert 'extern "C" __global__ void compute_main()' in cuda_code
+        assert "uint3 dispatchId" not in cuda_code
+        assert "uint3 groupId" not in cuda_code
+        assert (
+            "uint3 full = make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y), "
+            "(blockIdx.z * blockDim.z + threadIdx.z));"
+        ) in cuda_code
+        assert "uint gy = (blockIdx.y * blockDim.y + threadIdx.y);" in cuda_code
+        assert "uint bx = blockIdx.x;" in cuda_code
+        assert "SV_DispatchThreadID" not in cuda_code
+        assert "SV_GroupID" not in cuda_code
 
     def test_vector_swizzles_emit_cuda_make_functions(self):
         """Test CUDA lowers vector swizzles to scalar fields and constructors."""
@@ -1690,6 +1857,8 @@ class TestCudaCodeGen:
                     uvec3 localId @ SV_GroupThreadID,
                     uint lane @ gl_LocalInvocationIndex
                 ) {
+                    uint gx = globalId.x;
+                    uint lx = localId.x;
                     uint copy = lane;
                 }
             }
@@ -1711,7 +1880,16 @@ class TestCudaCodeGen:
             "// CrossGL parameter semantic: lane: local_invocation_index"
             in compute_cuda
         )
-        assert "__global__ void main(uint3 globalId" in compute_cuda
+        assert 'extern "C" __global__ void compute_main()' in compute_cuda
+        assert "uint3 globalId" not in compute_cuda
+        assert "uint3 localId" not in compute_cuda
+        assert "uint lane" not in compute_cuda
+        assert "uint gx = (blockIdx.x * blockDim.x + threadIdx.x);" in compute_cuda
+        assert "uint lx = threadIdx.x;" in compute_cuda
+        assert (
+            "uint copy = (threadIdx.z * blockDim.y * blockDim.x + "
+            "threadIdx.y * blockDim.x + threadIdx.x);"
+        ) in compute_cuda
         compile_cuda_if_nvcc_available(vertex_cuda, tmp_path)
         compile_cuda_if_nvcc_available(fragment_cuda, tmp_path)
         compile_cuda_if_nvcc_available(compute_cuda, tmp_path)
@@ -1792,7 +1970,7 @@ class TestCudaCodeGen:
         assert "};" in cuda_code
         assert "Mode mode = On;" in cuda_code
         assert cuda_code.index("enum Mode {") < cuda_code.index(
-            "__global__ void main()"
+            "__global__ void compute_main()"
         )
 
     def test_variable_with_qualifiers(self):
@@ -2738,6 +2916,11 @@ class TestCudaCodeGen:
                     float d = dot(a, b);
                     vec3 c = cross(a, b);
                     vec3 n = normalize(a);
+                    float weight = 0.5;
+                    vec3 scaled = normalize(a) * weight;
+                    vec3 wave = sin(a);
+                    vec3 noisy = -1.0 + 2.0 * fract(sin(a) * 43758.5453);
+                    vec3 fresnel = (1.0 - a) * pow(max(1.0 - weight, 0.0), 5.0);
                     float l = length(a);
                     dvec2 da = dvec2(3.0, 4.0);
                     double dl = length(da);
@@ -2764,6 +2947,7 @@ class TestCudaCodeGen:
         assert (
             "__device__ inline float3 cgl_float3_normalize(float3 value)" in cuda_code
         )
+        assert "__device__ inline float3 cgl_float3_sin(float3 value)" in cuda_code
         assert "__device__ inline double cgl_double2_length(double2 value)" in cuda_code
         assert (
             "return (lhs.x * rhs.x) + (lhs.y * rhs.y) + (lhs.z * rhs.z);" in cuda_code
@@ -2781,22 +2965,41 @@ class TestCudaCodeGen:
         assert "float d = cgl_float3_dot(a, b);" in cuda_code
         assert "float3 c = cgl_float3_cross(a, b);" in cuda_code
         assert "float3 n = cgl_float3_normalize(a);" in cuda_code
+        assert (
+            "float3 scaled = cgl_float3_mul_scalar(cgl_float3_normalize(a), weight);"
+            in cuda_code
+        )
+        assert "float3 wave = cgl_float3_sin(a);" in cuda_code
+        assert "cgl_float3_mul_scalar(cgl_float3_sin(a), 43758.5453)" in cuda_code
+        assert "cgl_scalar_mul_float3(2.0, cgl_float3_fract" in cuda_code
+        assert "cgl_float3_mul_scalar(cgl_scalar_sub_float3(1.0, a), powf" in cuda_code
         assert "float l = cgl_float3_length(a);" in cuda_code
         assert "double dl = cgl_double2_length(da);" in cuda_code
         assert "float d = dot(a, b);" not in cuda_code
         assert "float3 c = cross(a, b);" not in cuda_code
         assert "float3 n = normalize(a);" not in cuda_code
+        assert "sinf(a)" not in cuda_code
+        assert "cgl_float3_normalize(a) * weight" not in cuda_code
+        assert "2.0 * cgl_float3_fract" not in cuda_code
         assert "float l = length(a);" not in cuda_code
 
-    def test_matrix_types_and_constructors_emit_cuda_names(self):
+    def test_matrix_types_and_constructors_emit_cuda_names(self, tmp_path):
         """Test CUDA maps parser-produced matrix types and constructors."""
         source_code = """
         shader TestShader {
             compute {
                 void main() {
                     mat2 transform = mat2(1.0, 0.0, 0.0, 1.0);
+                    mat2 transform2 = mat2(1.0);
+                    mat2 combined = transform + transform2;
+                    mat2 product = transform * transform2;
+                    mat2 scaled = 2.0 * transform;
+                    vec2 direction = vec2(1.0, 2.0);
+                    vec2 transformed = transform * direction;
+                    vec2 projected = direction * transform;
                     mat3x4 affine;
                     dmat2 precise = dmat2(1.0, 0.0, 0.0, 1.0);
+                    dmat2 preciseProduct = precise * dmat2(1.0);
                     dmat4x3 jacobian;
                 }
             }
@@ -2811,12 +3014,35 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert "float2x2 transform = float2x2(1.0, 0.0, 0.0, 1.0);" in cuda_code
+        assert "float2x2 transform2 = float2x2(1.0);" in cuda_code
+        assert "float2x2 combined = (transform + transform2);" in cuda_code
+        assert "float2x2 product = (transform * transform2);" in cuda_code
+        assert "float2x2 scaled = (2.0 * transform);" in cuda_code
+        assert "float2 transformed = (transform * direction);" in cuda_code
+        assert "float2 projected = (direction * transform);" in cuda_code
         assert "float3x4 affine;" in cuda_code
         assert "double2x2 precise = double2x2(1.0, 0.0, 0.0, 1.0);" in cuda_code
+        assert "double2x2 preciseProduct = (precise * double2x2(1.0));" in cuda_code
         assert "double4x3 jacobian;" in cuda_code
+        assert "__host__ __device__ explicit float2x2(float diagonal)" in cuda_code
+        assert (
+            "inline float2x2 operator*(const float2x2& lhs, " "const float2x2& rhs)"
+        ) in cuda_code
+        assert (
+            "inline float2 operator*(const float2x2& lhs, const float2& rhs)"
+            in cuda_code
+        )
+        assert (
+            "inline float2 operator*(const float2& lhs, const float2x2& rhs)"
+            in cuda_code
+        )
         assert "MatrixType(" not in cuda_code
         assert " = mat2(" not in cuda_code
         assert " = dmat2(" not in cuda_code
+        compile_matrix_helpers_if_cxx_available(
+            codegen.generate_cuda_matrix_type_helpers(),
+            tmp_path,
+        )
 
     def test_bool_vector_constructors_emit_cuda_names(self):
         """Test CUDA maps boolean vectors to supported uchar vector types."""
@@ -2910,7 +3136,8 @@ class TestCudaCodeGen:
         assert "float f = atan2f(x, 1.0);" in cuda_code
         assert "float g = exp2f(x);" in cuda_code
         assert "float h = log2f(x);" in cuda_code
-        assert "float i = lerp(0.0, 1.0, 0.25);" in cuda_code
+        assert "float i = (0.0 + ((1.0 - 0.0) * 0.25));" in cuda_code
+        assert "float i = lerp(0.0, 1.0, 0.25);" not in cuda_code
         assert "inversesqrt(" not in cuda_code
         assert "mod(" not in cuda_code
         assert "mix(" not in cuda_code
@@ -3600,11 +3827,14 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "texture<float4, 2> tex;" in cuda_code
+        assert "cudaTextureObject_t tex;" in cuda_code
         assert "float2 uv = make_float2(0.5, 0.5);" in cuda_code
-        assert "float4 color = tex2D(tex, uv.x, uv.y);" in cuda_code
-        assert "float4 lodColor = tex2DLod(tex, uv.x, uv.y, 1.0);" in cuda_code
-        assert "float4 gradColor = tex2DGrad(tex, uv.x, uv.y, uv, uv);" in cuda_code
+        assert "float4 color = tex2D<float4>(tex, uv.x, uv.y);" in cuda_code
+        assert "float4 lodColor = tex2DLod<float4>(tex, uv.x, uv.y, 1.0);" in cuda_code
+        assert (
+            "float4 gradColor = tex2DGrad<float4>(tex, uv.x, uv.y, uv, uv);"
+            in cuda_code
+        )
         assert "sampler2D tex;" not in cuda_code
         assert " = texture(" not in cuda_code
         assert " = textureLod(" not in cuda_code
@@ -3658,17 +3888,19 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
-        assert "texture<float4, 2> colorMap;" in cuda_code
+        assert "cudaTextureObject_t colorMap;" in cuda_code
         assert "cudaTextureObject_t linearSampler;" in cuda_code
         assert (
-            "__device__ void sampleAll(texture<float4, 2> tex, "
+            "__device__ void sampleAll(cudaTextureObject_t tex, "
             "cudaTextureObject_t sampleState, float2 uv, float2 ddx, float2 ddy)"
             in cuda_code
         )
-        assert "float4 sampled = tex2D(tex, uv.x, uv.y);" in cuda_code
-        assert "float4 mip = tex2DLod(tex, uv.x, uv.y, 2.0);" in cuda_code
-        assert "float4 grad = tex2DGrad(tex, uv.x, uv.y, ddx, ddy);" in cuda_code
-        assert "return tex2D(colorMap, input.uv.x, input.uv.y);" in cuda_code
+        assert "float4 sampled = tex2D<float4>(tex, uv.x, uv.y);" in cuda_code
+        assert "float4 mip = tex2DLod<float4>(tex, uv.x, uv.y, 2.0);" in cuda_code
+        assert (
+            "float4 grad = tex2DGrad<float4>(tex, uv.x, uv.y, ddx, ddy);" in cuda_code
+        )
+        assert "return tex2D<float4>(colorMap, input.uv.x, input.uv.y);" in cuda_code
         assert "sampleState.x" not in cuda_code
         assert "linearSampler.x" not in cuda_code
         assert "texture(tex, sampleState" not in cuda_code
@@ -3746,9 +3978,9 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "texture<float4, 2> tex;" in cuda_code
-        assert "texture<float4, 3> volumeMap;" in cuda_code
-        assert "textureCube<float4> envMap;" in cuda_code
+        assert "cudaTextureObject_t tex;" in cuda_code
+        assert "cudaTextureObject_t volumeMap;" in cuda_code
+        assert "cudaTextureObject_t envMap;" in cuda_code
         assert "cudaTextureObject_t layers;" in cuda_code
         assert "cudaTextureObject_t probes;" in cuda_code
         assert "cudaSurfaceObject_t lineImage;" in cuda_code
@@ -3758,8 +3990,8 @@ class TestCudaCodeGen:
         assert "cudaSurfaceObject_t counterLine;" in cuda_code
         assert "cudaSurfaceObject_t signedImage;" in cuda_code
         assert (
-            "__device__ void sampleResources(texture<float4, 2> paramTex, "
-            "texture<float4, 3> paramVolume, textureCube<float4> paramEnv, "
+            "__device__ void sampleResources(cudaTextureObject_t paramTex, "
+            "cudaTextureObject_t paramVolume, cudaTextureObject_t paramEnv, "
             "cudaTextureObject_t paramLayers, cudaTextureObject_t paramProbes"
         ) in cuda_code
         assert (
@@ -3769,12 +4001,14 @@ class TestCudaCodeGen:
             "cudaSurfaceObject_t paramVolume, cudaSurfaceObject_t paramLayers, "
             "cudaSurfaceObject_t paramCounters, cudaSurfaceObject_t paramSigned"
         ) in cuda_code
-        assert "float4 color = tex2D(paramTex, uv.x, uv.y);" in cuda_code
+        assert "float4 color = tex2D<float4>(paramTex, uv.x, uv.y);" in cuda_code
         assert (
-            "float4 volumeColor = tex3D(paramVolume, uvw.x, uvw.y, uvw.z);" in cuda_code
+            "float4 volumeColor = tex3D<float4>(paramVolume, uvw.x, uvw.y, uvw.z);"
+            in cuda_code
         )
         assert (
-            "float4 envColor = texCubemap(paramEnv, uvw.x, uvw.y, uvw.z);" in cuda_code
+            "float4 envColor = texCubemap<float4>(paramEnv, uvw.x, uvw.y, uvw.z);"
+            in cuda_code
         )
         assert (
             "float4 layerColor = tex2DLayered<float4>"
@@ -4103,27 +4337,27 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "texture<float4, 1> ramp;" in cuda_code
+        assert "cudaTextureObject_t ramp;" in cuda_code
         assert "cudaTextureObject_t lineLayers;" in cuda_code
-        assert "texture<float4, 2> tex;" in cuda_code
+        assert "cudaTextureObject_t tex;" in cuda_code
         assert "cudaTextureObject_t layers;" in cuda_code
-        assert "texture<float4, 3> volumeMap;" in cuda_code
-        assert "textureCube<float4> cubeMap;" in cuda_code
+        assert "cudaTextureObject_t volumeMap;" in cuda_code
+        assert "cudaTextureObject_t cubeMap;" in cuda_code
         assert "cudaTextureObject_t cubeLayers;" in cuda_code
-        assert "texture<float4, 2> textureGrid[2];" in cuda_code
+        assert "cudaTextureObject_t textureGrid[2];" in cuda_code
         assert "cudaTextureObject_t layerGrid[2];" in cuda_code
         assert (
-            "__device__ void sampleResources(texture<float4, 2> paramTex, "
-            "cudaTextureObject_t paramLayers, texture<float4, 3> paramVolume, "
-            "textureCube<float4> paramCube, cudaTextureObject_t paramCubes"
+            "__device__ void sampleResources(cudaTextureObject_t paramTex, "
+            "cudaTextureObject_t paramLayers, cudaTextureObject_t paramVolume, "
+            "cudaTextureObject_t paramCube, cudaTextureObject_t paramCubes"
         ) in cuda_code
         assert (
-            "__device__ void sampleArrays(texture<float4, 2> paramTextures[2], "
+            "__device__ void sampleArrays(cudaTextureObject_t paramTextures[2], "
             "cudaTextureObject_t paramLayerTextures[2], int index"
         ) in cuda_code
-        assert "float4 rampColor = tex1D(ramp, u);" in cuda_code
-        assert "float4 rampMip = tex1DLod(ramp, u, 1.0);" in cuda_code
-        assert "float4 rampGrad = tex1DGrad(ramp, u, du, du);" in cuda_code
+        assert "float4 rampColor = tex1D<float4>(ramp, u);" in cuda_code
+        assert "float4 rampMip = tex1DLod<float4>(ramp, u, 1.0);" in cuda_code
+        assert "float4 rampGrad = tex1DGrad<float4>(ramp, u, du, du);" in cuda_code
         assert (
             "float4 lineLayerColor = tex1DLayered<float4>"
             "(lineLayers, lineCoord.x, lineCoord.y);" in cuda_code
@@ -4136,10 +4370,13 @@ class TestCudaCodeGen:
             "float4 lineLayerGrad = tex1DLayeredGrad<float4>"
             "(lineLayers, lineCoord.x, lineCoord.y, du, du);" in cuda_code
         )
-        assert "float4 color = tex2D(paramTex, uv.x, uv.y);" in cuda_code
-        assert "float4 texMip = tex2DLod(paramTex, uv.x, uv.y, 2.0);" in cuda_code
+        assert "float4 color = tex2D<float4>(paramTex, uv.x, uv.y);" in cuda_code
         assert (
-            "float4 texGrad = tex2DGrad(paramTex, uv.x, uv.y, ddx2, ddy2);" in cuda_code
+            "float4 texMip = tex2DLod<float4>(paramTex, uv.x, uv.y, 2.0);" in cuda_code
+        )
+        assert (
+            "float4 texGrad = tex2DGrad<float4>(paramTex, uv.x, uv.y, ddx2, ddy2);"
+            in cuda_code
         )
         assert (
             "float4 layerColor = tex2DLayered<float4>"
@@ -4154,28 +4391,29 @@ class TestCudaCodeGen:
             "(paramLayers, uvLayer.x, uvLayer.y, uvLayer.z, ddx2, ddy2);" in cuda_code
         )
         assert (
-            "float4 volumeColor = tex3D(paramVolume, uvw.x, uvw.y, uvw.z);" in cuda_code
-        )
-        assert (
-            "float4 volumeMip = tex3DLod(paramVolume, uvw.x, uvw.y, uvw.z, 1.0);"
+            "float4 volumeColor = tex3D<float4>(paramVolume, uvw.x, uvw.y, uvw.z);"
             in cuda_code
         )
         assert (
-            "float4 volumeGrad = tex3DGrad"
+            "float4 volumeMip = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "float4 volumeGrad = tex3DGrad<float4>"
             "(paramVolume, uvw.x, uvw.y, uvw.z, "
             "make_float4(ddx3.x, ddx3.y, ddx3.z, 0.0f), "
             "make_float4(ddy3.x, ddy3.y, ddy3.z, 0.0f));" in cuda_code
         )
         assert (
-            "float4 cubeColor = texCubemap(paramCube, dir.x, dir.y, dir.z);"
+            "float4 cubeColor = texCubemap<float4>(paramCube, dir.x, dir.y, dir.z);"
             in cuda_code
         )
         assert (
-            "float4 cubeMip = texCubemapLod(paramCube, dir.x, dir.y, dir.z, 1.0);"
+            "float4 cubeMip = texCubemapLod<float4>(paramCube, dir.x, dir.y, dir.z, 1.0);"
             in cuda_code
         )
         assert (
-            "float4 cubeGrad = texCubemapGrad"
+            "float4 cubeGrad = texCubemapGrad<float4>"
             "(paramCube, dir.x, dir.y, dir.z, ddxCube, ddyCube);" in cuda_code
         )
         assert (
@@ -4193,14 +4431,15 @@ class TestCudaCodeGen:
             "ddxCube, ddyCube);" in cuda_code
         )
         assert (
-            "float4 globalSample = tex2D(textureGrid[index], uv.x, uv.y);" in cuda_code
-        )
-        assert (
-            "float4 globalMip = tex2DLod(textureGrid[index], uv.x, uv.y, 1.0);"
+            "float4 globalSample = tex2D<float4>(textureGrid[index], uv.x, uv.y);"
             in cuda_code
         )
         assert (
-            "float4 globalGrad = tex2DGrad(textureGrid[index], uv.x, uv.y, uv, uv);"
+            "float4 globalMip = tex2DLod<float4>(textureGrid[index], uv.x, uv.y, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "float4 globalGrad = tex2DGrad<float4>(textureGrid[index], uv.x, uv.y, uv, uv);"
             in cuda_code
         )
         assert (
@@ -4216,14 +4455,15 @@ class TestCudaCodeGen:
             "(layerGrid[index], uvLayer.x, uvLayer.y, uvLayer.z, uv, uv);" in cuda_code
         )
         assert (
-            "float4 paramSample = tex2D(paramTextures[index], uv.x, uv.y);" in cuda_code
-        )
-        assert (
-            "float4 paramMip = tex2DLod(paramTextures[index], uv.x, uv.y, 1.0);"
+            "float4 paramSample = tex2D<float4>(paramTextures[index], uv.x, uv.y);"
             in cuda_code
         )
         assert (
-            "float4 paramGrad = tex2DGrad(paramTextures[index], uv.x, uv.y, uv, uv);"
+            "float4 paramMip = tex2DLod<float4>(paramTextures[index], uv.x, uv.y, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "float4 paramGrad = tex2DGrad<float4>(paramTextures[index], uv.x, uv.y, uv, uv);"
             in cuda_code
         )
         assert (
@@ -4329,16 +4569,16 @@ class TestCudaCodeGen:
 
         assert "struct CglResourceQueryInfo" in cuda_code
         assert "__device__ inline int cgl_lod_extent" in cuda_code
-        assert "texture<float4, 1> ramp;" in cuda_code
+        assert "cudaTextureObject_t ramp;" in cuda_code
         assert "cudaTextureObject_t lineLayers;" in cuda_code
-        assert "texture<float4, 2> colorMap;" in cuda_code
+        assert "cudaTextureObject_t colorMap;" in cuda_code
         assert "cudaTextureObject_t layers;" in cuda_code
-        assert "texture<float4, 3> volumeMap;" in cuda_code
-        assert "textureCube<float4> cubeMap;" in cuda_code
+        assert "cudaTextureObject_t volumeMap;" in cuda_code
+        assert "cudaTextureObject_t cubeMap;" in cuda_code
         assert "cudaTextureObject_t cubeLayers;" in cuda_code
         assert "cudaTextureObject_t msTex;" in cuda_code
         assert "cudaTextureObject_t msLayers;" in cuda_code
-        assert "texture<float4, 2> textureGrid[2];" in cuda_code
+        assert "cudaTextureObject_t textureGrid[2];" in cuda_code
         assert "CglResourceQueryInfo lineLayers_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo layers_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo volumeMap_metadata = {};" in cuda_code
@@ -4348,9 +4588,9 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo textureGrid_metadata[2] = {};" in cuda_code
         assert (
             "__device__ void queryResources("
-            "texture<float4, 1> paramRamp, "
+            "cudaTextureObject_t paramRamp, "
             "CglResourceQueryInfo paramRamp_metadata, "
-            "texture<float4, 2> paramTex, "
+            "cudaTextureObject_t paramTex, "
             "CglResourceQueryInfo paramTex_metadata, "
             "cudaTextureObject_t paramLayers, "
             "CglResourceQueryInfo paramLayers_metadata, "
@@ -4412,12 +4652,14 @@ class TestCudaCodeGen:
             "int layerSamples = cgl_textureSamples_sampler2DMSArray"
             "(msLayers_metadata);" in cuda_code
         )
-        assert "float4 fetchRamp = tex1Dfetch(paramRamp, x);" in cuda_code
+        assert "float4 fetchRamp = tex1Dfetch<float4>(paramRamp, x);" in cuda_code
         assert (
             "float4 fetchLineLayer = tex1DLayered<float4>"
             "(lineLayers, pixel.x, pixel.y);" in cuda_code
         )
-        assert "float4 fetchTex = tex2D(paramTex, pixel.x, pixel.y);" in cuda_code
+        assert (
+            "float4 fetchTex = tex2D<float4>(paramTex, pixel.x, pixel.y);" in cuda_code
+        )
         assert (
             "float4 fetchLayer = tex2DLayered<float4>"
             "(paramLayers, pixelLayer.x, pixelLayer.y, pixelLayer.z);" in cuda_code
@@ -6367,7 +6609,7 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert "cudaTextureObject_t layers;" in cuda_code
-        assert "texture<float4, 3> volumeMap;" in cuda_code
+        assert "cudaTextureObject_t volumeMap;" in cuda_code
         assert (
             "float4 layerColor = tex2DLayered<float4>"
             "(paramLayers, uvLayer.x, uvLayer.y, uvLayer.z);" in cuda_code
@@ -6381,14 +6623,15 @@ class TestCudaCodeGen:
             "(paramLayers, uvLayer.x, uvLayer.y, uvLayer.z, ddx2, ddy2);" in cuda_code
         )
         assert (
-            "float4 volumeColor = tex3D(paramVolume, uvw.x, uvw.y, uvw.z);" in cuda_code
-        )
-        assert (
-            "float4 volumeMip = tex3DLod(paramVolume, uvw.x, uvw.y, uvw.z, 1.0);"
+            "float4 volumeColor = tex3D<float4>(paramVolume, uvw.x, uvw.y, uvw.z);"
             in cuda_code
         )
         assert (
-            "float4 volumeGrad = tex3DGrad"
+            "float4 volumeMip = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "float4 volumeGrad = tex3DGrad<float4>"
             "(paramVolume, uvw.x, uvw.y, uvw.z, "
             "make_float4(ddx3.x, ddx3.y, ddx3.z, 0.0f), "
             "make_float4(ddy3.x, ddy3.y, ddy3.z, 0.0f));" in cuda_code
@@ -6434,20 +6677,21 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "texture<float4, 1> ramp;" in cuda_code
-        assert "textureCube<float4> envMap;" in cuda_code
-        assert "float4 rampColor = tex1D(paramRamp, u);" in cuda_code
-        assert "float4 rampMip = tex1DLod(paramRamp, u, 2.0);" in cuda_code
-        assert "float4 rampGrad = tex1DGrad(paramRamp, u, du, du);" in cuda_code
+        assert "cudaTextureObject_t ramp;" in cuda_code
+        assert "cudaTextureObject_t envMap;" in cuda_code
+        assert "float4 rampColor = tex1D<float4>(paramRamp, u);" in cuda_code
+        assert "float4 rampMip = tex1DLod<float4>(paramRamp, u, 2.0);" in cuda_code
+        assert "float4 rampGrad = tex1DGrad<float4>(paramRamp, u, du, du);" in cuda_code
         assert (
-            "float4 envColor = texCubemap(paramEnv, dir.x, dir.y, dir.z);" in cuda_code
-        )
-        assert (
-            "float4 envMip = texCubemapLod(paramEnv, dir.x, dir.y, dir.z, 1.0);"
+            "float4 envColor = texCubemap<float4>(paramEnv, dir.x, dir.y, dir.z);"
             in cuda_code
         )
         assert (
-            "float4 envGrad = texCubemapGrad"
+            "float4 envMip = texCubemapLod<float4>(paramEnv, dir.x, dir.y, dir.z, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "float4 envGrad = texCubemapGrad<float4>"
             "(paramEnv, dir.x, dir.y, dir.z, ddxCube, ddyCube);" in cuda_code
         )
         assert " = texture(" not in cuda_code
@@ -6531,8 +6775,8 @@ class TestCudaCodeGen:
         )
         assert "sampler1DArray lineArray" not in cuda_code
         assert "sampler1DArray paramLineArray" not in cuda_code
-        assert "tex2D(lineArray" not in cuda_code
-        assert "tex2D(paramLineArray" not in cuda_code
+        assert "tex2D<float4>(lineArray" not in cuda_code
+        assert "tex2D<float4>(paramLineArray" not in cuda_code
         assert "textureSize(" not in cuda_code
         assert "textureQueryLevels(" not in cuda_code
 
@@ -6801,10 +7045,10 @@ class TestCudaCodeGen:
         assert "texture(cascades" not in cuda_code
         assert "texture(cubeShadow" not in cuda_code
         assert "texture(cubeArrayShadow" not in cuda_code
-        assert " = tex2D(shadowMap" not in cuda_code
-        assert " = tex2D(cascades" not in cuda_code
-        assert " = tex2D(cubeShadow" not in cuda_code
-        assert " = tex2D(cubeArrayShadow" not in cuda_code
+        assert " = tex2D<float4>(shadowMap" not in cuda_code
+        assert " = tex2D<float4>(cascades" not in cuda_code
+        assert " = tex2D<float4>(cubeShadow" not in cuda_code
+        assert " = tex2D<float4>(cubeArrayShadow" not in cuda_code
 
     def test_texture_gather_calls_emit_cuda_helpers_and_diagnostics(self):
         """Test CUDA lowers supported advanced texture calls and diagnoses the rest."""
@@ -6921,46 +7165,46 @@ class TestCudaCodeGen:
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         )
         assert (
-            "float4 offsetSample = tex2D"
+            "float4 offsetSample = tex2D<float4>"
             "(colorMap, (uv.x + offset.x), (uv.y + offset.y));" in cuda_code
         )
         assert (
-            "float4 lodOffsetSample = tex2DLod"
+            "float4 lodOffsetSample = tex2DLod<float4>"
             "(colorMap, (uv.x + offset.x), (uv.y + offset.y), 1.0);" in cuda_code
         )
         assert (
-            "float4 gradOffsetSample = tex2DGrad"
+            "float4 gradOffsetSample = tex2DGrad<float4>"
             "(colorMap, (uv.x + offset.x), (uv.y + offset.y), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 projected = tex2D"
+            "float4 projected = tex2D<float4>"
             "(colorMap, (uvw.x / uvw.z), (uvw.y / uvw.z));" in cuda_code
         )
         assert (
-            "float4 projectedOffset = tex2D"
+            "float4 projectedOffset = tex2D<float4>"
             "(colorMap, ((uvw.x / uvw.z) + offset.x), "
             "((uvw.y / uvw.z) + offset.y));" in cuda_code
         )
         assert (
-            "float4 projectedLod = tex2DLod"
+            "float4 projectedLod = tex2DLod<float4>"
             "(colorMap, (uvw.x / uvw.z), (uvw.y / uvw.z), 1.0);" in cuda_code
         )
         assert (
-            "float4 projectedLodOffset = tex2DLod"
+            "float4 projectedLodOffset = tex2DLod<float4>"
             "(colorMap, ((uvw.x / uvw.z) + offset.x), "
             "((uvw.y / uvw.z) + offset.y), 1.0);" in cuda_code
         )
         assert (
-            "float4 projectedGrad = tex2DGrad"
+            "float4 projectedGrad = tex2DGrad<float4>"
             "(colorMap, (uvw.x / uvw.z), (uvw.y / uvw.z), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 projectedGradOffset = tex2DGrad"
+            "float4 projectedGradOffset = tex2DGrad<float4>"
             "(colorMap, ((uvw.x / uvw.z) + offset.x), "
             "((uvw.y / uvw.z) + offset.y), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 fetchedOffset = tex2D"
+            "float4 fetchedOffset = tex2D<float4>"
             "(colorMap, (offset.x + offset.x), (offset.y + offset.y));" in cuda_code
         )
         assert "__device__ inline float4 cgl_float4_add" in cuda_code
@@ -7150,7 +7394,7 @@ class TestCudaCodeGen:
                 "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
             ) in cuda_code
         assert (
-            "float4 validButUnsupported = tex2D"
+            "float4 validButUnsupported = tex2D<float4>"
             "(colorMap, (uv.x + offset2.x), (uv.y + offset2.y));" in cuda_code
         )
         assert (
@@ -7223,9 +7467,9 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
-        assert "float4 line = tex1D(lineTex, (uq.x / uq.y));" in cuda_code
+        assert "float4 line = tex1D<float4>(lineTex, (uq.x / uq.y));" in cuda_code
         assert (
-            "float4 color = tex2D(colorMap, (uvq.x / uvq.z), (uvq.y / uvq.z));"
+            "float4 color = tex2D<float4>(colorMap, (uvq.x / uvq.z), (uvq.y / uvq.z));"
             in cuda_code
         )
         assert (
@@ -7234,22 +7478,22 @@ class TestCudaCodeGen:
             "(uvLayerQ.y / uvLayerQ.w), uvLayerQ.z);" in cuda_code
         )
         assert (
-            "float4 volume = tex3D"
+            "float4 volume = tex3D<float4>"
             "(volumeMap, (xyzq.x / xyzq.w), "
             "(xyzq.y / xyzq.w), (xyzq.z / xyzq.w));" in cuda_code
         )
         assert (
-            "float4 cube = texCubemap"
+            "float4 cube = texCubemap<float4>"
             "(cubeMap, (dirQ.x / dirQ.w), "
             "(dirQ.y / dirQ.w), (dirQ.z / dirQ.w));" in cuda_code
         )
         assert (
-            "float4 colorOffset = tex2D"
+            "float4 colorOffset = tex2D<float4>"
             "(colorMap, ((uvq.x / uvq.z) + offset2.x), "
             "((uvq.y / uvq.z) + offset2.y));" in cuda_code
         )
         assert (
-            "float4 volumeGradOffset = tex3DGrad"
+            "float4 volumeGradOffset = tex3DGrad<float4>"
             "(volumeMap, ((xyzq.x / xyzq.w) + offset3.x), "
             "((xyzq.y / xyzq.w) + offset3.y), "
             "((xyzq.z / xyzq.w) + offset3.z), "
@@ -7363,15 +7607,15 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "texture<float4, 2> colorMap;" in cuda_code
+        assert "cudaTextureObject_t colorMap;" in cuda_code
         assert "cudaTextureObject_t layers;" in cuda_code
-        assert "texture<float4, 3> volumeMap;" in cuda_code
-        assert "textureCube<float4> cubeMap;" in cuda_code
+        assert "cudaTextureObject_t volumeMap;" in cuda_code
+        assert "cudaTextureObject_t cubeMap;" in cuda_code
         assert "cudaTextureObject_t cubeLayers;" in cuda_code
         assert "cudaTextureObject_t msTex;" in cuda_code
         assert (
-            "__device__ void unsupported(texture<float4, 2> paramTex, "
-            "cudaTextureObject_t paramLayers, textureCube<float4> paramCube"
+            "__device__ void unsupported(cudaTextureObject_t paramTex, "
+            "cudaTextureObject_t paramLayers, cudaTextureObject_t paramCube"
         ) in cuda_code
         assert (
             "float4 gathered = tex2Dgather<float4>(paramTex, uv.x, uv.y, 1);"
@@ -7407,7 +7651,7 @@ class TestCudaCodeGen:
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         )
         assert (
-            "float4 offsetSample = tex2D"
+            "float4 offsetSample = tex2D<float4>"
             "(paramTex, (uv.x + offset.x), (uv.y + offset.y));" in cuda_code
         )
         assert (
@@ -7416,42 +7660,42 @@ class TestCudaCodeGen:
             "(uvLayer.y + offset.y), uvLayer.z);" in cuda_code
         )
         assert (
-            "float4 lodOffsetSample = tex2DLod"
+            "float4 lodOffsetSample = tex2DLod<float4>"
             "(paramTex, (uv.x + offset.x), (uv.y + offset.y), 1.0);" in cuda_code
         )
         assert (
-            "float4 gradOffsetSample = tex2DGrad"
+            "float4 gradOffsetSample = tex2DGrad<float4>"
             "(paramTex, (uv.x + offset.x), (uv.y + offset.y), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 projected = tex2D"
+            "float4 projected = tex2D<float4>"
             "(paramTex, (uvw.x / uvw.z), (uvw.y / uvw.z));" in cuda_code
         )
         assert (
-            "float4 projectedOffset = tex2D"
+            "float4 projectedOffset = tex2D<float4>"
             "(paramTex, ((uvw.x / uvw.z) + offset.x), "
             "((uvw.y / uvw.z) + offset.y));" in cuda_code
         )
         assert (
-            "float4 projectedLod = tex2DLod"
+            "float4 projectedLod = tex2DLod<float4>"
             "(paramTex, (uvw.x / uvw.z), (uvw.y / uvw.z), 1.0);" in cuda_code
         )
         assert (
-            "float4 projectedLodOffset = tex2DLod"
+            "float4 projectedLodOffset = tex2DLod<float4>"
             "(paramTex, ((uvw.x / uvw.z) + offset.x), "
             "((uvw.y / uvw.z) + offset.y), 1.0);" in cuda_code
         )
         assert (
-            "float4 projectedGrad = tex2DGrad"
+            "float4 projectedGrad = tex2DGrad<float4>"
             "(paramTex, (uvw.x / uvw.z), (uvw.y / uvw.z), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 projectedGradOffset = tex2DGrad"
+            "float4 projectedGradOffset = tex2DGrad<float4>"
             "(paramTex, ((uvw.x / uvw.z) + offset.x), "
             "((uvw.y / uvw.z) + offset.y), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 fetchedOffset = tex2D"
+            "float4 fetchedOffset = tex2D<float4>"
             "(paramTex, (pixel.x + offset.x), (pixel.y + offset.y));" in cuda_code
         )
         assert (
@@ -7546,10 +7790,10 @@ class TestCudaCodeGen:
         }
 
         assert "cudaTextureObject_t linearState;" in declarations
-        assert "texture<float4, 1> ramp;" in declarations
-        assert "texture<float4, 2> colorMap;" in declarations
-        assert "texture<float4, 3> volumeMap;" in declarations
-        assert "textureCube<float4> environmentMap;" in declarations
+        assert "cudaTextureObject_t ramp;" in declarations
+        assert "cudaTextureObject_t colorMap;" in declarations
+        assert "cudaTextureObject_t volumeMap;" in declarations
+        assert "cudaTextureObject_t environmentMap;" in declarations
         assert "cudaTextureObject_t layers;" in declarations
         assert "cudaTextureObject_t shadowMap;" in declarations
         assert "cudaTextureObject_t cascades;" in declarations
@@ -7690,12 +7934,14 @@ class TestCudaCodeGen:
         assert "cudaSurfaceObject_t layerImage;" in cuda_code
         assert "cudaSurfaceObject_t counterLine;" in cuda_code
         assert "cudaSurfaceObject_t signedImage;" in cuda_code
-        assert "float4 fetchedLine = tex1Dfetch(lineTex, x);" in cuda_code
+        assert "float4 fetchedLine = tex1Dfetch<float4>(lineTex, x);" in cuda_code
         assert (
             "float4 fetchedLineLayer = tex1DLayered<float4>"
             "(lineLayers, pixel.x, pixel.y);" in cuda_code
         )
-        assert "float4 fetched = tex2D(paramTex, pixel.x, pixel.y);" in cuda_code
+        assert (
+            "float4 fetched = tex2D<float4>(paramTex, pixel.x, pixel.y);" in cuda_code
+        )
         assert (
             "float4 fetchedLayer = tex2DLayered<float4>"
             "(layers, pixelLayer.x, pixelLayer.y, pixelLayer.z);" in cuda_code
@@ -9927,10 +10173,13 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "float4 sampled = tex2D(bundle.tex, uv.x, uv.y);" in cuda_code
-        assert "float4 sampledLod = tex2DLod(bundle.tex, uv.x, uv.y, 1.0);" in cuda_code
+        assert "float4 sampled = tex2D<float4>(bundle.tex, uv.x, uv.y);" in cuda_code
         assert (
-            "float4 sampledElement = tex2D(bundle.textures[slot], uv.x, uv.y);"
+            "float4 sampledLod = tex2DLod<float4>(bundle.tex, uv.x, uv.y, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "float4 sampledElement = tex2D<float4>(bundle.textures[slot], uv.x, uv.y);"
             in cuda_code
         )
         assert (
@@ -10030,17 +10279,20 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "float4 line = tex1D(lineTex, u);" in cuda_code
-        assert "float4 lineLod = tex1DLod(lineTex, u, 1.0);" in cuda_code
-        assert "float4 lineGrad = tex1DGrad(lineTex, u, du, du);" in cuda_code
+        assert "float4 line = tex1D<float4>(lineTex, u);" in cuda_code
+        assert "float4 lineLod = tex1DLod<float4>(lineTex, u, 1.0);" in cuda_code
+        assert "float4 lineGrad = tex1DGrad<float4>(lineTex, u, du, du);" in cuda_code
         assert (
             "float4 lineLayer = tex1DLayered<float4>(lineLayers, uv.x, uv.y);"
             in cuda_code
         )
-        assert "float4 color = tex2D(tex, uv.x, uv.y);" in cuda_code
-        assert "float4 typedColor = tex2D(typedTex, uv.x, uv.y);" in cuda_code
-        assert "float4 colorLod = tex2DLod(tex, uv.x, uv.y, 1.0);" in cuda_code
-        assert "float4 colorGrad = tex2DGrad(tex, uv.x, uv.y, ddx2, ddy2);" in cuda_code
+        assert "float4 color = tex2D<float4>(tex, uv.x, uv.y);" in cuda_code
+        assert "float4 typedColor = tex2D<float4>(typedTex, uv.x, uv.y);" in cuda_code
+        assert "float4 colorLod = tex2DLod<float4>(tex, uv.x, uv.y, 1.0);" in cuda_code
+        assert (
+            "float4 colorGrad = tex2DGrad<float4>(tex, uv.x, uv.y, ddx2, ddy2);"
+            in cuda_code
+        )
         assert (
             "float4 layer = tex2DLayered<float4>"
             "(layers, uvw.x, uvw.y, uvw.z);" in cuda_code
@@ -10053,24 +10305,30 @@ class TestCudaCodeGen:
             "float4 layerGrad = tex2DLayeredGrad<float4>"
             "(layers, uvw.x, uvw.y, uvw.z, ddx2, ddy2);" in cuda_code
         )
-        assert "float4 volumeColor = tex3D(volume, uvw.x, uvw.y, uvw.z);" in cuda_code
         assert (
-            "float4 volumeLod = tex3DLod(volume, uvw.x, uvw.y, uvw.z, 1.0);"
+            "float4 volumeColor = tex3D<float4>(volume, uvw.x, uvw.y, uvw.z);"
             in cuda_code
         )
         assert (
-            "float4 volumeGrad = tex3DGrad"
+            "float4 volumeLod = tex3DLod<float4>(volume, uvw.x, uvw.y, uvw.z, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "float4 volumeGrad = tex3DGrad<float4>"
             "(volume, uvw.x, uvw.y, uvw.z, "
             "make_float4(ddx3.x, ddx3.y, ddx3.z, 0.0f), "
             "make_float4(ddy3.x, ddy3.y, ddy3.z, 0.0f));" in cuda_code
         )
-        assert "float4 cube = texCubemap(cubeTex, uvw.x, uvw.y, uvw.z);" in cuda_code
         assert (
-            "float4 cubeLod = texCubemapLod(cubeTex, uvw.x, uvw.y, uvw.z, 1.0);"
+            "float4 cube = texCubemap<float4>(cubeTex, uvw.x, uvw.y, uvw.z);"
             in cuda_code
         )
         assert (
-            "float4 cubeGrad = texCubemapGrad"
+            "float4 cubeLod = texCubemapLod<float4>(cubeTex, uvw.x, uvw.y, uvw.z, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "float4 cubeGrad = texCubemapGrad<float4>"
             "(cubeTex, uvw.x, uvw.y, uvw.z, "
             "make_float4(ddx3.x, ddx3.y, ddx3.z, 0.0f), "
             "make_float4(ddy3.x, ddy3.y, ddy3.z, 0.0f));" in cuda_code
@@ -10103,12 +10361,12 @@ class TestCudaCodeGen:
                 f"{func_name} coordinate rank on {texture_type} */ "
                 "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
             ) in cuda_code
-        assert "tex1D(lineTex, uv)" not in cuda_code
+        assert "tex1D<float4>(lineTex, uv)" not in cuda_code
         assert "tex1DLayered<float4>(lineLayers, u." not in cuda_code
-        assert "tex2D(tex, u." not in cuda_code
+        assert "tex2D<float4>(tex, u." not in cuda_code
         assert "tex2DLayered<float4>(layers, uv.x, uv.y, uv.z)" not in cuda_code
-        assert "tex3D(volume, uv.x, uv.y, uv.z)" not in cuda_code
-        assert "texCubemap(cubeTex, uv.x, uv.y, uv.z)" not in cuda_code
+        assert "tex3D<float4>(volume, uv.x, uv.y, uv.z)" not in cuda_code
+        assert "texCubemap<float4>(cubeTex, uv.x, uv.y, uv.z)" not in cuda_code
         assert (
             "texCubemapLayered<float4>(cubeLayers, uvw.x, uvw.y, uvw.z, uvw.w)"
             not in cuda_code
@@ -10175,36 +10433,39 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "float4 validLine = tex1DGrad(lineTex, u, du, du);" in cuda_code
+        assert "float4 validLine = tex1DGrad<float4>(lineTex, u, du, du);" in cuda_code
         assert (
             "float4 validLineLayer = tex1DLayeredGrad<float4>"
             "(lineLayers, uv.x, uv.y, du, du);" in cuda_code
         )
-        assert "float4 validTex = tex2DGrad(tex, uv.x, uv.y, ddx2, ddy2);" in cuda_code
+        assert (
+            "float4 validTex = tex2DGrad<float4>(tex, uv.x, uv.y, ddx2, ddy2);"
+            in cuda_code
+        )
         assert (
             "float4 validLayer = tex2DLayeredGrad<float4>"
             "(layers, uvw.x, uvw.y, uvw.z, ddx2, ddy2);" in cuda_code
         )
         assert (
-            "float4 validVolume = tex3DGrad"
+            "float4 validVolume = tex3DGrad<float4>"
             "(volume, uvw.x, uvw.y, uvw.z, "
             "make_float4(ddx3.x, ddx3.y, ddx3.z, 0.0f), "
             "make_float4(ddy3.x, ddy3.y, ddy3.z, 0.0f));" in cuda_code
         )
         assert (
-            "float4 validTypedVolume = tex3DGrad"
+            "float4 validTypedVolume = tex3DGrad<float4>"
             "(typedVolume, uvw.x, uvw.y, uvw.z, "
             "make_float4(ddx3.x, ddx3.y, ddx3.z, 0.0f), "
             "make_float4(ddy3.x, ddy3.y, ddy3.z, 0.0f));" in cuda_code
         )
         assert (
-            "float4 validCube3 = texCubemapGrad"
+            "float4 validCube3 = texCubemapGrad<float4>"
             "(cubeTex, uvw.x, uvw.y, uvw.z, "
             "make_float4(ddx3.x, ddx3.y, ddx3.z, 0.0f), "
             "make_float4(ddy3.x, ddy3.y, ddy3.z, 0.0f));" in cuda_code
         )
         assert (
-            "float4 validCube4 = texCubemapGrad"
+            "float4 validCube4 = texCubemapGrad<float4>"
             "(cubeTex, uvw.x, uvw.y, uvw.z, ddx4, ddy4);" in cuda_code
         )
         assert (
@@ -10232,19 +10493,23 @@ class TestCudaCodeGen:
                 f"textureGrad derivative rank on {texture_type} */ "
                 "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
             ) in cuda_code
-        assert "tex1DGrad(lineTex, u, ddx2, ddy2)" not in cuda_code
+        assert "tex1DGrad<float4>(lineTex, u, ddx2, ddy2)" not in cuda_code
         assert (
             "tex1DLayeredGrad<float4>(lineLayers, uv.x, uv.y, ddx2, ddy2)"
             not in cuda_code
         )
-        assert "tex2DGrad(tex, uv.x, uv.y, du, du)" not in cuda_code
+        assert "tex2DGrad<float4>(tex, uv.x, uv.y, du, du)" not in cuda_code
         assert (
             "tex2DLayeredGrad<float4>(layers, uvw.x, uvw.y, uvw.z, ddx3, ddy3)"
             not in cuda_code
         )
-        assert "tex3DGrad(volume, uvw.x, uvw.y, uvw.z, ddx2, ddy2)" not in cuda_code
         assert (
-            "texCubemapGrad(cubeTex, uvw.x, uvw.y, uvw.z, ddx2, ddy2)" not in cuda_code
+            "tex3DGrad<float4>(volume, uvw.x, uvw.y, uvw.z, ddx2, ddy2)"
+            not in cuda_code
+        )
+        assert (
+            "texCubemapGrad<float4>(cubeTex, uvw.x, uvw.y, uvw.z, ddx2, ddy2)"
+            not in cuda_code
         )
         assert (
             "texCubemapLayeredGrad<float4>(cubeLayers, uvqw.x, uvqw.y, uvqw.z, uvqw.w, du, du)"
@@ -10305,21 +10570,24 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "texture<float4, 1> lineTex;" in cuda_code
+        assert "cudaTextureObject_t lineTex;" in cuda_code
         assert "cudaTextureObject_t lineLayers;" in cuda_code
-        assert "texture<float4, 2> tex;" in cuda_code
+        assert "cudaTextureObject_t tex;" in cuda_code
         assert "cudaTextureObject_t layers;" in cuda_code
-        assert "texture<float4, 3> volume;" in cuda_code
-        assert "texture<float4, 3> typedVolume;" in cuda_code
-        assert "float4 fetchedLine = tex1Dfetch(lineTex, x);" in cuda_code
+        assert "cudaTextureObject_t volume;" in cuda_code
+        assert "cudaTextureObject_t typedVolume;" in cuda_code
+        assert "float4 fetchedLine = tex1Dfetch<float4>(lineTex, x);" in cuda_code
         assert (
             "float4 fetchedLineLayer = tex1DLayered<float4>"
             "(lineLayers, pixel.x, pixel.y);" in cuda_code
         )
-        assert "float4 fetched = tex2D(tex, pixel.x, pixel.y);" in cuda_code
-        assert "float4 fetchedExplicit = tex2D(tex, pixel.x, pixel.y);" in cuda_code
+        assert "float4 fetched = tex2D<float4>(tex, pixel.x, pixel.y);" in cuda_code
         assert (
-            "float4 fetchedExplicitOffset = tex2D"
+            "float4 fetchedExplicit = tex2D<float4>(tex, pixel.x, pixel.y);"
+            in cuda_code
+        )
+        assert (
+            "float4 fetchedExplicitOffset = tex2D<float4>"
             "(tex, (pixel.x + pixel.x), (pixel.y + pixel.y));" in cuda_code
         )
         assert (
@@ -10327,11 +10595,11 @@ class TestCudaCodeGen:
             "(layers, voxel.x, voxel.y, voxel.z);" in cuda_code
         )
         assert (
-            "float4 fetchedVolume = tex3D(volume, voxel.x, voxel.y, voxel.z);"
+            "float4 fetchedVolume = tex3D<float4>(volume, voxel.x, voxel.y, voxel.z);"
             in cuda_code
         )
         assert (
-            "float4 typedFetchedVolume = tex3D"
+            "float4 typedFetchedVolume = tex3D<float4>"
             "(typedVolume, voxel.x, voxel.y, voxel.z);" in cuda_code
         )
         assert (
@@ -10368,11 +10636,11 @@ class TestCudaCodeGen:
             "float badShadow = /* unsupported CUDA shadow resource call: "
             "texelFetch on sampler2DShadow */ 0.0f;" in cuda_code
         )
-        assert "tex1Dfetch(lineTex, pixel)" not in cuda_code
+        assert "tex1Dfetch<float4>(lineTex, pixel)" not in cuda_code
         assert "tex1DLayered<float4>(lineLayers, x." not in cuda_code
-        assert "tex2D(tex, x." not in cuda_code
+        assert "tex2D<float4>(tex, x." not in cuda_code
         assert "querySampler.x" not in cuda_code
-        assert "tex3D(volume, pixel.x, pixel.y, pixel.z)" not in cuda_code
+        assert "tex3D<float4>(volume, pixel.x, pixel.y, pixel.z)" not in cuda_code
         assert "texelFetch(" not in cuda_code
 
     def test_nested_resource_arrays_emit_cuda_texture_and_surface_calls(self):
@@ -10425,35 +10693,36 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "texture<float4, 2> textureGrid[2][3];" in cuda_code
+        assert "cudaTextureObject_t textureGrid[2][3];" in cuda_code
         assert "cudaTextureObject_t layerGrid[2][2];" in cuda_code
         assert "cudaTextureObject_t msGrid[2][2];" in cuda_code
         assert "cudaSurfaceObject_t imageGrid[2][4];" in cuda_code
         assert "cudaSurfaceObject_t counterGrid[2][2];" in cuda_code
         assert (
             "__device__ void processNested("
-            "texture<float4, 2> paramTextures[2][3], "
+            "cudaTextureObject_t paramTextures[2][3], "
             "cudaSurfaceObject_t paramImages[2][4], int layer, int slot, "
             "float2 uv, float3 uvLayer, int2 pixel, int3 pixelLayer, "
             "int sampleIndex)" in cuda_code
         )
         assert (
-            "float4 sampled = tex2D(textureGrid[layer][slot], uv.x, uv.y);" in cuda_code
+            "float4 sampled = tex2D<float4>(textureGrid[layer][slot], uv.x, uv.y);"
+            in cuda_code
         )
         assert (
             "float4 sampledLayer = tex2DLayered<float4>"
             "(layerGrid[layer][slot], uvLayer.x, uvLayer.y, uvLayer.z);" in cuda_code
         )
         assert (
-            "float4 mip = tex2DLod(textureGrid[layer][slot], uv.x, uv.y, 1.0);"
+            "float4 mip = tex2DLod<float4>(textureGrid[layer][slot], uv.x, uv.y, 1.0);"
             in cuda_code
         )
         assert (
-            "float4 grad = tex2DGrad(textureGrid[layer][slot], uv.x, uv.y, uv, uv);"
+            "float4 grad = tex2DGrad<float4>(textureGrid[layer][slot], uv.x, uv.y, uv, uv);"
             in cuda_code
         )
         assert (
-            "float4 sampledParam = tex2D(paramTextures[layer][slot], uv.x, uv.y);"
+            "float4 sampledParam = tex2D<float4>(paramTextures[layer][slot], uv.x, uv.y);"
             in cuda_code
         )
         assert (
@@ -10461,7 +10730,7 @@ class TestCudaCodeGen:
             "(textureGrid[layer][slot], uv.x, uv.y, 1);" in cuda_code
         )
         assert (
-            "float4 fetched = tex2D(textureGrid[layer][slot], pixel.x, pixel.y);"
+            "float4 fetched = tex2D<float4>(textureGrid[layer][slot], pixel.x, pixel.y);"
             in cuda_code
         )
         assert (
@@ -10573,23 +10842,28 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert (
-            "__device__ void useDynamic(texture<float4, 2>* dynTextures, "
+            "__device__ void useDynamic(cudaTextureObject_t* dynTextures, "
             "cudaTextureObject_t* dynLayers, cudaSurfaceObject_t* dynImages, "
             "cudaSurfaceObject_t* dynCounters, int i, float2 uv, "
             "float3 uvLayer, int2 pixel)" in cuda_code
         )
         assert (
             "__device__ void useDynamicGrid("
-            "texture<float4, 2> (*dynGrid)[3], "
+            "cudaTextureObject_t (*dynGrid)[3], "
             "cudaSurfaceObject_t (*dynGridImages)[3], int layer, int slot, "
             "float2 uv, int2 pixel)" in cuda_code
         )
-        assert "float4 sampled = tex2D(dynTextures[i], uv.x, uv.y);" in cuda_code
+        assert (
+            "float4 sampled = tex2D<float4>(dynTextures[i], uv.x, uv.y);" in cuda_code
+        )
         assert (
             "float4 layered = tex2DLayered<float4>"
             "(dynLayers[i], uvLayer.x, uvLayer.y, uvLayer.z);" in cuda_code
         )
-        assert "float4 fetched = tex2D(dynTextures[i], pixel.x, pixel.y);" in cuda_code
+        assert (
+            "float4 fetched = tex2D<float4>(dynTextures[i], pixel.x, pixel.y);"
+            in cuda_code
+        )
         assert (
             "float4 color = surf2Dread<float4>"
             "(dynImages[i], pixel.x * sizeof(float4), pixel.y);" in cuda_code
@@ -10606,7 +10880,10 @@ class TestCudaCodeGen:
             "surf2Dwrite(count, dynCounters[i], pixel.x * sizeof(uint), pixel.y);"
             in cuda_code
         )
-        assert "float4 sampled = tex2D(dynGrid[layer][slot], uv.x, uv.y);" in cuda_code
+        assert (
+            "float4 sampled = tex2D<float4>(dynGrid[layer][slot], uv.x, uv.y);"
+            in cuda_code
+        )
         assert (
             "float4 color = surf2Dread<float4>"
             "(dynGridImages[layer][slot], pixel.x * sizeof(float4), pixel.y);"
@@ -10616,7 +10893,7 @@ class TestCudaCodeGen:
             "surf2Dwrite(color, dynGridImages[layer][slot], "
             "pixel.x * sizeof(float4), pixel.y);" in cuda_code
         )
-        assert "texture<float4, 2>* dynGrid[3]" not in cuda_code
+        assert "cudaTextureObject_t* dynGrid[3]" not in cuda_code
         assert "cudaSurfaceObject_t* dynGridImages[3]" not in cuda_code
         assert "texture(" not in cuda_code
         assert "texelFetch(" not in cuda_code
@@ -10837,16 +11114,16 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert "struct CglResourceQueryInfo" in cuda_code
-        assert "texture<float4, 2> textures[4];" in cuda_code
+        assert "cudaTextureObject_t textures[4];" in cuda_code
         assert "CglResourceQueryInfo textures_metadata[4] = {};" in cuda_code
         assert "cudaTextureObject_t layerTextures[3];" in cuda_code
         assert "cudaSurfaceObject_t images[4];" in cuda_code
         assert "cudaSurfaceObject_t counters[4];" in cuda_code
-        assert "texture<float4, 2> textureGrid[2][3];" in cuda_code
+        assert "cudaTextureObject_t textureGrid[2][3];" in cuda_code
         assert "CglResourceQueryInfo textureGrid_metadata[2][3] = {};" in cuda_code
         assert "cudaSurfaceObject_t imageGrid[2][3];" in cuda_code
         assert (
-            "__device__ void useDynamic(texture<float4, 2>* dynTextures, "
+            "__device__ void useDynamic(cudaTextureObject_t* dynTextures, "
             "CglResourceQueryInfo* dynTextures_metadata, "
             "cudaTextureObject_t* dynLayers, cudaSurfaceObject_t* dynImages, "
             "cudaSurfaceObject_t* dynCounters, int i, float2 uv, "
@@ -10854,12 +11131,14 @@ class TestCudaCodeGen:
         )
         assert (
             "__device__ void useDynamicGrid("
-            "texture<float4, 2> (*dynGrid)[3], "
+            "cudaTextureObject_t (*dynGrid)[3], "
             "CglResourceQueryInfo (*dynGrid_metadata)[3], "
             "cudaSurfaceObject_t (*dynGridImages)[3], int layer, int slot, "
             "float2 uv, int2 pixel)" in cuda_code
         )
-        assert "float4 sampled = tex2D(dynTextures[i], uv.x, uv.y);" in cuda_code
+        assert (
+            "float4 sampled = tex2D<float4>(dynTextures[i], uv.x, uv.y);" in cuda_code
+        )
         assert (
             "float4 layered = tex2DLayered<float4>"
             "(dynLayers[i], uvLayer.x, uvLayer.y, uvLayer.z);" in cuda_code
@@ -10872,7 +11151,10 @@ class TestCudaCodeGen:
             "int dynLevels = cgl_textureQueryLevels_sampler2D"
             "(dynTextures_metadata[i]);" in cuda_code
         )
-        assert "float4 fetched = tex2D(dynTextures[i], pixel.x, pixel.y);" in cuda_code
+        assert (
+            "float4 fetched = tex2D<float4>(dynTextures[i], pixel.x, pixel.y);"
+            in cuda_code
+        )
         assert (
             "float4 color = surf2Dread<float4>"
             "(dynImages[i], pixel.x * sizeof(float4), pixel.y);" in cuda_code
@@ -10889,7 +11171,10 @@ class TestCudaCodeGen:
             "surf2Dwrite(count, dynCounters[i], pixel.x * sizeof(uint), pixel.y);"
             in cuda_code
         )
-        assert "float4 sampled = tex2D(dynGrid[layer][slot], uv.x, uv.y);" in cuda_code
+        assert (
+            "float4 sampled = tex2D<float4>(dynGrid[layer][slot], uv.x, uv.y);"
+            in cuda_code
+        )
         assert (
             "int2 gridSize = cgl_textureSize_sampler2D"
             "(dynGrid_metadata[layer][slot], 0);" in cuda_code
@@ -11175,12 +11460,12 @@ class TestCudaCodeGen:
         assert "counterGrid_metadata" not in cuda_code
         assert (
             "__device__ float4 leafSample("
-            "texture<float4, 2> (*dynGrid)[3], int layer, int slot, float2 uv)"
+            "cudaTextureObject_t (*dynGrid)[3], int layer, int slot, float2 uv)"
             in cuda_code
         )
         assert (
             "__device__ float4 forwardSample("
-            "texture<float4, 2> (*dynGrid)[3], int layer, int slot, float2 uv)"
+            "cudaTextureObject_t (*dynGrid)[3], int layer, int slot, float2 uv)"
             in cuda_code
         )
         assert "return leafSample(dynGrid, layer, slot, uv);" in cuda_code
@@ -11195,7 +11480,7 @@ class TestCudaCodeGen:
         )
         assert "return leafCounter(dynCounters, layer, slot, pixel);" in cuda_code
         assert (
-            "__device__ void leafQuery(texture<float4, 2> (*dynGrid)[3], "
+            "__device__ void leafQuery(cudaTextureObject_t (*dynGrid)[3], "
             "CglResourceQueryInfo (*dynGrid_metadata)[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot)"
@@ -11209,7 +11494,7 @@ class TestCudaCodeGen:
             "forwardQuery(textureGrid, textureGrid_metadata, imageGrid, "
             "imageGrid_metadata, 1, 2);" in cuda_code
         )
-        assert "return tex2D(dynGrid[layer][slot], uv.x, uv.y);" in cuda_code
+        assert "return tex2D<float4>(dynGrid[layer][slot], uv.x, uv.y);" in cuda_code
         assert (
             "float4 color = surf2Dread<float4>"
             "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
@@ -11315,9 +11600,9 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo textureGrid_metadata[2][3] = {};" in cuda_code
         assert "CglResourceQueryInfo imageGrid_metadata[2][3] = {};" in cuda_code
         assert (
-            "__device__ void leafMixed(texture<float4, 2> (*dynamicGrid)[3], "
+            "__device__ void leafMixed(cudaTextureObject_t (*dynamicGrid)[3], "
             "CglResourceQueryInfo (*dynamicGrid_metadata)[3], "
-            "texture<float4, 2> fixedRow[3], "
+            "cudaTextureObject_t fixedRow[3], "
             "CglResourceQueryInfo fixedRow_metadata[3], "
             "cudaSurfaceObject_t (*dynamicImages)[3], "
             "CglResourceQueryInfo (*dynamicImages_metadata)[3], "
@@ -11336,10 +11621,13 @@ class TestCudaCodeGen:
             "imageGrid_metadata[1], 1, 2, uv, pixel);" in cuda_code
         )
         assert (
-            "float4 dynamicSample = tex2D(dynamicGrid[layer][slot], uv.x, uv.y);"
+            "float4 dynamicSample = tex2D<float4>(dynamicGrid[layer][slot], uv.x, uv.y);"
             in cuda_code
         )
-        assert "float4 fixedSample = tex2D(fixedRow[slot], uv.x, uv.y);" in cuda_code
+        assert (
+            "float4 fixedSample = tex2D<float4>(fixedRow[slot], uv.x, uv.y);"
+            in cuda_code
+        )
         assert (
             "float4 dynamicColor = surf2Dread<float4>"
             "(dynamicImages[layer][slot], pixel.x * sizeof(float4), pixel.y);"
@@ -11477,22 +11765,22 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo textureGrid_metadata[2][3] = {};" in cuda_code
         assert "CglResourceQueryInfo imageGrid_metadata[2][3] = {};" in cuda_code
         assert (
-            "__device__ void leafShuffle(texture<float4, 2> (*dynA)[3], "
+            "__device__ void leafShuffle(cudaTextureObject_t (*dynA)[3], "
             "CglResourceQueryInfo (*dynA_metadata)[3], "
             "cudaSurfaceObject_t fixedImageRow[3], "
             "CglResourceQueryInfo fixedImageRow_metadata[3], "
-            "texture<float4, 2> fixedTexRow[3], "
+            "cudaTextureObject_t fixedTexRow[3], "
             "CglResourceQueryInfo fixedTexRow_metadata[3], "
             "cudaSurfaceObject_t (*dynImageGrid)[3], "
             "CglResourceQueryInfo (*dynImageGrid_metadata)[3], "
-            "texture<float4, 2> (*dynAlias)[3], "
+            "cudaTextureObject_t (*dynAlias)[3], "
             "CglResourceQueryInfo (*dynAlias_metadata)[3], "
             "int layer, int slot, float2 uv, int2 pixel)" in cuda_code
         )
         assert (
-            "__device__ void midForward(texture<float4, 2> (*firstDyn)[3], "
+            "__device__ void midForward(cudaTextureObject_t (*firstDyn)[3], "
             "CglResourceQueryInfo (*firstDyn_metadata)[3], "
-            "texture<float4, 2> firstFixed[3], "
+            "cudaTextureObject_t firstFixed[3], "
             "CglResourceQueryInfo firstFixed_metadata[3], "
             "cudaSurfaceObject_t (*firstDynImages)[3], "
             "CglResourceQueryInfo (*firstDynImages_metadata)[3], "
@@ -11501,11 +11789,11 @@ class TestCudaCodeGen:
             "int layer, int slot, float2 uv, int2 pixel)" in cuda_code
         )
         assert (
-            "__device__ void topForward(texture<float4, 2> topFixedTex[3], "
+            "__device__ void topForward(cudaTextureObject_t topFixedTex[3], "
             "CglResourceQueryInfo topFixedTex_metadata[3], "
             "cudaSurfaceObject_t (*topDynImages)[3], "
             "CglResourceQueryInfo (*topDynImages_metadata)[3], "
-            "texture<float4, 2> (*topDynTex)[3], "
+            "cudaTextureObject_t (*topDynTex)[3], "
             "CglResourceQueryInfo (*topDynTex_metadata)[3], "
             "cudaSurfaceObject_t topFixedImages[3], "
             "CglResourceQueryInfo topFixedImages_metadata[3], "
@@ -11528,12 +11816,16 @@ class TestCudaCodeGen:
             "imageGrid_metadata, textureGrid, textureGrid_metadata, imageGrid[1], "
             "imageGrid_metadata[1], 1, 2, uv, pixel);" in cuda_code
         )
-        assert "float4 sampledA = tex2D(dynA[layer][slot], uv.x, uv.y);" in cuda_code
         assert (
-            "float4 sampledFixed = tex2D(fixedTexRow[slot], uv.x, uv.y);" in cuda_code
+            "float4 sampledA = tex2D<float4>(dynA[layer][slot], uv.x, uv.y);"
+            in cuda_code
         )
         assert (
-            "float4 sampledAlias = tex2D(dynAlias[layer][slot], uv.x, uv.y);"
+            "float4 sampledFixed = tex2D<float4>(fixedTexRow[slot], uv.x, uv.y);"
+            in cuda_code
+        )
+        assert (
+            "float4 sampledAlias = tex2D<float4>(dynAlias[layer][slot], uv.x, uv.y);"
             in cuda_code
         )
         assert (
@@ -11708,9 +12000,9 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert (
-            "__device__ float4 chooseBranch(texture<float4, 2> (*dynTex)[3], "
+            "__device__ float4 chooseBranch(cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
-            "texture<float4, 2> fixedTex[3], "
+            "cudaTextureObject_t fixedTex[3], "
             "CglResourceQueryInfo fixedTex_metadata[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], "
@@ -11838,9 +12130,9 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert (
-            "__device__ float4 sampleLoop(texture<float4, 2> (*dynTex)[3], "
+            "__device__ float4 sampleLoop(cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
-            "texture<float4, 2> fixedTex[3], "
+            "cudaTextureObject_t fixedTex[3], "
             "CglResourceQueryInfo fixedTex_metadata[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], "
@@ -11852,7 +12144,10 @@ class TestCudaCodeGen:
         assert "continue;" in cuda_code
         assert "break;" in cuda_code
         assert "while ((fixedSlot < 3))" in cuda_code
-        assert "float4 sampled = tex2D(dynTex[layer][slot], uv.x, uv.y);" in cuda_code
+        assert (
+            "float4 sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
+            in cuda_code
+        )
         assert (
             "float4 loaded = surf2Dread<float4>"
             "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
@@ -11870,7 +12165,7 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "accum = cgl_float4_add(accum, tex2D(fixedTex[fixedSlot], uv.x, uv.y));"
+            "accum = cgl_float4_add(accum, tex2D<float4>(fixedTex[fixedSlot], uv.x, uv.y));"
             in cuda_code
         )
         assert (
@@ -11947,7 +12242,7 @@ class TestCudaCodeGen:
 
         assert (
             "__device__ float4 sampleNestedLoops("
-            "texture<float4, 2> (*dynTex)[3], "
+            "cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], float2 uv, int2 pixel)"
@@ -11957,7 +12252,10 @@ class TestCudaCodeGen:
         assert "for (int slot = 0; (slot < 3); slot++)" in cuda_code
         assert "break;" in cuda_code
         assert "continue;" in cuda_code
-        assert "float4 sampled = tex2D(dynTex[layer][slot], uv.x, uv.y);" in cuda_code
+        assert (
+            "float4 sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
+            in cuda_code
+        )
         assert (
             "float4 loaded = surf2Dread<float4>"
             "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
@@ -12071,22 +12369,22 @@ class TestCudaCodeGen:
 
         assert "struct SampleParams {" in cuda_code
         assert (
-            "__device__ float4 samplePacked(texture<float4, 2> (*dynTex)[3], "
+            "__device__ float4 samplePacked(cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], SampleParams params, "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], float weight, "
-            "texture<float4, 2> fixedTex[3], "
+            "cudaTextureObject_t fixedTex[3], "
             "CglResourceQueryInfo fixedTex_metadata[3], "
             "cudaSurfaceObject_t fixedImages[3], "
             "CglResourceQueryInfo fixedImages_metadata[3])" in cuda_code
         )
         assert (
             "__device__ float4 passPacked(SampleParams params, "
-            "texture<float4, 2> (*firstDyn)[3], "
+            "cudaTextureObject_t (*firstDyn)[3], "
             "CglResourceQueryInfo (*firstDyn_metadata)[3], float weight, "
             "cudaSurfaceObject_t (*firstImages)[3], "
             "CglResourceQueryInfo (*firstImages_metadata)[3], "
-            "texture<float4, 2> fixedTex[3], "
+            "cudaTextureObject_t fixedTex[3], "
             "CglResourceQueryInfo fixedTex_metadata[3], "
             "cudaSurfaceObject_t fixedImages[3], "
             "CglResourceQueryInfo fixedImages_metadata[3])" in cuda_code
@@ -12102,12 +12400,12 @@ class TestCudaCodeGen:
             "imageGrid[1], imageGrid_metadata[1]);" in cuda_code
         )
         assert (
-            "float4 dynamicSample = tex2D"
+            "float4 dynamicSample = tex2D<float4>"
             "(dynTex[params.layer][params.slot], params.uv.x, params.uv.y);"
             in cuda_code
         )
         assert (
-            "float4 fixedSample = tex2D(fixedTex[params.slot], params.uv.x, params.uv.y);"
+            "float4 fixedSample = tex2D<float4>(fixedTex[params.slot], params.uv.x, params.uv.y);"
             in cuda_code
         )
         assert (
@@ -12235,7 +12533,7 @@ class TestCudaCodeGen:
         assert "struct SampleResult {" in cuda_code
         assert (
             "__device__ SampleResult buildAssigned("
-            "texture<float4, 2> (*dynTex)[3], "
+            "cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
@@ -12243,20 +12541,23 @@ class TestCudaCodeGen:
         )
         assert (
             "__device__ SampleResult buildConstructed("
-            "texture<float4, 2> (*dynTex)[3], "
+            "cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
             "float2 uv, int2 pixel)" in cuda_code
         )
         assert (
-            "__device__ float4 consumeResults(texture<float4, 2> (*dynTex)[3], "
+            "__device__ float4 consumeResults(cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
             "float2 uv, int2 pixel)" in cuda_code
         )
-        assert "result.sampled = tex2D(dynTex[layer][slot], uv.x, uv.y);" in cuda_code
+        assert (
+            "result.sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
+            in cuda_code
+        )
         assert (
             "result.loaded = surf2Dread<float4>"
             "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
@@ -12270,7 +12571,7 @@ class TestCudaCodeGen:
             "(dynImages_metadata[layer][slot]);" in cuda_code
         )
         assert (
-            "return SampleResult(tex2D(dynTex[layer][slot], uv.x, uv.y), "
+            "return SampleResult(tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
             "surf2Dread<float4>(dynImages[layer][slot], "
             "pixel.x * sizeof(float4), pixel.y), "
             "cgl_textureSize_sampler2D(dynTex_metadata[layer][slot], 0), "
@@ -12369,14 +12670,14 @@ class TestCudaCodeGen:
         assert "struct SampleEnvelope {" in cuda_code
         assert (
             "__device__ SampleEnvelope buildNestedAssigned("
-            "texture<float4, 2> (*dynTex)[3], "
+            "cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
             "float2 uv, int2 pixel)" in cuda_code
         )
         assert (
-            "envelope.result.sampled = tex2D(dynTex[layer][slot], uv.x, uv.y);"
+            "envelope.result.sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
             in cuda_code
         )
         assert (
@@ -12396,7 +12697,7 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "envelope.bias = cgl_float4_add(tex2D(dynTex[layer][slot], uv.x, uv.y), "
+            "envelope.bias = cgl_float4_add(tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
             "surf2Dread<float4>(dynImages[layer][slot], "
             "pixel.x * sizeof(float4), pixel.y));" in cuda_code
         )
@@ -12500,14 +12801,14 @@ class TestCudaCodeGen:
         assert "SampleResult results[3];" in cuda_code
         assert (
             "__device__ SampleEnvelope buildArrayEnvelope("
-            "texture<float4, 2> (*dynTex)[3], "
+            "cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
             "float2 uv, int2 pixel)" in cuda_code
         )
         assert (
-            "envelope.results[slot].sampled = tex2D(dynTex[layer][slot], uv.x, uv.y);"
+            "envelope.results[slot].sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
             in cuda_code
         )
         assert (
@@ -12642,7 +12943,7 @@ class TestCudaCodeGen:
 
         assert (
             "__device__ SampleEnvelope fillControlled("
-            "texture<float4, 2> (*dynTex)[3], "
+            "cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
@@ -12656,7 +12957,7 @@ class TestCudaCodeGen:
         assert "envelope.accum = make_float4(0.0, 0.0, 0.0, 0.0);" in cuda_code
         assert "envelope.chosen = slot;" in cuda_code
         assert (
-            "envelope.result.sampled = tex2D(dynTex[layer][slot], uv.x, uv.y);"
+            "envelope.result.sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
             in cuda_code
         )
         assert (
@@ -12664,7 +12965,7 @@ class TestCudaCodeGen:
             "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
         )
         assert (
-            "envelope.result.sampled = tex2D(dynTex[fallback][slot], uv.x, uv.y);"
+            "envelope.result.sampled = tex2D<float4>(dynTex[fallback][slot], uv.x, uv.y);"
             in cuda_code
         )
         assert (
@@ -12681,7 +12982,7 @@ class TestCudaCodeGen:
             "(dynImages_metadata[layer][i]);" in cuda_code
         )
         assert (
-            "envelope.accum = cgl_float4_add(envelope.accum, tex2D(dynTex[layer][i], uv.x, uv.y));"
+            "envelope.accum = cgl_float4_add(envelope.accum, tex2D<float4>(dynTex[layer][i], uv.x, uv.y));"
             in cuda_code
         )
         assert (
@@ -12772,7 +13073,7 @@ class TestCudaCodeGen:
 
         assert (
             "__device__ SampleResult buildResourceResult("
-            "texture<float4, 2> (*dynTex)[3], "
+            "cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
@@ -12783,7 +13084,7 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "__device__ float4 consumeAdjusted(texture<float4, 2> (*dynTex)[3], "
+            "__device__ float4 consumeAdjusted(cudaTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "cudaSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
@@ -13604,7 +13905,7 @@ class TestCudaCodeGen:
         assert "struct CglResourceQueryInfo" in cuda_code
         assert "__device__ inline int cgl_lod_extent" in cuda_code
         assert (
-            "__device__ void queryParam(texture<float4, 2> paramTex, "
+            "__device__ void queryParam(cudaTextureObject_t paramTex, "
             "CglResourceQueryInfo paramTex_metadata)" in cuda_code
         )
         assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
@@ -13974,7 +14275,7 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo lineImages_metadata[2] = {};" in cuda_code
         assert "CglResourceQueryInfo cubeImages_metadata[2] = {};" in cuda_code
         assert (
-            "__device__ void queryArrays(texture<float4, 2> paramTextures[3], "
+            "__device__ void queryArrays(cudaTextureObject_t paramTextures[3], "
             "CglResourceQueryInfo paramTextures_metadata[3], "
             "cudaSurfaceObject_t paramLineImages[3], "
             "CglResourceQueryInfo paramLineImages_metadata[3], "
@@ -14078,14 +14379,14 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo textures_metadata[2] = {};" in cuda_code
         assert "CglResourceQueryInfo images_metadata[2] = {};" in cuda_code
         assert (
-            "__device__ void consumeAlias(texture<float4, 2> tex, "
+            "__device__ void consumeAlias(cudaTextureObject_t tex, "
             "CglResourceQueryInfo tex_metadata, cudaSurfaceObject_t img, "
             "CglResourceQueryInfo img_metadata)" in cuda_code
         )
         assert (
-            "__device__ void queryParamAliases(texture<float4, 2> paramTex, "
+            "__device__ void queryParamAliases(cudaTextureObject_t paramTex, "
             "CglResourceQueryInfo paramTex_metadata, "
-            "texture<float4, 2> paramTextures[2], "
+            "cudaTextureObject_t paramTextures[2], "
             "CglResourceQueryInfo paramTextures_metadata[2], "
             "cudaSurfaceObject_t paramImages[2], "
             "CglResourceQueryInfo paramImages_metadata[2], int i)" in cuda_code
@@ -15040,7 +15341,7 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "texture<float4, 2> selected = chooseWithLocalWork();" in cuda_code
+        assert "cudaTextureObject_t selected = chooseWithLocalWork();" in cuda_code
         assert (
             "int2 selectedSize = /* unsupported CUDA resource query: "
             "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
@@ -15108,7 +15409,7 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert (
-            "__device__ void consume(texture<float4, 2> tex, "
+            "__device__ void consume(cudaTextureObject_t tex, "
             "CglResourceQueryInfo tex_metadata, cudaSurfaceObject_t img, "
             "CglResourceQueryInfo img_metadata)" in cuda_code
         )
@@ -15467,7 +15768,7 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo images_metadata[2] = {};" in cuda_code
         assert (
-            "__device__ void consumeRefs(const texture<float4, 2>& tex, "
+            "__device__ void consumeRefs(const cudaTextureObject_t& tex, "
             "CglResourceQueryInfo tex_metadata, const cudaSurfaceObject_t& img, "
             "CglResourceQueryInfo img_metadata)" in cuda_code
         )
@@ -16079,13 +16380,13 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo lineGrid_metadata[2][3] = {};" in cuda_code
         assert "CglResourceQueryInfo cubeGrid_metadata[2][3] = {};" in cuda_code
         assert (
-            "__device__ void queryArrays(texture<float4, 2>* dynamicTextures, "
+            "__device__ void queryArrays(cudaTextureObject_t* dynamicTextures, "
             "CglResourceQueryInfo* dynamicTextures_metadata, "
-            "texture<float4, 2> fixedTextures[3], "
+            "cudaTextureObject_t fixedTextures[3], "
             "CglResourceQueryInfo fixedTextures_metadata[3], "
             "cudaTextureObject_t* dynamicMsTextures, "
             "CglResourceQueryInfo* dynamicMsTextures_metadata, "
-            "texture<float4, 2> (*dynamicGrid)[3], "
+            "cudaTextureObject_t (*dynamicGrid)[3], "
             "CglResourceQueryInfo (*dynamicGrid_metadata)[3], "
             "cudaSurfaceObject_t (*dynamicImageGrid)[4], "
             "CglResourceQueryInfo (*dynamicImageGrid_metadata)[4], "
@@ -16507,7 +16808,7 @@ class TestCudaCodeGen:
         assert "imageLoad(msImageLayers" not in cuda_code
         assert "imageStore(msImage" not in cuda_code
         assert "imageStore(msImageLayers" not in cuda_code
-        assert "tex2D(msTex" not in cuda_code
+        assert "tex2D<float4>(msTex" not in cuda_code
         assert "tex2DLayered<float4>(msLayers" not in cuda_code
         assert "surf2Dread" not in cuda_code
         assert "surf2DLayeredread" not in cuda_code
@@ -16977,10 +17278,11 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "int main(Pair pair)" in cuda_code
+        assert 'extern "C" __global__ void compute_main(Pair pair)' in cuda_code
         assert "int left = pair.left;" in cuda_code
         assert "int right = pair.right;" in cuda_code
         assert "value = (left + right);" in cuda_code
+        assert "return value;" not in cuda_code
         assert "MatchNode" not in cuda_code
 
     def test_match_expression_initializes_cuda_local_with_bindings(self):
@@ -17014,8 +17316,8 @@ class TestCudaCodeGen:
         assert "value = -1;" in cuda_code
         assert "MatchNode" not in cuda_code
 
-    def test_return_match_expression_lowers_to_cuda_typed_temporary(self):
-        """Test CUDA lowers return-position match expressions through a typed local."""
+    def test_return_match_expression_in_cuda_kernel_discards_return_value(self):
+        """Test CUDA kernels do not preserve return-position match values."""
         source_code = """
         shader TestShader {
             compute {
@@ -17035,10 +17337,12 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "int __crossgl_match_value_0;" in cuda_code
-        assert "__crossgl_match_value_0 = 10;" in cuda_code
-        assert "__crossgl_match_value_0 = -1;" in cuda_code
-        assert "return __crossgl_match_value_0;" in cuda_code
+        assert 'extern "C" __global__ void compute_main(int mode)' in cuda_code
+        assert "int __crossgl_match_value_0;" not in cuda_code
+        assert "__crossgl_match_value_0 = 10;" not in cuda_code
+        assert "__crossgl_match_value_0 = -1;" not in cuda_code
+        assert "return __crossgl_match_value_0;" not in cuda_code
+        assert "return;" in cuda_code
         assert "MatchNode" not in cuda_code
 
     def test_match_plain_enum_path_arms_lower_for_cuda(self):
@@ -17202,7 +17506,7 @@ class TestCudaCodeGen:
         assert "float weights[4];" in cuda_code
         assert "float3 colors[2];" in cuda_code
         assert (
-            "void main(float input_weights[4], float3 input_colors[2], "
+            "void compute_main(float input_weights[4], float3 input_colors[2], "
             "float* dynamic_weights)"
         ) in cuda_code
         assert "float data[256];" in cuda_code
@@ -17438,11 +17742,12 @@ class TestCudaCodeGen:
 
         assert "switch (code) {" in cuda_code
         assert "case 0:" in cuda_code
-        assert "return 100;" in cuda_code
         assert "case 1:" in cuda_code
-        assert "return 200;" in cuda_code
         assert "default:" in cuda_code
-        assert "return 0;" in cuda_code
+        assert "return 100;" not in cuda_code
+        assert "return 200;" not in cuda_code
+        assert "return 0;" not in cuda_code
+        assert cuda_code.count("return;") == 3
         assert "break;" not in cuda_code
 
     def test_texture_sampling_basic_tex2d_float4(self, tmp_path):
@@ -17468,8 +17773,8 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "texture<float4, 2> diffuseMap;" in cuda_code
-        assert "tex2D(diffuseMap, uv.x, uv.y)" in cuda_code
+        assert "cudaTextureObject_t diffuseMap;" in cuda_code
+        assert "tex2D<float4>(diffuseMap, uv.x, uv.y)" in cuda_code
         assert "sampler2D diffuseMap;" not in cuda_code
         assert " = texture(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
@@ -17497,9 +17802,9 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "texture<float4, 2> mipMap;" in cuda_code
-        assert "float4 mip0 = tex2DLod(mipMap, uv.x, uv.y, 0.0);" in cuda_code
-        assert "float4 mip3 = tex2DLod(mipMap, uv.x, uv.y, 3.0);" in cuda_code
+        assert "cudaTextureObject_t mipMap;" in cuda_code
+        assert "float4 mip0 = tex2DLod<float4>(mipMap, uv.x, uv.y, 0.0);" in cuda_code
+        assert "float4 mip3 = tex2DLod<float4>(mipMap, uv.x, uv.y, 3.0);" in cuda_code
         assert "textureLod(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 

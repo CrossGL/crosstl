@@ -83,15 +83,6 @@ class SlangParser:
                 cbuffers.append(self.parse_cbuffer())
             elif self.current_token[0] == "TYPEDEF":
                 typedefs.append(self.parse_typedef())
-            elif self.current_token[0] == "TYPE_SHADER":
-                type_shader = self.current_token[1].split('"')[1]
-                self.eat("TYPE_SHADER")
-                function_attributes = pending_attributes
-                while self.current_token[0] == "LBRACKET":
-                    function_attributes.extend(self.parse_attribute_list())
-                functions.append(
-                    self.parse_function(type_shader, attributes=function_attributes)
-                )
             elif self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS:
                 if self.is_function():
                     functions.append(self.parse_function(attributes=pending_attributes))
@@ -173,18 +164,36 @@ class SlangParser:
     def parse_attribute_list(self):
         attributes = []
         self.eat("LBRACKET")
-        if self.current_token[0] == "IDENTIFIER":
+
+        if self.current_token[0] == "LBRACKET":
+            while self.current_token[0] == "LBRACKET":
+                attributes.extend(self.parse_attribute_list())
+            self.eat("RBRACKET")
+            return attributes
+
+        while self.current_token[0] != "RBRACKET":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated attribute list")
+
+            if self.current_token[0] not in {"IDENTIFIER", "SHADER"}:
+                self.eat(self.current_token[0])
+                continue
+
             name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            self.eat(self.current_token[0])
             arguments = []
             if self.current_token[0] == "LPAREN":
                 arguments = self.parse_attribute_arguments()
             attributes.append({"name": name, "arguments": arguments})
 
-        while self.current_token[0] != "RBRACKET":
-            if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated attribute list")
-            self.eat(self.current_token[0])
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+
+            while self.current_token[0] not in {"COMMA", "RBRACKET"}:
+                if self.current_token[0] == "EOF":
+                    raise SyntaxError("Unterminated attribute list")
+                self.eat(self.current_token[0])
 
         self.eat("RBRACKET")
         return attributes
@@ -221,11 +230,26 @@ class SlangParser:
 
     def get_numthreads_attribute(self, attributes):
         for attribute in attributes:
-            if attribute.get("name") == "numthreads":
+            if str(attribute.get("name", "")).lower() == "numthreads":
                 arguments = attribute.get("arguments", [])
                 if len(arguments) >= 3:
                     return tuple(arguments[:3])
         return None
+
+    def get_shader_attribute(self, attributes):
+        for attribute in attributes:
+            if str(attribute.get("name", "")).lower() == "shader":
+                arguments = attribute.get("arguments", [])
+                if arguments:
+                    return str(arguments[0]).strip().strip("\"'")
+        return None
+
+    def filter_function_attributes(self, attributes):
+        return [
+            attribute
+            for attribute in attributes
+            if str(attribute.get("name", "")).lower() != "shader"
+        ]
 
     def parse_type_name(self):
         type_name = self.current_token[1]
@@ -333,10 +357,14 @@ class SlangParser:
 
     def parse_import(self):
         self.eat("IMPORT")
-        module_name = self.current_token[1]
+        parts = [self.current_token[1]]
         self.eat("IDENTIFIER")
+        while self.current_token[0] == "DOT":
+            self.eat("DOT")
+            parts.append(self.current_token[1])
+            self.eat("IDENTIFIER")
         self.eat("SEMICOLON")
-        return ImportNode(module_name)
+        return ImportNode(".".join(parts))
 
     def parse_export(self):
         self.eat("EXPORT")
@@ -387,6 +415,8 @@ class SlangParser:
 
     def parse_function(self, shader_type=None, attributes=None):
         attributes = attributes or []
+        shader_type = shader_type or self.get_shader_attribute(attributes)
+        attributes = self.filter_function_attributes(attributes)
         qualifiers, is_generic = self.parse_declaration_prefixes()
         return_type = self.parse_type_name()
         name = self.current_token[1]

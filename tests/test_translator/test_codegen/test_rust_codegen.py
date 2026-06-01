@@ -3872,6 +3872,26 @@ mod gpu {
 
     // Rust codegen emits sync and subgroup operations as helper calls.
     // These stubs pin the placeholder prelude contract used by compile tests.
+    pub fn workgroup_id() -> Vec3<u32> {
+        Vec3::default()
+    }
+
+    pub fn local_invocation_id() -> Vec3<u32> {
+        Vec3::default()
+    }
+
+    pub fn global_invocation_id() -> Vec3<u32> {
+        Vec3::default()
+    }
+
+    pub fn local_invocation_index() -> u32 {
+        0
+    }
+
+    pub fn num_workgroups() -> Vec3<u32> {
+        Vec3::default()
+    }
+
     pub fn workgroup_barrier() {}
     pub fn memory_barrier() {}
     pub fn memory_barrier_shared() {}
@@ -4029,6 +4049,10 @@ mod gpu {
         _value
     }
 
+    pub fn subgroup_shuffle_down<T, Delta>(_value: T, _delta: Delta) -> T {
+        _value
+    }
+
     pub fn ray_launch_id() -> Vec3<u32> {
         Vec3::default()
     }
@@ -4117,18 +4141,34 @@ def rustc_or_skip():
     return rustc
 
 
+RUST_STAGE_ATTRIBUTES = {
+    "vertex": '#[cfg_attr(feature = "crossgl_gpu", vertex_shader)]',
+    "fragment": '#[cfg_attr(feature = "crossgl_gpu", fragment_shader)]',
+    "compute": '#[cfg_attr(feature = "crossgl_gpu", compute_shader)]',
+}
+BARE_RUST_STAGE_ATTRIBUTES = {
+    "vertex": "#[vertex_shader]",
+    "fragment": "#[fragment_shader]",
+    "compute": "#[compute_shader]",
+}
+
+
+def assert_rust_stage_attr(generated_code: str, stage: str) -> None:
+    assert RUST_STAGE_ATTRIBUTES[stage] in generated_code
+
+
+def assert_rust_stage_attr_absent(generated_code: str, stage: str) -> None:
+    assert RUST_STAGE_ATTRIBUTES[stage] not in generated_code
+
+
+def assert_no_bare_rust_stage_attrs(generated_code: str) -> None:
+    padded_code = f"\n{generated_code}\n"
+    for attribute in BARE_RUST_STAGE_ATTRIBUTES.values():
+        assert f"\n{attribute}\n" not in padded_code
+
+
 def rust_smoke_source(generated_code: str) -> str:
-    stripped_lines = [
-        line
-        for line in generated_code.splitlines()
-        if line.strip()
-        not in {
-            "#[vertex_shader]",
-            "#[fragment_shader]",
-            "#[compute_shader]",
-        }
-    ]
-    return textwrap.dedent(RUST_SMOKE_STUBS) + "\n" + "\n".join(stripped_lines)
+    return textwrap.dedent(RUST_SMOKE_STUBS) + "\n" + generated_code
 
 
 def assert_generated_rust_smoke_compiles(generated_code: str, tmp_path):
@@ -4873,8 +4913,7 @@ def test_reference_branches_and_mutable_places_borrow_without_clones_compile(
         in generated_code
     )
     assert (
-        "let mut selected: &mut Payload = "
-        "(if flag { &mut left } else { &mut right });"
+        "let mut selected: &mut Payload = (if flag { &mut left } else { &mut right });"
     ) in generated_code
     assert "pub fn borrow_mut_places(mut wrapper: Wrapper, index: i32)" in (
         generated_code
@@ -6238,9 +6277,7 @@ def test_legacy_non_copy_array_nodes_default_with_from_fn_and_compile(tmp_path):
         ArrayNode("Payload", "values", 2), indent=1
     )
 
-    expected = (
-        "let values: [Payload; 2] = " "std::array::from_fn(|_| Default::default());"
-    )
+    expected = "let values: [Payload; 2] = std::array::from_fn(|_| Default::default());"
     assert expected in generated_code
     assert f"    {expected}\n" == helper_code
     assert "[Default::default(); 2]" not in generated_code
@@ -7705,8 +7742,7 @@ def test_non_copy_generic_struct_like_enum_variants_and_guards_compile(tmp_path)
     generated_code = generate_code(ast)
 
     assert (
-        "return Choice::<Payload>::Named { "
-        "primary: payload.clone(), backup: payload };"
+        "return Choice::<Payload>::Named { primary: payload.clone(), backup: payload };"
     ) in generated_code
     assert (
         "Choice::Named { primary, backup } if (primary.count > 0) =>"
@@ -8119,8 +8155,7 @@ def test_target_typed_array_literals_in_generic_constructors_compile(tmp_path):
     )
     assert "SampleChoice::<f32>::Window { values: [7.0, 8.0] }" in generated_code
     assert (
-        "return identity_choice(SampleChoice::<f32>::Window { "
-        "values: [9.0, 10.0] });"
+        "return identity_choice(SampleChoice::<f32>::Window { values: [9.0, 10.0] });"
     ) in generated_code
     assert "SampleChoice::Window" not in generated_code
     assert "[1, 2]" not in generated_code
@@ -8241,7 +8276,7 @@ def test_nested_array_literals_and_tuple_enum_payloads_compile(tmp_path):
     assert "pub values: [[T; 2]; 2]," in generated_code
     assert "Grid([[T; 2]; 2])," in generated_code
     assert (
-        "MatrixBox::<f32> { values: [[1.0, 2.0], " "[3.0, Default::default()]] }"
+        "MatrixBox::<f32> { values: [[1.0, 2.0], [3.0, Default::default()]] }"
     ) in generated_code
     assert (
         "return MatrixChoice::<f32>::Grid([[4.0, 5.0], [6.0, 7.0]]);" in generated_code
@@ -8569,8 +8604,7 @@ def test_deep_nested_array_literals_and_access_target_types_compile(tmp_path):
     assert "pub cube: [[[T; 2]; 2]; 2]," in generated_code
     assert "Cube([[[T; 2]; 2]; 2])," in generated_code
     assert (
-        "CubeBox::<f32> { cube: [[[1.0, 2.0], [3.0, 4.0]], "
-        "[[5.0, 6.0], [7.0, 8.0]]] }"
+        "CubeBox::<f32> { cube: [[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]] }"
     ) in generated_code
     assert (
         "selected = CubeBox::<Payload> { cube: "
@@ -8956,8 +8990,7 @@ def test_array_block_tail_and_loop_carried_contexts_compile(tmp_path):
         not in (generated_code)
     )
     assert (
-        "let mut selected: [[Payload; 2]; 2] = "
-        "identity_payload_matrix(left.clone());"
+        "let mut selected: [[Payload; 2]; 2] = identity_payload_matrix(left.clone());"
     ) in generated_code
     assert "while (i < 2) {" in generated_code
     assert "selected = identity_payload_matrix(right.clone());" in generated_code
@@ -9219,8 +9252,7 @@ def test_array_lambda_captures_and_nested_helper_closures_compile(tmp_path):
     generated_code = generate_code(ast)
 
     assert (
-        "pub fn apply_payload_matrix<F: FnOnce([[Payload; 2]; 2]) -> "
-        "[[Payload; 2]; 2]>"
+        "pub fn apply_payload_matrix<F: FnOnce([[Payload; 2]; 2]) -> [[Payload; 2]; 2]>"
     ) in generated_code
     assert (
         "return apply_payload_matrix(right, |matrix: [[Payload; 2]; 2]| "
@@ -9846,8 +9878,7 @@ def test_array_lambda_infers_multi_arg_nested_callable_targets_compile(tmp_path)
     generated_code = generate_code(ast)
 
     assert (
-        "pub fn apply_payload_row_with_seed<G: Fn([Payload; 2], i32) -> "
-        "[Payload; 2]>"
+        "pub fn apply_payload_row_with_seed<G: Fn([Payload; 2], i32) -> [Payload; 2]>"
     ) in generated_code
     assert (
         "pub fn apply_payload_matrix_from_row<F: Fn([Payload; 2], i32) -> "
@@ -14326,7 +14357,7 @@ def test_lambda_fnonce_option_result_enum_payload_returns_compile(tmp_path):
         "FnOnce(Choice<Payload>, bool) -> Option<Choice<Payload>>"
     )
     result_closure_bound = NamedType(
-        "FnOnce(Choice<Payload>, Payload, bool) -> " "Result<Choice<Payload>, Payload>"
+        "FnOnce(Choice<Payload>, Payload, bool) -> Result<Choice<Payload>, Payload>"
     )
     choice_enum = EnumNode(
         "Choice",
@@ -14621,7 +14652,7 @@ def test_lambda_fnonce_option_result_nested_call_arguments_compile(tmp_path):
         "FnOnce(Choice<Payload>, bool) -> Option<Choice<Payload>>"
     )
     result_closure_bound = NamedType(
-        "FnOnce(Choice<Payload>, Payload, bool) -> " "Result<Choice<Payload>, Payload>"
+        "FnOnce(Choice<Payload>, Payload, bool) -> Result<Choice<Payload>, Payload>"
     )
     choice_enum = EnumNode(
         "Choice",
@@ -14910,7 +14941,7 @@ def test_option_result_match_consumers_from_fnonce_helpers_compile(tmp_path):
         "FnOnce(Choice<Payload>, bool) -> Option<Choice<Payload>>"
     )
     result_closure_bound = NamedType(
-        "FnOnce(Choice<Payload>, Payload, bool) -> " "Result<Choice<Payload>, Payload>"
+        "FnOnce(Choice<Payload>, Payload, bool) -> Result<Choice<Payload>, Payload>"
     )
     choice_enum = EnumNode(
         "Choice",
@@ -15901,7 +15932,7 @@ def test_top_level_enums_emit_rust_variants():
     assert "Toon { base_color: Vec3<f32> }," in generated_code
     assert "impl Default for LightingModel {" in generated_code
     assert (
-        "Self::Phong { ambient: Default::default(), " "shininess: Default::default() }"
+        "Self::Phong { ambient: Default::default(), shininess: Default::default() }"
     ) in generated_code
     assert (
         "#[derive(Debug, Clone, Copy, Default)]\npub enum ShaderError {"
@@ -16126,22 +16157,22 @@ def test_vector_matrix_array_statics_use_zeroed_static_fallback():
     generated_code = generate_code(ast)
 
     assert (
-        "static GLOBAL_DIRS: [Vec3<f32>; 2] = " "unsafe { std::mem::zeroed() };"
+        "static GLOBAL_DIRS: [Vec3<f32>; 2] = unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
-        "static GLOBAL_PRECISE: [Vec2<f64>; 3] = " "unsafe { std::mem::zeroed() };"
+        "static GLOBAL_PRECISE: [Vec2<f64>; 3] = unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
-        "static GLOBAL_TRANSFORMS: [Mat4<f32>; 2] = " "unsafe { std::mem::zeroed() };"
+        "static GLOBAL_TRANSFORMS: [Mat4<f32>; 2] = unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
-        "static DIRECTIONS: [Vec3<f32>; 2] = " "unsafe { std::mem::zeroed() };"
+        "static DIRECTIONS: [Vec3<f32>; 2] = unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
-        "static TRANSFORMS: [Mat4<f32>; 2] = " "unsafe { std::mem::zeroed() };"
+        "static TRANSFORMS: [Mat4<f32>; 2] = unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
-        "static PRECISE: [Vec2<f64>; 3] = " "unsafe { std::mem::zeroed() };"
+        "static PRECISE: [Vec2<f64>; 3] = unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
         "static GLOBAL_DIRS: [Vec3<f32>; 2] = Default::default();" not in generated_code
@@ -16448,6 +16479,38 @@ def test_generated_rust_duplicate_stage_main_names_smoke_compile_with_rustc(tmp_
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_generated_rust_stage_attrs_are_host_compatible_for_rustc(tmp_path):
+    code = """
+    shader HostCompatibleStages {
+        vertex {
+            vec4 main(vec3 position) {
+                return vec4(position, 1.0);
+            }
+        }
+
+        fragment {
+            vec4 main(vec4 color) @ gl_FragColor {
+                return color;
+            }
+        }
+
+        compute {
+            void main(uvec3 globalId @ gl_GlobalInvocationID) {
+                uint copy = globalId.x;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert_rust_stage_attr(generated_code, "vertex")
+    assert_rust_stage_attr(generated_code, "fragment")
+    assert_rust_stage_attr(generated_code, "compute")
+    assert_no_bare_rust_stage_attrs(generated_code)
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_initialized_vector_and_dynamic_array_statics_use_lazy_lock(tmp_path):
     code = """
     vec3 globalDirs[3] = {
@@ -16562,8 +16625,8 @@ def test_basic_shader():
         assert generated_code is not None
         assert "fn vertex_main(" in generated_code
         assert "fn fragment_main(" in generated_code
-        assert "#[vertex_shader]" in generated_code
-        assert "#[fragment_shader]" in generated_code
+        assert_rust_stage_attr(generated_code, "vertex")
+        assert_rust_stage_attr(generated_code, "fragment")
         print(generated_code)
     except SyntaxError:
         pytest.fail("Rust basic shader codegen not implemented.")
@@ -19967,6 +20030,163 @@ def test_scalar_left_vector_arithmetic_lowers_to_lane_constructors(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_vector_scalar_arithmetic_lowers_to_lane_constructors(tmp_path):
+    code = """
+    shader VectorScalarOps {
+        vec2 makeUv() {
+            return vec2(0.25, 0.75);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, vec3 color, float exposure) {
+                let scaledUv = uv * 10.0;
+                let shiftedColor = color + exposure;
+                let dynamicUv = makeUv() / exposure;
+                return vec4(scaledUv, shiftedColor.x + dynamicUv.x, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let scaledUv: Vec2<f32> = Vec2::<f32>::new((uv.x * 10.0), (uv.y * 10.0));"
+        in generated_code
+    )
+    assert (
+        "let shiftedColor: Vec3<f32> = Vec3::<f32>::new((color.x + exposure), "
+        "(color.y + exposure), (color.z + exposure));" in generated_code
+    )
+    assert (
+        "let dynamicUv: Vec2<f32> = { let __cgl_vec_arg_0 = makeUv();" in generated_code
+    )
+    assert "(uv * 10.0)" not in generated_code
+    assert "(color + exposure)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_vec2_dot_lowers_to_inline_lane_expression(tmp_path):
+    code = """
+    shader RustVec2Dot {
+        fragment {
+            float noise(vec2 p) {
+                return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+            }
+
+            vec4 main(vec2 uv) {
+                float value = noise(uv);
+                return vec4(value, value, value, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "dot(p, Vec2::<f32>" not in generated_code
+    assert "(p.x * " in generated_code
+    assert "(p.y * " in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_vector_compound_assignment_lowers_without_assign_traits(tmp_path):
+    code = """
+    shader RustVectorCompound {
+        fragment {
+            vec4 main(vec3 color, float exposure) {
+                vec3 adjusted = color;
+                adjusted *= exposure;
+                adjusted += 0.25;
+                return vec4(adjusted, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "adjusted *= exposure" not in generated_code
+    assert "adjusted += 0.25" not in generated_code
+    assert "adjusted = Vec3::<f32>::new((adjusted.x * exposure)" in generated_code
+    assert "adjusted = Vec3::<f32>::new((adjusted.x + 0.25)" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_texture_size_vector_temp_and_float_increment_compile(tmp_path):
+    code = """
+    shader RustTextureSizeTemp {
+        sampler2D shadowMap;
+
+        fragment {
+            vec4 main(vec2 uv) {
+                vec2 texel = vec2(textureSize(shadowMap, 0));
+                float samples = 0.0;
+                samples++;
+                return vec4(uv / texel, samples, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let __cgl_vec_arg_0: Vec2<i32> = texture_size_lod(*SHADOW_MAP, 0);" in (
+        generated_code
+    )
+    assert "samples += 1.0;" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_vec2_intrinsics_and_matrix_multiply_lower_to_lanes(tmp_path):
+    code = """
+    shader RustLaneMatrixMath {
+        fragment {
+            vec4 main(vec2 direction, mat2 rotation, mat4 view, mat4 model) {
+                float len = length(direction);
+                vec2 unit = normalize(direction);
+                vec2 rotated = rotation * unit;
+                mat4 combined = view * model;
+                return combined * vec4(rotated, len, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "length(direction)" not in generated_code
+    assert "normalize(direction)" not in generated_code
+    assert "(rotation * unit)" not in generated_code
+    assert "(view * model)" not in generated_code
+    assert "let combined: Mat4<f32> = Mat4::<f32>::new(" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_shared_stage_arrays_emit_mutable_locals(tmp_path):
+    code = """
+    shader RustSharedLocal {
+        compute {
+            shared float tile[2][2];
+
+            void main() {
+                int x = int(gl_LocalInvocationID.x);
+                tile[x][0] = 1.0;
+                workgroupBarrier();
+                float value = tile[x][0];
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static TILE" not in generated_code
+    assert "let mut tile: [[f32; 2]; 2]" in generated_code
+    assert "tile[x as usize][0] = 1.0;" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_lambda_call_emits_native_rust_closure():
     code = """
     shader main {
@@ -20571,15 +20791,15 @@ def test_double_vector_and_matrix_types_emit_rust_names(tmp_path):
 
     assert "let preciseUV: Vec2<f64> = Vec2::<f64>::new(1.0, 2.0);" in generated_code
     assert "let mask: Vec2<bool> = Vec2::<bool>::new(true, false);" in generated_code
-    assert "let flags: Vec3<bool>;" in generated_code
+    assert "let flags: Vec3<bool> = Default::default();" in generated_code
     assert (
-        "let transform: Mat2<f32> = " "Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0);"
+        "let transform: Mat2<f32> = Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0);"
     ) in generated_code
-    assert "let affine: Mat3x4<f32>;" in generated_code
+    assert "let affine: Mat3x4<f32> = Default::default();" in generated_code
     assert (
-        "let precise: Mat2<f64> = " "Mat2::<f64>::new(1.0, 0.0, 0.0, 1.0);"
+        "let precise: Mat2<f64> = Mat2::<f64>::new(1.0, 0.0, 0.0, 1.0);"
     ) in generated_code
-    assert "let jacobian: Mat4x3<f64>;" in generated_code
+    assert "let jacobian: Mat4x3<f64> = Default::default();" in generated_code
     assert "dvec2(" not in generated_code
     assert "bvec2(" not in generated_code
     assert "bool2" not in generated_code
@@ -20745,18 +20965,18 @@ def test_mixed_vector_and_matrix_binary_operands_promote_before_operator():
 
     assert (
         "let inferredVec: Vec2<f32> = "
-        "(Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)) + amount);"
-        in generated_code
+        "Vec2::<f32>::new(((pixel.x as f32) + amount.x), "
+        "((pixel.y as f32) + amount.y));" in generated_code
     )
     assert (
         "let inferredVecReverse: Vec2<f32> = "
-        "(amount + Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)));"
-        in generated_code
+        "Vec2::<f32>::new((amount.x + (pixel.x as f32)), "
+        "(amount.y + (pixel.y as f32)));" in generated_code
     )
     assert (
         "let declaredVec: Vec2<f32> = "
-        "(Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)) + amount);"
-        in generated_code
+        "Vec2::<f32>::new(((pixel.x as f32) + amount.x), "
+        "((pixel.y as f32) + amount.y));" in generated_code
     )
     assert (
         "let inferredMat: Mat2<f64> = "
@@ -20815,8 +21035,8 @@ def test_mixed_vector_and_matrix_scalar_binary_operands_cast_to_components():
 
     assert (
         "let inferredVec: Vec2<f32> = "
-        "(Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)) + weight);"
-        in generated_code
+        "Vec2::<f32>::new(((pixel.x as f32) + weight), "
+        "((pixel.y as f32) + weight));" in generated_code
     )
     assert (
         "let inferredVecReverse: Vec2<f32> = "
@@ -20825,15 +21045,18 @@ def test_mixed_vector_and_matrix_scalar_binary_operands_cast_to_components():
     )
     assert (
         "let declaredVec: Vec2<f32> = "
-        "(Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)) + weight);"
-        in generated_code
+        "Vec2::<f32>::new(((pixel.x as f32) + weight), "
+        "((pixel.y as f32) + weight));" in generated_code
     )
     assert (
         "let inferredDoubleVec: Vec2<f64> = "
-        "(Vec2::<f64>::new((amount.x as f64), (amount.y as f64)) + precise);"
-        in generated_code
+        "Vec2::<f64>::new(((amount.x as f64) + precise), "
+        "((amount.y as f64) + precise));" in generated_code
     )
-    assert "let indexedVec: Vec2<f32> = (amount + (index as f32));" in generated_code
+    assert (
+        "let indexedVec: Vec2<f32> = Vec2::<f32>::new("
+        "(amount.x + (index as f32)), (amount.y + (index as f32)));" in generated_code
+    )
     assert (
         "let inferredMat: Mat2<f64> = "
         "(Mat2::<f64>::new((transform.c0.x as f64), "
@@ -20853,7 +21076,10 @@ def test_mixed_vector_and_matrix_scalar_binary_operands_cast_to_components():
         "(transform.c1.y as f64)) + precise);" in generated_code
     )
     assert "let indexedMat: Mat2<f32> = (transform + (index as f32));" in generated_code
-    assert "let sameVec: Vec2<f32> = (amount + weight);" in generated_code
+    assert (
+        "let sameVec: Vec2<f32> = "
+        "Vec2::<f32>::new((amount.x + weight), (amount.y + weight));" in generated_code
+    )
     assert "let sameMat: Mat2<f64> = (preciseInput + precise);" in generated_code
     assert "(pixel + weight)" not in generated_code
     assert "(transform + precise)" not in generated_code
@@ -20890,48 +21116,41 @@ def test_matrix_vector_binary_operands_promote_components_and_result_size():
     generated_code = generate_code(ast)
 
     assert (
-        "let inferredMatVec: Vec2<f64> = "
-        "(Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)) * preciseAmount);" in generated_code
+        "let inferredMatVec: Vec2<f64> = Vec2::<f64>::new"
+        "((((transform.c0.x as f64) * preciseAmount.x)" in generated_code
     )
     assert (
         "let inferredMatVecReverseComponents: Vec2<f64> = "
-        "(preciseTransform * Vec2::<f64>::new((amount.x as f64), "
-        "(amount.y as f64)));" in generated_code
+        "Vec2::<f64>::new(((preciseTransform.c0.x * (amount.x as f64))"
+        in generated_code
     )
     assert (
         "let inferredMatIntVec: Vec2<f32> = "
-        "(transform * Vec2::<f32>::new((pixel.x as f32), "
-        "(pixel.y as f32)));" in generated_code
+        "Vec2::<f32>::new(((transform.c0.x * (pixel.x as f32))" in generated_code
     )
     assert (
-        "let declaredMatVec: Vec2<f64> = "
-        "(Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)) * Vec2::<f64>::new((amount.x as f64), "
-        "(amount.y as f64)));" in generated_code
+        "let declaredMatVec: Vec2<f64> = Vec2::<f64>::new"
+        "((((transform.c0.x as f64) * (amount.x as f64))" in generated_code
     )
     assert (
         "let inferredVecMat: Vec2<f64> = "
-        "(preciseAmount * Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)));" in generated_code
+        "Vec2::<f64>::new(((preciseAmount.x * (transform.c0.x as f64))"
+        in generated_code
     )
     assert (
         "let inferredVecMatReverseComponents: Vec2<f64> = "
-        "(Vec2::<f64>::new((amount.x as f64), (amount.y as f64)) "
-        "* preciseTransform);" in generated_code
+        "Vec2::<f64>::new((((amount.x as f64) * preciseTransform.c0.x)"
+        in generated_code
     )
     assert (
-        "let declaredVecMat: Vec2<f64> = "
-        "(Vec2::<f64>::new((amount.x as f64), (amount.y as f64)) "
-        "* Mat2::<f64>::new((transform.c0.x as f64), "
-        "(transform.c0.y as f64), (transform.c1.x as f64), "
-        "(transform.c1.y as f64)));" in generated_code
+        "let declaredVecMat: Vec2<f64> = Vec2::<f64>::new"
+        "((((amount.x as f64) * (transform.c0.x as f64))" in generated_code
     )
-    assert "let rectMatVec: Vec3<f32> = (affine * uv);" in generated_code
-    assert "let rectVecMat: Vec2<f32> = (normal * affine);" in generated_code
+    assert "let rectMatVec: Vec3<f32> = Vec3::<f32>::new" in generated_code
+    assert "let rectVecMat: Vec2<f32> = Vec2::<f32>::new" in generated_code
+    assert "(transform * preciseAmount)" not in generated_code
+    assert "(preciseTransform * amount)" not in generated_code
+    assert "(normal * affine)" not in generated_code
     assert "let inferredMatVecReverseComponents: Vec2<f32>" not in generated_code
     assert "let inferredMatIntVec: Vec2<i32>" not in generated_code
     assert "let rectMatVec: Vec2<f32>" not in generated_code
@@ -21880,8 +22099,7 @@ def test_composite_vector_constructors_flatten_rust_lanes():
         "Vec4::<f32>::new(xy.x, xy.y, 0.0, 1.0);" in generated_code
     )
     assert (
-        "let position: Vec3<f32> = "
-        "Vec3::<f32>::new(xy.x, xy.y, 1.0);" in generated_code
+        "let position: Vec3<f32> = Vec3::<f32>::new(xy.x, xy.y, 1.0);" in generated_code
     )
     assert (
         "let rgb: Vec3<f32> = "
@@ -22816,9 +23034,7 @@ def test_array_literals_emit_rust_array_initializers():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert (
-        "static GLOBAL_WEIGHTS: [f32; 4] = " "[1.0, 2.0, 0.0, 0.0];"
-    ) in generated_code
+    assert ("static GLOBAL_WEIGHTS: [f32; 4] = [1.0, 2.0, 0.0, 0.0];") in generated_code
     assert "static GLOBAL_WEIGHTS: [f32; 4] = [1.0, 2.0, Default" not in generated_code
     assert "let values: [f32; 4] = [1.0, 2.0, 3.0, 4.0];" in generated_code
     assert (
@@ -23060,8 +23276,8 @@ def test_rust_attributes():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert "#[vertex_shader]" in generated_code
-        assert "#[fragment_shader]" in generated_code
+        assert_rust_stage_attr(generated_code, "vertex")
+        assert_rust_stage_attr(generated_code, "fragment")
         assert "#[repr(C)]" in generated_code
         print(generated_code)
     except SyntaxError:
@@ -23123,7 +23339,7 @@ def test_rust_invalid_shader_empty_vertex_stage(tmp_path):
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "pub fn main() -> ()" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
@@ -23142,8 +23358,8 @@ def test_rust_invalid_shader_no_stages(tmp_path):
     generated_code = generate_code(ast)
     assert "use gpu::*;" in generated_code
     assert "pub struct Data" in generated_code
-    assert "#[vertex_shader]" not in generated_code
-    assert "#[fragment_shader]" not in generated_code
+    assert_rust_stage_attr_absent(generated_code, "vertex")
+    assert_rust_stage_attr_absent(generated_code, "fragment")
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -23161,7 +23377,7 @@ def test_rust_invalid_shader_missing_return_type(tmp_path):
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "-> ()" in generated_code
     assert "let x: f32 = 1.0;" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -23265,7 +23481,7 @@ def test_rust_cbuffer_used_in_vertex_stage():
     generated_code = generate_code(ast)
 
     assert "pub struct Transform" in generated_code
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "pub fn main(" in generated_code
 
 
@@ -23386,7 +23602,7 @@ def test_rust_stage_parameter_input_struct():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "input: VSInput" in generated_code
     assert "-> VSOutput" in generated_code
 
@@ -23409,7 +23625,7 @@ def test_rust_stage_parameter_output_semantic():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[fragment_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "fragment")
     assert "input: FSInput" in generated_code
     assert "-> Vec4<f32>" in generated_code
 
@@ -23432,7 +23648,7 @@ def test_rust_stage_parameter_multiple_params():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "input: VSInput" in generated_code
     assert "-> Vec4<f32>" in generated_code
 
@@ -23456,7 +23672,7 @@ def test_rust_fragment_stage_basic():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[fragment_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "fragment")
     assert "-> Vec4<f32>" in generated_code
     assert "Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0)" in generated_code
 
@@ -23480,7 +23696,7 @@ def test_rust_fragment_stage_with_texture_sampling():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[fragment_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "fragment")
     assert "sample" in generated_code
     assert "DIFFUSE_TEXTURE" in generated_code or "diffuseTexture" in generated_code
 
@@ -23506,7 +23722,7 @@ def test_rust_fragment_stage_with_discard():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[fragment_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "fragment")
     assert "discard" in generated_code
     assert "input.color.w" in generated_code
 
@@ -23535,7 +23751,7 @@ def test_rust_fragment_stage_multiple_render_targets():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[fragment_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "fragment")
     assert "-> GBuffer" in generated_code
     assert "pub struct GBuffer" in generated_code
     assert "// target(0)" in generated_code
@@ -23565,7 +23781,7 @@ def test_rust_vertex_stage_basic():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "pub fn main(input: VSInput) -> Vec4<f32>" in generated_code
 
 
@@ -23598,7 +23814,7 @@ def test_rust_vertex_stage_with_transform():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "pub struct Transforms" in generated_code
     assert "pub modelViewProjection: Mat4<f32>," in generated_code
     assert "-> VSOutput" in generated_code
@@ -23633,7 +23849,7 @@ def test_rust_vertex_stage_passthrough():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "pub struct VSInput" in generated_code
     assert "pub struct VSOutput" in generated_code
     assert "// position" in generated_code
@@ -23680,8 +23896,8 @@ def test_rust_vertex_and_fragment_pipeline():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[vertex_shader]" in generated_code
-    assert "#[fragment_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
+    assert_rust_stage_attr(generated_code, "fragment")
     assert "pub struct Material" in generated_code
     assert "pub struct VSInput" in generated_code
     assert "pub struct VSOutput" in generated_code
@@ -23991,10 +24207,10 @@ def test_rust_direct_return_semantics_emit_metadata_and_compile(tmp_path):
     """
     generated_code = generate_code(parse_code(tokenize_code(color_code)))
 
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "// CrossGL return semantic: position" in generated_code
     assert "pub fn vertex_main(position: Vec3<f32>) -> Vec4<f32>" in generated_code
-    assert "#[fragment_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "fragment")
     assert "// CrossGL return semantic: target(0)" in generated_code
     assert "pub fn fragment_main() -> Vec4<f32>" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -24010,7 +24226,7 @@ def test_rust_direct_return_semantics_emit_metadata_and_compile(tmp_path):
     """
     depth_generated_code = generate_code(parse_code(tokenize_code(depth_code)))
 
-    assert "#[fragment_shader]" in depth_generated_code
+    assert_rust_stage_attr(depth_generated_code, "fragment")
     assert "// CrossGL return semantic: depth(any)" in depth_generated_code
     assert "pub fn main() -> f32" in depth_generated_code
     assert_generated_rust_smoke_compiles(depth_generated_code, tmp_path)
@@ -24040,7 +24256,7 @@ def test_rust_vertex_stage_position_output(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "pub struct VSOutput" in generated_code
     assert "pub position: Vec4<f32>," in generated_code
     assert "// position" in generated_code
@@ -24068,7 +24284,7 @@ def test_rust_fragment_stage_color_output(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[fragment_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "fragment")
     assert "pub struct PSOutput" in generated_code
     assert "pub color: Vec4<f32>," in generated_code
     assert "// target(0)" in generated_code
@@ -24108,8 +24324,8 @@ def test_rust_stage_io_semantics_sv_position_sv_target(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[vertex_shader]" in generated_code
-    assert "#[fragment_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
+    assert_rust_stage_attr(generated_code, "fragment")
     assert "pub struct VSOut" in generated_code
     assert "pub struct PSOut" in generated_code
     assert "pub pos: Vec4<f32>," in generated_code
@@ -24149,7 +24365,7 @@ def test_rust_vertex_multiple_attributes(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "pub struct VertexIn" in generated_code
     assert "pub struct VertexOut" in generated_code
     assert "pub position: Vec3<f32>," in generated_code
@@ -24186,7 +24402,7 @@ def test_rust_fragment_stage_with_texture_sampling(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[fragment_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "fragment")
     assert "pub struct PSInput" in generated_code
     assert "pub uv: Vec2<f32>," in generated_code
     assert "// texcoord(0)" in generated_code
@@ -24212,9 +24428,9 @@ def test_rust_invalid_shader_completely_empty(tmp_path):
     assert "// Generated Rust GPU Shader Code" in generated_code
     assert "use gpu::*;" in generated_code
     assert "use math::*;" in generated_code
-    assert "#[vertex_shader]" not in generated_code
-    assert "#[fragment_shader]" not in generated_code
-    assert "#[compute_shader]" not in generated_code
+    assert_rust_stage_attr_absent(generated_code, "vertex")
+    assert_rust_stage_attr_absent(generated_code, "fragment")
+    assert_rust_stage_attr_absent(generated_code, "compute")
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -24232,7 +24448,7 @@ def test_rust_invalid_shader_vertex_stage_no_body(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "pub fn" in generated_code
     assert "-> ()" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -24263,8 +24479,8 @@ def test_rust_invalid_shader_struct_only_no_stage(tmp_path):
     assert "// position" in generated_code
     assert "// normal" in generated_code
     assert "// color" in generated_code
-    assert "#[vertex_shader]" not in generated_code
-    assert "#[fragment_shader]" not in generated_code
+    assert_rust_stage_attr_absent(generated_code, "vertex")
+    assert_rust_stage_attr_absent(generated_code, "fragment")
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -24913,7 +25129,7 @@ def test_rust_stage_parameter_semantics_all_mappings(tmp_path):
     assert "// texcoord(3)" in generated_code
     assert "// color(0)" in generated_code
     assert "// color(1)" in generated_code
-    assert "#[vertex_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
     assert "input: FullInput" in generated_code
     assert "-> FullOutput" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -24970,6 +25186,259 @@ def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile(tmp_pa
         "pub fn compute_main(globalId: Vec3<u32>, localId: Vec3<u32>, lane: u32)"
         in generated_code
     )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_escapes_keyword_struct_fields_and_accesses(tmp_path):
+    code = """
+    shader RustKeywordFields {
+        struct Light {
+            int type;
+        };
+
+        int readType(Light light) {
+            return light.type;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub type_: i32," in generated_code
+    assert "pub fn new(type_: i32)" in generated_code
+    assert "Self { type_ }" in generated_code
+    assert "return light.type_;" in generated_code
+    assert "pub type: i32" not in generated_code
+    assert "light.type;" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_keyword_struct_fields_survive_default_formatting(tmp_path):
+    import crosstl
+
+    source_path = tmp_path / "keyword_fields.cgl"
+    source_path.write_text(
+        """
+        shader RustKeywordFields {
+            struct Light {
+                int type;
+            };
+
+            int readType(Light light) {
+                return light.type;
+            }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(str(source_path), backend="rust")
+
+    assert "pub type_" in generated_code
+    assert "return light.type_;" in generated_code
+    assert "r #type" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_skips_forward_function_prototypes_and_compiles(tmp_path):
+    code = """
+    shader RustFunctionPrototype {
+        float shadowCalculation(vec4 fragPosLightSpace, int iteration);
+
+        float applyShadow(vec4 position) {
+            return shadowCalculation(position, 0);
+        }
+
+        float shadowCalculation(vec4 fragPosLightSpace, int iteration) {
+            return fragPosLightSpace.x + float(iteration);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert generated_code.count("pub fn shadowCalculation(") == 1
+    empty_definition = (
+        "pub fn shadowCalculation("
+        "fragPosLightSpace: Vec4<f32>, iteration: i32"
+        ") -> f32 {\n}\n"
+    )
+    assert empty_definition not in generated_code
+    assert "return shadowCalculation(position, 0);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_top_level_constants_and_compute_builtins_compile(tmp_path):
+    code = """
+    shader RustComputeBuiltins {
+        const int WARP_SIZE = 32;
+        const float SCALE = 2.0;
+
+        compute {
+            void main() {
+                int warp = int(gl_LocalInvocationID.x);
+                int globalId = int(gl_GlobalInvocationID.x);
+                int groups = int(gl_NumWorkGroups.x);
+                int stride = groups * WARP_SIZE;
+                float scaled = float(stride + globalId + warp) * SCALE;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "const WARP_SIZE: i32 = 32;" in generated_code
+    assert "const SCALE: f32 = 2.0;" in generated_code
+    assert "local_invocation_id().x" in generated_code
+    assert "global_invocation_id().x" in generated_code
+    assert "num_workgroups().x" in generated_code
+    assert "gl_LocalInvocationID" not in generated_code
+    assert "gl_GlobalInvocationID" not in generated_code
+    assert "gl_NumWorkGroups" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_swizzle_assignments_emit_component_writes(tmp_path):
+    code = """
+    shader RustSwizzleAssignments {
+        vec4 adjust(vec4 color, vec3 delta, float scale) {
+            color.rgb += delta;
+            color.rgb *= scale;
+            return color;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Vec3::<f32>::new(color.x, color.y, color.z) +=" not in generated_code
+    assert "color.x += __cgl_swizzle_" in generated_code
+    assert "color.y *= __cgl_swizzle_" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_matrix_scalar_and_resize_constructors_compile(tmp_path):
+    code = """
+    shader RustMatrixConstructors {
+        vec3 transform(vec3 normal) {
+            mat4 model = mat4(1.0);
+            mat3 normal_matrix = mat3(transpose(inverse(model)));
+            return normal_matrix * normal;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Mat4::<f32>::new(1.0)" not in generated_code
+    assert "Mat3::<f32>::new(transpose(" not in generated_code
+    assert "let __cgl_mat_arg_" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_stage_local_function_captures_entry_params(tmp_path):
+    code = """
+    shader RustStageLocalCapture {
+        struct FragmentInput {
+            vec3 worldNormal;
+            vec3 worldPosition;
+        };
+
+        fragment {
+            float shade(vec3 lightDir) {
+                return dot(input.worldNormal, lightDir);
+            }
+
+            vec4 main(FragmentInput input) @ gl_FragColor {
+                float lit = shade(input.worldPosition);
+                return vec4(lit, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn shade(lightDir: Vec3<f32>, input: FragmentInput) -> f32" in (
+        generated_code
+    )
+    assert "shade(input.worldPosition, input)" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_pointer_statics_and_indexing_compile(tmp_path):
+    code = """
+    shader RustPointerBuffers {
+        float read(buffer float* data, int index) {
+            return data[index];
+        }
+
+        void write(buffer float* data, int index, float value) {
+            data[index] = value;
+        }
+
+        compute {
+            buffer float* A;
+
+            void main() {
+                int index = int(gl_GlobalInvocationID.x);
+                write(A, index, read(A, index));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static A: usize = 0;" in generated_code
+    assert "LazyLock<*mut f32>" not in generated_code
+    assert "unsafe { *(data).add(index as usize) }" in generated_code
+    assert "unsafe { *(data).add(index as usize) = value }" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_large_array_struct_default_is_manual(tmp_path):
+    code = """
+    shader RustLargeArrayDefault {
+        struct BigMatrix {
+            float data[64][64];
+        };
+
+        BigMatrix make() {
+            BigMatrix matrix;
+            return matrix;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "#[derive(Debug, Clone, Copy, Default)]\npub struct BigMatrix" not in (
+        generated_code
+    )
+    assert "impl Default for BigMatrix" in generated_code
+    assert "unsafe { std::mem::zeroed() }" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_cuda_shuffle_down_intrinsic_maps_to_subgroup_helper(tmp_path):
+    code = """
+    shader RustCudaShuffle {
+        compute {
+            void main() {
+                float partial = 1.0;
+                int offset = 16;
+                partial += __shfl_down_sync(0xFFFFFFFF, partial, offset);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "__shfl_down_sync" not in generated_code
+    assert "subgroup_shuffle_down(partial, offset)" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -25051,8 +25520,8 @@ def test_rust_stage_parameter_multiple_bindings_attribute_syntax(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "#[vertex_shader]" in generated_code
-    assert "#[fragment_shader]" in generated_code
+    assert_rust_stage_attr(generated_code, "vertex")
+    assert_rust_stage_attr(generated_code, "fragment")
     assert "input: VSInput" in generated_code
     assert "input: VSOutput" in generated_code
     assert "-> VSOutput" in generated_code

@@ -1,0 +1,152 @@
+; SPIR-V
+; Version: 1.0
+; Generator: Khronos SPIR-V Tools Assembler; 0
+; Bound: 99
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Vertex %2 "main" %CrossGL_vertex_output_main_uv %gl_Position %CrossGL_vertex_input_input_position
+               OpEntryPoint Fragment %6 "main" %CrossGL_fragment_output_main_color %CrossGL_fragment_input_input_uv
+               OpExecutionMode %6 OriginUpperLeft
+               OpName %VertexInput "VertexInput"
+               OpMemberName %VertexInput 0 "position"
+               OpName %VertexOutput "VertexOutput"
+               OpMemberName %VertexOutput 0 "uv"
+               OpMemberName %VertexOutput 1 "position"
+               OpName %FragmentInput "FragmentInput"
+               OpMemberName %FragmentInput 0 "uv"
+               OpName %FragmentOutput "FragmentOutput"
+               OpMemberName %FragmentOutput 0 "color"
+               OpName %p "p"
+               OpName %CrossGL_vertex_output_main_uv "CrossGL_vertex_output_main_uv"
+               OpName %gl_Position "gl_Position"
+               OpName %CrossGL_vertex_input_input_position "CrossGL_vertex_input_input_position"
+               OpName %input "input"
+               OpName %output "output"
+               OpName %CrossGL_fragment_output_main_color "CrossGL_fragment_output_main_color"
+               OpName %CrossGL_fragment_input_input_uv "CrossGL_fragment_input_input_uv"
+               OpName %input_0 "input"
+               OpName %output_0 "output"
+               OpName %noise "noise"
+               OpName %height "height"
+               OpName %color "color"
+               OpDecorate %CrossGL_vertex_output_main_uv Location 0
+               OpDecorate %gl_Position BuiltIn Position
+               OpDecorate %CrossGL_vertex_input_input_position Location 0
+               OpDecorate %CrossGL_fragment_output_main_color Location 0
+               OpDecorate %CrossGL_fragment_input_input_uv Location 0
+       %void = OpTypeVoid
+       %bool = OpTypeBool
+        %int = OpTypeInt 32 1
+      %float = OpTypeFloat 32
+    %v2float = OpTypeVector %float 2
+    %v3float = OpTypeVector %float 3
+    %v4float = OpTypeVector %float 4
+%VertexInput = OpTypeStruct %v3float
+%VertexOutput = OpTypeStruct %v2float %v4float
+%FragmentInput = OpTypeStruct %v2float
+%FragmentOutput = OpTypeStruct %v4float
+         %28 = OpTypeFunction %float %v2float
+%float_12_9898005 = OpConstant %float 12.9898005
+%float_78_2330017 = OpConstant %float 78.2330017
+%float_43758_5469 = OpConstant %float 43758.5469
+         %32 = OpTypeFunction %void
+%_ptr_Output_v2float = OpTypePointer Output %v2float
+%_ptr_Output_v4float = OpTypePointer Output %v4float
+%_ptr_Input_v3float = OpTypePointer Input %v3float
+%_ptr_Function_VertexInput = OpTypePointer Function %VertexInput
+%_ptr_Function_VertexOutput = OpTypePointer Function %VertexOutput
+      %int_0 = OpConstant %int 0
+%_ptr_Function_v3float = OpTypePointer Function %v3float
+   %float_10 = OpConstant %float 10
+%_ptr_Function_v2float = OpTypePointer Function %v2float
+    %float_1 = OpConstant %float 1
+      %int_1 = OpConstant %int 1
+%_ptr_Function_v4float = OpTypePointer Function %v4float
+%_ptr_Input_v2float = OpTypePointer Input %v2float
+%_ptr_Function_FragmentInput = OpTypePointer Function %FragmentInput
+%_ptr_Function_FragmentOutput = OpTypePointer Function %FragmentOutput
+%_ptr_Function_float = OpTypePointer Function %float
+    %float_0 = OpConstant %float 0
+%CrossGL_vertex_output_main_uv = OpVariable %_ptr_Output_v2float Output
+%gl_Position = OpVariable %_ptr_Output_v4float Output
+%CrossGL_vertex_input_input_position = OpVariable %_ptr_Input_v3float Input
+%CrossGL_fragment_output_main_color = OpVariable %_ptr_Output_v4float Output
+%CrossGL_fragment_input_input_uv = OpVariable %_ptr_Input_v2float Input
+         %50 = OpFunction %float None %28
+          %p = OpFunctionParameter %v2float
+         %51 = OpLabel
+         %52 = OpCompositeConstruct %v2float %float_12_9898005 %float_78_2330017
+         %53 = OpDot %float %p %52
+         %54 = OpExtInst %float %1 Sin %53
+         %55 = OpFMul %float %54 %float_43758_5469
+         %56 = OpExtInst %float %1 Fract %55
+               OpReturnValue %56
+               OpFunctionEnd
+          %2 = OpFunction %void None %32
+         %57 = OpLabel
+      %input = OpVariable %_ptr_Function_VertexInput Function
+     %output = OpVariable %_ptr_Function_VertexOutput Function
+         %58 = OpLoad %v3float %CrossGL_vertex_input_input_position
+         %59 = OpCompositeConstruct %VertexInput %58
+               OpStore %input %59
+         %60 = OpAccessChain %_ptr_Function_v3float %input %int_0
+         %61 = OpAccessChain %_ptr_Function_v3float %input %int_0
+         %62 = OpLoad %v3float %61
+         %63 = OpVectorShuffle %v2float %62 %62 0 1
+         %64 = OpCompositeConstruct %v2float %float_10 %float_10
+         %65 = OpFMul %v2float %63 %64
+         %66 = OpAccessChain %_ptr_Function_v2float %output %int_0
+               OpStore %66 %65
+         %67 = OpAccessChain %_ptr_Function_v3float %input %int_0
+         %68 = OpLoad %v3float %67
+         %69 = OpCompositeExtract %float %68 0
+         %70 = OpCompositeExtract %float %68 1
+         %71 = OpCompositeExtract %float %68 2
+         %72 = OpCompositeConstruct %v4float %69 %70 %71 %float_1
+         %73 = OpAccessChain %_ptr_Function_v4float %output %int_1
+               OpStore %73 %72
+         %74 = OpLoad %VertexOutput %output
+         %75 = OpCompositeExtract %v2float %74 0
+               OpStore %CrossGL_vertex_output_main_uv %75
+         %76 = OpCompositeExtract %v4float %74 1
+               OpStore %gl_Position %76
+               OpReturn
+               OpFunctionEnd
+          %6 = OpFunction %void None %32
+         %77 = OpLabel
+    %input_0 = OpVariable %_ptr_Function_FragmentInput Function
+   %output_0 = OpVariable %_ptr_Function_FragmentOutput Function
+      %noise = OpVariable %_ptr_Function_float Function
+     %height = OpVariable %_ptr_Function_float Function
+      %color = OpVariable %_ptr_Function_v3float Function
+         %78 = OpLoad %v2float %CrossGL_fragment_input_input_uv
+         %79 = OpCompositeConstruct %FragmentInput %78
+               OpStore %input_0 %79
+         %80 = OpAccessChain %_ptr_Function_v2float %input_0 %int_0
+         %81 = OpLoad %v2float %80
+         %82 = OpFunctionCall %float %50 %81
+               OpStore %noise %82
+         %83 = OpLoad %float %noise
+         %84 = OpFMul %float %83 %float_10
+               OpStore %height %84
+         %85 = OpLoad %float %height
+         %86 = OpFDiv %float %85 %float_10
+         %87 = OpLoad %float %height
+         %88 = OpFDiv %float %87 %float_10
+         %89 = OpFSub %float %float_1 %88
+         %90 = OpCompositeConstruct %v3float %86 %89 %float_0
+               OpStore %color %90
+         %91 = OpLoad %v3float %color
+         %92 = OpCompositeExtract %float %91 0
+         %93 = OpCompositeExtract %float %91 1
+         %94 = OpCompositeExtract %float %91 2
+         %95 = OpCompositeConstruct %v4float %92 %93 %94 %float_1
+         %96 = OpAccessChain %_ptr_Function_v4float %output_0 %int_0
+               OpStore %96 %95
+         %97 = OpLoad %FragmentOutput %output_0
+         %98 = OpCompositeExtract %v4float %97 0
+               OpStore %CrossGL_fragment_output_main_color %98
+               OpReturn
+               OpFunctionEnd

@@ -1,6 +1,7 @@
 from enum import Enum
 
 from crosstl.translator import stage_utils as shared_stage_utils
+from crosstl.translator.ast import StageMap
 from crosstl.translator.codegen.stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -258,6 +259,22 @@ def test_stage_entry_name_helpers_rename_single_default_when_reserved():
     )
 
     assert names[id(entry)] == "vertex_main"
+
+
+def test_stage_helpers_preserve_multiple_entries_for_same_stage():
+    main_entry = DummyFunction("main")
+    spawn_entry = DummyFunction("spawn")
+    stages = StageMap()
+    stages.append("compute", DummyStageNode(main_entry))
+    stages.append("compute", DummyStageNode(spawn_entry))
+    ast = DummyAst(stages=stages)
+
+    entries = collect_stage_entry_records(ast, "compute", {"compute"})
+
+    assert entries == [
+        (id(main_entry), "compute", main_entry),
+        (id(spawn_entry), "compute", spawn_entry),
+    ]
 
 
 def test_collect_stage_local_variables_filters_by_stage_and_predicate():

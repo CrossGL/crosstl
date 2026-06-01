@@ -52,6 +52,7 @@ from .ast import (
     ReturnNode,
     ShaderNode,
     ShaderStage,
+    StageMap,
     StageNode,
     StructMemberNode,
     StructNode,
@@ -284,7 +285,7 @@ class Parser:
         global_variables = []
         constants = []
         cbuffers = []
-        stages = {}
+        stages = StageMap()
         imports = []
         preprocessors = []
         shader_name = "main"
@@ -325,7 +326,7 @@ class Parser:
                 elif isinstance(parsed_element, ConstantNode):
                     constants.append(parsed_element)
                 elif isinstance(parsed_element, StageNode):
-                    stages[parsed_element.stage] = parsed_element
+                    stages.append(parsed_element.stage, parsed_element)
                 elif isinstance(parsed_element, ImportNode):
                     imports.append(parsed_element)
                 elif isinstance(parsed_element, PreprocessorNode):
@@ -457,7 +458,7 @@ class Parser:
         self.eat("IDENTIFIER")
 
         execution_model = ExecutionModel.GRAPHICS_PIPELINE
-        stages = {}
+        stages = StageMap()
         functions = []
         structs = []
         global_variables = []
@@ -474,7 +475,7 @@ class Parser:
                 preprocessors.append(self.parse_precision_statement())
             elif self.current_token_starts_shader_stage_block():
                 stage_node = self.parse_shader_stage_block()
-                stages[stage_node.stage] = stage_node
+                stages.append(stage_node.stage, stage_node)
             elif self.current_token_starts_attributed_cbuffer_declaration():
                 cbuffers.append(self.parse_attributed_cbuffer())
             elif self.current_token_starts_attributed_struct_declaration():
@@ -576,7 +577,10 @@ class Parser:
         elif isinstance(declaration, ConstantNode):
             constants.append(declaration)
         elif isinstance(declaration, StageNode):
-            stages[declaration.stage] = declaration
+            if hasattr(stages, "append"):
+                stages.append(declaration.stage, declaration)
+            else:
+                stages[declaration.stage] = declaration
 
     def parse_shader_stage_block(self):
         """Parse a stage-qualified block into a ``StageNode``."""
@@ -596,6 +600,7 @@ class Parser:
         local_functions = []
         local_structs = []
         local_cbuffers = []
+        parsed_functions = []
         main_function = None
         execution_config = {}
         layout_qualifiers = []
@@ -639,16 +644,29 @@ class Parser:
                     local_cbuffers.append(cbuffer)
             elif self.is_function_declaration():
                 func = self.parse_function()
+                parsed_functions.append(func)
                 if func.name == "main":
                     main_function = func
-                else:
-                    local_functions.append(func)
             elif self.is_variable_declaration():
                 local_variables.append(self.parse_variable_declaration())
             else:
                 self.skip_unknown_token()
 
         self.eat("RBRACE")
+
+        if main_function is None:
+            main_function = next(
+                (
+                    func
+                    for func in parsed_functions
+                    if self.function_has_stage_entry_attributes(func)
+                ),
+                None,
+            )
+
+        local_functions.extend(
+            func for func in parsed_functions if func is not main_function
+        )
 
         if not main_function:
             main_function = FunctionNode(
@@ -674,6 +692,24 @@ class Parser:
             local_cbuffers=local_cbuffers,
             execution_config=execution_config,
             layout_qualifiers=layout_qualifiers,
+        )
+
+    def function_has_stage_entry_attributes(self, function):
+        """Return whether a non-main stage function carries entry metadata."""
+        stage_entry_attributes = {
+            "numthreads",
+            "outputtopology",
+            "max_vertices",
+            "max_primitives",
+            "outputcontrolpoints",
+            "domain",
+            "partitioning",
+            "patchconstantfunc",
+            "maxtessfactor",
+        }
+        return any(
+            str(getattr(attr, "name", "")).lower() in stage_entry_attributes
+            for attr in getattr(function, "attributes", []) or []
         )
 
     def parse_import(self):

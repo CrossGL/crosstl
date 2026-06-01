@@ -25,6 +25,12 @@ implementation and test evidence. Use `partial`, `diagnostic`, `unsupported`,
 `validated_rejection`, or `unknown` when the behavior is incomplete, deliberately
 rejected, or not audited yet.
 
+Generated backlog rows and managed GitHub sub-issues are reserved for actionable
+coverage gaps: `partial`, `unsupported`, and `unknown`. Evidence-backed
+`diagnostic` and `validated_rejection` rows stay visible in the matrix counts,
+but they are treated as closed-loop behavior rather than open implementation
+work.
+
 Run:
 
 ```sh

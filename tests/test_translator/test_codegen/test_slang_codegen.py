@@ -393,7 +393,7 @@ def test_fragment_dynamic_frag_data_output_index_raises_clear_error(target_index
     """
     with pytest.raises(
         ValueError,
-        match=("gl_FragData requires a non-negative literal " "render-target index"),
+        match=("gl_FragData requires a non-negative literal render-target index"),
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -777,8 +777,7 @@ def test_geometry_stage_lowers_stream_signature_and_emission_calls():
             "PointStream",
         ),
         (
-            "void main(inout TriangleStream<GSOutput> stream) "
-            "@maxvertexcount(3) { }",
+            "void main(inout TriangleStream<GSOutput> stream) @maxvertexcount(3) { }",
             "input primitive",
         ),
         (
@@ -2145,6 +2144,63 @@ def test_mix_builtin_lowers_to_lerp_without_affecting_resources_or_constructors(
     assert "float4 sampled = tex.Sample(uv);" in generated_code
     assert "mix(" not in generated_code
     assert "texture(" not in generated_code
+
+
+def test_stage_helpers_emit_once_with_constants_and_captured_entry_params():
+    code = """
+    shader SlangComplexFix {
+        struct Globals { int frameCount; vec2 screenSize; }
+        struct VSOut { vec3 worldNormal; vec3 worldPosition; }
+        const float EPSILON = 0.0001;
+        const int MAX_ITERATIONS = 64;
+
+        vertex {
+            uniform Globals globals;
+            VSOut main() {
+                VSOut output;
+                output.worldNormal = vec3(0.0, 1.0, 0.0);
+                output.worldPosition = vec3(0.0, 0.0, 0.0);
+                return output;
+            }
+        }
+
+        fragment {
+            uniform Globals globals;
+            uniform sampler2D shadowMap;
+            float shadowCalculation(vec4 fragPosLightSpace, int iteration);
+
+            vec4 main(VSOut input) @ gl_FragColor {
+                float shadow = shadowCalculation(vec4(input.worldPosition, 1.0), 0);
+                return vec4(shadow + EPSILON);
+            }
+
+            float shadowCalculation(vec4 fragPosLightSpace, int iteration) {
+                if (iteration > MAX_ITERATIONS) return 0.0;
+                float closestDepth = texture(shadowMap, fragPosLightSpace.xy).r;
+                return closestDepth + dot(input.worldNormal, input.worldPosition);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert generated_code.count("Globals globals;") == 1
+    assert "static const float EPSILON = 0.0001;" in generated_code
+    assert "static const int MAX_ITERATIONS = 64;" in generated_code
+    assert (
+        "float shadowCalculation(float4 fragPosLightSpace, int iteration, VSOut input)"
+        in generated_code
+    )
+    assert "shadowCalculation(float4(input.worldPosition, 1.0), 0, input)" in (
+        generated_code
+    )
+    assert "shadowMap.Sample(fragPosLightSpace.xy).r" in generated_code
+    assert (
+        "float shadowCalculation(float4 fragPosLightSpace, int iteration)\n{\n}"
+        not in (generated_code)
+    )
+    assert "0.r" not in generated_code
 
 
 def test_bool_mix_lowers_to_slang_selectors():
@@ -5163,7 +5219,7 @@ def test_slangc_smoke_compiles_generated_direct_return_semantics_if_available(
     """
     depth_generated_code = generate_code(parse_code(tokenize_code(depth_code)))
 
-    assert "float PSMain() : SV_Depth" in depth_generated_code
+    assert "float main() : SV_Depth" in depth_generated_code
     assert "return 0.5;" in depth_generated_code
 
     compile_generated_slang(
@@ -5171,7 +5227,7 @@ def test_slangc_smoke_compiles_generated_direct_return_semantics_if_available(
         tmp_path,
         "fragment",
         profile="ps_6_0",
-        entry="PSMain",
+        entry="main",
     )
 
 
@@ -9186,10 +9242,7 @@ def test_invalid_slang_ray_query_helper_method_arguments_raise(helper_source, me
             "domain 'patch'.*tri",
         ),
         (
-            (
-                "tessellation_control { void main() "
-                "@outputtopology(triangles_cw) { } }"
-            ),
+            ("tessellation_control { void main() @outputtopology(triangles_cw) { } }"),
             "outputtopology 'triangles_cw'",
         ),
         (
@@ -9250,10 +9303,7 @@ def test_invalid_slang_ray_query_helper_method_arguments_raise(helper_source, me
             "numthreads attribute must appear at most once",
         ),
         (
-            (
-                "geometry { void main() "
-                "@maxvertexcount(3) @hlsl_maxvertexcount(4) { } }"
-            ),
+            ("geometry { void main() @maxvertexcount(3) @hlsl_maxvertexcount(4) { } }"),
             "maxvertexcount attribute must appear at most once",
         ),
         (
@@ -9741,15 +9791,14 @@ def test_generic_enum_match_expression_lowers_for_slang():
     assert "Result_vec3_MathError makeResult(bool ok)" in generated_code
     assert "float3 read(bool ok, float3 fallback)" in generated_code
     assert "float3 value = cgl_match_value" in generated_code
-    assert "Result_vec3_MathError __crossgl_match_subject_0 = makeResult(ok);" in (
+    assert "Result_vec3_MathError cgl_match_subject_0 = makeResult(ok);" in (
         generated_code
     )
-    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
-    assert (
-        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
-    )
-    assert "float3 actual = __crossgl_match_subject_0.Ok_0;" in generated_code
-    assert "int err = __crossgl_match_subject_0.Err_0;" in generated_code
+    assert "if ((cgl_match_subject_0.variant == Result_Ok))" in generated_code
+    assert "else if ((cgl_match_subject_0.variant == Result_Err))" in generated_code
+    assert "float3 actual = cgl_match_subject_0.Ok_0;" in generated_code
+    assert "int err = cgl_match_subject_0.Err_0;" in generated_code
+    assert "__crossgl_match_subject" not in generated_code
     assert "cgl_match_value = actual;" in generated_code
     assert "cgl_match_value = fallback;" in generated_code
     assert "Result<" not in generated_code
@@ -9867,10 +9916,55 @@ def test_matrix_and_non_float_vector_types_emit_slang_names():
     assert "double2 preciseUV = double2(1.0, 2.0);" in generated_code
     assert "double2x2 precise = double2x2(1.0, 0.0, 0.0, 1.0);" in generated_code
     assert "double4x3 jacobian;" in generated_code
+    assert "return mul(m, p);" in generated_code
     assert "dvec2(" not in generated_code
     assert "bvec2(" not in generated_code
     assert "dmat2(" not in generated_code
     assert "MatrixType(" not in generated_code
+
+
+def test_matrix_multiply_and_inverse_lower_to_slang_helpers():
+    code = """
+    shader MatrixOps {
+        vertex {
+            vec2 rotateDirection(vec2 direction, float angle) {
+                return mat2(
+                    cos(angle),
+                    -sin(angle),
+                    sin(angle),
+                    cos(angle)
+                ) * direction;
+            }
+
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                mat4 model = mat4(1.0);
+                mat4 view = mat4(1.0);
+                mat4 modelView = view * model;
+                mat3 normalMatrix = mat3(transpose(inverse(model)));
+                vec3 normal = normalMatrix * vec3(0.0, 1.0, 0.0);
+                return modelView * vec4(position + normal, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4x4 _crossgl_inverse_float4x4(float4x4 m)" in generated_code
+    assert "float4x4 modelView = mul(view, model);" in generated_code
+    assert (
+        "float3x3 normalMatrix = float3x3(transpose(_crossgl_inverse_float4x4(model)));"
+        in (generated_code)
+    )
+    assert "float3 normal = mul(normalMatrix, float3(0.0, 1.0, 0.0));" in (
+        generated_code
+    )
+    assert (
+        "return mul(float2x2(cos(angle), -sin(angle), sin(angle), cos(angle)), "
+        "direction);" in generated_code
+    )
+    assert "return mul(modelView, float4(position + normal, 1.0));" in generated_code
+    assert " inverse(" not in generated_code
 
 
 def test_generic_vector_constructors_emit_slang_names():
@@ -9917,6 +10011,8 @@ def test_resource_types_emit_slang_texture_names():
         image2DMSArray msLayers;
         iimage2DMSArray signedLayers;
         uimage2DMS counters;
+        imageCube cubeImage;
+        uimageCubeArray cubeCounters;
 
         compute {
             void main() {}
@@ -9935,17 +10031,51 @@ def test_resource_types_emit_slang_texture_names():
     assert "Sampler2DMSArray<float4> msArray : register(t4);" in generated_code
     assert "RWTexture1D<float4> lineImage : register(u0);" in generated_code
     assert "RWTexture1DArray<float4> lineImages : register(u1);" in generated_code
-    assert "RWTexture1D<int> signedLine : register(u2);" in generated_code
-    assert "RWTexture1DArray<uint> unsignedLines : register(u3);" in generated_code
+    assert "RWTexture1D<int4> signedLine : register(u2);" in generated_code
+    assert "RWTexture1DArray<uint4> unsignedLines : register(u3);" in generated_code
     assert "RWTexture2D<float4> colorImage : register(u4);" in generated_code
     assert "RWTexture2DMS<float4> msColor : register(u5);" in generated_code
     assert "RWTexture2DMSArray<float4> msLayers : register(u6);" in generated_code
-    assert "RWTexture2DMSArray<int> signedLayers : register(u7);" in generated_code
-    assert "RWTexture2DMS<uint> counters : register(u8);" in generated_code
+    assert "RWTexture2DMSArray<int4> signedLayers : register(u7);" in generated_code
+    assert "RWTexture2DMS<uint4> counters : register(u8);" in generated_code
+    assert "RWTexture2DArray<float4> cubeImage : register(u9);" in generated_code
+    assert "RWTexture2DArray<uint4> cubeCounters : register(u10);" in generated_code
     assert "sampler2d" not in generated_code
     assert "image2DMS" not in generated_code
     assert "iimage2DMSArray" not in generated_code
     assert "uimage2DMS" not in generated_code
+    assert "imageCube" not in generated_code
+
+
+def test_default_storage_image_values_use_vector_elements_for_slang():
+    code = """
+    shader SlangStorageImages {
+        iimage2D signedImage @binding(0);
+        imageCube cubeImage @binding(1);
+
+        compute {
+            void main() {
+                ivec4 signedValue = imageLoad(signedImage, ivec2(0, 0));
+                vec4 cubeValue = imageLoad(cubeImage, ivec3(0, 0, 0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] RWTexture2D<int4> signedImage "
+        ": register(u0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWTexture2DArray<float4> cubeImage "
+        ": register(u1);" in generated_code
+    )
+    assert "int4 signedValue = signedImage[int2(0, 0)];" in generated_code
+    assert "float4 cubeValue = cubeImage[int3(0, 0, 0)];" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageCube" not in generated_code
 
 
 def test_resource_binding_metadata_emits_slang_vk_and_register_decorations(tmp_path):
@@ -9986,7 +10116,7 @@ def test_resource_binding_metadata_emits_slang_vk_and_register_decorations(tmp_p
     )
     assert "float4x4 viewProj;" in generated_code
     assert (
-        "[[vk::binding(7, 2)]] Sampler2D<float4> colorMap "
+        "[[vk::binding(7, 2)]] uniform Sampler2D<float4> colorMap "
         ": register(t7, space2);" in generated_code
     )
     assert (
@@ -10080,7 +10210,7 @@ def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "[[vk::binding(0, 0)]] cbuffer Camera : register(b0)" in generated_code
+    assert "[[vk::binding(7, 0)]] cbuffer Camera : register(b0)" in generated_code
     assert (
         "[[vk::binding(0, 0)]] Sampler2D<float4> firstTexture "
         ": register(t0);" in generated_code
@@ -10106,11 +10236,11 @@ def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots():
         ": register(t1, space1);" in generated_code
     )
     assert (
-        "[[vk::binding(0, 0)]] SamplerState linearSampler "
+        "[[vk::binding(1, 0)]] SamplerState linearSampler "
         ": register(s0);" in generated_code
     )
     assert (
-        "[[vk::binding(0, 0)]] RWTexture2D<uint> counters "
+        "[[vk::binding(6, 0)]] RWTexture2D<uint> counters "
         ": register(u0);" in generated_code
     )
 
@@ -10157,11 +10287,11 @@ def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings():
         ": register(u2);" in generated_code
     )
     assert (
-        "[[vk::binding(2, 0)]] StructuredBuffer<float4> vectors "
+        "[[vk::binding(3, 0)]] StructuredBuffer<float4> vectors "
         ": register(t2);" in generated_code
     )
     assert (
-        "[[vk::binding(3, 0)]] RWStructuredBuffer<float> values[2] "
+        "[[vk::binding(4, 0)]] RWStructuredBuffer<float> values[2] "
         ": register(u3);" in generated_code
     )
     assert (
@@ -11415,13 +11545,13 @@ def test_unsized_slang_resource_arrays_preserve_bindless_declarations_and_operat
     assert "[[vk::binding(0, 0)]] SamplerState querySampler : register(s0);" in (
         generated_code
     )
-    assert "[[vk::binding(0, 0)]] Sampler2D<float4> textures[] : register(t0);" in (
+    assert "[[vk::binding(1, 0)]] Texture2D<float4> textures[] : register(t0);" in (
         generated_code
     )
-    assert "[[vk::binding(1, 0)]] SamplerState states[] : register(s1);" in (
+    assert "[[vk::binding(2, 0)]] SamplerState states[] : register(s1);" in (
         generated_code
     )
-    assert "[[vk::binding(0, 0)]] RWTexture2D<float4> images[] : register(u0);" in (
+    assert "[[vk::binding(3, 0)]] RWTexture2D<float4> images[] : register(u0);" in (
         generated_code
     )
     assert (
@@ -11429,14 +11559,14 @@ def test_unsized_slang_resource_arrays_preserve_bindless_declarations_and_operat
         ": register(t0, space1);" in generated_code
     )
     assert (
-        "[[vk::binding(0, 1)]] RWStructuredBuffer<uint> counters[] "
+        "[[vk::binding(1, 1)]] RWStructuredBuffer<uint> counters[] "
         ": register(u0, space1);" in generated_code
     )
     assert (
         "[[vk::binding(0, 2)]] ByteAddressBuffer rawBytes[] "
         ": register(t0, space2);" in generated_code
     )
-    assert "float4 color = textures[index].Sample(uv);" in generated_code
+    assert "float4 color = textures[index].Sample(states[index], uv);" in generated_code
     assert "float4 imageColor = images[index][pixel];" in generated_code
     assert "float4 bufferValue = values[index].Load(0u);" in generated_code
     assert "uint counterValue = counters[index].Load(1u);" in generated_code
@@ -11797,16 +11927,19 @@ def test_explicit_sampler_texture_builtins_emit_combined_slang_methods():
 
     assert "SamplerState linearSampler : register(s0);" in generated_code
     assert "SamplerState sampleState" in generated_code
-    assert "float4 color = tex.Sample(uv);" in generated_code
-    assert "float4 biased = tex.SampleBias(uv, 0.5);" in generated_code
-    assert "float4 mip = tex.SampleLevel(uv, 2.0);" in generated_code
-    assert "float4 grad = tex.SampleGrad(uv, ddx, ddy);" in generated_code
-    assert "float4 layer = layers.Sample(uvw);" in generated_code
-    assert "float4 volumeGrad = volume.SampleGrad(uvw, ddx3, ddy3);" in generated_code
-    assert "tex.Sample(sampleState" not in generated_code
-    assert "tex.SampleBias(sampleState" not in generated_code
-    assert "tex.SampleLevel(sampleState" not in generated_code
-    assert "tex.SampleGrad(sampleState" not in generated_code
+    assert "float4 color = tex.Sample(sampleState, uv);" in generated_code
+    assert "float4 biased = tex.SampleBias(sampleState, uv, 0.5);" in generated_code
+    assert "float4 mip = tex.SampleLevel(sampleState, uv, 2.0);" in generated_code
+    assert "float4 grad = tex.SampleGrad(sampleState, uv, ddx, ddy);" in generated_code
+    assert "float4 layer = layers.Sample(sampleState, uvw);" in generated_code
+    assert (
+        "float4 volumeGrad = volume.SampleGrad(sampleState, uvw, ddx3, ddy3);"
+        in generated_code
+    )
+    assert "float4 color = tex.Sample(uv);" not in generated_code
+    assert "float4 biased = tex.SampleBias(uv, 0.5);" not in generated_code
+    assert "float4 mip = tex.SampleLevel(uv, 2.0);" not in generated_code
+    assert "float4 grad = tex.SampleGrad(uv, ddx, ddy);" not in generated_code
     assert "texture(" not in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
@@ -12205,39 +12338,54 @@ def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices()
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "Sampler2D<float4> textures[((2 + 1) * 2)] : register(t0);" in generated_code
+    assert "Texture2D<float4> textures[((2 + 1) * 2)] : register(t0);" in generated_code
     assert "SamplerState samplers[((2 + 1) * 2)] : register(s0);" in generated_code
     assert "Sampler2D<float4> unaryTextures[+6] : register(t6);" in generated_code
     assert (
-        "Sampler2DShadow shadowMaps[((2 + 1) * 2)] : register(t12);" in generated_code
+        "Texture2D<float> shadowMaps[((2 + 1) * 2)] : register(t12);" in generated_code
     )
     assert (
-        "SamplerState shadowSamplers[((2 + 1) * 2)] : register(s6);" in generated_code
+        "SamplerComparisonState shadowSamplers[((2 + 1) * 2)] : register(s6);"
+        in generated_code
     )
     assert (
-        "float4 sampleLayer(Sampler2D<float4> textures[((2 + 1) * 2)], "
+        "float4 sampleLayer(Texture2D<float4> textures[((2 + 1) * 2)], "
         "SamplerState samplers[((2 + 1) * 2)], "
         "Sampler2D<float4> unaryTextures[+6], float2 uv, float2 ddx, float2 ddy)"
         in generated_code
     )
     assert (
-        "float shadowLayer(Sampler2DShadow shadowMaps[((2 + 1) * 2)], "
-        "SamplerState shadowSamplers[((2 + 1) * 2)], float2 uv, float depth)"
+        "float shadowLayer(Texture2D<float> shadowMaps[((2 + 1) * 2)], "
+        "SamplerComparisonState shadowSamplers[((2 + 1) * 2)], float2 uv, float depth)"
         in generated_code
     )
-    assert "float4 color = textures[(1 + 2)].Sample(uv);" in generated_code
-    assert "float4 lodColor = textures[2].SampleLevel(uv, 1.0);" in generated_code
-    assert "float4 gradColor = textures[2].SampleGrad(uv, ddx, ddy);" in generated_code
-    assert "float4 gathered = textures[(1 + 2)].Gather(uv);" in generated_code
+    assert (
+        "float4 color = textures[(1 + 2)].Sample(samplers[(1 + 2)], uv);"
+        in generated_code
+    )
+    assert (
+        "float4 lodColor = textures[2].SampleLevel(samplers[2], uv, 1.0);"
+        in generated_code
+    )
+    assert (
+        "float4 gradColor = textures[2].SampleGrad(samplers[2], uv, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float4 gathered = textures[(1 + 2)].Gather(samplers[(1 + 2)], uv);"
+        in generated_code
+    )
     assert "float4 unaryColor = unaryTextures[2].Sample(uv);" in generated_code
     assert (
-        "float compared = shadowMaps[(1 + 2)].SampleCmp(uv, depth);" in generated_code
+        "float compared = shadowMaps[(1 + 2)].SampleCmp("
+        "shadowSamplers[(1 + 2)], uv, depth);" in generated_code
     )
-    assert "float4 gathered = shadowMaps[2].GatherCmp(uv, depth);" in generated_code
+    assert (
+        "float4 gathered = shadowMaps[2].GatherCmp(shadowSamplers[2], uv, depth);"
+        in generated_code
+    )
     assert "1 + 2]." not in generated_code
     assert "2 + 1 * 2" not in generated_code
-    assert ".Sample(samplers" not in generated_code
-    assert ".SampleCmp(shadowSamplers" not in generated_code
     assert "texture(" not in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
@@ -12318,11 +12466,14 @@ def test_texture_offset_builtins_emit_slang_offset_methods():
     generated_code = generate_code(ast)
 
     assert "Sampler2D<float4> tex" in generated_code
-    assert "Sampler2DArray<float4> layers" in generated_code
+    assert "Texture2DArray<float4> layers" in generated_code
     assert "SamplerState sampleState" in generated_code
     assert "float4 offsetColor = tex.Sample(uv, offset);" in generated_code
     assert "float4 explicitOffset = tex.Sample(uv, offset);" in generated_code
-    assert "float4 arrayOffset = layers.Sample(uvw, offset);" in generated_code
+    assert (
+        "float4 arrayOffset = layers.Sample(sampleState, uvw, offset);"
+        in generated_code
+    )
     assert "float4 biasOffset = tex.SampleBias(uv, bias, offset);" in generated_code
     assert (
         "float4 explicitBiasOffset = tex.SampleBias(uv, 0.5, offset);" in generated_code
@@ -12339,9 +12490,6 @@ def test_texture_offset_builtins_emit_slang_offset_methods():
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
     assert "textureGradOffset(" not in generated_code
-    assert ".Sample(sampleState" not in generated_code
-    assert ".SampleLevel(sampleState" not in generated_code
-    assert ".SampleGrad(sampleState" not in generated_code
 
 
 def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
@@ -12717,10 +12865,6 @@ def test_projected_texture_builtins_emit_slang_projected_samples():
     assert "textureProjLodOffset(" not in generated_code
     assert "textureProjGrad(" not in generated_code
     assert "textureProjGradOffset(" not in generated_code
-    assert ".Sample(sampleState" not in generated_code
-    assert ".SampleBias(sampleState" not in generated_code
-    assert ".SampleLevel(sampleState" not in generated_code
-    assert ".SampleGrad(sampleState" not in generated_code
 
 
 def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
@@ -13377,7 +13521,7 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
     generated_code = generate_code(ast)
 
     assert "Sampler2D<float4> tex" in generated_code
-    assert "Sampler2DArray<float4> layers" in generated_code
+    assert "Texture2DArray<float4> layers" in generated_code
     assert "SamplerState sampleState" in generated_code
     assert "float4 gathered = tex.Gather(uv);" in generated_code
     assert "float4 explicitGathered = tex.Gather(uv);" in generated_code
@@ -13387,7 +13531,8 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
     assert "float4 alphaOffsetGather = tex.GatherAlpha(uv, offset);" in generated_code
     assert (
         "float4 offsetsGather = layers.Gather("
-        "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]);" in generated_code
+        "sampleState, uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]);"
+        in generated_code
     )
     assert (
         "float4 dynamicGather = (component == 0 ? tex.GatherRed(uv) : "
@@ -13404,13 +13549,14 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
     assert (
         "float4 dynamicOffsetsGather = ("
         "component == 0 ? layers.GatherRed("
-        "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]) : "
+        "sampleState, uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]) : "
         "component == 1 ? layers.GatherGreen("
-        "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]) : "
+        "sampleState, uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]) : "
         "component == 2 ? layers.GatherBlue("
-        "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]) : "
+        "sampleState, uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]) : "
         "layers.GatherAlpha("
-        "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]));" in generated_code
+        "sampleState, uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]));"
+        in generated_code
     )
     assert (
         "float4 nestedOffsetsGather = tex.Gather("
@@ -13424,9 +13570,6 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
         in generated_code
     )
     assert "textureGather" not in generated_code
-    assert ".Gather(sampleState" not in generated_code
-    assert ".GatherBlue(sampleState" not in generated_code
-    assert ".GatherAlpha(sampleState" not in generated_code
 
 
 def test_texture_gather_builtins_validate_target_result_types():
@@ -13831,12 +13974,15 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
     generated_code = generate_code(ast)
 
     assert "Sampler2DShadow tex" in generated_code
-    assert "Sampler2DArrayShadow layers" in generated_code
+    assert "Texture2DArray<float> layers" in generated_code
     assert "SamplerCubeShadow cube" in generated_code
-    assert "SamplerState compareState" in generated_code
+    assert "SamplerComparisonState compareState" in generated_code
     assert "float direct = tex.SampleCmp(uv, depth);" in generated_code
     assert "float explicitCompare = tex.SampleCmp(uv, depth);" in generated_code
-    assert "float arrayCompare = layers.SampleCmp(uvLayer, depth);" in generated_code
+    assert (
+        "float arrayCompare = layers.SampleCmp(compareState, uvLayer, depth);"
+        in generated_code
+    )
     assert "float cubeCompare = cube.SampleCmp(direction, depth);" in generated_code
     assert "float lod = tex.SampleCmpLevel(uv, depth, 2.0);" in generated_code
     assert "float intLod = tex.SampleCmpLevel(uv, depth, integerLod);" in generated_code
@@ -13852,8 +13998,6 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
     assert "float4 gatheredOffset = tex.GatherCmp(uv, depth, offset);" in generated_code
     assert "textureCompare" not in generated_code
     assert "textureGatherCompare" not in generated_code
-    assert ".SampleCmp(compareState" not in generated_code
-    assert ".GatherCmp(compareState" not in generated_code
 
 
 def test_shadow_compare_builtins_validate_target_result_types():
@@ -14397,31 +14541,30 @@ def test_texture_query_lod_emits_slang_lod_methods():
 
     assert (
         "float2 lod = float2("
-        "colorMap.CalculateLevelOfDetailUnclamped(uv), "
-        "colorMap.CalculateLevelOfDetail(uv));" in generated_code
+        "colorMap.CalculateLevelOfDetail(uv), "
+        "colorMap.CalculateLevelOfDetailUnclamped(uv));" in generated_code
     )
     assert (
         "float2 explicitLod = float2("
-        "colorMap.CalculateLevelOfDetailUnclamped(uv), "
-        "colorMap.CalculateLevelOfDetail(uv));" in generated_code
+        "colorMap.CalculateLevelOfDetail(uv), "
+        "colorMap.CalculateLevelOfDetailUnclamped(uv));" in generated_code
     )
     assert (
         "float2 arrayLod = float2("
-        "layers.CalculateLevelOfDetailUnclamped(uvw), "
-        "layers.CalculateLevelOfDetail(uvw));" in generated_code
+        "layers.CalculateLevelOfDetail(querySampler, uvw), "
+        "layers.CalculateLevelOfDetailUnclamped(querySampler, uvw));" in generated_code
     )
     assert (
         "float2 volumeLod = float2("
-        "volumeTex.CalculateLevelOfDetailUnclamped(uvw), "
-        "volumeTex.CalculateLevelOfDetail(uvw));" in generated_code
+        "volumeTex.CalculateLevelOfDetail(uvw), "
+        "volumeTex.CalculateLevelOfDetailUnclamped(uvw));" in generated_code
     )
     assert (
         "float2 cubeLod = float2("
-        "cubeTex.CalculateLevelOfDetailUnclamped(direction), "
-        "cubeTex.CalculateLevelOfDetail(direction));" in generated_code
+        "cubeTex.CalculateLevelOfDetail(direction), "
+        "cubeTex.CalculateLevelOfDetailUnclamped(direction));" in generated_code
     )
     assert "textureQueryLod(" not in generated_code
-    assert "CalculateLevelOfDetail(querySampler" not in generated_code
 
 
 def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
@@ -14559,6 +14702,7 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
     assert generated_code.count("unsupported Slang resource query") == 16
     assert "textureQueryLod(" not in generated_code
     assert "CalculateLevelOfDetail(querySampler" not in generated_code
+    assert "CalculateLevelOfDetailUnclamped(querySampler" not in generated_code
 
 
 def test_resource_queries_on_texture_arrays_emit_slang_helpers():
@@ -14634,13 +14778,13 @@ def test_resource_queries_on_texture_arrays_emit_slang_helpers():
     )
     assert (
         "float2 lodValue = float2("
-        "textures[(1 + 2)].CalculateLevelOfDetailUnclamped(uv), "
-        "textures[(1 + 2)].CalculateLevelOfDetail(uv));" in generated_code
+        "textures[(1 + 2)].CalculateLevelOfDetail(uv), "
+        "textures[(1 + 2)].CalculateLevelOfDetailUnclamped(uv));" in generated_code
     )
     assert (
         "float2 explicitLodValue = float2("
-        "textures[(1 + 2)].CalculateLevelOfDetailUnclamped(uv), "
-        "textures[(1 + 2)].CalculateLevelOfDetail(uv));" in generated_code
+        "textures[(1 + 2)].CalculateLevelOfDetail(uv), "
+        "textures[(1 + 2)].CalculateLevelOfDetailUnclamped(uv));" in generated_code
     )
     assert (
         "int2 msSize = cgl_textureSize_sampler2DMS(msTextures[(1 + 2)]);"
@@ -14671,7 +14815,6 @@ def test_resource_queries_on_texture_arrays_emit_slang_helpers():
     assert "textureQueryLevels(" not in generated_code
     assert "textureSamples(" not in generated_code
     assert "textureQueryLod(" not in generated_code
-    assert "CalculateLevelOfDetail(querySampler" not in generated_code
 
 
 def test_nested_resource_arrays_emit_slang_queries_and_operations():
@@ -14764,8 +14907,9 @@ def test_nested_resource_arrays_emit_slang_queries_and_operations():
     )
     assert (
         "float2 lodValue = float2("
-        "textureGrid[layer][slot].CalculateLevelOfDetailUnclamped(uv), "
-        "textureGrid[layer][slot].CalculateLevelOfDetail(uv));" in generated_code
+        "textureGrid[layer][slot].CalculateLevelOfDetail(uv), "
+        "textureGrid[layer][slot].CalculateLevelOfDetailUnclamped(uv));"
+        in generated_code
     )
     assert (
         "int msSamples = cgl_textureSamples_sampler2DMS(msGrid[layer][slot]);"
@@ -15862,6 +16006,50 @@ def test_struct_and_scalar_params_preserve_slang_resource_argument_order():
     assert "unsupported Slang" not in generated_code
 
 
+def test_struct_resource_members_lower_to_global_slang_resources(tmp_path):
+    code = """
+    struct Material {
+        vec3 albedo;
+        sampler2d albedoMap;
+    };
+
+    struct Globals {
+        Material materials[4];
+    };
+
+    shader StructResourceLowering {
+        Globals globals;
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                Material material = globals.materials[0];
+                return texture(material.albedoMap, uv) * vec4(material.albedo, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    material_struct = generated_code.split("struct Material", 1)[1].split("};", 1)[0]
+    assert "Sampler2D<float4> albedoMap;" not in material_struct
+    assert "Sampler2D<float4> albedoMap" in generated_code
+    assert "Material material = globals.materials[0];" in generated_code
+    assert "return albedoMap.Sample(uv) * float4(material.albedo, 1.0);" in (
+        generated_code
+    )
+    assert "material.albedoMap" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "fragment",
+        profile="ps_6_0",
+        entry="main",
+    )
+
+
 def test_resource_values_in_struct_returns_emit_slang_operations():
     code = """
     struct SampleResult {
@@ -16521,7 +16709,7 @@ def test_array_literals_emit_slang_brace_initializers():
     assert "float globalWeights[4] = {1.0, 2.0};" in generated_code
     assert "float values[4] = {1.0, 2.0, 3.0, 4.0};" in generated_code
     assert (
-        "float3 colors[2] = {float3(1.0, 2.0, 3.0), " "float3(4.0, 5.0, 6.0)};"
+        "float3 colors[2] = {float3(1.0, 2.0, 3.0), float3(4.0, 5.0, 6.0)};"
     ) in generated_code
     assert "ArrayLiteralNode" not in generated_code
 
@@ -17097,16 +17285,16 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
     assert (
         "int cgl_textureQueryLevels_sampler2D(Sampler2D<float4> tex)" in generated_code
     )
-    assert "tex.GetDimensions(width, height, levels);" in generated_code
+    assert "tex.GetDimensions(0u, width, height, levels);" in generated_code
     assert (
         "int cgl_textureQueryLevels_sampler2DArray(Sampler2DArray<float4> tex)"
         in generated_code
     )
-    assert "tex.GetDimensions(width, height, elements, levels);" in generated_code
+    assert "tex.GetDimensions(0u, width, height, elements, levels);" in generated_code
     assert (
         "int cgl_textureQueryLevels_sampler3D(Sampler3D<float4> tex)" in generated_code
     )
-    assert "tex.GetDimensions(width, height, depth, levels);" in generated_code
+    assert "tex.GetDimensions(0u, width, height, depth, levels);" in generated_code
     assert (
         "int cgl_textureQueryLevels_sampler2DShadow(Sampler2DShadow tex)"
         in generated_code
@@ -17149,7 +17337,7 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
         in generated_code
     )
     assert "int cgl_imageSamples_image2DMS(RWTexture2DMS<float4> tex)" in generated_code
-    assert "int cgl_imageSamples_uimage2DMS(RWTexture2DMS<uint> tex)" in generated_code
+    assert "int cgl_imageSamples_uimage2DMS(RWTexture2DMS<uint4> tex)" in generated_code
     assert "return samples;" in generated_code
     assert "int2 texSize = cgl_textureSize_sampler2D(colorMap, 2);" in generated_code
     assert (
@@ -18579,8 +18767,9 @@ def test_slangc_smoke_compiles_generated_resource_query_helpers_if_available(
     assert "int cgl_imageSamples_image2DMS(RWTexture2DMS<float4> tex)" in (
         generated_code
     )
-    assert "int cgl_imageSamples_uimage2DMS(RWTexture2DMS<uint> tex)" in (
-        generated_code
+    assert (
+        "int cgl_imageSamples_uimage2DMS_RWTexture2DMS_uint("
+        "RWTexture2DMS<uint> tex)" in generated_code
     )
     assert "int2 texSize = cgl_textureSize_sampler2D(colorMap, 0);" in generated_code
     assert (
@@ -18598,7 +18787,8 @@ def test_slangc_smoke_compiles_generated_resource_query_helpers_if_available(
     assert "int2 msImageSizeValue = cgl_imageSize_image2DMS(msImage);" in generated_code
     assert "int msImageSamples = cgl_imageSamples_image2DMS(msImage);" in generated_code
     assert (
-        "int counterSamples = cgl_imageSamples_uimage2DMS(counters);" in generated_code
+        "int counterSamples = cgl_imageSamples_uimage2DMS_RWTexture2DMS_uint(counters);"
+        in generated_code
     )
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
@@ -18647,10 +18837,14 @@ def test_storage_image_load_store_emit_slang_subscript_access():
     assert "msColor[pixel, sampleIndex] = color;" in generated_code
     assert "float4 layer = msLayers[pixelLayer, sampleIndex];" in generated_code
     assert "msLayers[pixelLayer, sampleIndex] = layer;" in generated_code
-    assert "uint count = counters[pixel, sampleIndex];" in generated_code
-    assert "counters[pixel, sampleIndex] = count;" in generated_code
-    assert "int signedValue = signedLayers[pixelLayer, sampleIndex];" in generated_code
-    assert "signedLayers[pixelLayer, sampleIndex] = signedValue;" in generated_code
+    assert "uint count = counters[pixel, sampleIndex].x;" in generated_code
+    assert "counters[pixel, sampleIndex] = uint4(count);" in generated_code
+    assert (
+        "int signedValue = signedLayers[pixelLayer, sampleIndex].x;" in generated_code
+    )
+    assert (
+        "signedLayers[pixelLayer, sampleIndex] = int4(signedValue);" in generated_code
+    )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
 
@@ -18703,7 +18897,8 @@ def test_slang_multisample_storage_backlog_load_store_queries_and_diagnostics():
     assert "int3 layerSize = cgl_imageSize_image2DMSArray(msLayers);" in generated_code
     assert "int colorSamples = cgl_imageSamples_image2DMS(msColor);" in generated_code
     assert (
-        "int counterSamples = cgl_imageSamples_uimage2DMS(counters);" in generated_code
+        "int counterSamples = cgl_imageSamples_uimage2DMS_RWTexture2DMS_uint"
+        "(counters);" in generated_code
     )
     assert (
         "uint rejectedAtomic = /* unsupported Slang image atomic: imageAtomicAdd "
@@ -20438,12 +20633,12 @@ def test_texture_sampling_with_explicit_sampler_sample_level_and_grad():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "float4 baseLevel = base.SampleLevel(uv, 3.0);" in generated_code
-    assert "float4 baseGrad = base.SampleGrad(uv," in generated_code
-    assert "float4 volLevel = vol.SampleLevel(uvw, 2.0);" in generated_code
-    assert "float4 volGrad = vol.SampleGrad(uvw," in generated_code
-    assert "float4 skyLevel = sky.SampleLevel(dir, 0.0);" in generated_code
-    assert "float4 skyGrad = sky.SampleGrad(dir," in generated_code
+    assert "float4 baseLevel = base.SampleLevel(samp, uv, 3.0);" in generated_code
+    assert "float4 baseGrad = base.SampleGrad(samp, uv," in generated_code
+    assert "float4 volLevel = vol.SampleLevel(samp, uvw, 2.0);" in generated_code
+    assert "float4 volGrad = vol.SampleGrad(samp, uvw," in generated_code
+    assert "float4 skyLevel = sky.SampleLevel(samp, dir, 0.0);" in generated_code
+    assert "float4 skyGrad = sky.SampleGrad(samp, dir," in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
 
@@ -21421,6 +21616,108 @@ def test_struct_member_semantics_produce_slang_annotations():
     assert "float2 texcoord : TEXCOORD0;" in generated_code
 
 
+def test_vertex_output_struct_members_get_default_slang_semantics():
+    code = """
+    shader DefaultSemantics {
+        struct VertexInput {
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct VertexOutput {
+            vec2 uv;
+            vec4 clipPosition;
+            vec3 normal;
+        };
+
+        vertex {
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.uv = input.uv;
+                output.clipPosition = vec4(input.position, 1.0);
+                output.normal = vec3(0.0, 1.0, 0.0);
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(VertexOutput input) @ gl_FragColor {
+                return vec4(input.uv, input.normal.x, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float2 uv : TEXCOORD0;" in generated_code
+    assert "float4 clipPosition : SV_Position;" in generated_code
+    assert "float3 normal : TEXCOORD1;" in generated_code
+
+
+def test_entry_structs_and_plain_returns_get_default_slang_semantics():
+    code = """
+    shader EntryDefaultSemantics {
+        struct VertexInput {
+            vec3 position;
+            vec2 uv;
+        };
+
+        struct FragmentOutput {
+            vec4 color;
+            float depth;
+        };
+
+        vertex {
+            vec4 main(VertexInput input) {
+                return vec4(input.position, 1.0);
+            }
+        }
+
+        fragment {
+            FragmentOutput main() {
+                FragmentOutput output;
+                output.color = vec4(1.0);
+                output.depth = 0.5;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float3 position : POSITION;" in generated_code
+    assert "float2 uv : TEXCOORD0;" in generated_code
+    assert "float4 VSMain(VertexInput input) : SV_Position" in generated_code
+    assert "float4 color : SV_Target;" in generated_code
+    assert "float depth : SV_Depth;" in generated_code
+
+
+def test_unsized_value_array_members_get_fixed_slang_fallback():
+    code = """
+    shader UnsizedValueArrayMember {
+        struct Globals {
+            float noiseValues[];
+        };
+
+        uniform Globals globals;
+
+        fragment {
+            vec4 main() {
+                return vec4(globals.noiseValues[0]);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float noiseValues[1024];" in generated_code
+    assert "uniform Globals globals;" in generated_code
+    assert "float noiseValues[];" not in generated_code
+
+
 def test_stage_output_sv_position_semantic():
     code = """
     shader PositionOutput {
@@ -21453,6 +21750,21 @@ def test_function_return_sv_target_semantic():
     assert "float4" in generated_code
     assert ": SV_Target" in generated_code
     assert "return float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+
+
+def test_fragment_plain_float4_return_defaults_to_slang_sv_target():
+    code = """
+    shader FragOutputDefault {
+        fragment {
+            vec4 main() {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main() : SV_Target" in generated_code
 
 
 def test_stage_input_parameter_semantic_annotations():
@@ -22191,8 +22503,8 @@ def test_texture_resource_declarations_emit_slang_typed_textures():
     assert "SamplerCube<float4> envMap" in generated_code
     assert "Sampler2DArray<float4> layeredMap" in generated_code
     assert "RWTexture2D<float4> outputImage" in generated_code
-    assert "RWTexture3D<int> signedVolume" in generated_code
-    assert "RWTexture2D<uint> counterImage" in generated_code
+    assert "RWTexture3D<int4> signedVolume" in generated_code
+    assert "RWTexture2D<uint4> counterImage" in generated_code
     assert "sampler2d" not in generated_code
     assert "sampler3d" not in generated_code
     assert "samplercube" not in generated_code

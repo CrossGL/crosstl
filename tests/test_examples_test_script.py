@@ -31,6 +31,7 @@ def test_build_summary_records_regression_budget_and_failures():
 
     assert summary["schema_version"] == 1
     assert summary["failed"] == 2
+    assert summary["skipped"] == 0
     assert summary["success_rate"] == 80.0
     assert summary["known_failure_budget"] == module.KNOWN_FAILURE_BUDGET
     assert summary["minimum_success_rate"] == module.MIN_SUCCESS_RATE
@@ -41,6 +42,30 @@ def test_build_summary_records_regression_budget_and_failures():
         "error": "unsupported sample",
     }
     assert summary["consistency"] == {"successful": 4, "total": 4}
+
+
+def test_build_summary_records_documented_skips():
+    module = load_examples_test_module()
+    skips = [("GenericPatternMatching", "mojo", "generic functions unsupported")]
+
+    summary = module.build_summary(
+        total_tests=59,
+        successful_tests=59,
+        failed_tests=[],
+        skipped_tests=skips,
+    )
+
+    assert summary["failed"] == 0
+    assert summary["skipped"] == 1
+    assert summary["success_rate"] == 100.0
+    assert summary["within_regression_budget"] is True
+    assert summary["skips"] == [
+        {
+            "example": "GenericPatternMatching",
+            "backend": "mojo",
+            "reason": "generic functions unsupported",
+        }
+    ]
 
 
 def test_build_summary_accepts_current_known_failure_budget():

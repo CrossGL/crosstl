@@ -17,7 +17,8 @@ exclude: |
     dist/|
     docs/_build/|
     docs/doxygen/|
-    examples/output/
+    examples/output/|
+    worktrees/
   )
 
 repos:

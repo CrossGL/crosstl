@@ -1,22 +1,21 @@
 
 struct VertexInput
 {
-    float3 position;
+    float3 position : POSITION;
 };
 struct VertexOutput
 {
-    float2 uv;
-    float4 position;
+    float2 uv : TEXCOORD0;
+    float4 position : SV_Position;
 };
 struct FragmentInput
 {
-    float2 uv;
+    float2 uv : TEXCOORD0;
 };
 struct FragmentOutput
 {
-    float4 color;
+    float4 color : SV_TARGET;
 };
-// Vertex Shader
 // Vertex Shader
 VertexOutput VSMain(VertexInput input)
 {
@@ -26,7 +25,11 @@ VertexOutput VSMain(VertexInput input)
     return output;
 }
 
-// Fragment Shader
+float perlinNoise(float2 p)
+{
+    return frac((sin(dot(p, float2(12.9898, 78.233))) * 43758.5453));
+}
+
 // Fragment Shader
 FragmentOutput PSMain(FragmentInput input)
 {
@@ -36,9 +39,4 @@ FragmentOutput PSMain(FragmentInput input)
     float3 color = float3((height / 10.0), (1.0 - (height / 10.0)), 0.0);
     output.color = float4(color, 1.0);
     return output;
-}
-
-float perlinNoise(VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 2) p)
-{
-    return fract((sin(dot(p, float2(12.9898, 78.233))) * 43758.5453));
 }

@@ -58,7 +58,7 @@ class CodeFormatter:
             return ShaderLanguage.GLSL
         elif ext in [".metal"]:
             return ShaderLanguage.METAL
-        elif ext in [".spv", ".spirv", ".vulkan"]:
+        elif ext in [".spvasm", ".vulkan"]:
             return ShaderLanguage.SPIRV
         elif ext in [".slang"]:
             return ShaderLanguage.SLANG
@@ -238,7 +238,14 @@ class CodeFormatter:
                 tmp_path = tmp.name
                 tmp.write(code)
 
-            assemble_cmd = [self.spirv_as_path, "--target-env", "vulkan1.0", tmp_path]
+            assemble_cmd = [
+                self.spirv_as_path,
+                "--target-env",
+                "vulkan1.0",
+                tmp_path,
+                "-o",
+                tmp_path + ".spv",
+            ]
             result = subprocess.run(assemble_cmd, capture_output=True, text=True)
 
             if result.returncode != 0:

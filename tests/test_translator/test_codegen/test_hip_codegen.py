@@ -21,6 +21,7 @@ from crosstl.translator.ast import (
     MemberAccessNode,
     ParameterNode,
     PrimitiveType,
+    ReturnNode,
     ShaderNode,
     ShaderStage,
     StructNode,
@@ -51,6 +52,61 @@ def compile_hip_if_hipcc_available(hip_code, tmp_path):
     assert result.returncode == 0, result.stderr + "\n\n" + hip_code
 
 
+def compile_matrix_helpers_if_cxx_available(helper_code, tmp_path):
+    """Compile CUDA/HIP-neutral matrix helper overloads with a C++ compiler."""
+    compiler = shutil.which("c++") or shutil.which("clang++") or shutil.which("g++")
+    if compiler is None:
+        return
+
+    source_path = tmp_path / "matrix_helpers.cpp"
+    object_path = tmp_path / "matrix_helpers.o"
+    source_path.write_text(
+        "\n".join(
+            [
+                "#define __host__",
+                "#define __device__",
+                "struct float2 { float x; float y; };",
+                "struct float3 { float x; float y; float z; };",
+                "struct float4 { float x; float y; float z; float w; };",
+                "struct double2 { double x; double y; };",
+                "struct double3 { double x; double y; double z; };",
+                "struct double4 { double x; double y; double z; double w; };",
+                "inline float2 make_float2(float x, float y) { return {x, y}; }",
+                "inline float3 make_float3(float x, float y, float z) { return {x, y, z}; }",
+                "inline float4 make_float4(float x, float y, float z, float w) { return {x, y, z, w}; }",
+                "inline double2 make_double2(double x, double y) { return {x, y}; }",
+                "inline double3 make_double3(double x, double y, double z) { return {x, y, z}; }",
+                "inline double4 make_double4(double x, double y, double z, double w) { return {x, y, z, w}; }",
+                helper_code,
+                "int main() {",
+                "    float2x2 a(1.0f);",
+                "    float2x2 b(1.0f, 2.0f, 3.0f, 4.0f);",
+                "    float2x2 c = a + b;",
+                "    c += b;",
+                "    c *= 2.0f;",
+                "    float2x2 d = a * b;",
+                "    float2 v = make_float2(1.0f, 2.0f);",
+                "    float2 mv = a * v;",
+                "    float2 vm = v * a;",
+                "    double4x3 da(1.0);",
+                "    double2x4 db(1.0);",
+                "    double2x3 dc = da * db;",
+                "    (void)c; (void)d; (void)mv; (void)vm; (void)dc;",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [compiler, "-std=c++17", "-c", str(source_path), "-o", str(object_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr + "\n\n" + helper_code
+
+
 class TestHipCodeGen:
     def test_simple_function_generation(self):
         """Test generating a simple HIP function from CrossGL"""
@@ -75,6 +131,33 @@ class TestHipCodeGen:
         assert "#include <hip/hip_runtime_api.h>" in hip_code
         assert "__device__ void main()" in hip_code
 
+    def test_global_constants_are_emitted(self):
+        """Test HIP emits parsed shader constants before generated functions."""
+        source_code = """
+        shader TestShader {
+            const float PI = 3.14159;
+            const int WARP_SIZE = 32;
+            const vec3 UP_VECTOR = vec3(0.0, 1.0, 0.0);
+
+            compute {
+                void main(float *out) {
+                    out[0] = PI + float(WARP_SIZE) + UP_VECTOR.y;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const float PI = 3.14159;" in hip_code
+        assert "const int WARP_SIZE = 32;" in hip_code
+        assert "const float3 UP_VECTOR = make_float3(0.0, 1.0, 0.0);" in hip_code
+        assert "out[0] = ((PI + float(WARP_SIZE)) + UP_VECTOR.y);" in hip_code
+
     def test_compute_shader_to_kernel(self):
         """Test converting a compute shader to HIP kernel"""
         source_code = """
@@ -94,7 +177,43 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        assert "__global__ void main()" in hip_code
+        assert "__global__ void compute_main()" in hip_code
+
+    def test_non_void_compute_entry_point_lowers_to_void_kernel(self, tmp_path):
+        """Test HIP kernels discard invalid source return values."""
+        ast = ShaderNode(
+            name="NonVoidHipKernel",
+            execution_model=ExecutionModel.COMPUTE_KERNEL,
+            functions=[
+                FunctionNode(
+                    "returnsValue",
+                    PrimitiveType("float"),
+                    [ParameterNode("out", "float *")],
+                    BlockNode(
+                        [
+                            AssignmentNode(
+                                ArrayAccessNode(
+                                    IdentifierNode("out"),
+                                    LiteralNode(0, PrimitiveType("int")),
+                                ),
+                                LiteralNode(1.0, PrimitiveType("float")),
+                            ),
+                            ReturnNode(LiteralNode(2.0, PrimitiveType("float"))),
+                        ]
+                    ),
+                    qualifiers=["compute"],
+                )
+            ],
+        )
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__global__ void returnsValue(float * out)" in hip_code
+        assert "__global__ float returnsValue" not in hip_code
+        assert "return 2.0;" not in hip_code
+        assert "return;" in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_mesh_task_stages_lower_to_hip_metadata_and_placeholder_hooks(self):
         """Mesh/task stages lower to deterministic HIP helper representation."""
@@ -778,7 +897,7 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         helper_signature = "__device__ float helper(float x)"
-        kernel_signature = "__global__ void main()"
+        kernel_signature = "__global__ void compute_main()"
         assert helper_signature in hip_code
         assert kernel_signature in hip_code
         assert hip_code.index(helper_signature) < hip_code.index(kernel_signature)
@@ -1924,6 +2043,11 @@ class TestHipCodeGen:
                     float d = dot(a, b);
                     vec3 c = cross(a, b);
                     vec3 n = normalize(a);
+                    float weight = 0.5;
+                    vec3 scaled = normalize(a) * weight;
+                    vec3 wave = sin(a);
+                    vec3 noisy = -1.0 + 2.0 * fract(sin(a) * 43758.5453);
+                    vec3 fresnel = (1.0 - a) * pow(max(1.0 - weight, 0.0), 5.0);
                     float l = length(a);
                     dvec2 da = dvec2(3.0, 4.0);
                     double dl = length(da);
@@ -1947,6 +2071,7 @@ class TestHipCodeGen:
         )
         assert "__device__ inline float cgl_float3_length(float3 value)" in hip_code
         assert "__device__ inline float3 cgl_float3_normalize(float3 value)" in hip_code
+        assert "__device__ inline float3 cgl_float3_sin(float3 value)" in hip_code
         assert "__device__ inline double cgl_double2_length(double2 value)" in hip_code
         assert "return (lhs.x * rhs.x) + (lhs.y * rhs.y) + (lhs.z * rhs.z);" in hip_code
         assert (
@@ -1962,11 +2087,22 @@ class TestHipCodeGen:
         assert "float d = cgl_float3_dot(a, b);" in hip_code
         assert "float3 c = cgl_float3_cross(a, b);" in hip_code
         assert "float3 n = cgl_float3_normalize(a);" in hip_code
+        assert (
+            "float3 scaled = cgl_float3_mul_scalar(cgl_float3_normalize(a), weight);"
+            in hip_code
+        )
+        assert "float3 wave = cgl_float3_sin(a);" in hip_code
+        assert "cgl_float3_mul_scalar(cgl_float3_sin(a), 43758.5453)" in hip_code
+        assert "cgl_scalar_mul_float3(2.0, cgl_float3_fract" in hip_code
+        assert "cgl_float3_mul_scalar(cgl_scalar_sub_float3(1.0, a), powf" in hip_code
         assert "float l = cgl_float3_length(a);" in hip_code
         assert "double dl = cgl_double2_length(da);" in hip_code
         assert "float d = dot(a, b);" not in hip_code
         assert "float3 c = cross(a, b);" not in hip_code
         assert "float3 n = normalize(a);" not in hip_code
+        assert "sinf(a)" not in hip_code
+        assert "cgl_float3_normalize(a) * weight" not in hip_code
+        assert "2.0 * cgl_float3_fract" not in hip_code
         assert "float l = length(a);" not in hip_code
 
     def test_vector_atan2_builtin_lowers_componentwise(self):
@@ -2593,15 +2729,23 @@ class TestHipCodeGen:
         assert "fracf(" not in hip_code
         assert " = fract(" not in hip_code
 
-    def test_matrix_types_and_constructors_emit_hip_names(self):
+    def test_matrix_types_and_constructors_emit_hip_names(self, tmp_path):
         """Test HIP maps parser-produced matrix types and constructors."""
         source_code = """
         shader TestShader {
             compute {
                 void main() {
                     mat2 transform = mat2(1.0, 0.0, 0.0, 1.0);
+                    mat2 transform2 = mat2(1.0);
+                    mat2 combined = transform + transform2;
+                    mat2 product = transform * transform2;
+                    mat2 scaled = 2.0 * transform;
+                    vec2 direction = vec2(1.0, 2.0);
+                    vec2 transformed = transform * direction;
+                    vec2 projected = direction * transform;
                     mat3x4 affine;
                     dmat2 precise = dmat2(1.0, 0.0, 0.0, 1.0);
+                    dmat2 preciseProduct = precise * dmat2(1.0);
                     dmat4x3 jacobian;
                 }
             }
@@ -2616,12 +2760,35 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert "float2x2 transform = float2x2(1.0, 0.0, 0.0, 1.0);" in hip_code
+        assert "float2x2 transform2 = float2x2(1.0);" in hip_code
+        assert "float2x2 combined = (transform + transform2);" in hip_code
+        assert "float2x2 product = (transform * transform2);" in hip_code
+        assert "float2x2 scaled = (2.0 * transform);" in hip_code
+        assert "float2 transformed = (transform * direction);" in hip_code
+        assert "float2 projected = (direction * transform);" in hip_code
         assert "float3x4 affine;" in hip_code
         assert "double2x2 precise = double2x2(1.0, 0.0, 0.0, 1.0);" in hip_code
+        assert "double2x2 preciseProduct = (precise * double2x2(1.0));" in hip_code
         assert "double4x3 jacobian;" in hip_code
+        assert "__host__ __device__ explicit float2x2(float diagonal)" in hip_code
+        assert (
+            "inline float2x2 operator*(const float2x2& lhs, " "const float2x2& rhs)"
+        ) in hip_code
+        assert (
+            "inline float2 operator*(const float2x2& lhs, const float2& rhs)"
+            in hip_code
+        )
+        assert (
+            "inline float2 operator*(const float2& lhs, const float2x2& rhs)"
+            in hip_code
+        )
         assert "MatrixType(" not in hip_code
         assert " = mat2(" not in hip_code
         assert " = dmat2(" not in hip_code
+        compile_matrix_helpers_if_cxx_available(
+            codegen.generate_hip_matrix_type_helpers(),
+            tmp_path,
+        )
 
     def test_bool_vector_constructors_emit_hip_names(self):
         """Test HIP maps boolean vectors to supported uchar vector types."""
@@ -2706,6 +2873,8 @@ class TestHipCodeGen:
                 void main() {
                     int lx = gl_LocalInvocationID.x;
                     int gx = gl_GlobalInvocationID.x;
+                    ivec2 globalXY = ivec2(gl_GlobalInvocationID.xy);
+                    uvec2 groupXY = gl_WorkGroupID.xy;
                     int wy = gl_WorkGroupID.y;
                     int bz = gl_WorkGroupSize.z;
                     int nz = gl_NumWorkGroups.z;
@@ -2723,6 +2892,12 @@ class TestHipCodeGen:
 
         assert "int lx = threadIdx.x;" in hip_code
         assert "int gx = (blockIdx.x * blockDim.x + threadIdx.x);" in hip_code
+        assert (
+            "int2 globalXY = make_int2("
+            "(blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y));"
+        ) in hip_code
+        assert "uint2 groupXY = make_uint2(blockIdx.x, blockIdx.y);" in hip_code
         assert "int wy = blockIdx.y;" in hip_code
         assert "int bz = blockDim.z;" in hip_code
         assert "int nz = gridDim.z;" in hip_code
@@ -2731,6 +2906,7 @@ class TestHipCodeGen:
         assert "gl_WorkGroupID" not in hip_code
         assert "gl_WorkGroupSize" not in hip_code
         assert "gl_NumWorkGroups" not in hip_code
+        assert ".xy" not in hip_code
 
     def test_hlsl_compute_builtins_emit_hip_names(self):
         """Test HIP maps HLSL compute built-in aliases to native indices."""
@@ -2769,6 +2945,42 @@ class TestHipCodeGen:
         assert "SV_GroupID" not in hip_code
         assert "SV_GroupIndex" not in hip_code
         assert "gl_LocalInvocationIndex" not in hip_code
+
+    def test_hlsl_compute_builtin_parameters_lower_to_hip_expressions(self):
+        """Test HIP does not expose HLSL compute built-ins as kernel params."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main(
+                    uvec3 dispatchId @ SV_DispatchThreadID,
+                    uvec3 groupId @ SV_GroupID
+                ) {
+                    uvec3 full = dispatchId;
+                    uint gy = dispatchId.y;
+                    uint bx = groupId.x;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__global__ void compute_main()" in hip_code
+        assert "uint3 dispatchId" not in hip_code
+        assert "uint3 groupId" not in hip_code
+        assert (
+            "uint3 full = make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y), "
+            "(blockIdx.z * blockDim.z + threadIdx.z));"
+        ) in hip_code
+        assert "unsigned int gy = (blockIdx.y * blockDim.y + threadIdx.y);" in hip_code
+        assert "unsigned int bx = blockIdx.x;" in hip_code
+        assert "SV_DispatchThreadID" not in hip_code
+        assert "SV_GroupID" not in hip_code
 
     def test_direct_hlsl_compute_vector_builtins_emit_hip_vectors(self):
         """Test direct AST HLSL compute vector built-ins map to uint3 values."""
@@ -2966,10 +3178,17 @@ class TestHipCodeGen:
         """Test atomic operations code generation"""
         source_code = """
         shader TestShader {
+            struct Counters {
+                int active;
+            };
+
+            Counters counters;
+
             compute {
                 void main() {
                     int counter;
                     atomicAdd(counter, 1);
+                    atomicAdd(counters.active, 1);
                     int oldValue = atomicExchange(counter, 2);
                     int exchanged = atomicCompareExchange(counter, 0, 3);
                     int swapped = atomicCompSwap(counter, exchanged, 4);
@@ -2992,16 +3211,17 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert "__global__" in hip_code or "__device__" in hip_code
-        assert "atomicAdd(counter, 1);" in hip_code
-        assert "int oldValue = atomicExch(counter, 2);" in hip_code
-        assert "int exchanged = atomicCAS(counter, 0, 3);" in hip_code
-        assert "int swapped = atomicCAS(counter, exchanged, 4);" in hip_code
-        assert "atomicSub(counter, 1);" in hip_code
-        assert "atomicMin(counter, 0);" in hip_code
-        assert "atomicMax(counter, 7);" in hip_code
-        assert "atomicAnd(counter, 1);" in hip_code
-        assert "atomicOr(counter, 2);" in hip_code
-        assert "atomicXor(counter, 3);" in hip_code
+        assert "atomicAdd(&counter, 1);" in hip_code
+        assert "atomicAdd(&counters.active, 1);" in hip_code
+        assert "int oldValue = atomicExch(&counter, 2);" in hip_code
+        assert "int exchanged = atomicCAS(&counter, 0, 3);" in hip_code
+        assert "int swapped = atomicCAS(&counter, exchanged, 4);" in hip_code
+        assert "atomicSub(&counter, 1);" in hip_code
+        assert "atomicMin(&counter, 0);" in hip_code
+        assert "atomicMax(&counter, 7);" in hip_code
+        assert "atomicAnd(&counter, 1);" in hip_code
+        assert "atomicOr(&counter, 2);" in hip_code
+        assert "atomicXor(&counter, 3);" in hip_code
         assert "atomicExchange(" not in hip_code
         assert "atomicCompareExchange(" not in hip_code
         assert "atomicCompSwap(" not in hip_code
@@ -9910,10 +10130,136 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "int main(Pair pair)" in hip_code
+        assert "__global__ void compute_main(Pair pair)" in hip_code
         assert "int left = pair.left;" in hip_code
         assert "int right = pair.right;" in hip_code
         assert "value = (left + right);" in hip_code
+        assert "return value;" not in hip_code
+        assert "MatchNode" not in hip_code
+
+    def test_match_plain_enum_path_patterns_lower_to_hip_if_chain(self):
+        """Test HIP lowers enum path patterns through generated enum constants."""
+        source_code = """
+        shader TestShader {
+            enum Mode {
+                Add,
+                Sub
+            }
+
+            compute {
+                void main(Mode mode, int *out) {
+                    match mode {
+                        Mode::Add => {
+                            out[0] = 1;
+                        }
+                        Mode::Sub => {
+                            out[0] = 2;
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "static const int Mode_Add = 0;" in hip_code
+        assert "static const int Mode_Sub = 1;" in hip_code
+        assert "__global__ void compute_main(int mode, int* out)" in hip_code
+        assert "if ((mode == Mode_Add))" in hip_code
+        assert "else if ((mode == Mode_Sub))" in hip_code
+        assert "out[0] = 1;" in hip_code
+        assert "out[0] = 2;" in hip_code
+        assert "enum path patterns are not supported" not in hip_code
+        assert "MatchNode" not in hip_code
+
+    def test_match_generic_enum_constructor_pattern_binds_payload_for_hip(self):
+        """Test HIP lowers generic enum tuple payload patterns."""
+        source_code = """
+        shader TestShader {
+            generic<T> struct Option {
+                enum OptionType {
+                    Some(T),
+                    None
+                }
+                OptionType variant;
+            }
+
+            struct State {
+                value: Option<int>;
+            }
+
+            compute {
+                void main(State state, int *out) {
+                    match state.value {
+                        Option::Some(value) => {
+                            out[0] = value;
+                        }
+                        Option::None => {
+                            out[0] = 0;
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "static const int Option_Some = 0;" in hip_code
+        assert "static const int Option_None = 1;" in hip_code
+        assert "struct Option_int" in hip_code
+        assert "Option_int value;" in hip_code
+        assert "if ((state.value.variant == Option_Some))" in hip_code
+        assert "int value = state.value.Some_0;" in hip_code
+        assert "else if ((state.value.variant == Option_None))" in hip_code
+        assert "out[0] = value;" in hip_code
+        assert "out[0] = 0;" in hip_code
+        assert "enum constructor patterns are not supported" not in hip_code
+        assert "MatchNode" not in hip_code
+
+    def test_match_enum_struct_pattern_binds_fields_for_hip(self):
+        """Test HIP lowers struct-like enum payload patterns."""
+        source_code = """
+        shader TestShader {
+            enum Command {
+                Clear {
+                    color: int,
+                    depth: int
+                },
+                Draw {
+                    id: int
+                }
+            }
+
+            compute {
+                void main(Command command, int *out) {
+                    match command {
+                        Command::Clear { color, depth } => {
+                            out[0] = color + depth;
+                        }
+                        Command::Draw { id } => {
+                            out[0] = id;
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "static const int Command_Clear = 0;" in hip_code
+        assert "static const int Command_Draw = 1;" in hip_code
+        assert "struct Command" in hip_code
+        assert "if ((command.variant == Command_Clear))" in hip_code
+        assert "int color = command.color;" in hip_code
+        assert "int depth = command.depth;" in hip_code
+        assert "else if ((command.variant == Command_Draw))" in hip_code
+        assert "int id = command.id;" in hip_code
+        assert "out[0] = (color + depth);" in hip_code
+        assert "out[0] = id;" in hip_code
+        assert "enum struct patterns are not supported" not in hip_code
         assert "MatchNode" not in hip_code
 
     def test_match_expression_initializes_hip_local_with_bindings(self):
@@ -9947,8 +10293,8 @@ class TestHipCodeGen:
         assert "value = -1;" in hip_code
         assert "MatchNode" not in hip_code
 
-    def test_return_match_expression_lowers_to_hip_typed_temporary(self):
-        """Test HIP lowers return-position match expressions through a typed local."""
+    def test_return_match_expression_in_hip_kernel_discards_return_value(self):
+        """Test HIP kernels do not preserve return-position match values."""
         source_code = """
         shader TestShader {
             compute {
@@ -9968,10 +10314,12 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "int __crossgl_match_value_0;" in hip_code
-        assert "__crossgl_match_value_0 = 10;" in hip_code
-        assert "__crossgl_match_value_0 = -1;" in hip_code
-        assert "return __crossgl_match_value_0;" in hip_code
+        assert "__global__ void compute_main(int mode)" in hip_code
+        assert "int __crossgl_match_value_0;" not in hip_code
+        assert "__crossgl_match_value_0 = 10;" not in hip_code
+        assert "__crossgl_match_value_0 = -1;" not in hip_code
+        assert "return __crossgl_match_value_0;" not in hip_code
+        assert "return;" in hip_code
         assert "MatchNode" not in hip_code
 
     def test_direct_ast_expression_statements_are_emitted(self):
@@ -10148,7 +10496,7 @@ class TestHipCodeGen:
         assert "float weights[4];" in hip_code
         assert "float3 colors[2];" in hip_code
         assert (
-            "void main(float input_weights[4], float3 input_colors[2], "
+            "void compute_main(float input_weights[4], float3 input_colors[2], "
             "float* dynamic_weights)"
         ) in hip_code
         assert "float data[256];" in hip_code
@@ -10518,6 +10866,35 @@ class TestHipCodeGen:
         )
         assert "WaveOpNode(" not in hip_code
         assert "Unsupported HIP wave intrinsic" not in hip_code
+
+    def test_direct_shfl_down_sync_lowers_to_guarded_hip_helper(self):
+        """Test raw CUDA-style shuffle calls do not leak into HIP kernels."""
+        source_code = """
+        shader HipDirectShuffle {
+            compute {
+                void main() {
+                    float partial = 1.0;
+                    float reduced = __shfl_down_sync(0xFFFFFFFF, partial, 16);
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "__device__ inline float "
+            "cgl_hip_shfl_down_sync_float(unsigned long long mask, float value, "
+            "int offset)" in hip_code
+        )
+        assert (
+            "#if defined(__HIP_DEVICE_COMPILE__) && "
+            "defined(HIP_ENABLE_WARP_SYNC_BUILTINS)" in hip_code
+        )
+        assert (
+            "float reduced = cgl_hip_shfl_down_sync_float"
+            "(4294967295, partial, 16);" in hip_code
+        )
 
     def test_wave_match_count_quad_and_multi_prefix_lower_to_hip_helpers(self):
         """Test extended Wave* forms lower to typed HIP helper calls."""
@@ -11136,6 +11513,8 @@ class TestHipCodeGen:
                     uvec3 localId @ SV_GroupThreadID,
                     uint lane @ gl_LocalInvocationIndex
                 ) {
+                    uint gx = globalId.x;
+                    uint lx = localId.x;
                     uint copy = lane;
                 }
             }
@@ -11153,7 +11532,18 @@ class TestHipCodeGen:
         assert (
             "// CrossGL parameter semantic: lane: local_invocation_index" in compute_hip
         )
-        assert "__global__ void main(uint3 globalId" in compute_hip
+        assert "__global__ void compute_main()" in compute_hip
+        assert "uint3 globalId" not in compute_hip
+        assert "uint3 localId" not in compute_hip
+        assert "unsigned int lane" not in compute_hip
+        assert (
+            "unsigned int gx = (blockIdx.x * blockDim.x + threadIdx.x);" in compute_hip
+        )
+        assert "unsigned int lx = threadIdx.x;" in compute_hip
+        assert (
+            "unsigned int copy = (threadIdx.z * blockDim.y * blockDim.x + "
+            "threadIdx.y * blockDim.x + threadIdx.x);"
+        ) in compute_hip
         if shutil.which("hipcc") is not None:
             compile_hip_if_hipcc_available(vertex_hip, tmp_path)
             compile_hip_if_hipcc_available(fragment_hip, tmp_path)
@@ -11857,7 +12247,7 @@ class TestHipCodeGen:
         assert "hipSurfaceObject_t outputImage;" in hip_code
         assert "@binding" not in hip_code
         assert "@texture" not in hip_code
-        assert "__global__ void main()" in hip_code
+        assert "__global__ void compute_main()" in hip_code
 
     def test_automatic_sequential_binding_for_multiple_resources(self):
         """Test multiple resources without explicit bindings all generate valid globals."""

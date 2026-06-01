@@ -41,7 +41,7 @@ NATIVE_SOURCE_SNIPPETS = {
     "mojo": ("shader.mojo", "fn main() -> None:\n    return\n"),
     "rust": ("shader.rs", "fn main() { let x: f32 = 1.0; }"),
     "vulkan": (
-        "shader.spirv",
+        "shader.spvasm",
         """
         void main() {
             vec4 color = vec4(1.0, 0.0, 0.0, 1.0);

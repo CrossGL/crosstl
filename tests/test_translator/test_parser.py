@@ -822,6 +822,34 @@ def test_compound_assignments_parse_operator_tokens():
     ]
 
 
+def test_parser_preserves_multiple_same_stage_blocks():
+    code = """
+    shader MultiCompute {
+        compute {
+            void main() {
+                int first = 1;
+            }
+        }
+
+        compute spawn {
+            void main() {
+                int second = 2;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stages = [
+        stage
+        for stage_type, stage in ast.stages.items()
+        if stage_type == ShaderStage.COMPUTE
+    ]
+
+    assert ast.stages[ShaderStage.COMPUTE] is compute_stages[0]
+    assert [stage.entry_point.name for stage in compute_stages] == ["main", "spawn"]
+
+
 def test_modulus_operations():
     code = """
     shader main {

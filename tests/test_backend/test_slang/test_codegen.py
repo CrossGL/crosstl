@@ -615,6 +615,27 @@ def test_numthreads_roundtrip_to_spirv_local_size(tmp_path):
     assert "LocalSize 8 8 1" in generated_code
 
 
+def test_modern_slang_compute_attributes_codegen():
+    code = """
+    [[shader("compute")]]
+    [numThreads(4, 2, 1)]
+    void main(uint3 tid : SV_DispatchThreadID) {
+        return;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "compute {" in generated_code
+    assert (
+        "layout(local_size_x = 4, local_size_y = 2, local_size_z = 1) in;"
+        in generated_code
+    )
+    assert "void main(uvec3 tid @ SV_DispatchThreadID)" in generated_code
+
+
 def test_generic_resource_global_codegen():
     code = """
     Texture2D<float4> albedo;

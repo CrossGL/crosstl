@@ -5,6 +5,7 @@ from ..ast import (
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
+    ConstantNode,
     ContinueNode,
     EnumNode,
     ExpressionStatementNode,
@@ -171,24 +172,80 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.current_structured_buffer_length_parameters = {}
         self.current_function_name = None
         self.current_stage_name = None
+        self.cuda_function_capture_params = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        self.stage_builtin_aliases = {}
+        self.current_function_is_kernel_entry = False
         self.builtin_map = {
+            "gl_LocalInvocationID": "make_uint3(threadIdx.x, threadIdx.y, threadIdx.z)",
             "gl_LocalInvocationID.x": "threadIdx.x",
             "gl_LocalInvocationID.y": "threadIdx.y",
             "gl_LocalInvocationID.z": "threadIdx.z",
+            "gl_WorkGroupID": "make_uint3(blockIdx.x, blockIdx.y, blockIdx.z)",
             "gl_WorkGroupID.x": "blockIdx.x",
             "gl_WorkGroupID.y": "blockIdx.y",
             "gl_WorkGroupID.z": "blockIdx.z",
+            "gl_WorkGroupSize": "make_uint3(blockDim.x, blockDim.y, blockDim.z)",
             "gl_WorkGroupSize.x": "blockDim.x",
             "gl_WorkGroupSize.y": "blockDim.y",
             "gl_WorkGroupSize.z": "blockDim.z",
+            "gl_NumWorkGroups": "make_uint3(gridDim.x, gridDim.y, gridDim.z)",
             "gl_NumWorkGroups.x": "gridDim.x",
             "gl_NumWorkGroups.y": "gridDim.y",
             "gl_NumWorkGroups.z": "gridDim.z",
+            "gl_GlobalInvocationID": (
+                "make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+                "(blockIdx.y * blockDim.y + threadIdx.y), "
+                "(blockIdx.z * blockDim.z + threadIdx.z))"
+            ),
             "gl_GlobalInvocationID.x": "(blockIdx.x * blockDim.x + threadIdx.x)",
             "gl_GlobalInvocationID.y": "(blockIdx.y * blockDim.y + threadIdx.y)",
             "gl_GlobalInvocationID.z": "(blockIdx.z * blockDim.z + threadIdx.z)",
+            "gl_LocalInvocationIndex": (
+                "(threadIdx.z * blockDim.y * blockDim.x + "
+                "threadIdx.y * blockDim.x + threadIdx.x)"
+            ),
+            "SV_GroupThreadID": "make_uint3(threadIdx.x, threadIdx.y, threadIdx.z)",
+            "SV_GroupThreadID.x": "threadIdx.x",
+            "SV_GroupThreadID.y": "threadIdx.y",
+            "SV_GroupThreadID.z": "threadIdx.z",
+            "SV_GROUPTHREADID": "make_uint3(threadIdx.x, threadIdx.y, threadIdx.z)",
+            "SV_GROUPTHREADID.x": "threadIdx.x",
+            "SV_GROUPTHREADID.y": "threadIdx.y",
+            "SV_GROUPTHREADID.z": "threadIdx.z",
+            "SV_GroupID": "make_uint3(blockIdx.x, blockIdx.y, blockIdx.z)",
+            "SV_GroupID.x": "blockIdx.x",
+            "SV_GroupID.y": "blockIdx.y",
+            "SV_GroupID.z": "blockIdx.z",
+            "SV_GROUPID": "make_uint3(blockIdx.x, blockIdx.y, blockIdx.z)",
+            "SV_GROUPID.x": "blockIdx.x",
+            "SV_GROUPID.y": "blockIdx.y",
+            "SV_GROUPID.z": "blockIdx.z",
+            "SV_DispatchThreadID": (
+                "make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+                "(blockIdx.y * blockDim.y + threadIdx.y), "
+                "(blockIdx.z * blockDim.z + threadIdx.z))"
+            ),
+            "SV_DispatchThreadID.x": "(blockIdx.x * blockDim.x + threadIdx.x)",
+            "SV_DispatchThreadID.y": "(blockIdx.y * blockDim.y + threadIdx.y)",
+            "SV_DispatchThreadID.z": "(blockIdx.z * blockDim.z + threadIdx.z)",
+            "SV_DISPATCHTHREADID": (
+                "make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+                "(blockIdx.y * blockDim.y + threadIdx.y), "
+                "(blockIdx.z * blockDim.z + threadIdx.z))"
+            ),
+            "SV_DISPATCHTHREADID.x": "(blockIdx.x * blockDim.x + threadIdx.x)",
+            "SV_DISPATCHTHREADID.y": "(blockIdx.y * blockDim.y + threadIdx.y)",
+            "SV_DISPATCHTHREADID.z": "(blockIdx.z * blockDim.z + threadIdx.z)",
+            "SV_GroupIndex": (
+                "(threadIdx.z * blockDim.y * blockDim.x + "
+                "threadIdx.y * blockDim.x + threadIdx.x)"
+            ),
+            "SV_GROUPINDEX": (
+                "(threadIdx.z * blockDim.y * blockDim.x + "
+                "threadIdx.y * blockDim.x + threadIdx.x)"
+            ),
         }
 
     def generate(self, ast_node):
@@ -196,6 +253,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.output = []
         self.indent_level = 0
         self.validate_supported_stage_types(ast_node)
+        self.reject_unsupported_generic_functions(ast_node)
         self.variable_types = {}
         self.current_function_return_type = None
         self.match_temp_variable_index = 0
@@ -222,7 +280,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        self.stage_builtin_aliases = {}
+        self.current_function_is_kernel_entry = False
         self.current_stage_name = None
+        self.cuda_function_capture_params = {}
         (
             self.query_resource_names,
             self.query_metadata_function_params,
@@ -242,6 +303,30 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.visit(ast_node)
         self.insert_helper_functions()
         return "\n".join(self.output)
+
+    def reject_unsupported_generic_functions(self, ast_node):
+        """Reject generic functions before emitting non-compilable CUDA code."""
+        functions = list(getattr(ast_node, "functions", []) or [])
+        for stage in (getattr(ast_node, "stages", {}) or {}).values():
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                functions.append(entry_point)
+            functions.extend(getattr(stage, "local_functions", []) or [])
+
+        for func in functions:
+            generic_params = getattr(func, "generic_params", []) or []
+            if not generic_params:
+                continue
+            names = [
+                getattr(param, "name", str(param))
+                for param in generic_params
+                if getattr(param, "name", str(param))
+            ]
+            suffix = f" ({', '.join(names)})" if names else ""
+            raise ValueError(
+                f"CUDA codegen does not support generic functions{suffix}; "
+                "specialize the function before CUDA generation"
+            )
 
     def unsupported_stage_types(self):
         return set()
@@ -422,6 +507,263 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "}\n\n"
         )
 
+    def generate_cuda_matrix_type_helpers(self):
+        components = ("x", "y", "z", "w")
+
+        def matrix_type(scalar, columns, rows):
+            return f"{scalar}{columns}x{rows}"
+
+        def vector_type(scalar, size):
+            return f"{scalar}{size}"
+
+        def vector_constructor(scalar, size, args):
+            return f"make_{scalar}{size}({', '.join(args)})"
+
+        lines = ["// CrossGL matrix value helpers"]
+        for scalar in ("float", "double"):
+            for columns in range(2, 5):
+                for rows in range(2, 5):
+                    type_name = matrix_type(scalar, columns, rows)
+                    count = columns * rows
+                    params = ", ".join(f"{scalar} v{i}" for i in range(count))
+                    assignments = " ".join(f"m[{i}] = v{i};" for i in range(count))
+                    zero = f"{scalar}(0)"
+                    add_args = ", ".join(f"m[{i}] + rhs.m[{i}]" for i in range(count))
+                    sub_args = ", ".join(f"m[{i}] - rhs.m[{i}]" for i in range(count))
+                    neg_args = ", ".join(f"-m[{i}]" for i in range(count))
+                    mul_args = ", ".join(f"m[{i}] * rhs" for i in range(count))
+                    div_args = ", ".join(f"m[{i}] / rhs" for i in range(count))
+                    column_params = ", ".join(
+                        f"{vector_type(scalar, rows)} c{column}"
+                        for column in range(columns)
+                    )
+                    column_assignments = " ".join(
+                        (f"m[{column * rows + row}] = " f"c{column}.{components[row]};")
+                        for column in range(columns)
+                        for row in range(rows)
+                    )
+                    one = f"{scalar}(1)"
+                    lines.extend(
+                        [
+                            f"struct {type_name} {{",
+                            f"    {scalar} m[{count}];",
+                            f"    static const int CGL_COLUMNS = {columns};",
+                            f"    static const int CGL_ROWS = {rows};",
+                            f"    __host__ __device__ {type_name}() {{ }}",
+                            f"    __host__ __device__ explicit {type_name}({scalar} diagonal) {{",
+                            f"        for (int i = 0; i < {count}; ++i) {{ m[i] = {zero}; }}",
+                        ]
+                    )
+                    for index in range(min(columns, rows)):
+                        lines.append(f"        m[{index * rows + index}] = diagonal;")
+                    lines.extend(
+                        [
+                            "    }",
+                            f"    __host__ __device__ {type_name}({column_params}) {{ {column_assignments} }}",
+                            (
+                                "    template <typename Matrix, "
+                                "typename = decltype(Matrix::CGL_COLUMNS), "
+                                "typename = decltype(Matrix::CGL_ROWS)>"
+                            ),
+                            f"    __host__ __device__ explicit {type_name}(const Matrix& source) {{",
+                            f"        for (int i = 0; i < {count}; ++i) {{ m[i] = {zero}; }}",
+                            f"        for (int column = 0; column < {columns}; ++column) {{",
+                            f"            for (int row = 0; row < {rows}; ++row) {{",
+                            "                if (column < Matrix::CGL_COLUMNS && row < Matrix::CGL_ROWS) {",
+                            f"                    m[column * {rows} + row] = source.m[column * Matrix::CGL_ROWS + row];",
+                            "                } else if (column == row) {",
+                            f"                    m[column * {rows} + row] = {one};",
+                            "                }",
+                            "            }",
+                            "        }",
+                            "    }",
+                            f"    __host__ __device__ {type_name}({params}) {{ {assignments} }}",
+                            f"    __host__ __device__ {scalar}& operator[](int index) {{ return m[index]; }}",
+                            f"    __host__ __device__ const {scalar}& operator[](int index) const {{ return m[index]; }}",
+                            f"    __host__ __device__ {type_name} operator+(const {type_name}& rhs) const {{",
+                            f"        return {type_name}({add_args});",
+                            "    }",
+                            f"    __host__ __device__ {type_name} operator-(const {type_name}& rhs) const {{",
+                            f"        return {type_name}({sub_args});",
+                            "    }",
+                            f"    __host__ __device__ {type_name} operator-() const {{",
+                            f"        return {type_name}({neg_args});",
+                            "    }",
+                            f"    __host__ __device__ {type_name} operator*({scalar} rhs) const {{",
+                            f"        return {type_name}({mul_args});",
+                            "    }",
+                            f"    __host__ __device__ {type_name} operator/({scalar} rhs) const {{",
+                            f"        return {type_name}({div_args});",
+                            "    }",
+                            f"    __host__ __device__ {type_name}& operator+=(const {type_name}& rhs) {{",
+                            "        *this = *this + rhs;",
+                            "        return *this;",
+                            "    }",
+                            f"    __host__ __device__ {type_name}& operator-=(const {type_name}& rhs) {{",
+                            "        *this = *this - rhs;",
+                            "        return *this;",
+                            "    }",
+                            f"    __host__ __device__ {type_name}& operator*=({scalar} rhs) {{",
+                            "        *this = *this * rhs;",
+                            "        return *this;",
+                            "    }",
+                            f"    __host__ __device__ {type_name}& operator/=({scalar} rhs) {{",
+                            "        *this = *this / rhs;",
+                            "        return *this;",
+                            "    }",
+                            "};",
+                            "",
+                            f"__host__ __device__ inline {type_name} operator*({scalar} lhs, const {type_name}& rhs) {{",
+                            "    return rhs * lhs;",
+                            "}",
+                            "",
+                        ]
+                    )
+
+            for columns in range(2, 5):
+                for rows in range(2, 5):
+                    type_name = matrix_type(scalar, columns, rows)
+                    result_type = matrix_type(scalar, rows, columns)
+                    transpose_values = [
+                        f"value.m[{row * rows + column}]"
+                        for column in range(rows)
+                        for row in range(columns)
+                    ]
+                    lines.extend(
+                        [
+                            f"__host__ __device__ inline {result_type} transpose(const {type_name}& value) {{",
+                            f"    return {result_type}({', '.join(transpose_values)});",
+                            "}",
+                            "",
+                        ]
+                    )
+
+            for size in range(2, 5):
+                type_name = matrix_type(scalar, size, size)
+                zero = f"{scalar}(0)"
+                one = f"{scalar}(1)"
+                lines.extend(
+                    [
+                        f"__host__ __device__ inline {type_name} inverse(const {type_name}& value) {{",
+                        f"    {type_name} a(value);",
+                        f"    {type_name} result({one});",
+                        f"    for (int column = 0; column < {size}; ++column) {{",
+                        "        int pivot_row = column;",
+                        f"        {scalar} pivot_value = a.m[column * {size} + column];",
+                        (
+                            f"        {scalar} pivot_abs = pivot_value < {zero} ? "
+                            "-pivot_value : pivot_value;"
+                        ),
+                        f"        for (int row = column + 1; row < {size}; ++row) {{",
+                        f"            {scalar} candidate_value = a.m[column * {size} + row];",
+                        (
+                            f"            {scalar} candidate_abs = "
+                            f"candidate_value < {zero} ? "
+                            "-candidate_value : candidate_value;"
+                        ),
+                        "            if (candidate_abs > pivot_abs) {",
+                        "                pivot_abs = candidate_abs;",
+                        "                pivot_row = row;",
+                        "            }",
+                        "        }",
+                        f"        if (pivot_abs == {zero}) {{",
+                        "            return result;",
+                        "        }",
+                        "        if (pivot_row != column) {",
+                        f"            for (int c = 0; c < {size}; ++c) {{",
+                        f"                {scalar} tmp = a.m[c * {size} + column];",
+                        f"                a.m[c * {size} + column] = a.m[c * {size} + pivot_row];",
+                        f"                a.m[c * {size} + pivot_row] = tmp;",
+                        f"                tmp = result.m[c * {size} + column];",
+                        f"                result.m[c * {size} + column] = result.m[c * {size} + pivot_row];",
+                        f"                result.m[c * {size} + pivot_row] = tmp;",
+                        "            }",
+                        "        }",
+                        f"        {scalar} pivot = a.m[column * {size} + column];",
+                        f"        for (int c = 0; c < {size}; ++c) {{",
+                        f"            a.m[c * {size} + column] /= pivot;",
+                        f"            result.m[c * {size} + column] /= pivot;",
+                        "        }",
+                        f"        for (int row = 0; row < {size}; ++row) {{",
+                        "            if (row == column) {",
+                        "                continue;",
+                        "            }",
+                        f"            {scalar} factor = a.m[column * {size} + row];",
+                        f"            for (int c = 0; c < {size}; ++c) {{",
+                        f"                a.m[c * {size} + row] -= factor * a.m[c * {size} + column];",
+                        f"                result.m[c * {size} + row] -= factor * result.m[c * {size} + column];",
+                        "            }",
+                        "        }",
+                        "    }",
+                        "    return result;",
+                        "}",
+                        "",
+                    ]
+                )
+
+            for left_columns in range(2, 5):
+                for left_rows in range(2, 5):
+                    left_type = matrix_type(scalar, left_columns, left_rows)
+                    in_vector = vector_type(scalar, left_columns)
+                    out_vector = vector_type(scalar, left_rows)
+                    values = []
+                    for row in range(left_rows):
+                        terms = [
+                            f"lhs.m[{column * left_rows + row}] * rhs.{components[column]}"
+                            for column in range(left_columns)
+                        ]
+                        values.append(" + ".join(terms))
+                    lines.extend(
+                        [
+                            f"__host__ __device__ inline {out_vector} operator*(const {left_type}& lhs, const {in_vector}& rhs) {{",
+                            f"    return {vector_constructor(scalar, left_rows, values)};",
+                            "}",
+                            "",
+                        ]
+                    )
+
+                    in_vector = vector_type(scalar, left_rows)
+                    out_vector = vector_type(scalar, left_columns)
+                    values = []
+                    for column in range(left_columns):
+                        terms = [
+                            f"lhs.{components[row]} * rhs.m[{column * left_rows + row}]"
+                            for row in range(left_rows)
+                        ]
+                        values.append(" + ".join(terms))
+                    lines.extend(
+                        [
+                            f"__host__ __device__ inline {out_vector} operator*(const {in_vector}& lhs, const {left_type}& rhs) {{",
+                            f"    return {vector_constructor(scalar, left_columns, values)};",
+                            "}",
+                            "",
+                        ]
+                    )
+
+                    for right_columns in range(2, 5):
+                        right_type = matrix_type(scalar, right_columns, left_columns)
+                        result_type = matrix_type(scalar, right_columns, left_rows)
+                        values = []
+                        for column in range(right_columns):
+                            for row in range(left_rows):
+                                terms = [
+                                    (
+                                        f"lhs.m[{shared * left_rows + row}] * "
+                                        f"rhs.m[{column * left_columns + shared}]"
+                                    )
+                                    for shared in range(left_columns)
+                                ]
+                                values.append(" + ".join(terms))
+                        lines.extend(
+                            [
+                                f"__host__ __device__ inline {result_type} operator*(const {left_type}& lhs, const {right_type}& rhs) {{",
+                                f"    return {result_type}({', '.join(values)});",
+                                "}",
+                                "",
+                            ]
+                        )
+        return "\n".join(lines)
+
     def validate_supported_stage_types(self, ast_node, target_stage=None):
         unsupported_stages = set()
         for stage_type in getattr(ast_node, "stages", {}) or {}:
@@ -454,6 +796,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def generic_visit(self, node):
         """Fallback visitor for primitive values, lists, and unknown nodes."""
         if isinstance(node, str):
+            builtin_alias = self.cuda_stage_builtin_alias_expression(node)
+            if builtin_alias is not None:
+                return builtin_alias
             ray_builtin = self.cuda_ray_builtin_expression(node)
             if ray_builtin is not None and node not in self.variable_types:
                 return ray_builtin
@@ -573,6 +918,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("#include <cuda_runtime.h>")
         self.emit("#include <device_launch_parameters.h>")
         self.emit("")
+        self.emit_generated_code(self.generate_cuda_matrix_type_helpers())
+        self.emit("")
         if self.has_geometry_stage(node):
             self.emit_generated_code(self.generate_cuda_geometry_stream_helpers())
         if self.has_tessellation_stage(node):
@@ -590,10 +937,43 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.visit_cbuffer(cbuffer)
             self.emit("")
 
+        constants = getattr(node, "constants", [])
+        for constant in constants:
+            self.visit(constant)
+            self.emit("")
+
         global_vars = getattr(node, "global_variables", [])
         for var in global_vars:
             self.visit(var)
             self.emit("")
+
+        emitted_stage_local_variables = {
+            getattr(var, "name", None): self.type_name_string(
+                self.get_variable_node_type(var)
+            )
+            for var in global_vars
+            if getattr(var, "name", None)
+        }
+        for stage in (getattr(node, "stages", {}) or {}).values():
+            for var in getattr(stage, "local_variables", []) or []:
+                if self.is_cuda_shared_variable(var):
+                    continue
+                var_name = getattr(var, "name", None)
+                var_type = self.type_name_string(self.get_variable_node_type(var))
+                if not var_name:
+                    continue
+                previous_type = emitted_stage_local_variables.get(var_name)
+                if previous_type is not None:
+                    if previous_type != var_type:
+                        raise ValueError(
+                            "Conflicting CUDA stage-local declaration for "
+                            f"'{var_name}': {previous_type} differs from {var_type}"
+                        )
+                    self.register_variable_type(var_name, var_type, var)
+                    continue
+                self.visit(var)
+                self.emit("")
+                emitted_stage_local_variables[var_name] = var_type
 
         functions = getattr(node, "functions", [])
         for func in functions:
@@ -622,26 +1002,40 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                         else:
                             stage.entry_point.qualifiers = ["compute"]
 
-                    for func in getattr(stage, "local_functions", []):
-                        if id(func) in emitted_local_functions:
-                            continue
-                        self.visit(func)
-                        self.emit("")
-                        emitted_local_functions.add(id(func))
-
+                    local_captures = self.collect_stage_local_function_captures(stage)
+                    self.cuda_function_capture_params.update(local_captures)
                     saved_stage_name = self.current_stage_name
-                    self.current_stage_name = stage_name
                     saved_override = getattr(
                         self, "current_stage_entry_function_name", None
                     )
-                    self.current_stage_entry_function_name = (
-                        self.stage_entry_function_name(
-                            stage_name, stage.entry_point, stage_entry_name_counts
-                        )
+                    saved_stage_local_variables = getattr(
+                        self, "current_stage_local_variables", []
                     )
-                    self.visit(stage.entry_point)
-                    self.current_stage_entry_function_name = saved_override
-                    self.current_stage_name = saved_stage_name
+                    try:
+                        self.current_stage_name = saved_stage_name
+                        for func in getattr(stage, "local_functions", []):
+                            if id(func) in emitted_local_functions:
+                                continue
+                            self.visit(func)
+                            self.emit("")
+                            emitted_local_functions.add(id(func))
+
+                        self.current_stage_name = stage_name
+                        self.current_stage_entry_function_name = (
+                            self.stage_entry_function_name(
+                                stage_name, stage.entry_point, stage_entry_name_counts
+                            )
+                        )
+                        self.current_stage_local_variables = (
+                            getattr(stage, "local_variables", []) or []
+                        )
+                        self.visit(stage.entry_point)
+                    finally:
+                        self.current_stage_entry_function_name = saved_override
+                        self.current_stage_name = saved_stage_name
+                        self.current_stage_local_variables = saved_stage_local_variables
+                        for captured_name in local_captures:
+                            self.cuda_function_capture_params.pop(captured_name, None)
                     self.emit("")
 
     def stage_entry_name_counts(self, stages):
@@ -657,6 +1051,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         name = getattr(entry_point, "name", None)
         if not name:
             return name
+        if normalize_stage_name(stage_name) == "compute" and name == "main":
+            return "compute_main"
         if stage_name in self.cuda_ray_stage_names() and name == "main":
             return f"{stage_name}_{name}"
         if (
@@ -674,6 +1070,61 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return f"{stage_name}_{name}"
         return name
 
+    def collect_stage_local_function_captures(self, stage):
+        entry_point = getattr(stage, "entry_point", None)
+        entry_params = list(
+            getattr(entry_point, "parameters", getattr(entry_point, "params", []))
+        )
+        entry_params_by_name = {
+            getattr(param, "name", None): param for param in entry_params
+        }
+        entry_params_by_name = {
+            name: param for name, param in entry_params_by_name.items() if name
+        }
+        if not entry_params_by_name:
+            return {}
+
+        captures = {}
+        for function in getattr(stage, "local_functions", []) or []:
+            if getattr(function, "body", None) is None:
+                continue
+            used_names = self.collect_function_free_identifier_names(function)
+            captured_params = [
+                entry_params_by_name[name]
+                for name in entry_params_by_name
+                if name in used_names
+            ]
+            if captured_params:
+                captures[getattr(function, "name", None)] = captured_params
+        return {name: params for name, params in captures.items() if name}
+
+    def is_cuda_shared_variable(self, node):
+        """Return whether a stage-local variable maps to CUDA shared memory."""
+        return any(
+            "shared" in qualifier_name or "workgroup" in qualifier_name
+            for qualifier_name in (
+                str(qualifier).lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            )
+        )
+
+    def collect_function_free_identifier_names(self, function):
+        params = getattr(function, "parameters", getattr(function, "params", []))
+        bound_names = {getattr(param, "name", None) for param in params}
+        bound_names = {name for name in bound_names if name}
+        body = getattr(function, "body", None)
+        local_names = {
+            getattr(node, "name", None)
+            for node in self.query_walk_nodes(body)
+            if isinstance(node, VariableNode)
+        }
+        bound_names.update(name for name in local_names if name)
+        return {
+            node.name
+            for node in self.query_walk_nodes(body)
+            if isinstance(node, IdentifierNode) and node.name not in bound_names
+        }
+
     def visit_FunctionNode(self, node):
         """Render a CrossGL function or compute entry point as CUDA code."""
         saved_variable_types = self.variable_types.copy()
@@ -684,31 +1135,41 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         saved_query_metadata_aliases = self.query_metadata_aliases
         saved_current_function_name = self.current_function_name
         saved_current_function_return_type = self.current_function_return_type
+        saved_stage_builtin_aliases = self.stage_builtin_aliases
+        saved_current_function_is_kernel_entry = self.current_function_is_kernel_entry
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
         )
         self.current_function_name = node.name
         self.current_structured_buffer_length_parameters = {}
         self.query_metadata_aliases = {}
+        self.stage_builtin_aliases = {}
+        self.current_function_is_kernel_entry = False
         qualifiers = []
 
         if hasattr(node, "qualifiers") and node.qualifiers:
             for qualifier in node.qualifiers:
-                if qualifier == "compute":
+                qualifier_name = normalize_stage_name(qualifier)
+                if qualifier_name == "compute":
                     qualifiers.append("__global__")
-                elif qualifier in ["vertex", "fragment"]:
+                elif qualifier_name in ["vertex", "fragment"]:
                     qualifiers.append("__device__")
                 else:
                     qualifiers.append("__device__")
         elif hasattr(node, "qualifier") and node.qualifier:
-            if node.qualifier == "compute":
+            qualifier_name = normalize_stage_name(node.qualifier)
+            if qualifier_name == "compute":
                 qualifiers.append("__global__")
-            elif node.qualifier in ["vertex", "fragment"]:
+            elif qualifier_name in ["vertex", "fragment"]:
                 qualifiers.append("__device__")
             else:
                 qualifiers.append("__device__")
         else:
             qualifiers.append("__device__")
+
+        stage_name = self.function_stage_name(node)
+        is_kernel_entry = "__global__" in qualifiers
+        self.current_function_is_kernel_entry = is_kernel_entry
 
         if hasattr(node, "return_type"):
             self.current_function_return_type = node.return_type
@@ -717,7 +1178,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.current_function_return_type = "void"
             return_type = "void"
 
-        stage_name = self.function_stage_name(node)
         return_semantic = self.semantic_from_node(node)
         self.validate_cuda_return_semantic(
             stage_name, self.current_function_return_type, return_semantic
@@ -725,11 +1185,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.validate_cuda_struct_return_semantics(
             stage_name, self.current_function_return_type
         )
+        if is_kernel_entry:
+            self.current_function_return_type = "void"
+            return_type = "void"
 
         qualifier_str = " ".join(qualifiers)
 
         params = []
-        param_list = getattr(node, "parameters", getattr(node, "params", []))
+        param_list = list(getattr(node, "parameters", getattr(node, "params", [])))
+        param_list.extend(self.cuda_function_capture_params.get(node.name, []))
         self.validate_cuda_stage_parameter_semantics(stage_name, param_list)
         if stage_name == "geometry":
             self.validate_cuda_geometry_stage(node, param_list)
@@ -747,35 +1211,42 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 param_type = "void"
 
             declaration_type = self.resource_type_with_access(param_type, param)
+            param_name = getattr(param, "name", getattr(param, "param_name", None))
+            builtin_role = self.cuda_compute_builtin_parameter_role(stage_name, param)
+            if param_name and builtin_role is not None:
+                self.register_variable_type(param_name, declaration_type, param)
+                self.stage_builtin_aliases[param_name] = builtin_role
+                continue
+
             geometry_stream_declaration = self.format_cuda_geometry_stream_parameter(
                 declaration_type,
-                param.name,
+                param_name,
             )
             if geometry_stream_declaration is not None:
                 self.register_variable_type(
-                    param.name,
+                    param_name,
                     self.cuda_geometry_stream_mapped_type(declaration_type),
                     param,
                 )
                 params.append(geometry_stream_declaration)
             else:
-                self.register_variable_type(param.name, declaration_type, param)
+                self.register_variable_type(param_name, declaration_type, param)
                 params.append(
-                    self.format_typed_declarator(declaration_type, param.name)
+                    self.format_typed_declarator(declaration_type, param_name)
                 )
-            metadata_param = self.query_metadata_parameter(param.name, declaration_type)
+            metadata_param = self.query_metadata_parameter(param_name, declaration_type)
             if metadata_param:
                 params.append(metadata_param)
             length_param = self.structured_buffer_length_parameter(
-                node.name, param.name, declaration_type
+                node.name, param_name, declaration_type
             )
             if length_param:
-                self.current_structured_buffer_length_parameters[param.name] = (
-                    self.structured_buffer_length_name(param.name)
+                self.current_structured_buffer_length_parameters[param_name] = (
+                    self.structured_buffer_length_name(param_name)
                 )
                 params.append(length_param)
             counter_param = self.structured_buffer_counter_parameter(
-                param.name, declaration_type
+                param_name, declaration_type
             )
             if counter_param:
                 params.append(counter_param)
@@ -813,11 +1284,38 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         function_name = getattr(self, "current_stage_entry_function_name", None)
         if not function_name:
             function_name = node.name
-        self.emit(f"{qualifier_str} {return_type} {function_name}({param_str}) {{")
+        if is_kernel_entry and function_name == "main":
+            function_name = "compute_main"
+        signature_prefix = qualifier_str
+        if is_kernel_entry:
+            signature_prefix = f'extern "C" {qualifier_str}'
+        body = getattr(node, "body", None)
+        if stage_name is None and body is None:
+            self.emit(f"{signature_prefix} {return_type} {function_name}({param_str});")
+            self.variable_types = saved_variable_types
+            self.image_resource_accesses = saved_image_resource_accesses
+            self.buffer_resource_accesses = saved_buffer_resource_accesses
+            self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
+            self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
+            self.query_metadata_aliases = saved_query_metadata_aliases
+            self.current_function_name = saved_current_function_name
+            self.current_function_return_type = saved_current_function_return_type
+            self.stage_builtin_aliases = saved_stage_builtin_aliases
+            self.current_function_is_kernel_entry = (
+                saved_current_function_is_kernel_entry
+            )
+            self.current_structured_buffer_length_parameters = (
+                saved_structured_buffer_length_parameters
+            )
+            return
+        self.emit(f"{signature_prefix} {return_type} {function_name}({param_str}) {{")
 
         self.indent_level += 1
 
-        body = getattr(node, "body", [])
+        for local_var in getattr(self, "current_stage_local_variables", []) or []:
+            if self.is_cuda_shared_variable(local_var):
+                self.visit(local_var)
+
         self.emit_body(body)
 
         self.indent_level -= 1
@@ -830,6 +1328,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.query_metadata_aliases = saved_query_metadata_aliases
         self.current_function_name = saved_current_function_name
         self.current_function_return_type = saved_current_function_return_type
+        self.stage_builtin_aliases = saved_stage_builtin_aliases
+        self.current_function_is_kernel_entry = saved_current_function_is_kernel_entry
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
         )
@@ -906,6 +1406,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         self.indent_level -= 1
         self.emit("};")
+
+    def visit_ConstantNode(self, node: ConstantNode):
+        const_type = self.type_name_string(getattr(node, "const_type", "auto"))
+        value = getattr(node, "value", None)
+        self.register_variable_type(node.name, const_type, node, value)
+        declaration_type = self.glsl_buffer_block_declaration_type(const_type, node)
+        declaration = self.format_typed_declarator(declaration_type, node.name)
+        if value is not None:
+            declaration += f" = {self.visit(value)}"
+        self.emit(f"const {declaration};")
 
     def format_variable_declaration(self, node):
         var_type = None
@@ -1742,6 +2252,152 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "SV_DISPATCHRAYSDIMENSIONS": ("launch_size", "uint3", ray_stages),
         }
 
+    def cuda_compute_builtin_parameter_role(self, stage_name, param):
+        """Return the compute built-in role for a semantic kernel parameter."""
+        if stage_name != "compute":
+            return None
+
+        semantic = self.semantic_from_node(param)
+        if semantic is None:
+            return None
+
+        rule = self.cuda_stage_parameter_semantic_rules().get(
+            self.cuda_stage_parameter_semantic_key(semantic)
+        )
+        if rule is None:
+            return None
+
+        role, _expected_type, allowed_stages = rule
+        if "compute" not in allowed_stages:
+            return None
+        if role in {
+            "global_invocation_id",
+            "local_invocation_id",
+            "local_invocation_index",
+            "workgroup_id",
+        }:
+            return role
+        return None
+
+    def cuda_compute_builtin_expression(self, role, component=None):
+        """Return the CUDA expression for a CrossGL compute built-in role."""
+        local_index = (
+            "(threadIdx.z * blockDim.y * blockDim.x + "
+            "threadIdx.y * blockDim.x + threadIdx.x)"
+        )
+        component_expressions = {
+            "global_invocation_id": {
+                "x": "(blockIdx.x * blockDim.x + threadIdx.x)",
+                "y": "(blockIdx.y * blockDim.y + threadIdx.y)",
+                "z": "(blockIdx.z * blockDim.z + threadIdx.z)",
+            },
+            "local_invocation_id": {
+                "x": "threadIdx.x",
+                "y": "threadIdx.y",
+                "z": "threadIdx.z",
+            },
+            "workgroup_id": {
+                "x": "blockIdx.x",
+                "y": "blockIdx.y",
+                "z": "blockIdx.z",
+            },
+            "workgroup_size": {
+                "x": "blockDim.x",
+                "y": "blockDim.y",
+                "z": "blockDim.z",
+            },
+            "num_workgroups": {
+                "x": "gridDim.x",
+                "y": "gridDim.y",
+                "z": "gridDim.z",
+            },
+        }
+
+        if role == "local_invocation_index":
+            return local_index if component is None else None
+
+        role_components = component_expressions.get(role)
+        if role_components is None:
+            return None
+        if component is not None:
+            if component in role_components:
+                return role_components[component]
+            swizzle_components = tuple(str(component))
+            if all(part in role_components for part in swizzle_components):
+                constructor = {
+                    2: "make_uint2",
+                    3: "make_uint3",
+                    4: "make_uint4",
+                }.get(len(swizzle_components))
+                if constructor is not None:
+                    values = ", ".join(
+                        role_components[part] for part in swizzle_components
+                    )
+                    return f"{constructor}({values})"
+            return None
+        return "make_uint3({x}, {y}, {z})".format(**role_components)
+
+    def cuda_compute_builtin_role_for_name(self, name):
+        """Return the compute built-in role represented by a source identifier."""
+        return {
+            "gl_GlobalInvocationID": "global_invocation_id",
+            "SV_DispatchThreadID": "global_invocation_id",
+            "SV_DISPATCHTHREADID": "global_invocation_id",
+            "gl_LocalInvocationID": "local_invocation_id",
+            "SV_GroupThreadID": "local_invocation_id",
+            "SV_GROUPTHREADID": "local_invocation_id",
+            "gl_WorkGroupID": "workgroup_id",
+            "SV_GroupID": "workgroup_id",
+            "SV_GROUPID": "workgroup_id",
+            "gl_WorkGroupSize": "workgroup_size",
+            "gl_NumWorkGroups": "num_workgroups",
+            "gl_LocalInvocationIndex": "local_invocation_index",
+            "SV_GroupIndex": "local_invocation_index",
+            "SV_GROUPINDEX": "local_invocation_index",
+        }.get(name)
+
+    def cuda_compute_builtin_type(self, name):
+        """Return the CUDA value type for a compute built-in identifier."""
+        role = self.cuda_compute_builtin_role_for_name(name)
+        if role is None:
+            return None
+        if role == "local_invocation_index":
+            return "uint"
+        return "uint3"
+
+    def cuda_compute_builtin_member_type(self, name, member):
+        """Return the type of a direct compute built-in member/swizzle."""
+        root_type = self.cuda_compute_builtin_type(name)
+        vector_info = self.vector_type_info(root_type)
+        if vector_info is None:
+            return None
+        component_aliases = {
+            "x": "x",
+            "y": "y",
+            "z": "z",
+            "w": "w",
+            "r": "x",
+            "g": "y",
+            "b": "z",
+            "a": "w",
+        }
+        components = [component_aliases.get(component) for component in str(member)]
+        if not components or any(component is None for component in components):
+            return None
+        if any(component not in vector_info["components"] for component in components):
+            return None
+        if len(components) == 1:
+            return vector_info["component_type"]
+        return self.vector_type_for_components(
+            vector_info["component_type"], len(components)
+        )
+
+    def cuda_stage_builtin_alias_expression(self, name, component=None):
+        role = self.stage_builtin_aliases.get(name)
+        if role is None:
+            return None
+        return self.cuda_compute_builtin_expression(role, component)
+
     def validate_cuda_stage_parameter_semantic_type(
         self, param, semantic, expected_type
     ):
@@ -1914,6 +2570,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def visit_IdentifierNode(self, node):
         name = getattr(node, "name", str(node))
+        builtin_alias = self.cuda_stage_builtin_alias_expression(name)
+        if builtin_alias is not None:
+            return builtin_alias
         ray_builtin = self.cuda_ray_builtin_expression(name)
         if ray_builtin is not None and name not in self.variable_types:
             return ray_builtin
@@ -1996,6 +2655,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
         if diagnostic is not None:
             return diagnostic
+        swizzle_assignment = self.format_swizzle_assignment_expression(
+            node.target,
+            node.value,
+            operator,
+        )
+        if swizzle_assignment is not None:
+            return swizzle_assignment
         self.assignment_lhs_depth += 1
         try:
             target = self.visit(node.target)
@@ -2046,6 +2712,71 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if lowered_value is not None:
                 return f"{target} = {lowered_value}"
         return f"{target} {operator} {value}"
+
+    def format_swizzle_assignment_expression(self, target_node, value_node, operator):
+        if not isinstance(target_node, MemberAccessNode):
+            return None
+        object_node = getattr(
+            target_node, "object_expr", getattr(target_node, "object", None)
+        )
+        components = self.member_swizzle_components(target_node)
+        if object_node is None or components is None or len(components) <= 1:
+            return None
+
+        object_info = self.vector_type_info(self.expression_result_type(object_node))
+        if object_info is None:
+            return None
+        result_type = self.vector_type_for_components(
+            object_info["component_type"], len(components)
+        )
+        result_info = self.vector_type_info(result_type)
+        if result_info is None:
+            return None
+
+        object_expr = self.visit(object_node)
+        value_expr = self.visit(value_node)
+        value_info = self.vector_type_info(self.expression_result_type(value_node))
+        temp_name = self.next_cuda_temp_variable("swizzle_value")
+        if value_info is not None:
+            if len(value_info["components"]) != len(components):
+                return None
+            temp_type = result_info["type"]
+            value_parts = [f"{temp_name}.{part}" for part in result_info["components"]]
+        else:
+            scalar_type = self.scalar_component_type(
+                self.expression_result_type(value_node)
+            )
+            if scalar_type is None:
+                scalar_type = self.vector_scalar_parameter_type(object_info)
+            temp_type = self.convert_crossgl_type_to_cuda(scalar_type)
+            value_parts = None
+
+        statements = [f"{temp_type} {temp_name} = {value_expr}"]
+        if value_parts is None:
+            value_parts = [temp_name] * len(components)
+
+        compound_ops = {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+            "%=": "%",
+            "&=": "&",
+            "|=": "|",
+            "^=": "^",
+            "<<=": "<<",
+            ">>=": ">>",
+        }
+        binary_op = compound_ops.get(operator)
+        for component, value_part in zip(components, value_parts):
+            target = f"{object_expr}.{component}"
+            if operator == "=":
+                statements.append(f"{target} = {value_part}")
+            elif binary_op is not None:
+                statements.append(f"{target} = ({target} {binary_op} {value_part})")
+            else:
+                return None
+        return "; ".join(statements)
 
     def visit_BinaryOpNode(self, node):
         left = self.visit(node.left)
@@ -2216,6 +2947,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if saturate_call is not None:
                 return saturate_call
 
+        if func_name == "smoothstep" and len(args) == 3:
+            smoothstep_call = self.generate_smoothstep_call(raw_args, args)
+            if smoothstep_call is not None:
+                return smoothstep_call
+
         if func_name in {"dot", "cross", "length", "normalize"}:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
@@ -2224,6 +2960,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
             if geometric_call is not None:
                 return geometric_call
+
+        vector_math_call = self.generate_vector_scalar_math_call(
+            func_name,
+            raw_args,
+            args,
+        )
+        if vector_math_call is not None:
+            return vector_math_call
 
         vector_info = self.vector_type_info(func_name)
         if vector_info:
@@ -3892,6 +4636,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "object_expr",
                 getattr(raw_arg, "object", None),
             )
+            role = self.cuda_compute_builtin_role_for_name(
+                getattr(object_node, "name", None)
+            )
+            if role is not None:
+                lanes = [
+                    self.cuda_compute_builtin_expression(role, component)
+                    for component in swizzle_components
+                ]
+                if all(lane is not None for lane in lanes):
+                    return lanes
             object_expr = self.visit(object_node)
             return [f"{object_expr}.{component}" for component in swizzle_components]
 
@@ -3996,7 +4750,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
             if scalar_bool_mix is not None:
                 return scalar_bool_mix
-            return None
+            scalar_mix_call = self.generate_scalar_mix_single_eval_call(
+                raw_args,
+                args,
+            )
+            if scalar_mix_call is not None:
+                return scalar_mix_call
+            return self.format_mix_component(args[0], args[1], args[2])
 
         if left_info is None or right_info is None:
             return None
@@ -4202,10 +4962,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             diagnostic = self.structured_buffer_element_read_diagnostic(node, "load")
             if diagnostic is not None:
                 return diagnostic
-        if hasattr(node, "object_expr"):
-            obj = self.visit(node.object_expr)
-        else:
-            obj = self.visit(node.object)
+        object_node = getattr(node, "object_expr", getattr(node, "object", None))
+        raw_object_name = getattr(object_node, "name", None)
+        if raw_object_name is not None:
+            alias_component = self.cuda_stage_builtin_alias_expression(
+                raw_object_name, node.member
+            )
+            if alias_component is not None:
+                return alias_component
+            direct_builtin = self.cuda_compute_builtin_expression(
+                self.cuda_compute_builtin_role_for_name(raw_object_name), node.member
+            )
+            if direct_builtin is not None:
+                return direct_builtin
+            raw_member_access = f"{raw_object_name}.{node.member}"
+            if raw_member_access in self.builtin_map:
+                return self.builtin_map[raw_member_access]
+
+        obj = self.visit(object_node)
         member_access = f"{obj}.{node.member}"
         if member_access in self.builtin_map:
             return self.builtin_map[member_access]
@@ -4484,6 +5258,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def visit_ReturnNode(self, node):
         """Visit return statement"""
+        if self.current_function_is_kernel_entry:
+            if node.value and not isinstance(node.value, MatchNode):
+                self.visit(node.value)
+            self.emit("return;")
+            return
         if node.value:
             if isinstance(node.value, MatchNode):
                 return self.emit_match_expression_return(node.value)
@@ -4649,11 +5428,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "dmat4x4": "double4x4",
             # Texture/resource types
             "sampler": "cudaTextureObject_t",
-            "sampler1D": "texture<float4, 1>",
+            "sampler1D": "cudaTextureObject_t",
             "sampler1DArray": "cudaTextureObject_t",
-            "sampler2D": "texture<float4, 2>",
-            "sampler3D": "texture<float4, 3>",
-            "samplerCube": "textureCube<float4>",
+            "sampler2D": "cudaTextureObject_t",
+            "sampler3D": "cudaTextureObject_t",
+            "samplerCube": "cudaTextureObject_t",
             "sampler2DArray": "cudaTextureObject_t",
             "sampler2DShadow": "cudaTextureObject_t",
             "sampler2DArrayShadow": "cudaTextureObject_t",
@@ -5191,7 +5970,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Expand user calls with CUDA sidecar resource arguments."""
         callee = self.query_functions_by_name.get(func_name)
         if callee is None:
-            return args
+            return args + self.cuda_captured_function_call_args(func_name)
 
         params = getattr(callee, "parameters", getattr(callee, "params", []))
         query_params = self.query_metadata_function_params.get(func_name, set())
@@ -5226,7 +6005,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 counter_arg = self.structured_buffer_counter_expression(raw_args[index])
                 if counter_arg:
                     expanded_args.append(counter_arg)
+        expanded_args.extend(self.cuda_captured_function_call_args(func_name))
         return expanded_args
+
+    def cuda_captured_function_call_args(self, func_name):
+        return [
+            self.visit(IdentifierNode(param.name))
+            for param in self.cuda_function_capture_params.get(func_name, [])
+        ]
 
     def unavailable_query_metadata_argument(self, param_name, param_type):
         """Return a deterministic zero metadata sidecar for untraceable resources."""
@@ -5322,6 +6108,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def expression_result_type(self, node):
         """Infer expression result types with CUDA structured-buffer operations."""
+        if isinstance(node, (IdentifierNode, VariableNode)):
+            builtin_type = self.cuda_compute_builtin_type(getattr(node, "name", None))
+            if builtin_type is not None:
+                return builtin_type
         if isinstance(node, WaveOpNode):
             return self.wave_result_type(
                 getattr(node, "operation", ""), getattr(node, "arguments", []) or []
@@ -5338,6 +6128,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return "float"
             return "uint"
         if isinstance(node, MemberAccessNode):
+            object_node = getattr(
+                node,
+                "object_expr",
+                getattr(node, "object", None),
+            )
+            builtin_member_type = self.cuda_compute_builtin_member_type(
+                getattr(object_node, "name", None),
+                getattr(node, "member", ""),
+            )
+            if builtin_member_type is not None:
+                return builtin_member_type
             member_type = self.member_access_member_type(node)
             if member_type is not None:
                 return member_type
@@ -9212,11 +10013,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if texture_type == "sampler1D" and len(components) >= 1:
             coord_args = f"{texture_name}, {components[0]}"
             if func_name == "texture":
-                return f"tex1D({coord_args})"
+                return f"tex1D<float4>({coord_args})"
             if func_name == "textureLod" and lod is not None:
-                return f"tex1DLod({coord_args}, {lod})"
+                return f"tex1DLod<float4>({coord_args}, {lod})"
             if func_name == "textureGrad" and grad_x is not None:
-                return f"tex1DGrad({coord_args}, {grad_x}, {grad_y})"
+                return f"tex1DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
 
         if texture_type == "sampler1DArray" and len(components) >= 2:
             coord_args = f"{texture_name}, {components[0]}, {components[1]}"
@@ -9230,11 +10031,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if texture_type == "sampler2D" and len(components) >= 2:
             coord_args = f"{texture_name}, {components[0]}, {components[1]}"
             if func_name == "texture":
-                return f"tex2D({coord_args})"
+                return f"tex2D<float4>({coord_args})"
             if func_name == "textureLod" and lod is not None:
-                return f"tex2DLod({coord_args}, {lod})"
+                return f"tex2DLod<float4>({coord_args}, {lod})"
             if func_name == "textureGrad" and grad_x is not None:
-                return f"tex2DGrad({coord_args}, {grad_x}, {grad_y})"
+                return f"tex2DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
 
         if texture_type == "sampler2DArray" and len(components) >= 3:
             coord_args = (
@@ -9252,22 +10053,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 f"{texture_name}, {components[0]}, {components[1]}, {components[2]}"
             )
             if func_name == "texture":
-                return f"tex3D({coord_args})"
+                return f"tex3D<float4>({coord_args})"
             if func_name == "textureLod" and lod is not None:
-                return f"tex3DLod({coord_args}, {lod})"
+                return f"tex3DLod<float4>({coord_args}, {lod})"
             if func_name == "textureGrad" and grad_x is not None:
-                return f"tex3DGrad({coord_args}, {grad_x}, {grad_y})"
+                return f"tex3DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
 
         if texture_type == "samplerCube" and len(components) >= 3:
             coord_args = (
                 f"{texture_name}, {components[0]}, {components[1]}, {components[2]}"
             )
             if func_name == "texture":
-                return f"texCubemap({coord_args})"
+                return f"texCubemap<float4>({coord_args})"
             if func_name == "textureLod" and lod is not None:
-                return f"texCubemapLod({coord_args}, {lod})"
+                return f"texCubemapLod<float4>({coord_args}, {lod})"
             if func_name == "textureGrad" and grad_x is not None:
-                return f"texCubemapGrad({coord_args}, {grad_x}, {grad_y})"
+                return f"texCubemapGrad<float4>({coord_args}, {grad_x}, {grad_y})"
 
         if texture_type == "samplerCubeArray" and len(components) >= 4:
             coord_args = (
@@ -9291,21 +10092,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     ):
         """Return a CUDA texel-fetch expression from precomputed components."""
         if texture_type == "sampler1D" and len(components) >= 1:
-            return f"tex1Dfetch({texture_name}, {components[0]})"
+            return f"tex1Dfetch<float4>({texture_name}, {components[0]})"
         if texture_type == "sampler1DArray" and len(components) >= 2:
             return (
                 f"tex1DLayered<float4>"
                 f"({texture_name}, {components[0]}, {components[1]})"
             )
         if texture_type == "sampler2D" and len(components) >= 2:
-            return f"tex2D({texture_name}, {components[0]}, {components[1]})"
+            return f"tex2D<float4>({texture_name}, {components[0]}, {components[1]})"
         if texture_type == "sampler2DArray" and len(components) >= 3:
             return (
                 f"tex2DLayered<float4>"
                 f"({texture_name}, {components[0]}, {components[1]}, {components[2]})"
             )
         if texture_type == "sampler3D" and len(components) >= 3:
-            return f"tex3D({texture_name}, {components[0]}, {components[1]}, {components[2]})"
+            return (
+                f"tex3D<float4>"
+                f"({texture_name}, {components[0]}, {components[1]}, {components[2]})"
+            )
         return None
 
     def generate_texture_offset_call(self, func_name, raw_args, args):
@@ -10040,11 +10844,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             lod_index = coord_index + 1
             if texture_type == "sampler1D":
                 if func_name == "texture":
-                    return f"tex1D({texture_name}, {coord})"
+                    return f"tex1D<float4>({texture_name}, {coord})"
                 if func_name == "textureLod" and len(args) > lod_index:
-                    return f"tex1DLod({texture_name}, {coord}, {args[lod_index]})"
+                    return (
+                        f"tex1DLod<float4>"
+                        f"({texture_name}, {coord}, {args[lod_index]})"
+                    )
                 if func_name == "textureGrad" and grad_x is not None:
-                    return f"tex1DGrad({texture_name}, {coord}, {grad_x}, {grad_y})"
+                    return (
+                        f"tex1DGrad<float4>"
+                        f"({texture_name}, {coord}, {grad_x}, {grad_y})"
+                    )
 
             if texture_type == "sampler1DArray":
                 coord_args = (
@@ -10069,11 +10879,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     f"{self.coord_component(coord, 'y')}"
                 )
                 if func_name == "texture":
-                    return f"tex2D({coord_args})"
+                    return f"tex2D<float4>({coord_args})"
                 if func_name == "textureLod" and len(args) > lod_index:
-                    return f"tex2DLod({coord_args}, {args[lod_index]})"
+                    return f"tex2DLod<float4>({coord_args}, {args[lod_index]})"
                 if func_name == "textureGrad" and grad_x is not None:
-                    return f"tex2DGrad({coord_args}, {grad_x}, {grad_y})"
+                    return f"tex2DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
 
             if texture_type == "sampler2DArray":
                 coord_args = (
@@ -10100,11 +10910,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     f"{self.coord_component(coord, 'z')}"
                 )
                 if func_name == "texture":
-                    return f"tex3D({coord_args})"
+                    return f"tex3D<float4>({coord_args})"
                 if func_name == "textureLod" and len(args) > lod_index:
-                    return f"tex3DLod({coord_args}, {args[lod_index]})"
+                    return f"tex3DLod<float4>({coord_args}, {args[lod_index]})"
                 if func_name == "textureGrad" and grad_x is not None:
-                    return f"tex3DGrad({coord_args}, {grad_x}, {grad_y})"
+                    return f"tex3DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
 
             if texture_type == "samplerCube":
                 coord_args = (
@@ -10114,11 +10924,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     f"{self.coord_component(coord, 'z')}"
                 )
                 if func_name == "texture":
-                    return f"texCubemap({coord_args})"
+                    return f"texCubemap<float4>({coord_args})"
                 if func_name == "textureLod" and len(args) > lod_index:
-                    return f"texCubemapLod({coord_args}, {args[lod_index]})"
+                    return f"texCubemapLod<float4>({coord_args}, {args[lod_index]})"
                 if func_name == "textureGrad" and grad_x is not None:
-                    return f"texCubemapGrad({coord_args}, {grad_x}, {grad_y})"
+                    return f"texCubemapGrad<float4>({coord_args}, {grad_x}, {grad_y})"
 
             if texture_type == "samplerCubeArray":
                 coord_args = (

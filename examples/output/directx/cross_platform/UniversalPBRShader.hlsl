@@ -1,4 +1,10 @@
 
+#define RWTextureCube RWTexture2DArray
+static const float PI = 3.14159265359;
+static const float EPSILON = 0.0001;
+static const int MAX_LIGHTS = 32;
+static const int MAX_SHADOW_CASCADES = 4;
+
 struct MaterialProperties
 {
     float3 albedo;
@@ -26,13 +32,10 @@ struct LightData
     float outer_cone_angle;
     int type;
     bool cast_shadows;
-    MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 4, cols = 4) light_view_proj;
+    float4x4 light_view_proj;
 };
 struct EnvironmentData
 {
-    TextureCube irradiance_map;
-    TextureCube prefilter_map;
-    Texture2D brdf_lut;
     float max_reflection_lod;
     float exposure;
     float3 ambient_color;
@@ -43,9 +46,9 @@ struct CameraData
     float3 forward;
     float3 up;
     float3 right;
-    MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 4, cols = 4) view_matrix;
-    MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 4, cols = 4) projection_matrix;
-    MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 4, cols = 4) view_projection_matrix;
+    float4x4 view_matrix;
+    float4x4 projection_matrix;
+    float4x4 view_projection_matrix;
     float near_plane;
     float far_plane;
     float fov;
@@ -64,64 +67,107 @@ struct RenderSettings
     int max_lights;
     float lod_bias;
 };
+struct VertexInput
+{
+    float3 position : POSITION;
+    float3 normal : TEXCOORD0;
+    float3 tangent : TEXCOORD1;
+    float2 uv : TEXCOORD2;
+    float4 color : TEXCOORD3;
+};
 struct VertexOutput
 {
-    float4 clip_position;
-    float3 world_position;
-    float3 world_normal;
-    float3 world_tangent;
-    float3 world_bitangent;
-    float2 uv;
-    float4 color;
-    MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 3, cols = 3) tbn_matrix;
-    float4 shadow_coords[MAX_SHADOW_CASCADES];
+    float4 clip_position : SV_Position;
+    float3 world_position : TEXCOORD0;
+    float3 world_normal : TEXCOORD1;
+    float3 world_tangent : TEXCOORD2;
+    float3 world_bitangent : TEXCOORD3;
+    float2 uv : TEXCOORD4;
+    float4 color : TEXCOORD5;
+    float3x3 tbn_matrix : TEXCOORD6;
+    float4 shadow_coords[MAX_SHADOW_CASCADES] : TEXCOORD7;
 };
-MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 4, cols = 4) model_matrix;
-MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 4, cols = 4) view_matrix;
-MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 4, cols = 4) projection_matrix;
-MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 3, cols = 3) normal_matrix;
+struct FragmentInput
+{
+    float3 world_position : TEXCOORD0;
+    float3 world_normal : TEXCOORD1;
+    float3 world_tangent : TEXCOORD2;
+    float3 world_bitangent : TEXCOORD3;
+    float2 uv : TEXCOORD4;
+    float4 color : TEXCOORD5;
+    float3x3 tbn_matrix : TEXCOORD6;
+    float4 shadow_coords[MAX_SHADOW_CASCADES] : TEXCOORD7;
+};
+float4x4 model_matrix;
+float4x4 view_matrix;
+float4x4 projection_matrix;
+float3x3 normal_matrix;
 CameraData camera;
 RenderSettings settings;
-MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 4,
-           cols = 4) shadow_matrices[MAX_SHADOW_CASCADES];
-sampler2D albedo_map;
-sampler2D normal_map;
-sampler2D metallic_roughness_map;
-sampler2D ao_map;
-sampler2D emission_map;
-sampler2D height_map;
-sampler2D shadow_maps[MAX_SHADOW_CASCADES];
+float4x4 shadow_matrices[MAX_SHADOW_CASCADES];
+Texture2D albedo_map : register(t0);
+SamplerState albedo_mapSampler : register(s0);
+Texture2D normal_map : register(t1);
+SamplerState normal_mapSampler : register(s1);
+Texture2D metallic_roughness_map : register(t2);
+SamplerState metallic_roughness_mapSampler : register(s2);
+Texture2D ao_map : register(t3);
+SamplerState ao_mapSampler : register(s3);
+Texture2D emission_map : register(t4);
+SamplerState emission_mapSampler : register(s4);
+Texture2D height_map : register(t5);
+SamplerState height_mapSampler : register(s5);
+Texture2D shadow_maps[MAX_SHADOW_CASCADES] : register(t6);
+SamplerState shadow_mapsSampler : register(s6);
 MaterialProperties material;
 EnvironmentData environment;
-CameraData camera;
-RenderSettings settings;
 LightData lights[MAX_LIGHTS];
 int active_light_count;
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3)
-    getNormalFromMap(Texture2D normal_map,
-                     VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 2) uv,
-                     MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 3, cols = 3) tbn,
-                     float scale)
+TextureCube environment_map : register(t10);
+SamplerState environment_mapSampler : register(s7);
+RWTextureCube<float4> irradiance_map : register(u0);
+int face_index;
+int mip_level;
+SamplerState EnvironmentData_irradiance_mapSampler : register(s8);
+SamplerState brdf_lutSampler : register(s9);
+SamplerState prefilter_mapSampler : register(s10);
+Texture2D brdf_lut : register(t11);
+TextureCube EnvironmentData_irradiance_map : register(t12);
+TextureCube prefilter_map : register(t13);
+int2 imageSize(RWTextureCube<float4> image)
 {
-    float3 tangent_normal = ((texture(normal_map, uv).xyz * 2.0) - 1.0);
-    tangent_normal.xy *= scale;
-    return normalize((tbn * tangent_normal));
+    uint width;
+    uint height;
+    uint elements;
+    image.GetDimensions(width, height, elements);
+    return int2(width, height);
 }
 
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 2)
-    parallaxMapping(Texture2D height_map,
-                    VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 2) uv,
-                    VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) view_dir,
-                    float height_scale)
+int2 textureSize(Texture2D tex, int lod)
 {
-    float height = texture(height_map, uv).r;
+    uint width;
+    uint height;
+    uint levels;
+    tex.GetDimensions(lod, width, height, levels);
+    return int2(width, height);
+}
+
+float3 getNormalFromMap(Texture2D normal_map, SamplerState normal_mapSampler, float2 uv, float3x3 tbn, float scale)
+{
+    float3 tangent_normal = ((normal_map.Sample(normal_mapSampler, uv).xyz * 2.0) - 1.0);
+    tangent_normal.xy *= scale;
+    return normalize(mul(tbn, tangent_normal));
+}
+
+float2 parallaxMapping(Texture2D height_map, SamplerState height_mapSampler, float2 uv, float3 view_dir,
+                       float height_scale)
+{
+    float height = height_map.Sample(height_mapSampler, uv).r;
     float2 p = ((view_dir.xy / view_dir.z) * (height * height_scale));
     return (uv - p);
 }
 
-float distributionGGX(VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) N,
-                      VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) H,
-                      float roughness)
+float distributionGGX(float3 N, float3 H, float roughness)
 {
     float a = (roughness * roughness);
     float a2 = (a * a);
@@ -142,10 +188,7 @@ float geometrySchlickGGX(float NdotV, float roughness)
     return (num / max(denom, EPSILON));
 }
 
-float geometrySmith(VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) N,
-                    VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) V,
-                    VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) L,
-                    float roughness)
+float geometrySmith(float3 N, float3 V, float3 L, float roughness)
 {
     float NdotV = max(dot(N, V), 0.0);
     float NdotL = max(dot(N, L), 0.0);
@@ -154,25 +197,18 @@ float geometrySmith(VectorType(element_type = PrimitiveType(name = float, size_b
     return (ggx1 * ggx2);
 }
 
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3)
-    fresnelSchlick(float cosTheta,
-                   VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) F0)
+float3 fresnelSchlick(float cosTheta, float3 F0)
 {
     return (F0 + ((1.0 - F0) * pow(max((1.0 - cosTheta), 0.0), 5.0)));
 }
 
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3)
-    fresnelSchlickRoughness(float cosTheta,
-                            VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) F0,
-                            float roughness)
+float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
 {
-    return (F0 + ((max(float3((1.0 - roughness)), F0) - F0) * pow(max((1.0 - cosTheta), 0.0), 5.0)));
+    return (F0 + ((max(float3((1.0 - roughness), (1.0 - roughness), (1.0 - roughness)), F0) - F0) *
+                  pow(max((1.0 - cosTheta), 0.0), 5.0)));
 }
 
-float calculateShadow(Texture2D shadow_map,
-                      VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 4)
-                          frag_pos_light_space,
-                      float bias)
+float calculateShadow(Texture2D shadow_map, SamplerState shadow_mapSampler, float4 frag_pos_light_space, float bias)
 {
     float3 proj_coords = (frag_pos_light_space.xyz / frag_pos_light_space.w);
     proj_coords = ((proj_coords * 0.5) + 0.5);
@@ -182,53 +218,44 @@ float calculateShadow(Texture2D shadow_map,
     }
     float shadow = 0.0;
     float2 texel_size = (1.0 / textureSize(shadow_map, 0));
-    for (x; (x <= 1); ++x)
+    for (int x = -1; (x <= 1); ++x)
     {
-        for (y; (y <= 1); ++y)
+        for (int y = -1; (y <= 1); ++y)
         {
-            float pcf_depth = texture(shadow_map, (proj_coords.xy + (float2(x, y) * texel_size))).r;
+            float pcf_depth = shadow_map.Sample(shadow_mapSampler, (proj_coords.xy + (float2(x, y) * texel_size))).r;
             shadow += (((proj_coords.z - bias) > pcf_depth) ? 1.0 : 0.0);
         }
     }
     return (shadow / 9.0);
 }
 
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3)
-    calculateIBL(VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) N,
-                 VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) V,
-                 VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) albedo,
-                 float metallic, float roughness, EnvironmentData env)
+float3 calculateIBL(float3 N, float3 V, float3 albedo, float metallic, float roughness, EnvironmentData env)
 {
-    float3 F0 = mix(float3(0.04), albedo, metallic);
+    float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
     float3 F = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
     float3 kS = F;
     float3 kD = (1.0 - kS);
     kD *= (1.0 - metallic);
-    float3 irradiance = texture(env.irradiance_map, N).rgb;
+    float3 irradiance = EnvironmentData_irradiance_map.Sample(EnvironmentData_irradiance_mapSampler, N).rgb;
     float3 diffuse = (irradiance * albedo);
     float3 R = reflect(-V, N);
-    float3 prefiltered_color = textureLod(env.prefilter_map, R, (roughness * env.max_reflection_lod)).rgb;
-    float2 brdf = texture(env.brdf_lut, float2(max(dot(N, V), 0.0), roughness)).rg;
+    float3 prefiltered_color =
+        prefilter_map.SampleLevel(prefilter_mapSampler, R, (roughness * env.max_reflection_lod)).rgb;
+    float2 brdf = brdf_lut.Sample(brdf_lutSampler, float2(max(dot(N, V), 0.0), roughness)).rg;
     float3 specular = (prefiltered_color * ((F * brdf.x) + brdf.y));
     return (((kD * diffuse) + specular) * env.exposure);
 }
 
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3)
-    calculateDirectLighting(VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) N,
-                            VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) V,
-                            VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) L,
-                            VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) albedo,
-                            float metallic, float roughness,
-                            VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3)
-                                light_color)
+float3 calculateDirectLighting(float3 N, float3 V, float3 L, float3 albedo, float metallic, float roughness,
+                               float3 light_color)
 {
     float3 H = normalize((V + L));
-    float3 F0 = mix(float3(0.04), albedo, metallic);
+    float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
     float NDF = distributionGGX(N, H, roughness);
     float G = geometrySmith(N, V, L, roughness);
     float3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
     float3 kS = F;
-    float3 kD = (float3(1.0) - kS);
+    float3 kD = (float3(1.0, 1.0, 1.0) - kS);
     kD *= (1.0 - metallic);
     float3 numerator = ((NDF * G) * F);
     float denominator = (((4.0 * max(dot(N, V), 0.0)) * max(dot(N, L), 0.0)) + EPSILON);
@@ -237,8 +264,7 @@ VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 
     return (((((kD * albedo) / PI) + specular) * light_color) * NdotL);
 }
 
-float calculateAttenuation(LightData light,
-                           VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) frag_pos)
+float calculateAttenuation(LightData light, float3 frag_pos)
 {
     if ((light.type == 0))
     {
@@ -262,14 +288,12 @@ float calculateAttenuation(LightData light,
     return 0.0;
 }
 
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3)
-    reinhardToneMapping(VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) color)
+float3 reinhardToneMapping(float3 color)
 {
-    return (color / (color + float3(1.0)));
+    return (color / (color + float3(1.0, 1.0, 1.0)));
 }
 
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3)
-    acesToneMapping(VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) color)
+float3 acesToneMapping(float3 color)
 {
     float a = 2.51;
     float b = 0.03;
@@ -279,76 +303,76 @@ VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 
     return clamp(((color * ((a * color) + b)) / ((color * ((c * color) + d)) + e)), 0.0, 1.0);
 }
 
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3)
-    gammaCorrection(VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) color,
-                    float gamma)
+float3 gammaCorrection(float3 color, float gamma)
 {
-    return pow(color, float3((1.0 / gamma)));
+    return pow(color, float3((1.0 / gamma), (1.0 / gamma), (1.0 / gamma)));
 }
 
-VertexOutput main(VertexInput input)
+// Vertex Shader
+VertexOutput VSMain(VertexInput input)
 {
     VertexOutput output;
-    float4 world_pos = (model_matrix * float4(input.position, 1.0));
+    float4 world_pos = mul(model_matrix, float4(input.position, 1.0));
     output.world_position = world_pos.xyz;
-    output.clip_position = (camera.view_projection_matrix * world_pos);
-    output.world_normal = normalize((normal_matrix * input.normal));
-    output.world_tangent = normalize((normal_matrix * input.tangent));
+    output.clip_position = mul(camera.view_projection_matrix, world_pos);
+    output.world_normal = normalize(mul(normal_matrix, input.normal));
+    output.world_tangent = normalize(mul(normal_matrix, input.tangent));
     output.world_bitangent = cross(output.world_normal, output.world_tangent);
-    output.tbn_matrix = mat3(output.world_tangent, output.world_bitangent, output.world_normal);
+    output.tbn_matrix = float3x3(output.world_tangent, output.world_bitangent, output.world_normal);
     output.uv = input.uv;
     output.color = input.color;
     if (settings.enable_shadows)
     {
-        for (i; ((i < settings.shadow_cascade_count) && (i < MAX_SHADOW_CASCADES)); ++i)
+        for (int i = 0; ((i < settings.shadow_cascade_count) && (i < MAX_SHADOW_CASCADES)); ++i)
         {
-            output.shadow_coords[i] = (shadow_matrices[i] * world_pos);
+            output.shadow_coords[i] = mul(shadow_matrices[i], world_pos);
         }
     }
     return output;
 }
 
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 4) main(FragmentInput input)
+// Fragment Shader
+float4 PSMain(FragmentInput input) : SV_TARGET
 {
     float2 uv = input.uv;
     if ((settings.enable_parallax_mapping && material.has_height_map))
     {
         float3 view_dir = normalize((camera.position - input.world_position));
-        float3 tangent_view_dir = (transpose(input.tbn_matrix) * view_dir);
-        uv = parallaxMapping(height_map, uv, tangent_view_dir, material.height_scale);
+        float3 tangent_view_dir = mul(transpose(input.tbn_matrix), view_dir);
+        uv = parallaxMapping(height_map, height_mapSampler, uv, tangent_view_dir, material.height_scale);
     }
     float3 albedo = material.albedo;
     if (material.has_albedo_map)
     {
-        albedo *= texture(albedo_map, uv).rgb;
+        albedo *= albedo_map.Sample(albedo_mapSampler, uv).rgb;
     }
     albedo *= input.color.rgb;
     float metallic = material.metallic;
     float roughness = material.roughness;
     if (material.has_metallic_roughness_map)
     {
-        float3 mr_sample = texture(metallic_roughness_map, uv).rgb;
+        float3 mr_sample = metallic_roughness_map.Sample(metallic_roughness_mapSampler, uv).rgb;
         metallic *= mr_sample.b;
         roughness *= mr_sample.g;
     }
     float ao = material.ao;
     if (material.has_ao_map)
     {
-        ao *= texture(ao_map, uv).r;
+        ao *= ao_map.Sample(ao_mapSampler, uv).r;
     }
     float3 emission = material.emission;
     if (material.has_emission_map)
     {
-        emission *= texture(emission_map, uv).rgb;
+        emission *= emission_map.Sample(emission_mapSampler, uv).rgb;
     }
     float3 N = normalize(input.world_normal);
     if ((settings.enable_normal_mapping && material.has_normal_map))
     {
-        N = getNormalFromMap(normal_map, uv, input.tbn_matrix, material.normal_scale);
+        N = getNormalFromMap(normal_map, normal_mapSampler, uv, input.tbn_matrix, material.normal_scale);
     }
     float3 V = normalize((camera.position - input.world_position));
-    float3 Lo = float3(0.0);
-    for (i; ((i < active_light_count) && (i < MAX_LIGHTS)); ++i)
+    float3 Lo = float3(0.0, 0.0, 0.0);
+    for (int i = 0; ((i < active_light_count) && (i < MAX_LIGHTS)); ++i)
     {
         LightData light = lights[i];
         float3 L;
@@ -365,11 +389,11 @@ VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 
         float shadow = 0.0;
         if (((settings.enable_shadows && light.cast_shadows) && (i < settings.shadow_cascade_count)))
         {
-            shadow = calculateShadow(shadow_maps[i], input.shadow_coords[i], settings.shadow_bias);
+            shadow = calculateShadow(shadow_maps[i], shadow_mapsSampler, input.shadow_coords[i], settings.shadow_bias);
         }
         Lo += (calculateDirectLighting(N, V, L, albedo, metallic, roughness, radiance) * (1.0 - shadow));
     }
-    float3 ambient = float3(0.0);
+    float3 ambient = float3(0.0, 0.0, 0.0);
     if (settings.enable_ibl)
     {
         ambient = calculateIBL(N, V, albedo, metallic, roughness, environment);
@@ -390,23 +414,42 @@ VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 
     return float4(color, input.color.a);
 }
 
-// Vertex Shader
-// Vertex Shader
-void VSMain()
+float3 getSamplingVector(float2 uv, int face)
 {
-}
-
-// Fragment Shader
-// Fragment Shader
-void PSMain()
-{
+    float3 result;
+    switch (face)
+    {
+    case 0: {
+        result = float3(1.0, -uv.y, -uv.x);
+        break;
+    }
+    case 1: {
+        result = float3(-1.0, -uv.y, uv.x);
+        break;
+    }
+    case 2: {
+        result = float3(uv.x, 1.0, uv.y);
+        break;
+    }
+    case 3: {
+        result = float3(uv.x, -1.0, -uv.y);
+        break;
+    }
+    case 4: {
+        result = float3(uv.x, -uv.y, 1.0);
+        break;
+    }
+    case 5: {
+        result = float3(-uv.x, -uv.y, -1.0);
+        break;
+    }
+    }
+    return normalize(result);
 }
 
 // Compute Shader
-// Compute Shader
-void CSMain()
-{
-    int2 coord = ivec2(gl_GlobalInvocationID.xy);
+[numthreads(8, 8, 1)] void CSMain(uint3 gl_GlobalInvocationID : SV_DispatchThreadID) {
+    int2 coord = int2(gl_GlobalInvocationID.xy);
     int2 size = imageSize(irradiance_map);
     if (((coord.x >= size.x) || (coord.y >= size.y)))
     {
@@ -415,29 +458,21 @@ void CSMain()
     float2 uv = ((float2(coord) + 0.5) / float2(size));
     uv = ((uv * 2.0) - 1.0);
     float3 N = getSamplingVector(uv, face_index);
-    float3 irradiance = float3(0.0);
+    float3 irradiance = float3(0.0, 0.0, 0.0);
     float sample_count = 0.0;
-    for (phi; (phi < (2.0 * PI)); phi += 0.025)
+    for (float phi = 0.0; (phi < (2.0 * PI)); phi += 0.025)
     {
-        for (theta; (theta < (0.5 * PI)); theta += 0.025)
+        for (float theta = 0.0; (theta < (0.5 * PI)); theta += 0.025)
         {
             float3 tangent_sample = float3((sin(theta) * cos(phi)), (sin(theta) * sin(phi)), cos(theta));
             float3 up = ((abs(N.z) < 0.999) ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0));
             float3 right = normalize(cross(up, N));
             up = normalize(cross(N, right));
             float3 sample_vec = (((tangent_sample.x * right) + (tangent_sample.y * up)) + (tangent_sample.z * N));
-            irradiance += ((texture(environment_map, sample_vec).rgb * cos(theta)) * sin(theta));
+            irradiance += ((environment_map.Sample(environment_mapSampler, sample_vec).rgb * cos(theta)) * sin(theta));
             ++sample_count;
         }
     }
     irradiance = ((PI * irradiance) / sample_count);
-    imageStore(irradiance_map, ivec3(coord, face_index), float4(irradiance, 1.0));
-}
-
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3)
-    getSamplingVector(VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 2) uv, int face)
-{
-    float3 result;
-    SwitchNode(cases = 6);
-    return normalize(result);
+    irradiance_map[int3(coord, face_index)] = float4(irradiance, 1.0);
 }

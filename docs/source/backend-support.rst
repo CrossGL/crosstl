@@ -30,7 +30,7 @@ Built-in targets
    * - Vulkan SPIR-V
      - ``vulkan``
      - ``spirv``, ``spv``
-     - ``.spirv``
+     - ``.spvasm``
    * - CUDA
      - ``cuda``
      - ``cu``
@@ -80,7 +80,7 @@ Built-in sources
      - Yes
    * - Vulkan SPIR-V
      - ``vulkan``
-     - ``.spv``, ``.spirv``
+     - ``.spvasm``
      - Yes
    * - CUDA
      - ``cuda``

@@ -1396,13 +1396,13 @@ def test_codegen_mixed_ssbo_directx_metal_fixed_vec3_snapshot():
 
     // Compute Shader
     kernel void kernel_main(device uchar* snapshotBlock [[buffer(60)]]) {
-        uint i = (*reinterpret_cast<const device uint*>(snapshotBlock + 0));
+        __attribute__((unused)) uint i = (*reinterpret_cast<const device uint*>(snapshotBlock + 0));
         float3 axis = float3((*reinterpret_cast<const device float*>(snapshotBlock + 32)), (*reinterpret_cast<const device float*>(snapshotBlock + 36)), (*reinterpret_cast<const device float*>(snapshotBlock + 40)));
         float3 __crossgl_buffer_store_0 = axis;
         (*reinterpret_cast<device float*>(snapshotBlock + 16)) = __crossgl_buffer_store_0.x;
         (*reinterpret_cast<device float*>(snapshotBlock + 20)) = __crossgl_buffer_store_0.y;
         (*reinterpret_cast<device float*>(snapshotBlock + 24)) = __crossgl_buffer_store_0.z;
-        float tail = (*reinterpret_cast<const device float*>(snapshotBlock + 48));
+        __attribute__((unused)) float tail = (*reinterpret_cast<const device float*>(snapshotBlock + 48));
     }
     """
     expected_glsl = """
@@ -1466,8 +1466,8 @@ def test_codegen_mixed_ssbo_directx_metal_readonly_mat2_snapshot():
 
     // Compute Shader
     kernel void kernel_main(const device uchar* snapshotMatrixBlock [[buffer(61)]]) {
-        float2x2 transform = float2x2(float2((*reinterpret_cast<const device float*>(snapshotMatrixBlock + 0)), (*reinterpret_cast<const device float*>(snapshotMatrixBlock + 4))), float2((*reinterpret_cast<const device float*>(snapshotMatrixBlock + 8)), (*reinterpret_cast<const device float*>(snapshotMatrixBlock + 12))));
-        float tail = (*reinterpret_cast<const device float*>(snapshotMatrixBlock + 16));
+        __attribute__((unused)) float2x2 transform = float2x2(float2((*reinterpret_cast<const device float*>(snapshotMatrixBlock + 0)), (*reinterpret_cast<const device float*>(snapshotMatrixBlock + 4))), float2((*reinterpret_cast<const device float*>(snapshotMatrixBlock + 8)), (*reinterpret_cast<const device float*>(snapshotMatrixBlock + 12))));
+        __attribute__((unused)) float tail = (*reinterpret_cast<const device float*>(snapshotMatrixBlock + 16));
     }
     """
     expected_glsl = """
@@ -2651,8 +2651,8 @@ def test_codegen_mixed_ssbo_readonly_block_arrays_lower_const_readers():
 
     // Compute Shader
     kernel void kernel_main(array<const device uchar*, 2> readMixedBlocks [[buffer(73)]]) {
-        float2x2 t = float2x2(float2((*reinterpret_cast<const device float*>(readMixedBlocks[1] + 0)), (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 4))), float2((*reinterpret_cast<const device float*>(readMixedBlocks[1] + 8)), (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 12))));
-        float value = (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 16));
+        __attribute__((unused)) float2x2 t = float2x2(float2((*reinterpret_cast<const device float*>(readMixedBlocks[1] + 0)), (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 4))), float2((*reinterpret_cast<const device float*>(readMixedBlocks[1] + 8)), (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 12))));
+        __attribute__((unused)) float value = (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 16));
     }
     """
     expected_glsl = """
@@ -2716,7 +2716,7 @@ def test_codegen_mixed_ssbo_unsized_block_arrays_infer_literal_size():
     // Compute Shader
     kernel void kernel_main(array<device uchar*, 3> unsizedMixed [[buffer(74)]]) {
         uint i = (*reinterpret_cast<const device uint*>(unsizedMixed[2] + 0));
-        float4 value = float4((*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 4))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 8))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 12))));
+        __attribute__((unused)) float4 value = float4((*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 4))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 8))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 12))));
     }
     """
     expected_glsl = """
@@ -3839,15 +3839,15 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
     )
     assert (
         "float4 viaVectorAdd = float4(0) /* unsupported Metal GLSL buffer block "
-        "access block: no target-side fallback declaration emitted */ + 0 "
+        "access block: no target-side fallback declaration emitted */ + float4(0 "
         "/* unsupported Metal GLSL buffer block access scalarBlock: no target-side "
-        "fallback declaration emitted */;" in metal
+        "fallback declaration emitted */);" in metal
     )
     assert (
         "float4 viaFunctionAdd = float4(0) /* unsupported Metal GLSL buffer block "
-        "function call readParam: target function omitted */ + 0 "
+        "function call readParam: target function omitted */ + float4(0 "
         "/* unsupported Metal GLSL buffer block access scalarBlock: no target-side "
-        "fallback declaration emitted */;" in metal
+        "fallback declaration emitted */);" in metal
     )
     assert (
         "float viaScalarAdd = 0 /* unsupported Metal GLSL buffer block access "
@@ -8084,7 +8084,7 @@ def test_codegen_nested_block_shadowed_value_type_does_not_leak_to_image_store()
     assert (
         "    float value = 0.5;\n"
         "    {\n"
-        "        float2 value = float2(1.0, 2.0);\n"
+        "        __attribute__((unused)) float2 value = float2(1.0, 2.0);\n"
         "    }\n"
         "    scalarImage.write(float4(value), uint2(int2(0, 0)));" in metal
     )
@@ -8159,10 +8159,13 @@ def test_codegen_control_flow_shadowed_value_types_do_not_leak_to_image_store():
         assert (
             "texture2d<float, access::read_write> scalarImage [[texture(0)]]" in metal
         )
-        assert (
-            hlsl_body.replace("(i < 1)", "i < 1").replace("i = (i + 1)", "i = i + 1")
-            in metal
+        metal_body = hlsl_body.replace(
+            "float2 value =", "__attribute__((unused)) float2 value ="
         )
+        metal_body = metal_body.replace("(i < 1)", "i < 1").replace(
+            "i = (i + 1)", "i = i + 1"
+        )
+        assert metal_body in metal
         assert "scalarImage.write(float4(value), uint2(int2(0, 0)));" in metal
 
         assert "layout(r32f, binding = 0) uniform image2D scalarImage;" in glsl
@@ -16412,18 +16415,18 @@ def test_codegen_mixed_ssbo_unsupported_query_and_atomic_args_infer_types():
         "GLSL buffer block function call readLod: target function omitted */);" in hlsl
     )
     assert (
-        "float2 lodDirect = float2(layerMap.CalculateLevelOfDetailUnclamped"
+        "float2 lodDirect = float2(layerMap.CalculateLevelOfDetail"
         "(linearSampler, (float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "access queryBlock: no target-side fallback declaration emitted */).xy), "
-        "layerMap.CalculateLevelOfDetail(linearSampler, (float3(0.0, 0.0, 0.0) "
+        "layerMap.CalculateLevelOfDetailUnclamped(linearSampler, (float3(0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access queryBlock: no target-side "
         "fallback declaration emitted */).xy));" in hlsl
     )
     assert (
-        "float2 lodCall = float2(cubeArray.CalculateLevelOfDetailUnclamped"
+        "float2 lodCall = float2(cubeArray.CalculateLevelOfDetail"
         "(linearSampler, (float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "function call readCubeLayer: target function omitted */).xyz), "
-        "cubeArray.CalculateLevelOfDetail(linearSampler, (float4(0.0, 0.0, 0.0, 0.0) "
+        "cubeArray.CalculateLevelOfDetailUnclamped(linearSampler, (float4(0.0, 0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readCubeLayer: "
         "target function omitted */).xyz));" in hlsl
     )
@@ -16478,18 +16481,18 @@ def test_codegen_mixed_ssbo_unsupported_query_and_atomic_args_infer_types():
         in metal
     )
     assert (
-        "float2 lodDirect = float2(layerMap.calculate_unclamped_lod"
+        "float2 lodDirect = float2(layerMap.calculate_clamped_lod"
         "(linearSampler, (float3(0) /* unsupported Metal GLSL buffer block "
         "access queryBlock: no target-side fallback declaration emitted */).xy), "
-        "layerMap.calculate_clamped_lod(linearSampler, (float3(0) "
+        "layerMap.calculate_unclamped_lod(linearSampler, (float3(0) "
         "/* unsupported Metal GLSL buffer block access queryBlock: no target-side "
         "fallback declaration emitted */).xy));" in metal
     )
     assert (
-        "float2 lodCall = float2(cubeArray.calculate_unclamped_lod"
+        "float2 lodCall = float2(cubeArray.calculate_clamped_lod"
         "(linearSampler, (float4(0) /* unsupported Metal GLSL buffer block "
         "function call readCubeLayer: target function omitted */).xyz), "
-        "cubeArray.calculate_clamped_lod(linearSampler, (float4(0) "
+        "cubeArray.calculate_unclamped_lod(linearSampler, (float4(0) "
         "/* unsupported Metal GLSL buffer block function call readCubeLayer: "
         "target function omitted */).xyz));" in metal
     )

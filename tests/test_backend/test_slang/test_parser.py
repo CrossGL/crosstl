@@ -2,7 +2,7 @@ from typing import List
 
 import pytest
 
-from crosstl.backend.slang import SlangLexer, SlangParser
+from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 from crosstl.backend.slang.SlangAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -65,6 +65,15 @@ def test_struct_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_compound_import_parsing():
+    code = "import MyApp.Shadowing;\n"
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert [node.module_name for node in ast.imports] == ["MyApp.Shadowing"]
 
 
 def test_struct_array_member_declarator_parsing():
@@ -675,6 +684,29 @@ def test_top_level_attribute_list_before_shader_function_parsing():
         pytest.fail("Top-level attribute-list parsing not implemented.")
 
 
+def test_extended_shader_stage_attribute_parsing():
+    code = """
+    [shader("geometry")]
+    void gs_main() {
+        return;
+    }
+
+    [shader("raygeneration")]
+    void ray_main() {
+        return;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert find_function(ast, "gs_main").qualifier == "geometry"
+    assert find_function(ast, "ray_main").qualifier == "raygeneration"
+    generated = SlangCrossGLCodeGen.SlangToCrossGLConverter().generate(ast)
+    assert "geometry {" in generated
+    assert "ray_generation {" in generated
+
+
 def test_attribute_list_after_shader_function_parsing():
     code = """
     [shader("compute")]
@@ -699,6 +731,24 @@ def test_attribute_list_after_shader_function_parsing():
         assert function.body[0].value is None
     except SyntaxError:
         pytest.fail("Post-shader attribute-list parsing not implemented.")
+
+
+def test_modern_slang_shader_and_numthreads_attribute_parsing():
+    code = """
+    [[shader("compute")]]
+    [numThreads(4, 2, 1)]
+    void main(uint3 tid : SV_DispatchThreadID) {
+        return;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "main")
+
+    assert function.qualifier == "compute"
+    assert function.numthreads == ("4", "2", "1")
+    assert function.attributes == [{"name": "numThreads", "arguments": ["4", "2", "1"]}]
 
 
 def test_generic_resource_global_parsing():

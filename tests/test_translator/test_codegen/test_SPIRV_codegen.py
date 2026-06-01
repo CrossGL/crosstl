@@ -201,7 +201,7 @@ def assert_spirv_function_variables_are_first_block_declarations(spv_code):
             function_start = None
 
 
-def assert_spirv_module_validates(spv_code, tmp_path):
+def assert_spirv_module_validates(spv_code, tmp_path, target_env=None):
     spirv_as = shutil.which("spirv-as")
     spirv_val = shutil.which("spirv-val")
     if not spirv_as or not spirv_val:
@@ -210,9 +210,10 @@ def assert_spirv_module_validates(spv_code, tmp_path):
     asm_path = tmp_path / "shader.spvasm"
     spv_path = tmp_path / "shader.spv"
     asm_path.write_text(spv_code)
+    target_args = ["--target-env", target_env] if target_env else []
 
     assemble = subprocess.run(
-        [spirv_as, str(asm_path), "-o", str(spv_path)],
+        [spirv_as, *target_args, str(asm_path), "-o", str(spv_path)],
         capture_output=True,
         text=True,
         check=False,
@@ -220,7 +221,7 @@ def assert_spirv_module_validates(spv_code, tmp_path):
     assert assemble.returncode == 0, assemble.stderr
 
     validate = subprocess.run(
-        [spirv_val, str(spv_path)],
+        [spirv_val, *target_args, str(spv_path)],
         capture_output=True,
         text=True,
         check=False,
@@ -975,6 +976,62 @@ class TestVulkanSPIRVCodeGen:
         assert "OpMatrixTimesMatrix" in spv_code
         assert "OpMatrixTimesVector" in spv_code
         assert "OpVectorTimesMatrix" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_storage_buffer_bool_members_use_uint_layout_type(self, tmp_path):
+        source_code = """
+        shader StorageBoolLayout {
+            struct Particle {
+                bool active;
+                int kind;
+            };
+
+            struct ParticleBuffer {
+                Particle particles[2];
+            };
+
+            compute {
+                buffer ParticleBuffer particle_buffer;
+
+                void main() {
+                    Particle particle = particle_buffer.particles[0];
+                    if (particle_buffer.particles[1].active) {
+                        particle.active = true;
+                    }
+                    particle_buffer.particles[0] = particle;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        bool_type = re.search(r"(%\d+) = OpTypeBool\b", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        storage_particle = re.search(r'OpName (%\d+) "Particle_std430_\d+"', spv_code)
+
+        assert bool_type is not None
+        assert uint_type is not None
+        assert storage_particle is not None
+        storage_struct = re.search(
+            rf"{re.escape(storage_particle.group(1))} = OpTypeStruct (?P<members>[^\n]+)",
+            spv_code,
+        )
+        assert storage_struct is not None
+        assert uint_type.group(1) in storage_struct.group("members")
+        assert bool_type.group(1) not in storage_struct.group("members")
+        assert f"OpTypePointer Uniform {bool_type.group(1)}" not in spv_code
+        assert re.search(
+            rf"%\d+ = OpINotEqual {re.escape(bool_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpSelect {re.escape(uint_type.group(1))} %\d+ %\d+ %\d+",
+            spv_code,
+        )
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -4910,6 +4967,48 @@ class TestVulkanSPIRVCodeGen:
         assert "unknown function 'EmitVertex'" not in spv_code
         assert "unknown function 'EndPrimitive'" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_non_tessellation_stage_builtins_do_not_require_tessellation(self):
+        source_code = """
+        shader NonTessellationBuiltins {
+            vertex {
+                void main() {
+                    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            }
+
+            geometry {
+                layout(points) in;
+                layout(point, max_vertices = 1) out;
+
+                void main() {
+                    int invocation = gl_InvocationID;
+                    EmitVertex();
+                    EndPrimitive();
+                }
+            }
+
+            fragment {
+                vec4 main() @ gl_FragColor {
+                    int primitive = gl_PrimitiveID;
+                    return vec4(float(primitive));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpCapability Geometry" in spv_code
+        assert "OpCapability Tessellation" not in spv_code
+        assert "OpEntryPoint Vertex" in spv_code
+        assert "OpEntryPoint Geometry" in spv_code
+        assert "OpEntryPoint Fragment" in spv_code
+        assert "BuiltIn Position" in spv_code
+        assert "BuiltIn InvocationId" in spv_code
+        assert "BuiltIn PrimitiveId" in spv_code
 
     def test_tessellation_patch_builtins_emit_stage_specific_interfaces(self, tmp_path):
         source_code = """
@@ -10018,6 +10117,156 @@ class TestVulkanSPIRVCodeGen:
         with pytest.raises(ValueError, match="Duplicate SPIR-V input location 1"):
             VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+    def test_multistage_entry_points_use_only_stage_interfaces_for_vulkan10(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StageInterfaces {
+            struct VertexInput {
+                vec3 position;
+                vec2 uv;
+            }
+
+            struct VertexOutput {
+                vec2 uv;
+                vec4 position;
+            }
+
+            struct FragmentInput {
+                vec2 uv;
+            }
+
+            struct FragmentOutput {
+                vec4 color;
+            }
+
+            vertex {
+                VertexOutput main(VertexInput input) {
+                    VertexOutput output;
+                    output.uv = input.uv;
+                    output.position = vec4(input.position, 1.0);
+                    return output;
+                }
+            }
+
+            fragment {
+                FragmentOutput main(FragmentInput input) {
+                    FragmentOutput output;
+                    output.color = vec4(input.uv, 0.0, 1.0);
+                    return output;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vertex_position = spirv_named_variable(
+            spv_code, "CrossGL_vertex_input_input_position", storage_class="Input"
+        )
+        fragment_uv = spirv_named_variable(
+            spv_code, "CrossGL_fragment_input_input_uv", storage_class="Input"
+        )
+        vertex_entry = re.search(r"OpEntryPoint Vertex %[^\n]+", spv_code).group(0)
+        fragment_entry = re.search(r"OpEntryPoint Fragment %[^\n]+", spv_code).group(0)
+
+        assert vertex_position in vertex_entry
+        assert fragment_uv not in vertex_entry
+        assert fragment_uv in fragment_entry
+        assert vertex_position not in fragment_entry
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
+    def test_scalar_constructor_converts_integer_operand_for_vulkan10(self, tmp_path):
+        source_code = """
+        shader ScalarConstructor {
+            compute {
+                void main() {
+                    int levels = 3;
+                    float scaled = 1.0 * float(levels);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpConvertSToF" in spv_code
+        assert "SPIR-V backend cannot lower unknown function 'float'" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
+    def test_struct_resource_members_do_not_emit_opaque_struct_types_for_vulkan10(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ResourceStruct {
+            struct Material {
+                vec3 albedo;
+                sampler2D albedoMap;
+                sampler2D normalMap;
+            }
+
+            compute {
+                void main() {
+                    Material material;
+                    vec3 color = material.albedo;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        opaque_types = set(re.findall(r"(%\d+) = OpTypeSampledImage\b", spv_code))
+        for _struct_id, member_list in re.findall(
+            r"(%\d+) = OpTypeStruct ([^\n]+)", spv_code
+        ):
+            assert not opaque_types & set(member_list.split())
+
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
+    def test_fragment_integer_struct_inputs_are_flat_for_vulkan10(self, tmp_path):
+        source_code = """
+        shader FragmentIntegerInput {
+            struct VertexOutput {
+                vec2 uv;
+                int materialIndex;
+            }
+
+            struct FragmentOutput {
+                vec4 color;
+            }
+
+            fragment {
+                FragmentOutput main(VertexOutput input) {
+                    FragmentOutput output;
+                    output.color = input.materialIndex == 0
+                        ? vec4(input.uv, 0.0, 1.0)
+                        : vec4(1.0);
+                    return output;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        material_index = spirv_named_variable(
+            spv_code,
+            "CrossGL_fragment_input_input_materialIndex",
+            storage_class="Input",
+        )
+
+        assert f"OpDecorate {material_index} Flat" in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
     @pytest.mark.parametrize("attribute", ["input", "output"])
     def test_global_interface_variables_reject_duplicate_explicit_locations(
         self, attribute
@@ -10108,6 +10357,39 @@ class TestVulkanSPIRVCodeGen:
             "setOneReserved": (1, 0),
             "setOneAuto": (1, 1),
             "groupTwoTex": (2, 0),
+        }
+        for name, (descriptor_set, binding) in expected_slots.items():
+            resource_id = spirv_named_variable(
+                spv_code, name, storage_class="UniformConstant"
+            )
+            assert (
+                f"OpDecorate {resource_id} DescriptorSet {descriptor_set}" in spv_code
+            )
+            assert f"OpDecorate {resource_id} Binding {binding}" in spv_code
+
+        assert "WARNING" not in spv_code
+
+    def test_resource_globals_map_space_to_spirv_descriptor_set(self):
+        source_code = """
+        shader Resources {
+            sampler2d spaceTwoTex @space(2) @binding(3);
+            image2D spaceTwoAuto @space(2);
+
+            compute {
+                void main() {
+                    float x = 1.0;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        expected_slots = {
+            "spaceTwoTex": (2, 3),
+            "spaceTwoAuto": (2, 0),
         }
         for name, (descriptor_set, binding) in expected_slots.items():
             resource_id = spirv_named_variable(
@@ -10325,6 +10607,58 @@ class TestVulkanSPIRVCodeGen:
         assert "OpAccessChain" in spv_code
         assert "Unknown variable" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_uniform_struct_arrays_wrap_in_block_and_use_layout_bool(self, tmp_path):
+        source_code = """
+        shader UniformStructArray {
+            struct Light {
+                vec3 position;
+                bool castsShadow;
+            };
+
+            uniform Light lights[4] @binding(2);
+
+            compute {
+                void main() {
+                    Light light = lights[0];
+                    if (light.castsShadow) {
+                        vec3 position = light.position;
+                    }
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        bool_type = re.search(r"(%\d+) = OpTypeBool\b", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        layout_light = re.search(r'OpName (%\d+) "Light_std140_\d+"', spv_code)
+        block_type = spirv_named_id(spv_code, "lightsBlock")
+        lights_var = spirv_named_variable(spv_code, "lights", storage_class="Uniform")
+
+        assert bool_type is not None
+        assert uint_type is not None
+        assert layout_light is not None
+        layout_struct = re.search(
+            rf"{re.escape(layout_light.group(1))} = OpTypeStruct "
+            rf"(?P<members>[^\n]+)",
+            spv_code,
+        )
+        assert layout_struct is not None
+        assert uint_type.group(1) in layout_struct.group("members")
+        assert bool_type.group(1) not in layout_struct.group("members")
+        assert f"OpDecorate {block_type} Block" in spv_code
+        assert f"OpDecorate {lights_var} Binding 2" in spv_code
+        assert f"OpTypePointer Uniform {bool_type.group(1)}" not in spv_code
+        assert re.search(
+            rf"%\d+ = OpINotEqual {re.escape(bool_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
 
     def test_cbuffer_globals_reject_duplicate_spirv_bindings(self):
         source_code = """
@@ -15371,6 +15705,64 @@ class TestVulkanSPIRVCodeGen:
         assert "textureGatherOffsets" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_texture_gather_offsets_literal_offsets_use_const_offsets_operand(
+        self, tmp_path
+    ):
+        source_code = """
+        shader Resources {
+            sampler2darray layers;
+
+            compute {
+                void main() {
+                    vec3 uvLayer = vec3(0.25, 0.75, 1.0);
+                    vec4 gathered = textureGatherOffsets(
+                        layers,
+                        uvLayer,
+                        ivec2(-1, 0),
+                        ivec2(0, -1),
+                        ivec2(1, 0),
+                        ivec2(0, 1),
+                        2
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        assert int_type is not None
+        ivec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(int_type.group(1))} 2",
+            spv_code,
+        )
+        assert ivec2_type is not None
+        offsets_array_type = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(ivec2_type.group(1))} %\d+",
+            spv_code,
+        )
+        assert offsets_array_type is not None
+
+        assert spv_code.count("OpImageGather") == 1
+        assert re.search(
+            r"OpImageGather %\d+ %\d+ %\d+ %\d+ ConstOffsets %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpConstantComposite "
+            rf"{re.escape(offsets_array_type.group(1))} %\d+ %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert spv_code.count("OpCapability ImageGatherExtended") == 1
+        assert "ConstOffset " not in spv_code
+        assert " Offset " not in spv_code
+        assert "textureGatherOffsets" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_texture_and_image_queries_emit_spirv_query_operations(self):
         source_code = """
         shader Resources {
@@ -16814,7 +17206,7 @@ class TestVulkanSPIRVCodeGen:
         assert "MatchArmNode(" not in spv_code
         assert "WARNING" not in spv_code
 
-    def test_switch_node_emits_spirv_selection_chain_and_default(self):
+    def test_switch_node_emits_spirv_switch_and_default(self):
         source_code = """
         shader SwitchSmoke {
             int helper(int mode) {
@@ -16839,8 +17231,7 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert "OpSelectionMerge" in spv_code
-        assert "OpBranchConditional" in spv_code
-        assert spv_code.count("OpIEqual") >= 2
+        assert "OpSwitch" in spv_code
         assert spv_code.count("OpStore") >= 3
         assert "SwitchNode(" not in spv_code
         assert "CaseNode(" not in spv_code
@@ -22856,6 +23247,52 @@ class TestVulkanSPIRVCodeGen:
         ), "OpTypeArray with float element and size 4 not found"
         assert "WARNING" not in spv_code
 
+    def test_named_constant_array_size_emits_fixed_struct_member_array(self, tmp_path):
+        source_code = """
+        shader NamedConstStructArray {
+            const int SHADOW_COUNT = 4;
+
+            struct VertexOutput {
+                vec4 shadowCoords[SHADOW_COUNT];
+                vec4 position;
+            };
+
+            compute {
+                void main() {
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4\b", spv_code)
+        assert vec4_type is not None
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        assert int_type is not None
+        size_const = re.search(
+            rf"(%\d+) = OpConstant {re.escape(int_type.group(1))} 4\b", spv_code
+        )
+        assert size_const is not None
+        fixed_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(vec4_type.group(1))} "
+            rf"{re.escape(size_const.group(1))}",
+            spv_code,
+        )
+        assert fixed_array is not None
+        assert f"OpTypeRuntimeArray {vec4_type.group(1)}" not in spv_code
+
+        vertex_output_type = spirv_named_id(spv_code, "VertexOutput")
+        assert re.search(
+            rf"{re.escape(vertex_output_type)} = OpTypeStruct "
+            rf"{re.escape(fixed_array.group(1))} {re.escape(vec4_type.group(1))}\b",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
     def test_array_element_access_emits_opaccesschain_with_index(self):
         source_code = """
         shader ArrayElementAccess {
@@ -24037,6 +24474,105 @@ class TestSpirvShaderValidation:
         assert re.search(rf"%\d+ = OpFunction {void_type} None %\d+", spv_code)
         assert re.search(rf"OpStore {position_id} %\d+", spv_code)
         assert "OpReturnValue" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_entry_point_struct_parameters_and_returns_lower_to_interface_variables(
+        self, tmp_path
+    ):
+        source_code = """
+        shader EntryStructInterface {
+            struct VertexInput {
+                vec3 position;
+                vec2 uv;
+            };
+
+            struct VertexOutput {
+                vec2 uv;
+                vec4 position;
+            };
+
+            struct FragmentInput {
+                vec2 uv;
+            };
+
+            struct FragmentOutput {
+                vec4 color;
+            };
+
+            vertex {
+                VertexOutput main(VertexInput input) {
+                    VertexOutput output;
+                    output.uv = input.uv;
+                    output.position = vec4(input.position, 1.0);
+                    return output;
+                }
+            }
+
+            fragment {
+                FragmentOutput main(FragmentInput input) {
+                    FragmentOutput output;
+                    output.color = vec4(input.uv, 0.0, 1.0);
+                    return output;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uv_output = spirv_named_variable(
+            spv_code, "CrossGL_vertex_output_main_uv", storage_class="Output"
+        )
+        uv_input = spirv_named_variable(
+            spv_code, "CrossGL_fragment_input_input_uv", storage_class="Input"
+        )
+        color_output = spirv_named_variable(
+            spv_code, "CrossGL_fragment_output_main_color", storage_class="Output"
+        )
+        position_output = spirv_named_variable(
+            spv_code, "gl_Position", storage_class="Output"
+        )
+        void_type = re.search(r"(%\d+) = OpTypeVoid", spv_code).group(1)
+
+        assert "OpFunctionParameter" not in spv_code
+        assert re.search(rf"%\d+ = OpFunction {void_type} None %\d+", spv_code)
+        assert f"OpDecorate {uv_output} Location 0" in spv_code
+        assert f"OpDecorate {uv_input} Location 0" in spv_code
+        assert f"OpDecorate {color_output} Location 0" in spv_code
+        assert f"OpDecorate {position_output} BuiltIn Position" in spv_code
+        assert "OpReturnValue" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_entry_point_builtin_parameters_lower_to_interface_variables(
+        self, tmp_path
+    ):
+        source_code = """
+        shader BuiltinParameterInterface {
+            compute {
+                void main(uvec3 globalId @ gl_GlobalInvocationID) {
+                    uint x = globalId.x;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        global_id = spirv_named_variable(
+            spv_code, "gl_GlobalInvocationID", storage_class="Input"
+        )
+
+        assert "OpFunctionParameter" not in spv_code
+        assert f"OpDecorate {global_id} BuiltIn GlobalInvocationId" in spv_code
+        assert re.search(rf"OpEntryPoint GLCompute %\d+ \"main\" {global_id}", spv_code)
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)

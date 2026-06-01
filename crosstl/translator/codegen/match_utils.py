@@ -149,7 +149,10 @@ def generate_ordered_conditional_match_arms(
             break
 
         prefix = "if" if not emitted_arm else "else if"
-        code += f"{indent_str}{prefix} ({condition}) {{\n"
+        code += (
+            f"{indent_str}{prefix} "
+            f"{format_match_condition(generator, condition)} {{\n"
+        )
         code += generate_bound_match_body(
             generator, bindings, binding_types, body, indent + 1
         )
@@ -239,7 +242,10 @@ def generate_match_expression_assignment_arms(
             break
 
         prefix = "if" if not emitted_arm else "else if"
-        code += f"{indent_str}{prefix} ({condition}) {{\n"
+        code += (
+            f"{indent_str}{prefix} "
+            f"{format_match_condition(generator, condition)} {{\n"
+        )
         code += generate_match_expression_assignment_body(
             generator,
             bindings,
@@ -253,8 +259,9 @@ def generate_match_expression_assignment_arms(
         code += f"{indent_str}}}\n"
         emitted_arm = True
 
-    if not handled_unconditional and not match_arms_exhaust_subject(
-        generator, arms, expression_type
+    if not handled_unconditional and (
+        match_expression_requires_fallback_assignment(generator)
+        or not match_arms_exhaust_subject(generator, arms, expression_type)
     ):
         fallback = match_expression_unmatched_assignment(
             generator,
@@ -388,6 +395,13 @@ def combine_match_conditions(pattern_condition, guard_condition):
     return pattern_condition or guard_condition
 
 
+def format_match_condition(generator, condition):
+    formatter = getattr(generator, "format_match_condition", None)
+    if callable(formatter):
+        return formatter(condition)
+    return f"({condition})"
+
+
 def generate_match_guard_condition(generator, guard, binding_types):
     saved_types = getattr(generator, "local_variable_types", None)
     if saved_types is not None:
@@ -432,7 +446,10 @@ def generate_guarded_bound_match_arm(
         return code
 
     prefix = "if" if not emitted_arm else "else if"
-    code = f"{indent_str}{prefix} ({pattern_condition}) {{\n"
+    code = (
+        f"{indent_str}{prefix} "
+        f"{format_match_condition(generator, pattern_condition)} {{\n"
+    )
     code += generate_guarded_bound_match_body(
         generator,
         rest_arms,
@@ -473,7 +490,7 @@ def generate_guarded_bound_match_body(
     guard_condition = generate_match_guard_condition(generator, guard, binding_types)
 
     code = "".join(f"{indent_str}{binding}\n" for binding in bindings)
-    code += f"{indent_str}if ({guard_condition}) {{\n"
+    code += f"{indent_str}if {format_match_condition(generator, guard_condition)} {{\n"
     code += generate_body_with_binding_types(generator, binding_types, body, indent + 1)
     code += f"{indent_str}}}"
     if rest_arms:
@@ -526,7 +543,10 @@ def generate_guarded_bound_match_assignment_arm(
         return code
 
     prefix = "if" if not emitted_arm else "else if"
-    code = f"{indent_str}{prefix} ({pattern_condition}) {{\n"
+    code = (
+        f"{indent_str}{prefix} "
+        f"{format_match_condition(generator, pattern_condition)} {{\n"
+    )
     code += generate_guarded_bound_match_assignment_body(
         generator,
         rest_arms,
@@ -573,7 +593,7 @@ def generate_guarded_bound_match_assignment_body(
     guard_condition = generate_match_guard_condition(generator, guard, binding_types)
 
     code = "".join(f"{indent_str}{binding}\n" for binding in bindings)
-    code += f"{indent_str}if ({guard_condition}) {{\n"
+    code += f"{indent_str}if {format_match_condition(generator, guard_condition)} {{\n"
     code += generate_match_expression_assignment_body(
         generator,
         [],
@@ -1025,13 +1045,20 @@ def next_match_temp_variable(generator):
 
     index = getattr(generator, "match_temp_variable_index", 0)
     generator.match_temp_variable_index = index + 1
-    return f"__crossgl_match_subject_{index}"
+    return f"cgl_match_subject_{index}"
 
 
 def binding_declaration(generator, binding_type, name, expression):
+    binding_name = name
+    binding_name_hook = getattr(generator, "match_binding_name", None)
+    if callable(binding_name_hook):
+        binding_name = binding_name_hook(name)
     declaration = format_c_style_array_declaration(
-        generator.map_type(binding_type), name
+        generator.map_type(binding_type), binding_name
     )
+    formatter = getattr(generator, "format_match_binding_declaration", None)
+    if callable(formatter):
+        declaration = formatter(declaration, binding_name)
     return f"{declaration} = {expression};"
 
 
@@ -1060,7 +1087,7 @@ def infer_match_expression_result_type(generator, node):
     for arm in getattr(node, "arms", []) or []:
         _condition, _bindings, binding_types = match_arm_pattern_lowering(
             generator,
-            "__crossgl_match_subject",
+            "cgl_match_subject",
             expression_type,
             arm,
             "match expression",
@@ -1166,6 +1193,13 @@ def match_expression_unmatched_assignment(
         indent,
         target_name,
     )
+
+
+def match_expression_requires_fallback_assignment(generator):
+    hook = getattr(generator, "match_expression_requires_fallback_assignment", None)
+    if callable(hook):
+        return bool(hook())
+    return False
 
 
 def statement_list(body):

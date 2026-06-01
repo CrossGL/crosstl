@@ -327,7 +327,7 @@ class HLSLToCrossGLConverter:
             "COLOR1": "Color1",
             "BLENDWEIGHT": "BlendWeight",
             "BLENDINDICES": "BlendIndices",
-            "PSIZE": "PointSize",
+            "PSIZE": "gl_PointSize",
             "FOG": "Fog",
         }
         self.bitwise_op_map = {
@@ -486,7 +486,7 @@ class HLSLToCrossGLConverter:
                 "usage": None if diagnostic_reason else "regular",
                 "buffer_when_max_args": None,
                 "result_component": (
-                    ".x" if member == "CalculateLevelOfDetailUnclamped" else ".y"
+                    ".y" if member == "CalculateLevelOfDetailUnclamped" else ".x"
                 ),
             }
             if resource_type is not None:

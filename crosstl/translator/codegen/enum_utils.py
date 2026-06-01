@@ -93,10 +93,32 @@ def collect_generic_enum_specializations(nodes, definitions, type_name_string):
     specializations = {}
     visited = set()
 
+    def add_type_text(type_text):
+        base_name, generic_args = generic_type_parts(str(type_text or ""))
+        definition = definitions.get(base_name)
+        if definition is None:
+            return None
+        if len(generic_args) != len(definition["generic_params"]):
+            return None
+        if any(
+            type_text_contains_generic_parameter(arg, generic_names)
+            for arg in generic_args
+        ):
+            return None
+        if type_text in specializations:
+            return None
+
+        specialization = build_generic_enum_specialization(type_text, definition)
+        specializations[type_text] = specialization
+        return specialization
+
     def visit(value):
         if value is None:
             return
-        if isinstance(value, (str, int, float, bool)):
+        if isinstance(value, str):
+            add_type_text(value)
+            return
+        if isinstance(value, (int, float, bool)):
             return
         if isinstance(value, (list, tuple, set)):
             for item in value:
@@ -117,16 +139,7 @@ def collect_generic_enum_specializations(nodes, definitions, type_name_string):
         name = getattr(value, "name", None)
         generic_args = getattr(value, "generic_args", None)
         if name in definitions and generic_args:
-            definition = definitions[name]
-            if len(generic_args) == len(definition["generic_params"]) and not any(
-                type_node_contains_generic_parameter(arg, generic_names)
-                for arg in generic_args
-            ):
-                type_text = type_name_string(value)
-                specializations[type_text] = build_generic_enum_specialization(
-                    type_text,
-                    definition,
-                )
+            add_type_text(type_name_string(value))
 
         for child in vars(value).values():
             visit(child)
@@ -184,7 +197,7 @@ def type_node_contains_generic_parameter(value, generic_names):
     if value is None:
         return False
     if isinstance(value, str):
-        return value in generic_names
+        return type_text_contains_generic_parameter(value, generic_names)
     name = getattr(value, "name", None)
     generic_args = getattr(value, "generic_args", None)
     if name in generic_names and not generic_args:
@@ -194,6 +207,18 @@ def type_node_contains_generic_parameter(value, generic_names):
             return True
     element_type = getattr(value, "element_type", None)
     return type_node_contains_generic_parameter(element_type, generic_names)
+
+
+def type_text_contains_generic_parameter(type_text, generic_names):
+    type_text = str(type_text or "").strip()
+    if not type_text:
+        return False
+    base_name, generic_args = generic_type_parts(type_text)
+    if not generic_args:
+        return base_name in generic_names
+    return any(
+        type_text_contains_generic_parameter(arg, generic_names) for arg in generic_args
+    )
 
 
 def build_generic_enum_specialization(type_text, definition):
@@ -700,6 +725,12 @@ def enum_tuple_payload_fields(variant_name, fields):
 
 
 def default_value_expression(generator, field_type):
+    custom_default = getattr(generator, "default_value_expression_for_type", None)
+    if callable(custom_default):
+        default_value = custom_default(field_type)
+        if default_value is not None:
+            return default_value
+
     mapped_type = generator.map_type(field_type)
     if mapped_type == "bool":
         return "false"

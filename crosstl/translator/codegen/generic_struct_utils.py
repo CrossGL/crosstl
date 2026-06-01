@@ -95,7 +95,10 @@ def collect_generic_struct_specializations(nodes, definitions, type_name_string)
     def visit(value):
         if value is None:
             return
-        if isinstance(value, (str, int, float, bool)):
+        if isinstance(value, str):
+            add_type_text(value)
+            return
+        if isinstance(value, (int, float, bool)):
             return
         if isinstance(value, (list, tuple, set)):
             for item in value:

@@ -485,6 +485,13 @@ def parse_crossgl(code: str):
     return parser.parse()
 
 
+def test_hlsl_psize_roundtrips_to_gl_point_size():
+    crossgl = generate_crossgl("float pointSize() : PSIZE { return 1.0; }")
+
+    assert "@ gl_PointSize" in crossgl
+    assert "@ PointSize" not in crossgl
+
+
 def test_codegen_vertex_fragment_roundtrip():
     output = generate_crossgl(VERTEX_PIXEL_HLSL)
     assert isinstance(output, str)
@@ -1422,13 +1429,13 @@ def test_codegen_texture_method_descriptors():
         "component": None,
         "usage": "regular",
         "buffer_when_max_args": None,
-        "result_component": ".y",
+        "result_component": ".x",
     }
     assert (
         converter.resource_method_descriptor(
             "CalculateLevelOfDetailUnclamped", 2, "Texture2D<float4>"
         )["result_component"]
-        == ".x"
+        == ".y"
     )
     assert (
         converter.resource_method_descriptor(
@@ -3639,18 +3646,18 @@ def test_codegen_texture_lod_query_member_imports_to_texture_query_lod():
 
     assert ".CalculateLevelOfDetail(" not in crossgl
     assert ".CalculateLevelOfDetailUnclamped(" not in crossgl
-    assert "clamped = textureQueryLod(colorMap, linearSampler, uv).y;" in crossgl
-    assert "unclamped = textureQueryLod(colorMap, linearSampler, uv).x;" in crossgl
+    assert "clamped = textureQueryLod(colorMap, linearSampler, uv).x;" in crossgl
+    assert "unclamped = textureQueryLod(colorMap, linearSampler, uv).y;" in crossgl
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
     assert (
-        "float clamped = float2(colorMap.CalculateLevelOfDetailUnclamped("
-        "linearSampler, uv), colorMap.CalculateLevelOfDetail(linearSampler, uv)).y;"
+        "float clamped = float2(colorMap.CalculateLevelOfDetail("
+        "linearSampler, uv), colorMap.CalculateLevelOfDetailUnclamped(linearSampler, uv)).x;"
         in regenerated_hlsl
     )
     assert (
-        "float unclamped = float2(colorMap.CalculateLevelOfDetailUnclamped("
-        "linearSampler, uv), colorMap.CalculateLevelOfDetail(linearSampler, uv)).x;"
+        "float unclamped = float2(colorMap.CalculateLevelOfDetail("
+        "linearSampler, uv), colorMap.CalculateLevelOfDetailUnclamped(linearSampler, uv)).y;"
         in regenerated_hlsl
     )
     assert "textureQueryLod(" not in regenerated_hlsl
@@ -3765,7 +3772,7 @@ def test_codegen_struct_member_resource_methods_roundtrip_to_hlsl_members():
     assert "width = uint(textureSize(resources.color, 0).x);" in crossgl
     assert "height = uint(textureSize(resources.color, 0).y);" in crossgl
     assert "levels = uint(textureQueryLevels(resources.color));" in crossgl
-    assert "lod = textureQueryLod(resources.color, linearSampler, uv).y;" in crossgl
+    assert "lod = textureQueryLod(resources.color, linearSampler, uv).x;" in crossgl
     assert "pos = textureSamplePosition(resources.ms, sampleIndex);" in crossgl
     assert "loaded = imageLoad(resources.image, pixel);" in crossgl
     assert "texture(resources.color, linearSampler, uv)" in crossgl
@@ -3777,8 +3784,8 @@ def test_codegen_struct_member_resource_methods_roundtrip_to_hlsl_members():
     assert "height = uint(textureSize(resources.color, 0).y);" in regenerated_hlsl
     assert "levels = uint(textureQueryLevels(resources.color));" in regenerated_hlsl
     assert (
-        "float lod = float2(resources.color.CalculateLevelOfDetailUnclamped("
-        "linearSampler, uv), resources.color.CalculateLevelOfDetail(linearSampler, uv)).y;"
+        "float lod = float2(resources.color.CalculateLevelOfDetail("
+        "linearSampler, uv), resources.color.CalculateLevelOfDetailUnclamped(linearSampler, uv)).x;"
         in regenerated_hlsl
     )
     assert (
@@ -3823,7 +3830,7 @@ def test_codegen_indexed_struct_member_resource_methods_roundtrip_to_hlsl_member
     assert "height = uint(textureSize(resources[layer].color, 0).y);" in crossgl
     assert "levels = uint(textureQueryLevels(resources[layer].color));" in crossgl
     assert (
-        "lod = textureQueryLod(resources[layer].color, linearSampler, uv).y;" in crossgl
+        "lod = textureQueryLod(resources[layer].color, linearSampler, uv).x;" in crossgl
     )
     assert "pos = textureSamplePosition(resources[layer].ms, sampleIndex);" in crossgl
     assert "loaded = imageLoad(resources[layer].image, pixel);" in crossgl
@@ -3841,8 +3848,8 @@ def test_codegen_indexed_struct_member_resource_methods_roundtrip_to_hlsl_member
         "levels = uint(textureQueryLevels(resources[layer].color));" in regenerated_hlsl
     )
     assert (
-        "float lod = float2(resources[layer].color.CalculateLevelOfDetailUnclamped("
-        "linearSampler, uv), resources[layer].color.CalculateLevelOfDetail(linearSampler, uv)).y;"
+        "float lod = float2(resources[layer].color.CalculateLevelOfDetail("
+        "linearSampler, uv), resources[layer].color.CalculateLevelOfDetailUnclamped(linearSampler, uv)).x;"
         in regenerated_hlsl
     )
     assert (

@@ -33,6 +33,7 @@ SECTION_RE = re.compile(
 )
 FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
 INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 KEYWORDS = (
     "close",
     "closes",
@@ -283,7 +284,7 @@ class GitHubClient:
         raw = base64.b64decode(content)
         return json.loads(raw.decode("utf-8"))
 
-    def list_open_support_issues(self) -> list[dict[str, Any]]:
+    def list_support_issues(self) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []
         page = 1
         while True:
@@ -292,7 +293,7 @@ class GitHubClient:
                 f"/repos/{self.repo}/issues",
                 query={
                     "labels": "support:matrix",
-                    "state": "open",
+                    "state": "all",
                     "per_page": 100,
                     "page": page,
                 },
@@ -344,6 +345,10 @@ def strip_code_spans(text: str) -> str:
     return INLINE_CODE_RE.sub(" ", text)
 
 
+def strip_html_comments(text: str) -> str:
+    return HTML_COMMENT_RE.sub(" ", text)
+
+
 def normalize_issue_ref(ref: str, repo: str) -> int | None:
     owner, repo_name = repo.split("/", 1)
     ref = ref.strip()
@@ -375,6 +380,7 @@ def normalize_issue_ref(ref: str, repo: str) -> int | None:
 
 def extract_closing_issue_numbers(title: str, body: str, repo: str) -> list[int]:
     source = "\n".join([title or "", strip_managed_section(body or "")])
+    source = strip_html_comments(source)
     source = strip_code_spans(source)
     numbers: list[int] = []
     seen = set()
@@ -437,7 +443,7 @@ def support_matrix_artifact_changed(paths: list[str] | tuple[str, ...]) -> bool:
 
 def has_support_traceability_opt_out(body: str) -> bool:
     match = SUPPORT_TRACEABILITY_RE.search(
-        strip_code_spans(strip_managed_section(body))
+        strip_code_spans(strip_html_comments(strip_managed_section(body)))
     )
     if not match:
         return False
@@ -685,7 +691,7 @@ def support_matrix_issue_numbers(
             reference_keys=(),
         )
 
-    support_issues = client.list_open_support_issues()
+    support_issues = client.list_support_issues()
     numbers_by_key = support_issue_number_lookup(support_issues)
     closure_links = support_issue_links_for_keys(
         numbers_by_key,
@@ -1368,12 +1374,12 @@ def emit_support_link_audit(summary: dict[str, Any]) -> None:
     missing_reference_keys = audit.get("missing_reference_keys") or []
     if missing_closure_keys:
         print(
-            "::warning::Support backlog rows were removed without open managed "
+            "::warning::Support backlog rows were removed without managed "
             "support issues: " + format_support_link_keys(missing_closure_keys)
         )
     if missing_reference_keys:
         print(
-            "::warning::Support backlog rows changed without open managed "
+            "::warning::Support backlog rows changed without managed "
             "support issues: " + format_support_link_keys(missing_reference_keys)
         )
     if (

@@ -64,7 +64,7 @@ class FakeClient:
             raise error
         return self.json_files[(repo, path, ref)]
 
-    def list_open_support_issues(self):
+    def list_support_issues(self):
         return list(self.support_issues)
 
 
@@ -102,6 +102,23 @@ Closes #16
     )
 
     assert numbers == [18, 10, 11, 12, 13]
+
+
+def test_extract_closing_issue_numbers_ignores_html_comments():
+    module = load_sync_module()
+    body = """
+<!--
+Fixes #123
+Closes https://github.com/CrossGL/crosstl/issues/124
+-->
+Fixes #10
+"""
+
+    numbers = module.extract_closing_issue_numbers(
+        "Ignore template examples", body, "CrossGL/crosstl"
+    )
+
+    assert numbers == [10]
 
 
 def test_sync_assigns_unassigned_issues_and_updates_pr_body():
@@ -647,7 +664,7 @@ def test_sync_audit_reports_missing_managed_issue_for_removed_backlog_row(
     captured = capsys.readouterr()
     assert "missing_closure_links=1" in captured.out
     assert (
-        "::warning::Support backlog rows were removed without open managed support issues"
+        "::warning::Support backlog rows were removed without managed support issues"
         in captured.out
     )
     assert "backlog:metal:language.wave_intrinsics" in captured.out
@@ -1014,6 +1031,34 @@ def test_github_client_lists_pull_files_across_pages():
     assert pages == [1, 2]
 
 
+def test_github_client_lists_support_issues_across_open_and_closed_states():
+    module = load_sync_module()
+    client = module.GitHubClient("CrossGL/crosstl", "token")
+    queries = []
+
+    def fake_request(method, path, payload=None, query=None):
+        assert method == "GET"
+        assert path == "/repos/CrossGL/crosstl/issues"
+        assert payload is None
+        queries.append(query)
+        return [
+            {"number": 10, "body": "managed"},
+            {"number": 11, "body": "pull", "pull_request": {}},
+        ], {}
+
+    client.request = fake_request
+
+    assert client.list_support_issues() == [{"number": 10, "body": "managed"}]
+    assert queries == [
+        {
+            "labels": "support:matrix",
+            "state": "all",
+            "per_page": 100,
+            "page": 1,
+        }
+    ]
+
+
 def test_traceability_policy_passes_with_valid_closing_issue_for_support_files():
     module = load_sync_module()
     pr = module.PullRequestContext(
@@ -1078,6 +1123,38 @@ def test_traceability_policy_passes_with_explicit_no_issue_marker():
     assert summary["traceability_failed"] == 0
     assert summary["traceability_audit"]["satisfaction_sources"] == ["explicit_opt_out"]
     assert summary["traceability_audit"]["failure_reason"] is None
+
+
+def test_traceability_policy_ignores_no_issue_marker_in_html_comment():
+    module = load_sync_module()
+    pr = module.PullRequestContext(
+        number=5,
+        title="Refresh support matrix probes",
+        body="\n".join(
+            [
+                "<!--",
+                "Support issue traceability: no issue closed",
+                "-->",
+                "No linked issue.",
+            ]
+        ),
+        author="alice",
+        changed_files=("tools/support_matrix.py",),
+    )
+    client = FakeClient(module)
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        enforce_support_traceability=True,
+    )
+
+    assert summary["traceability_required"] == 1
+    assert summary["traceability_satisfied"] == 0
+    assert summary["traceability_failed"] == 1
+    assert summary["traceability_audit"]["satisfaction_sources"] == []
+    assert summary["traceability_audit"]["failure_reason"] == "missing_issue_or_opt_out"
 
 
 def test_traceability_policy_fails_for_support_files_without_issue_or_marker():

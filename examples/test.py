@@ -13,6 +13,39 @@ import crosstl
 
 KNOWN_FAILURE_BUDGET = 2
 MIN_SUCCESS_RATE = 90.0
+EXAMPLE_BACKEND_SKIPS = {
+    (
+        "advanced",
+        "GenericPatternMatching",
+        "mojo",
+    ): (
+        "Mojo codegen intentionally rejects generic functions until the backend has a generic ABI."
+    ),
+    (
+        "advanced",
+        "GenericPatternMatching",
+        "cuda",
+    ): (
+        "CUDA codegen intentionally rejects generic functions until the backend "
+        "has monomorphization support."
+    ),
+    (
+        "advanced",
+        "GenericPatternMatching",
+        "hip",
+    ): (
+        "HIP codegen intentionally rejects generic functions until the backend "
+        "has monomorphization support."
+    ),
+    (
+        "advanced",
+        "GenericPatternMatching",
+        "slang",
+    ): (
+        "Slang codegen intentionally rejects generic functions until the backend "
+        "has monomorphization support."
+    ),
+}
 
 
 def parse_args(argv=None):
@@ -33,14 +66,17 @@ def build_summary(
     total_tests,
     successful_tests,
     failed_tests,
+    skipped_tests=None,
     consistency_summary=None,
 ):
+    skipped_tests = skipped_tests or []
     success_rate = (successful_tests / total_tests) * 100 if total_tests else 0.0
     return {
         "schema_version": 1,
         "total": total_tests,
         "successful": successful_tests,
         "failed": len(failed_tests),
+        "skipped": len(skipped_tests),
         "success_rate": round(success_rate, 1),
         "known_failure_budget": KNOWN_FAILURE_BUDGET,
         "minimum_success_rate": MIN_SUCCESS_RATE,
@@ -55,6 +91,14 @@ def build_summary(
                 "error": error,
             }
             for example, backend, error in failed_tests
+        ],
+        "skips": [
+            {
+                "example": example,
+                "backend": backend,
+                "reason": reason,
+            }
+            for example, backend, reason in skipped_tests
         ],
         "consistency": consistency_summary or {},
     }
@@ -83,7 +127,7 @@ def main(argv=None):
         "metal": ".metal",
         "directx": ".hlsl",
         "opengl": ".glsl",
-        "vulkan": ".spirv",
+        "vulkan": ".spvasm",
         "rust": ".rs",
         "mojo": ".mojo",
         "cuda": ".cu",
@@ -130,6 +174,7 @@ def main(argv=None):
     total_tests = 0
     successful_tests = 0
     failed_tests = []
+    skipped_tests = []
 
     # Test each category
     for category, examples in examples_by_category.items():
@@ -153,6 +198,14 @@ def main(argv=None):
 
             for backend in compatible_backends:
                 if backend not in backends:
+                    continue
+
+                skip_reason = EXAMPLE_BACKEND_SKIPS.get(
+                    (category, example_name, backend)
+                )
+                if skip_reason:
+                    print(f"  [SKIPPED] {backend:8} -> {skip_reason}")
+                    skipped_tests.append((example_name, backend, skip_reason))
                     continue
 
                 total_tests += 1
@@ -194,7 +247,8 @@ def main(argv=None):
     print(f"Total tests: {total_tests}")
     print(f"Successful: {successful_tests}")
     print(f"Failed: {len(failed_tests)}")
-    summary = build_summary(total_tests, successful_tests, failed_tests)
+    print(f"Skipped: {len(skipped_tests)}")
+    summary = build_summary(total_tests, successful_tests, failed_tests, skipped_tests)
     print(f"Success rate: {summary['success_rate']:.1f}%")
 
     if failed_tests:
@@ -209,6 +263,7 @@ def main(argv=None):
         total_tests,
         successful_tests,
         failed_tests,
+        skipped_tests,
         consistency_summary,
     )
     if args.summary_json:

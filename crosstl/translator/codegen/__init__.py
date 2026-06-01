@@ -86,7 +86,7 @@ register_backend(
         name="vulkan",
         codegen_class=VulkanSPIRVCodeGen,
         aliases=("spirv", "spv"),
-        file_extensions=(".spirv",),
+        file_extensions=(".spvasm",),
         format_backend="vulkan",
     )
 )

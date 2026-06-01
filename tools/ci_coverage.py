@@ -171,7 +171,7 @@ SUPPORT_ISSUE_SYNC_PLANNED_ACTION_BUDGET_ARGS = [
     "--max-planned-closed 500",
     "--max-planned-attached 300",
     "--max-planned-total 600",
-    "--max-planned-stale-parent-closures 0",
+    "--max-planned-stale-parent-closures 10",
     "--max-planned-stale-backlog-closures 250",
     "--max-planned-stale-extracted-closures 250",
     "--max-planned-duplicate-marker-closures 25",
@@ -1010,7 +1010,10 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             path: path in path_filters
             for path in SUPPORT_ISSUE_SYNC_REQUIRED_PATH_FILTERS
         },
-        "min_desired_issues": "--min-desired-issues 10" in workflow,
+        "min_desired_issues": all(
+            "--min-desired-issues 0" in step
+            for step in (dry_run_step, plan_step, sync_step)
+        ),
         "writes_support_matrix_check_report": (
             "python tools/support_matrix.py check --output support/generated/support-matrix-check.json"
             in support_matrix_check_step

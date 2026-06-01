@@ -25,7 +25,8 @@ fixes #123
 resolves #123
 
 That way, GitHub links the issue to this PR and closes it automatically on merge.
-If it’s not fixing a specific issue, say so.
+For support-relevant changes that do not close an issue, add this exact raw
+PR body line outside this comment: `Support issue traceability: no issue closed`
 -->
 
 ### Changes
@@ -69,5 +70,6 @@ Feel free to add or remove items that fit your repo's workflow.
 
 - [ ] Tests cover new or changed code (or reason why not)
 - [ ] Linked the issue with a closing keyword (if applicable)
+- [ ] Added `Support issue traceability: no issue closed` when no issue is closed
 - [ ] Only touched files related to the issue
 - [ ] Everything builds and runs locally

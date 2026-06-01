@@ -32,7 +32,14 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("graphics/ComplexShader.cgl", "opengl"),
 )
 
-ADDITIONAL_FIXED_CASES = (("advanced/GenericPatternMatching.cgl", "slang"),)
+ADDITIONAL_FIXED_CASES = ()
+
+GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
+    ("advanced/GenericPatternMatching.cgl", "cuda", "CUDA"),
+    ("advanced/GenericPatternMatching.cgl", "hip", "HIP"),
+    ("advanced/GenericPatternMatching.cgl", "mojo", "Mojo"),
+    ("advanced/GenericPatternMatching.cgl", "slang", "Slang"),
+)
 
 KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = ()
 
@@ -49,6 +56,14 @@ def _assert_generated_output_is_usable(generated):
     assert "<crosstl." not in generated
     assert "MatchNode(" not in generated
     assert "ConstructorNode(" not in generated
+    assert "NamedType(" not in generated
+    assert "Result_T" not in generated
+    assert "Vec3_T" not in generated
+    assert "T::zero" not in generated
+    assert "T::one" not in generated
+    assert "unsupported CUDA match" not in generated
+    assert "unsupported HIP match" not in generated
+    assert "unsupported Slang match" not in generated
 
 
 @pytest.mark.parametrize("example_path", sorted(EXAMPLES_ROOT.rglob("*.cgl")))
@@ -111,6 +126,21 @@ def test_additional_fixed_examples_translate(relative_path, backend):
     _assert_generated_output_is_usable(generated)
     if backend == "slang":
         assert "unsupported Slang match" not in generated
+
+
+@pytest.mark.parametrize(
+    "relative_path,backend,backend_label", GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES
+)
+def test_generic_function_examples_report_backend_diagnostics(
+    relative_path, backend, backend_label
+):
+    with pytest.raises(
+        ValueError,
+        match=rf"{backend_label} codegen does not support generic functions",
+    ):
+        crosstl.translate(
+            str(_example_path(relative_path)), backend=backend, format_output=False
+        )
 
 
 @pytest.mark.parametrize(
