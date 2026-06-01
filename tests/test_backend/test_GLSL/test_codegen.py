@@ -273,6 +273,45 @@ def test_codegen_texture_intrinsics_use_canonical_crossgl_resources():
     assert "textureGather(tex, uv)" in glsl
 
 
+def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
+    code = textwrap.dedent("""
+        #version 450
+        #extension GL_EXT_nonuniform_qualifier : require
+
+        layout(set = 0, binding = 0) uniform texture2D Textures[];
+        layout(set = 1, binding = 0) uniform sampler ImmutableSampler;
+
+        layout(location = 0) in vec2 in_uv;
+        layout(location = 0) out vec4 out_frag_color;
+
+        void main() {
+            out_frag_color = texture(sampler2D(Textures[0], ImmutableSampler), in_uv);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "texture2D Textures[] @binding(0);" in crossgl
+    assert "sampler ImmutableSampler @binding(0);" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+
+
+def test_codegen_comma_separated_for_updates():
+    code = textwrap.dedent("""
+        #version 460
+        void main() {
+            uint plane_index = 0;
+            for (uint i = 0; i < 3; ++i, ++plane_index) {
+                plane_index += i;
+            }
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "for (uint i = 0; (i < 3); (++i), (++plane_index))" in crossgl
+
+
 def test_codegen_query_intrinsics_use_resource_descriptors():
     code = textwrap.dedent("""
         #version 450 core

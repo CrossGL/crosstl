@@ -16,6 +16,7 @@ from crosstl.backend.slang.SlangAst import (
     DoWhileNode,
     ForNode,
     FunctionCallNode,
+    IfNode,
     InitializerListNode,
     MemberAccessNode,
     MethodCallNode,
@@ -113,6 +114,25 @@ def test_if_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("if parsing not implemented.")
+
+
+def test_string_literals_and_braceless_if_parsing():
+    code = r"""
+    void computeMain(uint tid) {
+        if (tid > 0)
+            return;
+        println("hello from thread", tid);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "computeMain").body
+
+    assert isinstance(body[0], IfNode)
+    assert isinstance(body[0].if_body[0], ReturnNode)
+    assert isinstance(body[1], FunctionCallNode)
+    assert body[1].args[0] == '"hello from thread"'
 
 
 def test_for_parsing():

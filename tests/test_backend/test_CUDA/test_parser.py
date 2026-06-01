@@ -16,6 +16,7 @@ from crosstl.backend.CUDA.CudaAst import (
     KernelLaunchNode,
     MemberAccessNode,
     NewNode,
+    PreprocessorNode,
     RangeForNode,
     ReturnNode,
     ShaderNode,
@@ -47,6 +48,41 @@ class TestCudaParser:
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
         assert ast.kernels[0].name == "simple_kernel"
+
+    def test_block_preprocessor_pragmas_parsing(self):
+        code = """
+        __global__ void kernel(float* data) {
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                data[i] = data[i] + 1.0f;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        pragma = ast.kernels[0].body[0]
+        assert isinstance(pragma, PreprocessorNode)
+        assert pragma.directive == "other"
+        assert pragma.content == "#pragma unroll"
+
+    def test_adjacent_string_literal_arguments_parsing(self):
+        code = r"""
+        void host() {
+            printf("first "
+                   "second\n");
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        call = ast.functions[0].body[0]
+        assert isinstance(call, FunctionCallNode)
+        assert call.args == ['"first second\\n"']
 
     def test_device_function_parsing(self):
         code = """

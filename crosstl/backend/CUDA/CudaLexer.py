@@ -463,6 +463,7 @@ class CudaLexer:
         max_expansion_depth: int = 64,
         file_path: Optional[str] = None,
     ):
+        code = code.lstrip("\ufeff")
         if preprocess:
             preprocessor = CudaPreprocessor(
                 include_paths=include_paths,

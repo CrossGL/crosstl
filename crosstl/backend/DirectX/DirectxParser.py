@@ -204,7 +204,7 @@ class HLSLParser:
                 func = self.parse_function(return_type, name, qualifiers, attributes)
                 functions.append(func)
             else:
-                var = self.parse_variable_declaration_rest(
+                declarations = self.parse_variable_declaration_list_rest(
                     return_type,
                     name,
                     qualifiers=qualifiers,
@@ -212,7 +212,7 @@ class HLSLParser:
                     allow_semantic=True,
                     consume_semicolon=True,
                 )
-                global_variables.append(var)
+                global_variables.extend(declarations)
 
         return ShaderNode(
             includes=[],
@@ -401,22 +401,13 @@ class HLSLParser:
                 raise SyntaxError(
                     f"Expected type in struct member, got {self.current_token[0]}"
                 )
-            member_type = self.parse_type()
-            member_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            array_sizes = self.parse_array_suffixes()
-            member_semantic, _, _ = self.parse_semantic_or_register()
-            self.eat("SEMICOLON")
-
-            member = VariableNode(
-                member_type,
-                member_name,
+            declarations = self.parse_variable_declaration(
                 qualifiers=qualifiers,
                 attributes=attributes,
-                semantic=member_semantic,
+                allow_semantic=True,
+                consume_semicolon=True,
             )
-            member.array_sizes = array_sizes
-            members.append(member)
+            members.extend(self.ensure_statement_list(declarations))
 
         self.eat("RBRACE")
 
@@ -489,29 +480,13 @@ class HLSLParser:
         members = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             qualifiers = self.parse_qualifiers()
-            member_type = self.parse_type()
-            member_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            array_sizes = self.parse_array_suffixes()
-            semantic = None
-            member_register = None
-            member_packoffset = None
-            if self.current_token[0] == "COLON":
-                semantic, member_register, member_packoffset = (
-                    self.parse_semantic_or_register()
-                )
-            self.eat("SEMICOLON")
-
-            member = VariableNode(
-                member_type,
-                member_name,
+            declarations = self.parse_variable_declaration(
                 qualifiers=qualifiers,
-                semantic=semantic,
+                attributes=[],
+                allow_semantic=True,
+                consume_semicolon=True,
             )
-            member.register = member_register
-            member.packoffset = member_packoffset
-            member.array_sizes = array_sizes
-            members.append(member)
+            members.extend(self.ensure_statement_list(declarations))
 
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
@@ -530,11 +505,17 @@ class HLSLParser:
         if self.current_token[0] == "COLON":
             semantic, _, _ = self.parse_semantic_or_register()
 
-        body = self.parse_block()
+        is_prototype = False
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            body = []
+            is_prototype = True
+        else:
+            body = self.parse_block()
 
         qualifier = self.infer_function_qualifier(name, attributes, params, semantic)
 
-        return FunctionNode(
+        function = FunctionNode(
             return_type=return_type,
             name=name,
             params=params,
@@ -544,6 +525,8 @@ class HLSLParser:
             qualifier=qualifier,
             semantic=semantic,
         )
+        function.is_prototype = is_prototype
+        return function
 
     def infer_function_qualifier(self, name, attributes, params, semantic):
         for attr in attributes:
@@ -659,10 +642,15 @@ class HLSLParser:
 
                 array_sizes = self.parse_array_suffixes()
                 semantic, _, _ = self.parse_semantic_or_register()
+                value = None
+                if self.current_token[0] == "EQUALS":
+                    self.eat("EQUALS")
+                    value = self.parse_expression()
 
                 param = VariableNode(
                     param_type,
                     name,
+                    value=value,
                     qualifiers=qualifiers,
                     attributes=attributes,
                     is_const="const" in qualifiers,
@@ -698,50 +686,54 @@ class HLSLParser:
             self.eat("SEMICOLON")
             return None
 
+        attributes = self.parse_attribute_list()
+
         if self.current_token[0] == "RETURN":
             self.eat("RETURN")
             value = None
             if self.current_token[0] != "SEMICOLON":
                 value = self.parse_expression()
             self.eat("SEMICOLON")
-            return ReturnNode(value)
+            return self.attach_attributes(ReturnNode(value), attributes)
 
         if self.current_token[0] == "IF":
-            return self.parse_if_statement()
+            return self.attach_attributes(self.parse_if_statement(), attributes)
 
         if self.current_token[0] == "FOR":
-            return self.parse_for_loop()
+            return self.attach_attributes(self.parse_for_loop(), attributes)
 
         if self.current_token[0] == "WHILE":
-            return self.parse_while_loop()
+            return self.attach_attributes(self.parse_while_loop(), attributes)
 
         if self.current_token[0] == "DO":
-            return self.parse_do_while_loop()
+            return self.attach_attributes(self.parse_do_while_loop(), attributes)
 
         if self.current_token[0] == "SWITCH":
-            return self.parse_switch_statement()
+            return self.attach_attributes(self.parse_switch_statement(), attributes)
 
         if self.current_token[0] == "BREAK":
             self.eat("BREAK")
             self.eat("SEMICOLON")
-            return BreakNode()
+            return self.attach_attributes(BreakNode(), attributes)
 
         if self.current_token[0] == "CONTINUE":
             self.eat("CONTINUE")
             self.eat("SEMICOLON")
-            return ContinueNode()
+            return self.attach_attributes(ContinueNode(), attributes)
 
         if self.current_token[0] == "DISCARD":
             self.eat("DISCARD")
             self.eat("SEMICOLON")
             return "discard"
 
+        if self.current_token[0] == "LBRACE":
+            return self.parse_block()
+
         if self.current_token[0] == "PREPROCESSOR":
             self.parse_preprocessor_directive()
             return None
 
         if self.looks_like_declaration():
-            attributes = self.parse_attribute_list()
             qualifiers = self.parse_qualifiers()
             var = self.parse_variable_declaration(
                 qualifiers=qualifiers,
@@ -753,7 +745,20 @@ class HLSLParser:
 
         expr = self.parse_expression()
         self.eat("SEMICOLON")
-        return expr
+        return self.attach_attributes(expr, attributes)
+
+    def attach_attributes(self, node, attributes):
+        if node is not None and attributes:
+            existing = getattr(node, "attributes", []) or []
+            node.attributes = existing + attributes
+        return node
+
+    def ensure_statement_list(self, stmt):
+        if stmt is None:
+            return []
+        if isinstance(stmt, list):
+            return stmt
+        return [stmt]
 
     def looks_like_declaration(self):
         idx = self.current_index
@@ -789,7 +794,7 @@ class HLSLParser:
         vtype = self.parse_type()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-        return self.parse_variable_declaration_rest(
+        declarations = self.parse_variable_declaration_list_rest(
             vtype,
             name,
             qualifiers=qualifiers,
@@ -797,6 +802,40 @@ class HLSLParser:
             allow_semantic=allow_semantic,
             consume_semicolon=consume_semicolon,
         )
+        return declarations[0] if len(declarations) == 1 else declarations
+
+    def parse_variable_declaration_list_rest(
+        self,
+        vtype,
+        first_name,
+        qualifiers=None,
+        attributes=None,
+        allow_semantic=True,
+        consume_semicolon=True,
+    ):
+        declarations = []
+        name = first_name
+        while True:
+            declarations.append(
+                self.parse_variable_declaration_rest(
+                    vtype,
+                    name,
+                    qualifiers=qualifiers,
+                    attributes=attributes,
+                    allow_semantic=allow_semantic,
+                    consume_semicolon=False,
+                )
+            )
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+
+        if consume_semicolon:
+            self.eat("SEMICOLON")
+
+        return declarations
 
     def parse_variable_declaration_rest(
         self,
@@ -853,17 +892,28 @@ class HLSLParser:
             if self.current_token[0] == "ELSE":
                 self.eat("ELSE")
             else:
-                self.eat("ELSE_IF")
-                self.eat("LPAREN")
-                else_condition = self.parse_expression()
-                self.eat("RPAREN")
-                else_body = IfNode(
-                    else_condition,
-                    self.parse_statement_or_block(),
-                    None,
-                )
+                else_body = self.parse_else_if_statement()
                 return IfNode(condition, if_body, else_body)
 
+            if self.current_token[0] == "IF":
+                else_body = self.parse_if_statement()
+            else:
+                else_body = self.parse_statement_or_block()
+
+        return IfNode(condition, if_body, else_body)
+
+    def parse_else_if_statement(self):
+        self.eat("ELSE_IF")
+        self.eat("LPAREN")
+        condition = self.parse_expression()
+        self.eat("RPAREN")
+        if_body = self.parse_statement_or_block()
+
+        else_body = None
+        if self.current_token[0] == "ELSE_IF":
+            else_body = self.parse_else_if_statement()
+        elif self.current_token[0] == "ELSE":
+            self.eat("ELSE")
             if self.current_token[0] == "IF":
                 else_body = self.parse_if_statement()
             else:
@@ -892,7 +942,7 @@ class HLSLParser:
                     consume_semicolon=False,
                 )
             else:
-                init = self.parse_expression()
+                init = self.parse_expression_sequence()
         self.eat("SEMICOLON")
 
         condition = None
@@ -902,11 +952,18 @@ class HLSLParser:
 
         update = None
         if self.current_token[0] != "RPAREN":
-            update = self.parse_expression()
+            update = self.parse_expression_sequence()
         self.eat("RPAREN")
 
         body = self.parse_statement_or_block()
         return ForNode(init, condition, update, body)
+
+    def parse_expression_sequence(self):
+        expressions = [self.parse_expression()]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            expressions.append(self.parse_expression())
+        return expressions[0] if len(expressions) == 1 else expressions
 
     def parse_while_loop(self):
         self.eat("WHILE")
@@ -1136,7 +1193,29 @@ class HLSLParser:
                             break
                     idx += 1
             if idx < len(self.tokens) and self.tokens[idx][0] == "RPAREN":
-                return True
+                next_token = (
+                    self.tokens[idx + 1] if idx + 1 < len(self.tokens) else ("EOF", "")
+                )
+                return next_token[0] in {
+                    "IDENTIFIER",
+                    "NUMBER",
+                    "HEX_NUMBER",
+                    "BINARY_NUMBER",
+                    "OCT_NUMBER",
+                    "TRUE",
+                    "FALSE",
+                    "STRING",
+                    "CHAR_LITERAL",
+                    "LPAREN",
+                    "LBRACE",
+                    "PLUS",
+                    "MINUS",
+                    "LOGICAL_NOT",
+                    "BITWISE_NOT",
+                    "INCREMENT",
+                    "DECREMENT",
+                    *TYPE_TOKENS,
+                }
         return False
 
     def parse_postfix_expression(self):

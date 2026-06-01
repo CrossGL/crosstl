@@ -272,6 +272,123 @@ def test_parse_const_array_initializers():
     )
 
 
+def test_parse_vulkan_block_member_layouts_and_multiline_declarators():
+    code = textwrap.dedent("""
+        #version 450
+        layout(binding = 2) buffer FrequencyInformation
+        {
+            uvec4 settings;
+            uvec2 rates[];
+        }
+        params;
+
+        layout(push_constant) uniform PushConsts {
+            layout(offset = 12) float roughness;
+            layout(offset = 16) float metallic;
+        } material;
+
+        void main() {
+            const uint x0 = gl_GlobalInvocationID.x,
+                       y0 = gl_GlobalInvocationID.y,
+                       output_width = params.settings[2];
+            const float min_rate = 1,
+                        max_rate = max(params.settings.x, params.settings.y);
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+    push_consts = next(struct for struct in ast.structs if struct.name == "PushConsts")
+
+    assert [member.name for member in push_consts.members] == [
+        "roughness",
+        "metallic",
+    ]
+    assert push_consts.members[0].layout == {"offset": "12"}
+    assert push_consts.members[1].layout == {"offset": "16"}
+
+    main = next(function for function in ast.functions if function.name == "main")
+    declarations = [stmt for stmt in main.body if isinstance(stmt, VariableNode)]
+    assert [decl.name for decl in declarations] == [
+        "x0",
+        "y0",
+        "output_width",
+        "min_rate",
+        "max_rate",
+    ]
+
+
+def test_parse_array_type_declarators_and_newline_array_constructors():
+    code = textwrap.dedent("""
+        #version 450
+        const vec2[3] positions = vec2[]
+        (
+            vec2(-1, -1),
+            vec2(-1,  3),
+            vec2( 3, -1)
+        );
+
+        float conv(in float[9] kernel, in float[9] data) {
+            float[9] local;
+            return kernel[0] + data[0] + local[0];
+        }
+
+        void main() {
+            gl_Position = vec4(positions[0], 0.0, 1.0);
+        }
+        """)
+
+    ast = parse_ok(code, "vertex")
+
+    positions = next(var for var in ast.constant if var.name == "positions")
+    assert [size.value for size in positions.array_sizes] == ["3"]
+    assert isinstance(positions.value, InitializerListNode)
+
+    conv = next(function for function in ast.functions if function.name == "conv")
+    assert [size.value for size in conv.params[0].array_sizes] == ["9"]
+    assert [size.value for size in conv.params[1].array_sizes] == ["9"]
+    local = next(stmt for stmt in conv.body if isinstance(stmt, VariableNode))
+    assert [size.value for size in local.array_sizes] == ["9"]
+
+
+def test_parse_vulkan_extension_types_suffixes_and_qualifiers():
+    code = textwrap.dedent("""
+        #version 460
+        #extension GL_ARM_tensors : enable
+        #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+        layout(set = 0, binding = 0) writeonly uniform tensorARM<float, 4> output_tensor;
+        layout(location = 0) in pervertexEXT vec3 inColor[];
+
+        void main() {
+            vec3 sample[9];
+            f16vec4 rg_offset = f16vec4(0.95hf, 1.0hf, 0.95hf, 1.0hf);
+            sample[0] = inColor[0];
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+
+    tensor = next(var for var in ast.uniforms if var.name == "output_tensor")
+    assert tensor.vtype == "tensorARM<float, 4>"
+
+    in_color = next(var for var in ast.io_variables if var.name == "inColor")
+    assert "pervertexEXT" in in_color.qualifiers
+    assert in_color.is_array is True
+
+
+def test_parse_empty_statement_after_control_block():
+    code = textwrap.dedent("""
+        #version 450
+        void main() {
+            if (gl_FrontFacing) {
+                gl_FragDepth = 1.0;
+            };
+        }
+        """)
+
+    parse_ok(code, "fragment")
+
+
 def test_parse_control_flow_constructs():
     code = textwrap.dedent("""
         #version 450 core

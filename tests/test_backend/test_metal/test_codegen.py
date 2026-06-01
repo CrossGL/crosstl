@@ -180,8 +180,41 @@ def test_codegen_texture_and_sampler_translation():
     """
     result = convert(code)
     assert re.search(r"sampler2d", result, re.IGNORECASE)
-    assert "texture(albedo, samp, in.uv)" in result
+    assert "texture(albedo, samp, in_.uv)" in result
     assert "albedo" in result
+
+
+def test_codegen_gpuimage_typedef_struct_and_nested_constructor_expression():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef struct
+    {
+        float rangeReduction;
+    } RangeReductionUniform;
+
+    struct SingleInputVertexIO {
+        float4 position [[position]];
+        float2 textureCoordinate;
+    };
+
+    fragment half4 luminanceRangeFragment(SingleInputVertexIO fragmentInput [[stage_in]],
+                                          texture2d<half> inputTexture [[texture(0)]],
+                                          constant RangeReductionUniform& uniform [[buffer(1)]]) {
+        constexpr sampler quadSampler;
+        half4 color = inputTexture.sample(quadSampler, fragmentInput.textureCoordinate);
+        half luminanceRatio = ((0.5 - color.r) * uniform.rangeReduction);
+        return half4(half3((color.rgb) + (luminanceRatio)), color.w);
+    }
+    """
+    result = convert(code)
+
+    assert "struct RangeReductionUniform" in result
+    assert "f16vec3(color.rgb + luminanceRatio)" in result
+    assert (
+        "float16 luminanceRatio = (0.5 - color.r) * uniform_.rangeReduction;" in result
+    )
 
 
 def test_codegen_texture_sample_preserves_explicit_sampler_roundtrip():
@@ -1149,6 +1182,72 @@ def test_codegen_function_constants_and_argument_buffers():
     assert "@id(3)" in result
     assert "@argument_buffer" in result
     assert "@function_constant(0)" in result
+
+
+def test_codegen_sanitizes_crossgl_keyword_identifiers_from_real_msl():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef struct {
+        float brightness;
+    } BrightnessUniform;
+
+    fragment half4 brightnessFragment(VertexOut in [[stage_in]],
+                                      texture2d<half> texture [[texture(0)]],
+                                      constant BrightnessUniform& uniform [[buffer(1)]]) {
+        half4 color = texture.sample(linearSampler, in.textureCoordinate);
+        return half4(color.rgb + uniform.brightness, color.a);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "VertexOut in_" in crossgl
+    assert "sampler2D texture_" in crossgl
+    assert "BrightnessUniform& uniform_" in crossgl
+    assert "in.textureCoordinate" not in crossgl
+    assert "uniform.brightness" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    assert ast is not None
+
+
+def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constexpr sampler sampler2d(coord::normalized, filter::linear);
+
+    fragment half4 second_passthrough(QuadVertexOut in [[stage_in]],
+                                      texture2d<float, access::sample> texture [[texture(0)]]) {
+        float4 const color = texture.sample(sampler2d, in.texCoords);
+        return half4(half3(color.rgb), 1);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "texture(texture_, in_.texCoords)" in crossgl
+    assert "sampler2d" not in crossgl
+    assert "texture(texture_, sampler2d" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "texture_.sample(sampler(" in metal
+
+
+def test_codegen_sanitizes_unicode_identifiers_for_crossgl_parse():
+    code = """
+    void main() {
+        float const 𝛂 = 1.0;
+        float value = 𝛂;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "_u1d6c2" in crossgl
+    assert "𝛂" not in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_metal_namespace_types():

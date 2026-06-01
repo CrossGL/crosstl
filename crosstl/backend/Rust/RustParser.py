@@ -1389,8 +1389,20 @@ class RustParser:
                     is_mutable = True
                     self.eat("MUT")
 
-                param_name = self.current_token[1]
-                self.eat("IDENTIFIER")
+                if self.current_token[0] == "UNDERSCORE":
+                    self.eat("UNDERSCORE")
+                    if self.current_token[0] == "IDENTIFIER":
+                        param_name = f"_{self.current_token[1]}"
+                        self.eat("IDENTIFIER")
+                    else:
+                        param_name = "_"
+                elif self.current_token[0] == "IDENTIFIER":
+                    param_name = self.current_token[1]
+                    self.eat("IDENTIFIER")
+                else:
+                    raise SyntaxError(
+                        f"Expected IDENTIFIER, got {self.current_token[0]}"
+                    )
                 self.eat("COLON")
                 param_type = self.parse_type()
 
@@ -2351,17 +2363,7 @@ class RustParser:
                 if left == "matches":
                     left = self.parse_matches_macro_expression()
                 else:
-                    self.eat("LPAREN")
-                    args = []
-                    while self.current_token[0] != "RPAREN":
-                        args.append(self.parse_expression())
-                        if self.current_token[0] == "COMMA":
-                            self.eat("COMMA")
-                        else:
-                            break
-                    self.eat("RPAREN")
-                    # Treat macro calls as function calls for code generation
-                    left = FunctionCallNode(left, args)
+                    left = self.parse_macro_invocation(left)
             elif self.current_token[0] == "LPAREN":
                 self.eat("LPAREN")
                 args = []
@@ -2380,6 +2382,54 @@ class RustParser:
                 break
 
         return left
+
+    def parse_macro_invocation(self, macro_name):
+        if self.current_token[0] == "LPAREN":
+            self.eat("LPAREN")
+            args = []
+            while self.current_token[0] != "RPAREN":
+                args.append(self.parse_expression())
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                else:
+                    break
+            self.eat("RPAREN")
+            return FunctionCallNode(macro_name, args)
+
+        if self.current_token[0] in {"LBRACE", "LBRACKET"}:
+            delimiter = self.current_token[0]
+            body = self.collect_delimited_macro_body()
+            node = FunctionCallNode(f"{macro_name}!", [body])
+            node.macro_delimiter = delimiter
+            return node
+
+        raise SyntaxError(f"Expected macro delimiter, got {self.current_token[0]}")
+
+    def collect_delimited_macro_body(self):
+        opening_token = self.current_token[0]
+        closing_token = {"LBRACE": "RBRACE", "LBRACKET": "RBRACKET"}[opening_token]
+        self.eat(opening_token)
+
+        opening_tokens = {"LBRACE", "LBRACKET", "LPAREN"}
+        closing_tokens = {"RBRACE", "RBRACKET", "RPAREN"}
+        parts = []
+        depth = 0
+
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if depth == 0 and token_type == closing_token:
+                break
+
+            if token_type in opening_tokens:
+                depth += 1
+            elif token_type in closing_tokens and depth > 0:
+                depth -= 1
+
+            parts.append(str(token_value))
+            self.eat(token_type)
+
+        self.eat(closing_token)
+        return self.format_token_parts(parts)
 
     def parse_matches_macro_expression(self):
         self.eat("LPAREN")
@@ -2628,12 +2678,24 @@ class RustParser:
                     self.eat("SEMICOLON")
                     statements.append(parsed_expression)
                     continue
+                if (
+                    self.is_braced_macro_call(parsed_expression)
+                    and self.current_token[0] != "RBRACE"
+                ):
+                    statements.append(parsed_expression)
+                    continue
 
                 expression = parsed_expression
                 break
 
         self.eat("RBRACE")
         return BlockNode(statements, expression)
+
+    def is_braced_macro_call(self, expression):
+        return (
+            isinstance(expression, FunctionCallNode)
+            and getattr(expression, "macro_delimiter", None) == "LBRACE"
+        )
 
     def try_parse_block_final_expression(self):
         start_index = self.current_index

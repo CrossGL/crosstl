@@ -421,6 +421,100 @@ def test_parse_using_alias():
     parse_ok(code)
 
 
+def test_parse_gpuimage_typedef_struct_and_parenthesized_identifier_expression():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef struct {
+        float reductionFactor;
+    } LuminanceUniform;
+
+    fragment half4 luminanceRangeReduction(
+        texture2d<half> inputTexture [[texture(0)]],
+        constant LuminanceUniform& uniform [[buffer(1)]]
+    ) {
+        half4 color;
+        half luminanceRatio;
+        return half4(half3((color.rgb) + (luminanceRatio)), color.w);
+    }
+    """
+    parse_ok(code)
+
+
+def test_parse_stage_attributes_and_trailing_const_pointer_qualifiers():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct ShaderVertex {
+        float4 position [[position]];
+        float4 color;
+    };
+
+    [[vertex]] ShaderVertex main_vertex(
+        device ShaderVertex const* const vertices [[buffer(0)]],
+        uint vid [[vertex_id]]
+    ) {
+        return vertices[vid];
+    }
+    """
+    ast = parse_ok(code)
+
+    assert ast.functions[0].qualifier == "vertex"
+
+
+def test_parse_function_prototypes_macro_expanded_empty_statements_and_comma_update():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    half lum(half3 c);
+
+    half lum(half3 c) {
+        return dot(c, half3(0.3, 0.59, 0.11));
+    }
+
+    kernel void reduce(device uint* values [[buffer(0)]], uint histSize) {
+        uint residual = 4;
+        uint residualStep = 2;
+        for (uint i = 0; i < histSize && residual > 0; i += residualStep, residual--) {
+            ; ;
+            values[i]++;
+        }
+    }
+    """
+    parse_ok(code)
+
+
+def test_parse_metalpetal_namespace_macro_qualifier_and_unsigned_int():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    namespace metalpetal {
+        namespace yuv2rgbconvert {
+            typedef struct {
+                packed_float2 position;
+            } Vertex;
+
+            METAL_FUNC float helper(float value) {
+                using namespace metalpetal::yuv2rgbconvert;
+                return value;
+            }
+
+            vertex float4 colorConversionVertex(
+                const device Vertex * vertices [[buffer(0)]],
+                unsigned int vid [[vertex_id]]
+            ) {
+                return float4(float2(vertices[vid].position), helper(1.0), 1.0);
+            }
+        }
+    }
+    """
+    parse_ok(code)
+
+
 def test_parse_function_table_call_and_icb_methods():
     code = """
     #include <metal_stdlib>

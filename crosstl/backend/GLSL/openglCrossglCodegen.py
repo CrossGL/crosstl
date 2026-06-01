@@ -56,7 +56,9 @@ class GLSLToCrossGLConverter:
         "perprimitive": "perprimitive",
         "perprimitiveext": "perprimitive",
         "pervertex": "pervertex",
+        "pervertexext": "pervertex",
         "perview": "perview",
+        "perviewext": "perview",
     }
     VARIABLE_QUALIFIER_ATTRIBUTES = {
         "invariant": "invariant",
@@ -313,6 +315,14 @@ class GLSLToCrossGLConverter:
             "mat2": "mat2",
             "mat3": "mat3",
             "mat4": "mat4",
+            "texture1D": "texture1D",
+            "texture2D": "texture2D",
+            "texture3D": "texture3D",
+            "textureCube": "textureCube",
+            "texture1DArray": "texture1DArray",
+            "texture2DArray": "texture2DArray",
+            "textureCubeArray": "textureCubeArray",
+            "sampler": "sampler",
             "sampler1D": "sampler1D",
             "sampler2D": "sampler2D",
             "sampler3D": "sampler3D",
@@ -465,7 +475,15 @@ class GLSLToCrossGLConverter:
             return False
         name = str(type_name)
         return name == "accelerationStructureEXT" or name.startswith(
-            ("sampler", "isampler", "usampler", "image", "iimage", "uimage")
+            (
+                "texture",
+                "sampler",
+                "isampler",
+                "usampler",
+                "image",
+                "iimage",
+                "uimage",
+            )
         )
 
     def resource_function_descriptor(self, name):
@@ -1542,9 +1560,15 @@ class GLSLToCrossGLConverter:
         init = self.generate_statement(node.init).rstrip(";") if node.init else ""
         condition = self.generate_expression(node.condition) if node.condition else ""
         update_node = getattr(node, "update", None) or getattr(node, "iteration", None)
-        iteration = (
-            self.generate_statement(update_node).rstrip(";") if update_node else ""
-        )
+        if isinstance(update_node, list):
+            iteration = ", ".join(
+                self.generate_statement(update_part).rstrip(";")
+                for update_part in update_node
+            )
+        else:
+            iteration = (
+                self.generate_statement(update_node).rstrip(";") if update_node else ""
+            )
 
         result = f"for ({init}; {condition}; {iteration}) {{\n"
         self.increase_indent()

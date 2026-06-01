@@ -98,6 +98,28 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
     assert "memoryBarrierShared();" not in generated_code
     assert "deviceMemoryBarrier();" not in generated_code
     assert "memoryBarrierBuffer();" not in generated_code
+
+
+def test_directx_compute_rootsignature_attribute_is_not_return_semantic():
+    shader = """
+    shader RootSignatureCompute {
+        compute {
+            @ RootSignature("RootFlags(0), RootConstants(b0, num32BitConstants = 1)")
+            @ numthreads(8, 1, 1)
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        '[RootSignature("RootFlags(0), RootConstants(b0, num32BitConstants = 1)")]'
+        in generated_code
+    )
+    assert "[numthreads(8, 1, 1)]" in generated_code
+    assert "return semantic 'RootSignature'" not in generated_code
     assert "memoryBarrierImage();" not in generated_code
     assert "allMemoryBarrier();" not in generated_code
 
@@ -11665,6 +11687,24 @@ def test_compute_stage_validates_system_value_parameter_types():
     assert "uint3 groupId : SV_GroupID" in generated
     assert "uint3 groupThreadId : SV_GroupThreadID" in generated
     assert "uint3 dispatchId : SV_DispatchThreadID" in generated
+    assert "uint groupIndex : SV_GroupIndex" in generated
+
+    valid_group_vec2_code = """
+    shader ValidComputeGroupVec2SystemValues {
+        compute {
+            void main(
+                uvec2 groupId @ SV_GroupID,
+                uvec2 groupThreadId @ SV_GroupThreadID,
+                uint groupIndex @ SV_GroupIndex
+            ) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_group_vec2_code), "compute"
+    )
+    assert "uint2 groupId : SV_GroupID" in generated
+    assert "uint2 groupThreadId : SV_GroupThreadID" in generated
     assert "uint groupIndex : SV_GroupIndex" in generated
 
 

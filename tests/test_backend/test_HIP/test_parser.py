@@ -183,6 +183,27 @@ class TestHipParser:
         assert pointer_warp_value.member == "warpSize"
         assert pointer_warp_value.is_pointer
 
+    def test_newline_split_initializer_and_builtin_named_members(self):
+        code = """
+        void host() {
+            hipChannelFormatDesc channel_desc
+                = hipCreateChannelDesc(8, 0, 0, 0, hipChannelFormatKindUnsigned);
+            hipKernelNodeParams params{};
+            params.gridDim = dim3(1, 1, 1);
+            params.blockDim = dim3(32, 1, 1);
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert body[0].name == "channel_desc"
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "hipCreateChannelDesc"
+        assert isinstance(body[2].left, MemberAccessNode)
+        assert body[2].left.member == "gridDim"
+        assert isinstance(body[3].left, MemberAccessNode)
+        assert body[3].left.member == "blockDim"
+
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         code = """
         float weights[4] = {1.0f, 2.0f, 3.0f, 4.0f};

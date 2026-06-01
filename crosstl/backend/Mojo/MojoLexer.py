@@ -73,6 +73,7 @@ TOKENS = tuple(
         ("MINUS_EQUALS", r"-="),
         ("MULTIPLY_EQUALS", r"\*="),
         ("DIVIDE_EQUALS", r"/="),
+        ("FLOOR_DIVIDE", r"//"),
         ("ASSIGN_XOR", r"\^="),
         ("ASSIGN_OR", r"\|="),
         ("ASSIGN_AND", r"\&="),
@@ -140,6 +141,7 @@ class MojoLexer:
     """Tokenize Mojo source for the Mojo backend parser."""
 
     def __init__(self, code: str):
+        code = code.lstrip("\ufeff")
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
 

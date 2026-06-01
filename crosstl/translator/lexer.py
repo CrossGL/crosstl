@@ -441,7 +441,7 @@ class Lexer:
     """Tokenizer for CrossGL Universal IR."""
 
     def __init__(self, code):
-        self.code = code
+        self.code = code.lstrip("\ufeff")
         self.tokens = []
         self.token_cache = {}
         self.regex_cache = self._compile_patterns()

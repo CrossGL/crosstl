@@ -75,7 +75,18 @@ class HipParser:
         "HIPBLOCKDIM": "blockDim",
         "HIPGRIDDIM": "gridDim",
     }
-    MEMBER_NAME_TOKENS = {"IDENTIFIER", "WARPSIZE"}
+    MEMBER_NAME_TOKENS = {
+        "IDENTIFIER",
+        "THREADIDX",
+        "BLOCKIDX",
+        "BLOCKDIM",
+        "GRIDDIM",
+        "HIPTHREADIDX",
+        "HIPBLOCKIDX",
+        "HIPBLOCKDIM",
+        "HIPGRIDDIM",
+        "WARPSIZE",
+    }
     FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
     LAMBDA_SPECIFIER_TOKENS = {
         "__DEVICE__",
@@ -702,6 +713,7 @@ class HipParser:
         var_type = self.parse_type()
         name = self.consume("IDENTIFIER").value
         var_type += self.parse_array_suffix()
+        self.skip_newlines()
 
         value = None
         if self.match("ASSIGN"):
@@ -713,6 +725,7 @@ class HipParser:
             value = self.parse_initializer_list()
 
         if consume_semicolon:
+            self.skip_newlines()
             self.consume("SEMICOLON")
 
         return VariableNode(var_type, name, value, qualifiers)
@@ -745,6 +758,7 @@ class HipParser:
             )
 
         if consume_semicolon:
+            self.skip_newlines()
             self.consume("SEMICOLON")
 
         return declarations
@@ -756,6 +770,7 @@ class HipParser:
 
         name = self.consume("IDENTIFIER").value
         var_type += self.parse_array_suffix()
+        self.skip_newlines()
         value = self.parse_variable_initializer(var_type)
 
         return VariableNode(var_type, name, value, list(qualifiers))
@@ -781,6 +796,7 @@ class HipParser:
         return " ".join(parts)
 
     def parse_variable_initializer(self, var_type):
+        self.skip_newlines()
         if self.match("ASSIGN"):
             self.advance()
             self.skip_newlines()
@@ -2300,6 +2316,8 @@ class HipParser:
         if index is not None:
             if index < len(self.tokens) and self.tokens[index].type == "IDENTIFIER":
                 index += 1
+                while index < len(self.tokens) and self.tokens[index].type == "NEWLINE":
+                    index += 1
                 if index < len(self.tokens) and self.tokens[index].type in {
                     "SEMICOLON",
                     "ASSIGN",

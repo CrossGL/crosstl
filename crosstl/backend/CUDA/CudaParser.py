@@ -911,6 +911,8 @@ class CudaParser:
         return statements
 
     def parse_statement(self):
+        if self.current_token[0] == "PREPROCESSOR":
+            return self.parse_preprocessor()
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -1629,6 +1631,13 @@ class CudaParser:
         elif self.current_token[0] == "STRING":
             value = self.current_token[1]
             self.eat("STRING")
+            while self.current_token[0] == "STRING":
+                next_value = self.current_token[1]
+                if value.endswith('"') and next_value.startswith('"'):
+                    value = value[:-1] + next_value[1:]
+                else:
+                    value += next_value
+                self.eat("STRING")
             return value
         elif self.current_token[0] == "CHAR_LIT":
             value = self.current_token[1]

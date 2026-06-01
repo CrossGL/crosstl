@@ -15,6 +15,7 @@ from crosstl.backend.Mojo.MojoAst import (
     FunctionCallNode,
     FunctionNode,
     IfNode,
+    ImportNode,
     MemberAccessNode,
     MethodCallNode,
     RangeForNode,
@@ -84,6 +85,43 @@ def test_struct_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_parenthesized_import_items_and_floor_divide_parsing():
+    code = """
+    from std.gpu import (
+        block_idx,
+        thread_idx,
+    )
+
+    fn main():
+        var threads = max_threads // 2
+    """
+    ast = parse_code(tokenize_code(code))
+
+    import_node = ast.functions[0]
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+
+    assert isinstance(import_node, ImportNode)
+    assert import_node.items == ["block_idx", "thread_idx"]
+    assert isinstance(declaration.value, BinaryOpNode)
+    assert declaration.value.op == "//"
+
+
+def test_multiline_parenthesized_expression_parsing():
+    code = """
+    fn main():
+        var smem_per_tile = (
+            max_smem // 4 // 2
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+
+    assert isinstance(declaration.value, BinaryOpNode)
+    assert declaration.value.op == "//"
 
 
 def test_struct_generic_member_parsing():

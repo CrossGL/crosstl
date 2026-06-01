@@ -152,10 +152,14 @@ RAY_STORAGE_QUALIFIERS = {
 
 MESH_STORAGE_QUALIFIERS = {
     "perprimitiveEXT",
+    "pervertexEXT",
+    "perviewEXT",
     "taskPayloadSharedEXT",
 }
 
 IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS
+
+NAME_TOKENS = {"IDENTIFIER", "SAMPLE"}
 
 ASSIGNMENT_TOKENS = {
     "EQUALS": "=",
@@ -304,6 +308,7 @@ class GLSLParser:
                 or self.current_token[0] == "IDENTIFIER"
             ):
                 type_name = self.parse_type()
+                self.skip_newlines()
 
                 if (
                     self.current_token[0] == "IDENTIFIER"
@@ -434,27 +439,93 @@ class GLSLParser:
         if self.current_token[0] in TYPE_TOKENS:
             type_name = self.current_token[1]
             self.advance()
-            return type_name
+            return type_name + self.parse_type_template_suffix()
         if self.current_token[0] == "IDENTIFIER":
             type_name = self.current_token[1]
             self.eat("IDENTIFIER")
-            return type_name
+            return type_name + self.parse_type_template_suffix()
         raise SyntaxError(f"Expected type, got {self.current_token}")
 
+    def parse_type_template_suffix(self):
+        if self.current_token[0] != "LESS_THAN":
+            return ""
+
+        self.eat("LESS_THAN")
+        parts = []
+        depth = 1
+        while depth:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated type template argument list")
+            if self.current_token[0] == "LESS_THAN":
+                depth += 1
+                parts.append("<")
+                self.advance()
+                continue
+            if self.current_token[0] == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    self.advance()
+                    break
+                parts.append(">")
+                self.advance()
+                continue
+            parts.append(self.current_token[1])
+            self.advance()
+
+        return f"<{self.format_type_template_parts(parts)}>"
+
+    def format_type_template_parts(self, parts):
+        text = " ".join(str(part) for part in parts)
+        return (
+            text.replace(" ,", ",")
+            .replace(", ", ", ")
+            .replace("< ", "<")
+            .replace(" >", ">")
+        )
+
+    def is_name_token(self):
+        return self.current_token[0] in NAME_TOKENS
+
+    def parse_identifier_name(self, context="identifier"):
+        if self.is_name_token():
+            name = self.current_token[1]
+            self.advance()
+            return name
+        raise SyntaxError(f"Expected {context}, got {self.current_token}")
+
+    def is_declaration_start(self):
+        if self.current_token[0] in TYPE_TOKENS:
+            return True
+        if self.current_token[0] not in QUALIFIER_TOKENS:
+            return False
+        if self.current_token[0] in NAME_TOKENS:
+            next_token = self.peek_non_newline()
+            return next_token[0] in QUALIFIER_TOKENS or next_token[0] in TYPE_TOKENS
+        return True
+
     def parse_variable_declarations(
-        self, type_name, qualifiers=None, layout=None, consume_semicolon=True
+        self,
+        type_name,
+        qualifiers=None,
+        layout=None,
+        consume_semicolon=True,
+        type_array_sizes=None,
     ):
         variables = []
+        if type_array_sizes is None:
+            type_array_sizes = []
+            if self.current_token[0] == "LBRACKET":
+                type_array_sizes = self.parse_array_suffixes()
         while True:
-            if self.current_token[0] != "IDENTIFIER":
+            self.skip_newlines()
+            if not self.is_name_token():
                 raise SyntaxError(
                     f"Expected identifier in declaration, got {self.current_token}"
                 )
 
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            name = self.parse_identifier_name()
 
-            array_sizes = self.parse_array_suffixes()
+            array_sizes = list(type_array_sizes) + self.parse_array_suffixes()
             is_array = bool(array_sizes)
             array_size = array_sizes[0] if array_sizes else None
 
@@ -486,8 +557,10 @@ class GLSLParser:
 
             variables.append(var)
 
+            self.skip_newlines()
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
+                self.skip_newlines()
                 continue
             break
 
@@ -522,32 +595,17 @@ class GLSLParser:
             self.skip_newlines()
             if self.current_token[0] == "RBRACE":
                 break
-            if self.current_token[0] in QUALIFIER_TOKENS:
-                qualifiers = self.parse_qualifiers()
-            else:
-                qualifiers = []
+            member_layout = None
+            if self.current_token[0] == "LAYOUT":
+                member_layout = self.parse_layout_qualifier()
+                self.skip_newlines()
+            qualifiers = self.parse_qualifiers()
             member_type = self.parse_type()
-
-            if self.current_token[0] != "IDENTIFIER":
-                raise SyntaxError(
-                    f"Expected identifier in struct field, got {self.current_token}"
-                )
-
-            member_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-
-            array_sizes = self.parse_array_suffixes()
-            array_size = array_sizes[0] if array_sizes else None
-
-            self.eat("SEMICOLON")
-            members.append(
-                VariableNode(
+            members.extend(
+                self.parse_variable_declarations(
                     member_type,
-                    member_name,
                     qualifiers=qualifiers,
-                    array_size=array_size,
-                    array_sizes=array_sizes,
-                    is_array=bool(array_sizes),
+                    layout=member_layout,
                 )
             )
 
@@ -573,31 +631,20 @@ class GLSLParser:
             self.skip_newlines()
             if self.current_token[0] == "RBRACE":
                 break
+            member_layout = None
+            if self.current_token[0] == "LAYOUT":
+                member_layout = self.parse_layout_qualifier()
+                self.skip_newlines()
             member_qualifiers = self.parse_qualifiers()
             member_type = self.parse_type()
-
-            if self.current_token[0] != "IDENTIFIER":
-                raise SyntaxError(
-                    f"Expected identifier in interface block, got {self.current_token}"
-                )
-            member_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-
-            array_sizes = self.parse_array_suffixes()
-            array_size = array_sizes[0] if array_sizes else None
-            is_array = bool(array_sizes)
-
-            self.eat("SEMICOLON")
-            member_node = VariableNode(
+            member_nodes = self.parse_variable_declarations(
                 member_type,
-                member_name,
                 qualifiers=member_qualifiers,
-                array_size=array_size,
-                array_sizes=array_sizes,
+                layout=member_layout,
             )
-            member_node.is_array = is_array
-            member_node.interface_block = block_name
-            members.append(member_node)
+            for member_node in member_nodes:
+                member_node.interface_block = block_name
+                members.append(member_node)
 
         self.eat("RBRACE")
         self.skip_newlines()
@@ -687,10 +734,12 @@ class GLSLParser:
                 self.skip_newlines()
                 qualifiers = self.parse_qualifiers()
                 param_type = self.parse_type()
-                param_name = self.current_token[1]
-                self.eat("IDENTIFIER")
+                type_array_sizes = []
+                if self.current_token[0] == "LBRACKET":
+                    type_array_sizes = self.parse_array_suffixes()
+                param_name = self.parse_identifier_name("parameter name")
 
-                array_sizes = self.parse_array_suffixes()
+                array_sizes = type_array_sizes + self.parse_array_suffixes()
                 array_size = array_sizes[0] if array_sizes else None
 
                 params.append(
@@ -742,6 +791,9 @@ class GLSLParser:
         self.skip_newlines()
         if self.current_token[0] in ("RBRACE", "EOF"):
             return None
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return None
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
             block = self.parse_block()
@@ -775,29 +827,17 @@ class GLSLParser:
                 self.eat("SEMICOLON")
             return DiscardNode()
 
-        if (
-            self.current_token[0] in QUALIFIER_TOKENS
-            or self.current_token[0] in TYPE_TOKENS
-        ):
+        if self.is_declaration_start():
             qualifiers = self.parse_qualifiers()
             type_name = self.parse_type()
+            self.skip_newlines()
             return self.parse_variable_declarations(type_name, qualifiers=qualifiers)
         if self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "IDENTIFIER":
             type_name = self.parse_type()
+            self.skip_newlines()
             return self.parse_variable_declarations(type_name, qualifiers=[])
 
-        expr = self.parse_expression()
-        if self.current_token[0] in ASSIGNMENT_TOKENS:
-            op = ASSIGNMENT_TOKENS[self.current_token[0]]
-            self.eat(self.current_token[0])
-            right = self.parse_expression()
-            self.skip_newlines()
-            if self.current_token[0] != "SEMICOLON":
-                raise SyntaxError(
-                    f"Expected ';' after assignment, got {self.current_token}"
-                )
-            self.eat("SEMICOLON")
-            return AssignmentNode(expr, right, op)
+        expr = self.parse_assignment_expression()
         self.skip_newlines()
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
@@ -851,12 +891,7 @@ class GLSLParser:
                 )
                 init = init_decls[0] if init_decls else None
             else:
-                init = self.parse_expression()
-                if self.current_token[0] in ASSIGNMENT_TOKENS:
-                    op = ASSIGNMENT_TOKENS[self.current_token[0]]
-                    self.eat(self.current_token[0])
-                    right = self.parse_expression()
-                    init = AssignmentNode(init, right, op)
+                init = self.parse_assignment_expression()
 
         self.eat("SEMICOLON")
 
@@ -867,12 +902,15 @@ class GLSLParser:
 
         update = None
         if self.current_token[0] != "RPAREN":
-            update = self.parse_expression()
-            if self.current_token[0] in ASSIGNMENT_TOKENS:
-                op = ASSIGNMENT_TOKENS[self.current_token[0]]
-                self.eat(self.current_token[0])
-                right = self.parse_expression()
-                update = AssignmentNode(update, right, op)
+            updates = []
+            while True:
+                updates.append(self.parse_assignment_expression())
+                self.skip_newlines()
+                if self.current_token[0] != "COMMA":
+                    break
+                self.eat("COMMA")
+                self.skip_newlines()
+            update = updates[0] if len(updates) == 1 else updates
         self.eat("RPAREN")
 
         body = self.parse_statement_or_block()
@@ -975,6 +1013,16 @@ class GLSLParser:
     def parse_expression(self):
         self.skip_newlines()
         return self.parse_ternary()
+
+    def parse_assignment_expression(self):
+        expr = self.parse_expression()
+        self.skip_newlines()
+        if self.current_token[0] in ASSIGNMENT_TOKENS:
+            op = ASSIGNMENT_TOKENS[self.current_token[0]]
+            self.eat(self.current_token[0])
+            right = self.parse_assignment_expression()
+            return AssignmentNode(expr, right, op)
+        return expr
 
     def parse_ternary(self):
         expr = self.parse_logical_or()
@@ -1124,6 +1172,7 @@ class GLSLParser:
                 if self.current_token[0] != "RBRACKET":
                     self.parse_expression()
                 self.eat("RBRACKET")
+                self.skip_newlines()
                 args = self.parse_call_arguments()
                 expr = InitializerListNode(args)
                 continue
@@ -1135,8 +1184,7 @@ class GLSLParser:
                 continue
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
-                member = self.current_token[1]
-                self.eat("IDENTIFIER")
+                member = self.parse_identifier_name("member name")
                 expr = MemberAccessNode(expr, member)
                 continue
             if self.current_token[0] == "LPAREN":
@@ -1165,6 +1213,11 @@ class GLSLParser:
                 depth -= 1
                 if depth == 0:
                     next_idx = idx + 1
+                    while (
+                        next_idx < len(self.tokens)
+                        and self.tokens[next_idx][0] == "NEWLINE"
+                    ):
+                        next_idx += 1
                     if next_idx < len(self.tokens):
                         return self.tokens[next_idx][0] == "LPAREN"
                     return False
@@ -1203,10 +1256,7 @@ class GLSLParser:
             value = self.current_token[1]
             self.advance()
             return value
-        if (
-            self.current_token[0] in TYPE_TOKENS
-            or self.current_token[0] == "IDENTIFIER"
-        ):
+        if self.current_token[0] in TYPE_TOKENS or self.current_token[0] in NAME_TOKENS:
             name = self.current_token[1]
             self.advance()
             return VariableNode("", name)

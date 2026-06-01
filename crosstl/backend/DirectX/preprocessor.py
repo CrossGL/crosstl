@@ -197,7 +197,7 @@ class HLSLPreprocessor:
         after = rest[name_match.end() :]
         if after.startswith("("):
             params, remainder, is_variadic = self._parse_macro_params(after)
-            replacement = remainder.lstrip()
+            replacement = self._strip_macro_comments(remainder.lstrip())
             self.macros[name] = Macro(
                 name=name,
                 params=params,
@@ -205,8 +205,30 @@ class HLSLPreprocessor:
                 is_variadic=is_variadic,
             )
         else:
-            replacement = after.lstrip()
+            replacement = self._strip_macro_comments(after.lstrip())
             self.macros[name] = Macro(name=name, params=None, replacement=replacement)
+
+    def _strip_macro_comments(self, text: str) -> str:
+        result = ""
+        i = 0
+        while i < len(text):
+            if text[i] in "\"'":
+                literal, consumed = self._read_string(text, i)
+                result += literal
+                i += consumed
+                continue
+            if text.startswith("//", i):
+                break
+            if text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                if end == -1:
+                    break
+                result += " "
+                i = end + 2
+                continue
+            result += text[i]
+            i += 1
+        return result.rstrip()
 
     def _parse_macro_params(self, text: str) -> Tuple[List[str], str, bool]:
         assert text[0] == "("
@@ -256,7 +278,7 @@ class HLSLPreprocessor:
         for base in search_paths:
             candidate = os.path.join(base, target)
             if os.path.isfile(candidate):
-                with open(candidate, encoding="utf-8") as handle:
+                with open(candidate, encoding="utf-8", errors="replace") as handle:
                     return handle.read(), candidate
 
         if self.strict:

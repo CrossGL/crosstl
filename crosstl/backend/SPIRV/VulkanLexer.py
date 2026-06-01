@@ -315,6 +315,7 @@ class VulkanLexer:
         file_path: Optional[str] = None,
     ):
         """Initialize the lexer and optionally preprocess Vulkan source text."""
+        code = code.lstrip("\ufeff")
         if preprocess:
             preprocessor = VulkanPreprocessor(
                 include_paths=include_paths,

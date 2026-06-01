@@ -160,6 +160,42 @@ def test_enum_discriminant_expression_parsing():
         pytest.fail(f"Enum discriminant expression parsing failed: {e}")
 
 
+def test_braced_macro_invocation_parsing():
+    code = r"""
+    pub unsafe fn subgroup_add(value: u32) -> u32 {
+        let mut result = 0;
+        asm! {
+            "OpStore {result}",
+            value = in(reg) value,
+            result = in(reg) &mut result,
+        }
+        result
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+    macro_call = function.body[1]
+
+    assert isinstance(macro_call, FunctionCallNode)
+    assert macro_call.name == "asm!"
+    assert macro_call.macro_delimiter == "LBRACE"
+    assert "OpStore" in macro_call.args[0]
+
+
+def test_underscore_parameter_name_parsing():
+    code = """
+    pub fn fallback(_value: u32) -> u32 {
+        return 0;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.functions[0].params[0].name == "_value"
+    assert ast.functions[0].params[0].vtype == "u32"
+
+
 def test_tuple_struct_and_variant_visibility_parsing():
     code = """
     #[repr(transparent)]

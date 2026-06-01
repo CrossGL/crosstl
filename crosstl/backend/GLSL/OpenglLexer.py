@@ -12,8 +12,9 @@ HEX_NUMBER = r"0[xX][0-9a-fA-F]+"
 DECIMAL_FLOAT = r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?"
 DECIMAL_EXP = r"\d+[eE][+-]?\d+"
 DECIMAL_INT = r"\d+"
+NUMBER_SUFFIX = r"(?:[fF]|[hH][fF]|[lL][fF]|[uU](?:[lL]{1,2})?|[lL]{1,2}[uU]?)?"
 NUMBER_PATTERN = (
-    rf"(?:{HEX_NUMBER}|{DECIMAL_FLOAT}|{DECIMAL_EXP}|{DECIMAL_INT})(?:[fFuU])?"
+    rf"(?:{HEX_NUMBER}|{DECIMAL_FLOAT}|{DECIMAL_EXP}|{DECIMAL_INT}){NUMBER_SUFFIX}"
 )
 
 # Order matters: longer tokens first
@@ -243,6 +244,7 @@ class GLSLLexer:
         file_path: Optional[str] = None,
     ):
         """Initialize the lexer and optionally run the GLSL preprocessor."""
+        code = code.lstrip("\ufeff")
         if preprocess:
             preprocessor = GLSLPreprocessor(
                 include_paths=include_paths,

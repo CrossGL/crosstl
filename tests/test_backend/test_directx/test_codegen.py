@@ -4053,6 +4053,49 @@ def test_codegen_interlocked_typed_buffer_resource_array_roundtrip():
     assert "atomicMax(signedValues" not in regenerated_hlsl
 
 
+def test_codegen_upstream_declarations_defaults_and_for_update_sequences():
+    code = textwrap.dedent("""
+        cbuffer CSConstants : register(b0) {
+            uint ViewportWidth, ViewportHeight;
+        };
+
+        float4 ToRGBM(float3 rgb, float PeakValue = 255.0 / 16.0) {
+            return float4(rgb, PeakValue);
+        }
+
+        float main(uint count) : SV_Target0 {
+            uint tileLightLoadOffset = 0;
+            float sum = 0.0;
+            [unroll]
+            for (uint n = 0; n < count; n++, tileLightLoadOffset += 4) {
+                sum += n;
+            }
+            return sum;
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "uint ViewportWidth;" in output
+    assert "uint ViewportHeight;" in output
+    assert "vec4 ToRGBM(vec3 rgb, float PeakValue)" in output
+    assert "255.0 / 16.0" not in output
+    assert "for (uint n = 0; n < count; n++, tileLightLoadOffset += 4)" in output
+
+
+def test_codegen_unnamed_hlsl_parameters_get_synthetic_crossgl_names():
+    code = textwrap.dedent("""
+        float4 Rand4(inout uint4 ctx, uint) {
+            return float4(ctx);
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "uint _param1" in output
+    parse_crossgl(output)
+
+
 def test_codegen_invalid_hlsl_raises():
     code = "float4 main() : SV_Target0 { float x = 1.0 return float4(x, 0, 0, 1); }"
     with pytest.raises(SyntaxError):

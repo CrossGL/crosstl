@@ -3201,10 +3201,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         wave_size_attribute = self.generate_hlsl_wave_size_attribute(
             func, effective_shader_type
         )
+        root_signature_attribute = self.generate_hlsl_root_signature_attribute(func)
 
         if effective_shader_type in shader_map:
             return_semantic_attr = self.map_semantic(return_semantic)
             code += f"// {effective_shader_type.capitalize()} Shader\n"
+            code += root_signature_attribute
             if effective_shader_type == "compute":
                 self.validate_hlsl_stage_parameter_requirements(
                     func, effective_shader_type
@@ -3217,6 +3219,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else:
             shader_attr = shader_attr_map.get(effective_shader_type)
             self.validate_hlsl_stage_requirements(func, effective_shader_type)
+            code += root_signature_attribute
             code += self.generate_stage_numthreads(
                 func, effective_shader_type, execution_config
             )
@@ -7173,6 +7176,33 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return normalized
         return None
 
+    def hlsl_root_signature_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+
+        normalized = str(attr_name).lower()
+        if normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+        return normalized in {"rootsignature", "root_signature"}
+
+    def generate_hlsl_root_signature_attribute(self, func):
+        for attr in getattr(func, "attributes", []) or []:
+            if not self.hlsl_root_signature_attribute(attr):
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                return "[RootSignature()]\n"
+            argument = arguments[0]
+            value = self.hlsl_stage_attribute_value_to_string(argument)
+            literal_type = getattr(argument, "literal_type", None)
+            literal_type_name = str(getattr(literal_type, "name", literal_type))
+            if literal_type_name == "string":
+                escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+                value = f'"{escaped}"'
+            return f"[RootSignature({value})]\n"
+        return ""
+
     def hlsl_stage_attribute_names(self, func):
         names = set()
         for attr in getattr(func, "attributes", []) or []:
@@ -7917,6 +7947,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"must be {expected_description}"
                 )
 
+    def validate_hlsl_semantic_type_one_of(
+        self, parameters, shader_type, semantic, expected_types, expected_description
+    ):
+        for parameter in parameters:
+            if not self.hlsl_parameter_has_semantic(parameter, semantic):
+                continue
+
+            base_type, array_suffix = self.hlsl_parameter_mapped_base_and_array_suffix(
+                parameter
+            )
+            if base_type is None:
+                continue
+            if array_suffix or base_type not in expected_types:
+                raise ValueError(
+                    f"DirectX {shader_type} stage {semantic} "
+                    f"parameter '{parameter.name}' "
+                    f"must be {expected_description}"
+                )
+
     def validate_hlsl_thread_system_value_types(self, parameters, shader_type):
         self.validate_hlsl_exact_semantic_type(
             parameters, shader_type, "SV_GroupIndex", "uint", "scalar uint"
@@ -7949,7 +7998,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def validate_hlsl_compute_system_value_types(self, parameters):
-        self.validate_hlsl_thread_system_value_types(parameters, "compute")
+        self.validate_hlsl_exact_semantic_type(
+            parameters, "compute", "SV_GroupIndex", "uint", "scalar uint"
+        )
+        for semantic in ("SV_GroupID", "SV_GroupThreadID"):
+            self.validate_hlsl_semantic_type_one_of(
+                parameters,
+                "compute",
+                semantic,
+                {"uint2", "uint3"},
+                "uint2 or uint3",
+            )
+        self.validate_hlsl_exact_semantic_type(
+            parameters, "compute", "SV_DispatchThreadID", "uint3", "uint3"
+        )
 
     def hlsl_ray_stage_types(self):
         return {
@@ -16466,6 +16528,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 or self.hlsl_mesh_parameter_role_attribute_name(attr)
                 or self.hlsl_mesh_payload_parameter_attribute_name(attr)
                 or self.is_hlsl_resource_array_size_marker(node, attr)
+                or self.hlsl_root_signature_attribute(attr)
             ):
                 continue
             if hasattr(attr, "name"):
@@ -16480,6 +16543,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         for attr in func.attributes:
             if self.hlsl_stage_attribute_name(attr):
+                continue
+            if self.hlsl_root_signature_attribute(attr):
                 continue
             if self.hlsl_waveops_include_helper_lanes_attribute(attr):
                 continue

@@ -524,6 +524,7 @@ class HLSLLexer:
         defines: Optional[dict] = None,
         strict_preprocessor: bool = False,
     ):
+        code = code.lstrip("\ufeff")
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.file_path = file_path
         self.include_paths = include_paths or []

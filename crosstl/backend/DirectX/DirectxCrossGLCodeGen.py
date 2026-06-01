@@ -1144,8 +1144,9 @@ class HLSLToCrossGLConverter:
             ).strip()
             if qualifier_prefix:
                 prefixes.append(qualifier_prefix)
+        parameter_name = parameter.name or f"_param{parameter_index}"
         parameter_text = (
-            f"{self.map_variable_type(parameter)} {parameter.name}"
+            f"{self.map_variable_type(parameter)} {parameter_name}"
             f"{self.format_array_suffixes(parameter)}"
         )
         semantic = self.map_semantic(
@@ -2340,15 +2341,23 @@ class HLSLToCrossGLConverter:
         return rendered
 
     def generate_for_loop(self, node, indent, is_main):
-        if isinstance(node.init, VariableNode):
-            array_suffix = self.format_array_suffixes(node.init, is_main)
-            init = (
-                f"{self.map_variable_type(node.init)} "
-                f"{node.init.name}{array_suffix}"
-            )
-            if node.init.value is not None:
-                init += f" = {self.generate_expression(node.init.value, is_main)}"
-            self.record_variable_type(node.init)
+        def render_initializer(initializer):
+            if isinstance(initializer, VariableNode):
+                array_suffix = self.format_array_suffixes(initializer, is_main)
+                text = (
+                    f"{self.map_variable_type(initializer)} "
+                    f"{initializer.name}{array_suffix}"
+                )
+                if initializer.value is not None:
+                    text += f" = {self.generate_expression(initializer.value, is_main)}"
+                self.record_variable_type(initializer)
+                return text
+            return self.generate_expression(initializer, is_main)
+
+        if isinstance(node.init, list):
+            init = ", ".join(render_initializer(item) for item in node.init)
+        elif isinstance(node.init, VariableNode):
+            init = render_initializer(node.init)
         elif node.init is None:
             init = ""
         else:
@@ -2359,11 +2368,16 @@ class HLSLToCrossGLConverter:
             if node.condition is not None
             else ""
         )
-        update = (
-            self.generate_expression(node.update, is_main)
-            if node.update is not None
-            else ""
-        )
+        if isinstance(node.update, list):
+            update = ", ".join(
+                self.generate_expression(expr, is_main) for expr in node.update
+            )
+        else:
+            update = (
+                self.generate_expression(node.update, is_main)
+                if node.update is not None
+                else ""
+            )
 
         code = f"for ({init}; {condition}; {update}) {{\n"
         code += self.generate_function_body(node.body, indent + 1, is_main)

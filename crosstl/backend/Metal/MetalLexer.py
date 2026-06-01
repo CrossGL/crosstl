@@ -136,7 +136,7 @@ TOKENS = tuple(
         ("TRUE", r"\btrue\b"),
         ("FALSE", r"\bfalse\b"),
         # Identifiers (must come after all keywords)
-        ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
+        ("IDENTIFIER", r"[^\W\d]\w*"),
         # Numeric literals (decimal/hex/binary with suffixes)
         (
             "NUMBER",
@@ -319,6 +319,7 @@ class MetalLexer:
         file_path: Optional[str] = None,
     ):
         """Initialize the lexer with raw Metal source text."""
+        code = code.lstrip("\ufeff")
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         if preprocess:
             preprocessor = MetalPreprocessor(

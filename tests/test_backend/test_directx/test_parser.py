@@ -8,6 +8,7 @@ from crosstl.backend.common_ast import (
     MemberAccessNode,
     TextureSampleNode,
 )
+from crosstl.backend.DirectX.DirectxAst import ForNode, IfNode, VariableNode
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 
@@ -1022,6 +1023,120 @@ def test_parse_resource_method_ast_shapes():
         "Append",
         "Consume",
     }.issubset(set(members))
+
+
+def test_parse_upstream_default_parameter_value():
+    ast = parse_code("""
+    float4 ToRGBM(float3 rgb, float PeakValue = 255.0 / 16.0) {
+        return float4(rgb, PeakValue);
+    }
+    """)
+
+    func = ast.functions[0]
+
+    assert func.params[1].name == "PeakValue"
+    assert func.params[1].value is not None
+
+
+def test_parse_upstream_comma_separated_declarations():
+    ast = parse_code("""
+    cbuffer CSConstants : register(b0) {
+        uint ViewportWidth, ViewportHeight;
+    };
+
+    float main() : SV_Target0 {
+        float x = 1.0, y = 2.0;
+        return x + y;
+    }
+    """)
+
+    assert [member.name for member in ast.cbuffers[0].members] == [
+        "ViewportWidth",
+        "ViewportHeight",
+    ]
+
+    main_func = ast.functions[0]
+    locals_ = [stmt for stmt in main_func.body if isinstance(stmt, VariableNode)]
+    assert [node.name for node in locals_] == ["x", "y"]
+    assert [node.value for node in locals_] == [1.0, 2.0]
+
+
+def test_parse_upstream_statement_attributes_and_for_update_sequences():
+    ast = parse_code("""
+    void main(uint count) {
+        uint tileLightLoadOffset = 0;
+        [unroll]
+        for (uint n = 0; n < count; n++, tileLightLoadOffset += 4) {
+        }
+    }
+    """)
+
+    loop = next(node for node in iter_ast_nodes(ast) if isinstance(node, ForNode))
+
+    assert [attr.name for attr in loop.attributes] == ["unroll"]
+    assert isinstance(loop.update, list)
+    assert len(loop.update) == 2
+
+
+def test_parse_upstream_else_if_chain_with_final_else():
+    ast = parse_code("""
+    float TestSamples(uint x, uint y) {
+        if (y == 0) {
+            return 0.5;
+        } else if (x == y) {
+            return 0.25;
+        } else {
+            return 0.125;
+        }
+    }
+    """)
+
+    first_if = next(node for node in iter_ast_nodes(ast) if isinstance(node, IfNode))
+
+    assert isinstance(first_if.else_body, IfNode)
+    assert first_if.else_body.else_body is not None
+
+
+def test_parse_upstream_bare_scope_block():
+    ast = parse_code("""
+    float main(float ao) : SV_Target0 {
+        float colorSum = 0.0;
+        {
+            float ambient = ao;
+            colorSum += ambient;
+        }
+        return colorSum;
+    }
+    """)
+
+    body_names = [
+        node.name for node in ast.functions[0].body if isinstance(node, VariableNode)
+    ]
+    assert body_names == ["colorSum", "ambient"]
+
+
+def test_parse_parenthesized_identifier_after_unary_minus_not_cast():
+    ast = parse_code("""
+    float Sigmoid(float v) {
+        return 1.0 / (1.0 + exp(-(v)));
+    }
+    """)
+
+    assert ast.functions[0].name == "Sigmoid"
+
+
+def test_parse_function_prototype_declaration():
+    ast = parse_code("""
+    void TraceRay_OnMiss(inout uint rngState);
+
+    void main() {
+        TraceRay_OnMiss(0);
+    }
+    """)
+
+    assert ast.functions[0].name == "TraceRay_OnMiss"
+    assert ast.functions[0].body == []
+    assert ast.functions[0].is_prototype is True
 
 
 @pytest.mark.parametrize(

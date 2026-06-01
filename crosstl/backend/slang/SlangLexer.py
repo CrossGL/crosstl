@@ -157,6 +157,7 @@ class SlangLexer:
         file_path: Optional[str] = None,
     ):
         """Initialize the lexer and optionally preprocess Slang source text."""
+        code = code.lstrip("\ufeff")
         if preprocess:
             preprocessor = SlangPreprocessor(
                 include_paths=include_paths,

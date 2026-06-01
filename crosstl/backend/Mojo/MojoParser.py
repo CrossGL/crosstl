@@ -168,7 +168,18 @@ class MojoParser:
 
     def parse_import_items(self):
         items = []
+        parenthesized = False
+        self.skip_newlines()
+        if self.current_token[0] == "LPAREN":
+            parenthesized = True
+            self.eat("LPAREN")
+            self.skip_layout_tokens()
+
         while self.current_token[0] not in self.STATEMENT_END_TOKENS | {"SEMICOLON"}:
+            if parenthesized:
+                self.skip_layout_tokens()
+            if parenthesized and self.current_token[0] == "RPAREN":
+                break
             if self.current_token[0] == "MULTIPLY":
                 item = self.current_token[1]
                 self.eat("MULTIPLY")
@@ -184,8 +195,16 @@ class MojoParser:
             items.append(item)
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
+                if parenthesized:
+                    self.skip_layout_tokens()
+                else:
+                    self.skip_newlines()
             else:
                 break
+
+        if parenthesized:
+            self.skip_layout_tokens()
+            self.eat("RPAREN")
 
         if not items:
             raise SyntaxError("Expected imported item")
@@ -1039,7 +1058,7 @@ class MojoParser:
 
     def parse_multiplicative(self):
         left = self.parse_unary()
-        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
+        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "FLOOR_DIVIDE", "MOD"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_unary()
@@ -1088,14 +1107,18 @@ class MojoParser:
             return type_name
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
+            self.skip_layout_tokens()
             expr = self.parse_expression()
+            self.skip_layout_tokens()
             if self.current_token[0] == "COMMA":
                 elements = [expr]
                 while self.current_token[0] == "COMMA":
                     self.eat("COMMA")
+                    self.skip_layout_tokens()
                     if self.current_token[0] == "RPAREN":
                         break
                     elements.append(self.parse_expression())
+                    self.skip_layout_tokens()
                 self.eat("RPAREN")
                 return self.parse_postfix_suffixes(TupleNode(elements))
             self.eat("RPAREN")

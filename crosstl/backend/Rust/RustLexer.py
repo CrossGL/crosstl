@@ -374,6 +374,7 @@ class RustLexer:
     """Tokenize Rust source for the Rust backend parser."""
 
     def __init__(self, code: str):
+        code = code.lstrip("\ufeff")
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)

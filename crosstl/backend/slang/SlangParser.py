@@ -498,6 +498,11 @@ class SlangParser:
         self.eat("RBRACE")
         return statements
 
+    def parse_statement_or_block(self):
+        if self.current_token[0] == "LBRACE":
+            return self.parse_block()
+        return [self.parse_statement()]
+
     def parse_statement(self):
         if self.current_token[0] == "IDENTIFIER" and self.tokens[self.pos + 1][0] in {
             "LPAREN",
@@ -586,11 +591,11 @@ class SlangParser:
         self.eat("LPAREN")
         condition = self.parse_expression()
         self.eat("RPAREN")
-        if_body = self.parse_block()
+        if_body = self.parse_statement_or_block()
         else_body = None
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
-            else_body = self.parse_block()
+            else_body = self.parse_statement_or_block()
         elif self.current_token[0] == "ELSE_IF":
             else_body = self.parse_else_if_statement()
         return IfNode(condition, if_body, else_body)
@@ -600,11 +605,11 @@ class SlangParser:
         self.eat("LPAREN")
         condition = self.parse_expression()
         self.eat("RPAREN")
-        if_body = self.parse_block()
+        if_body = self.parse_statement_or_block()
         else_body = None
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
-            else_body = self.parse_block()
+            else_body = self.parse_statement_or_block()
         elif self.current_token[0] == "ELSE_IF":
             else_body = self.parse_else_if_statement()
         return IfNode(condition, if_body, else_body)
@@ -620,7 +625,7 @@ class SlangParser:
         update = self.parse_for_update()
         self.eat("RPAREN")
 
-        body = self.parse_block()
+        body = self.parse_statement_or_block()
 
         return ForNode(init, condition, update, body)
 
@@ -655,12 +660,12 @@ class SlangParser:
         self.eat("LPAREN")
         condition = self.parse_expression()
         self.eat("RPAREN")
-        body = self.parse_block()
+        body = self.parse_statement_or_block()
         return WhileNode(condition, body)
 
     def parse_do_while_statement(self):
         self.eat("DO")
-        body = self.parse_block()
+        body = self.parse_statement_or_block()
         self.eat("WHILE")
         self.eat("LPAREN")
         condition = self.parse_expression()
@@ -990,6 +995,10 @@ class SlangParser:
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
+            return value
+        elif self.current_token[0] == "STRING":
+            value = self.current_token[1]
+            self.eat("STRING")
             return value
         elif self.current_token[0] == "LPAREN":
             if self.is_lambda_expression_start():

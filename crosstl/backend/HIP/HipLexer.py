@@ -259,6 +259,7 @@ class HipLexer:
         file_path: Optional[str] = None,
     ):
         """Initialize the lexer and optionally preprocess HIP source text."""
+        code = code.lstrip("\ufeff")
         if preprocess:
             preprocessor = HipPreprocessor(
                 include_paths=include_paths,
