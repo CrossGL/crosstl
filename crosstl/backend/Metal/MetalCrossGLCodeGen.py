@@ -447,6 +447,22 @@ class MetalToCrossGLConverter:
                 return scope[name]
         return self.sanitize_identifier(name)
 
+    def generate_sampler_constructor_arg(self, arg, is_main=False):
+        if isinstance(arg, VariableNode) and self.is_scoped_identifier(arg.name):
+            return arg.name
+        return self.generate_expression(arg, is_main)
+
+    def is_scoped_identifier(self, name):
+        return (
+            isinstance(name, str)
+            and "::" in name
+            and all(
+                self.crossgl_identifier_pattern.match(part)
+                and part not in self.crossgl_reserved_identifiers
+                for part in name.split("::")
+            )
+        )
+
     def unwrap_texture_option_argument(self, expr, option_name):
         if (
             isinstance(expr, FunctionCallNode)
@@ -1308,9 +1324,15 @@ class MetalToCrossGLConverter:
                         initializer, is_main, expr.name
                     )
             function_name = self.map_function_call_name(expr.name)
-            args = ", ".join(
-                self.generate_expression(arg, is_main) for arg in expr.args
-            )
+            if function_name == "sampler":
+                args = ", ".join(
+                    self.generate_sampler_constructor_arg(arg, is_main)
+                    for arg in expr.args
+                )
+            else:
+                args = ", ".join(
+                    self.generate_expression(arg, is_main) for arg in expr.args
+                )
             return f"{function_name}({args})"
         elif isinstance(expr, CallNode):
             callee = self.generate_expression(expr.callee, is_main)
@@ -1413,10 +1435,17 @@ class MetalToCrossGLConverter:
             size_query = self.texture_size_constructor_expression(expr, is_main)
             if size_query is not None:
                 return size_query
-            args = ", ".join(
-                self.generate_expression(arg, is_main) for arg in expr.args
-            )
-            return f"{self.map_type(expr.type_name)}({args})"
+            mapped_type = self.map_type(expr.type_name)
+            if mapped_type == "sampler":
+                args = ", ".join(
+                    self.generate_sampler_constructor_arg(arg, is_main)
+                    for arg in expr.args
+                )
+            else:
+                args = ", ".join(
+                    self.generate_expression(arg, is_main) for arg in expr.args
+                )
+            return f"{mapped_type}({args})"
         elif isinstance(expr, InitializerListNode):
             return self.generate_initializer_list(expr, is_main)
         elif isinstance(expr, DesignatedInitializerNode):

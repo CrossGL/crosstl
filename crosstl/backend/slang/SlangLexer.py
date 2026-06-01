@@ -15,6 +15,7 @@ TOKENS = tuple(
         ("PREPROCESSOR", r"#[^\r\n]*"),
         ("BITWISE_NOT", r"~"),
         ("STRUCT", r"\bstruct\b"),
+        ("INTERFACE", r"\binterface\b"),
         ("CBUFFER", r"\bcbuffer\b"),
         ("SHADER", r"\bshader\b"),
         ("STRING", r'"(?:\\.|[^"\\])*"'),
@@ -41,6 +42,7 @@ TOKENS = tuple(
         ("CONTINUE", r"\bcontinue\b"),
         ("DISCARD", r"\bdiscard\b"),
         ("REGISTER", r"\bregister\b"),
+        ("WHERE", r"\bwhere\b"),
         ("STRING", r'"[^"]*"'),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         (
@@ -107,6 +109,7 @@ TOKENS = tuple(
 
 KEYWORDS = {
     "struct": "STRUCT",
+    "interface": "INTERFACE",
     "cbuffer": "CBUFFER",
     "Texture2D": "TEXTURE2D",
     "SamplerState": "SAMPLER_STATE",
@@ -131,6 +134,7 @@ KEYWORDS = {
     "continue": "CONTINUE",
     "discard": "DISCARD",
     "register": "REGISTER",
+    "where": "WHERE",
     "import": "IMPORT",
     "export": "EXPORT",
     "module": "MODULE",

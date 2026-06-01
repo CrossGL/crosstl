@@ -14,10 +14,13 @@ from crosstl.backend.slang.SlangAst import (
     ContinueNode,
     DiscardNode,
     DoWhileNode,
+    ExtensionNode,
     ForNode,
     FunctionCallNode,
+    GenericConstraintNode,
     IfNode,
     InitializerListNode,
+    InterfaceNode,
     MemberAccessNode,
     MethodCallNode,
     ReturnNode,
@@ -558,6 +561,66 @@ def test_generic_struct_declaration_after_name_parsing():
         ("float", "weights"),
     ]
     assert struct.members[1].array_sizes[0].name == "N"
+
+
+def test_interface_struct_and_extension_conformance_metadata_parsing():
+    code = """
+    interface IFoo {
+        int foo();
+    }
+
+    struct MyType : IFoo {
+        int value;
+    };
+
+    extension MyType : IBar {
+        int bar() {
+            return 1;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    interface = ast.interfaces[0]
+    assert isinstance(interface, InterfaceNode)
+    assert interface.name == "IFoo"
+    assert len(interface.methods) == 1
+    assert interface.methods[0].return_type == "int"
+    assert interface.methods[0].name == "foo"
+    assert interface.methods[0].is_declaration
+
+    struct = ast.structs[0]
+    assert struct.name == "MyType"
+    assert struct.conformances == ["IFoo"]
+
+    extension = ast.extensions[0]
+    assert isinstance(extension, ExtensionNode)
+    assert extension.extended_type == "MyType"
+    assert extension.conformances == ["IBar"]
+    assert len(extension.methods) == 1
+    assert extension.methods[0].name == "bar"
+    assert not extension.methods[0].is_declaration
+
+
+def test_function_generic_where_conformance_constraint_parsing():
+    code = """
+    int useFoo<T>(T value) where T : IFoo {
+        return value.foo();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "useFoo")
+
+    assert function.generic_parameters == "<T>"
+    assert len(function.generic_constraints) == 1
+    constraint = function.generic_constraints[0]
+    assert isinstance(constraint, GenericConstraintNode)
+    assert constraint.parameter == "T"
+    assert constraint.constraint_type == "IFoo"
 
 
 def test_for_update_parses_array_and_member_assignment_targets():

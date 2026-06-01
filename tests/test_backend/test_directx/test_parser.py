@@ -250,6 +250,19 @@ def test_parse_brace_initializer_declarations():
     assert payload.value.elements == [0]
 
 
+def test_parse_global_static_const_array_initializer():
+    ast = parse_code("static const float Weights[2] = { 0.25f, 0.75f };")
+
+    weights = ast.global_variables[0]
+    assert weights.name == "Weights"
+    assert weights.vtype == "float"
+    assert weights.qualifiers == ["static", "const"]
+    assert weights.is_const is True
+    assert weights.array_sizes == [2]
+    assert isinstance(weights.value, InitializerListNode)
+    assert weights.value.elements == [0.25, 0.75]
+
+
 def test_parse_control_flow_and_operators():
     assert_parses(CONTROL_FLOW_HLSL)
 

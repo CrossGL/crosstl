@@ -1098,6 +1098,17 @@ class HLSLToCrossGLConverter:
                 qualifiers.append(qualifier_name)
         return f"{' '.join(qualifiers)} " if qualifiers else ""
 
+    def format_global_storage_qualifier_prefix(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        ordered = []
+        if "groupshared" in qualifiers:
+            ordered.append("groupshared")
+        if "static" in qualifiers:
+            ordered.append("static")
+            if "const" in qualifiers:
+                ordered.append("const")
+        return f"{' '.join(ordered)} " if ordered else ""
+
     def format_inline_parameter_attributes(self, parameter):
         mesh_role_attributes = {"mesh_payload", "vertices", "indices", "primitives"}
         rendered = []
@@ -1960,11 +1971,14 @@ class HLSLToCrossGLConverter:
             code += self.format_attributes(getattr(node, "attributes", []), 1)
             code += self.format_resource_qualifier_attributes(node, 1)
             code += self.format_binding_attributes(node, 1)
-            storage_prefix = self.format_storage_qualifier_prefix(node, {"groupshared"})
+            storage_prefix = self.format_global_storage_qualifier_prefix(node)
             array_suffix = self.format_array_suffixes(node)
+            initializer = ""
+            if getattr(node, "value", None) is not None:
+                initializer = f" = {self.generate_expression(node.value)}"
             code += (
                 f"    {storage_prefix}{self.map_variable_type(node)} "
-                f"{node.name}{array_suffix};\n"
+                f"{node.name}{array_suffix}{initializer};\n"
             )
         if ast.cbuffers:
             code += "    // Constant Buffers\n"

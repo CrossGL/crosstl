@@ -164,6 +164,21 @@ def test_parse_arrays_and_indexing():
     parse_ok(code)
 
 
+def test_parse_imageblock_member_array_after_attribute_from_apple_sample():
+    code = """
+    struct TransparentFragmentValues {
+        rgba8unorm<half4> colors [[raster_order_group(0)]] [kNumLayers];
+        half depths [[raster_order_group(0)]] [kNumLayers];
+    };
+    """
+    ast = parse_ok(code)
+    members = ast.structs[0].members
+
+    assert members[0].vtype == "rgba8unorm<half4>"
+    assert members[0].array_sizes[0].name == "kNumLayers"
+    assert members[1].array_sizes[0].name == "kNumLayers"
+
+
 def test_parse_ternary_and_bitwise_expressions():
     code = """
     void main() {

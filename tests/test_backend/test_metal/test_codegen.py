@@ -1354,6 +1354,32 @@ def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():
     assert "texture_.sample(sampler(" in metal
 
 
+def test_roundtrip_local_constexpr_sampler_options_from_apple_texture_sample():
+    code = """
+    struct RasterizerData {
+        float4 position [[position]];
+        float2 textureCoordinate;
+    };
+
+    fragment float4 samplingShader(RasterizerData in [[stage_in]],
+                                   texture2d<half> colorTexture [[texture(0)]]) {
+        constexpr sampler textureSampler (mag_filter::linear, min_filter::linear);
+        const half4 colorSample = colorTexture.sample(textureSampler, in.textureCoordinate);
+        return float4(colorSample);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "_u3a_u3a" not in crossgl
+    assert "sampler(mag_filter::linear, min_filter::linear)" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "_u3a_u3a" not in metal
+    assert "mag_filter::linear" in metal
+    assert "min_filter::linear" in metal
+
+
 def test_codegen_sanitizes_unicode_identifiers_for_crossgl_parse():
     code = """
     void main() {

@@ -789,11 +789,13 @@ class MetalParser:
 
     def parse_declarator(self):
         name = ""
-        array_sizes = []
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
+        return name, self.parse_declarator_array_sizes()
 
+    def parse_declarator_array_sizes(self):
+        array_sizes = []
         while self.current_token[0] == "LBRACKET":
             self.eat("LBRACKET")
             size = None
@@ -802,7 +804,7 @@ class MetalParser:
             self.eat("RBRACKET")
             array_sizes.append(size)
 
-        return name, array_sizes
+        return array_sizes
 
     def parse_struct(self, pre_alignas=None):
         alignas_specs = pre_alignas or self.parse_alignas_specifiers()
@@ -828,6 +830,7 @@ class MetalParser:
             vtype, qualifiers = self.parse_type_specifier()
             var_name, array_sizes = self.parse_declarator()
             attributes = self.parse_attributes()
+            array_sizes.extend(self.parse_declarator_array_sizes())
             self.eat("SEMICOLON")
             var_node = VariableNode(
                 vtype, var_name, qualifiers=qualifiers, attributes=attributes

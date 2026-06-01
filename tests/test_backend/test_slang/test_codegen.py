@@ -378,6 +378,53 @@ def test_generic_struct_declaration_after_name_codegen():
     assert "GenericStruct<" not in generated_code
 
 
+def test_reverse_codegen_rejects_interface_and_conformance_constructs():
+    code = """
+    interface IFoo {
+        int foo();
+    }
+
+    struct MyType : IFoo {
+        int value;
+    };
+
+    extension MyType : IBar {
+        int bar();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(
+        NotImplementedError,
+        match="interface/conformance constructs",
+    ) as exc:
+        generate_code(ast)
+
+    message = str(exc.value)
+    assert "interface IFoo" in message
+    assert "struct MyType : IFoo" in message
+    assert "extension MyType : IBar" in message
+
+
+def test_reverse_codegen_rejects_generic_where_conformance_constraint():
+    code = """
+    int useFoo<T>(T value) where T : IFoo {
+        return value.foo();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(
+        NotImplementedError,
+        match="function useFoo where T : IFoo",
+    ):
+        generate_code(ast)
+
+
 def test_for_array_assignment_update_codegen():
     code = """
     void main(){

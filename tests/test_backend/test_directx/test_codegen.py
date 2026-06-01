@@ -5,7 +5,7 @@ import pytest
 from crosstl.backend.DirectX import DirectxCrossGLCodeGen
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
-from crosstl.translator.ast import ShaderStage
+from crosstl.translator.ast import ArrayLiteralNode, ArrayType, ShaderStage
 from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
@@ -571,6 +571,23 @@ def test_brace_initializer_declarations_generate_crossgl():
     assert "void main(MyPayload payload @ payload)" in output
     assert "BuiltInTriangleIntersectionAttributes attr @ hit_attribute" in output
     parse_crossgl(output)
+
+
+def test_global_static_const_array_initializer_generates_crossgl():
+    output = generate_crossgl("static const float Weights[2] = { 0.25f, 0.75f };")
+
+    assert "static const float Weights[2] = {0.25, 0.75};" in output
+
+    shader_ast = parse_crossgl(output)
+    weights = shader_ast.global_variables[0]
+    assert weights.name == "Weights"
+    assert weights.qualifiers == ["static", "const"]
+    assert isinstance(weights.var_type, ArrayType)
+    assert getattr(weights.var_type.size, "value", None) == 2
+    assert isinstance(weights.initial_value, ArrayLiteralNode)
+    assert [
+        getattr(element, "value", None) for element in weights.initial_value.elements
+    ] == [0.25, 0.75]
 
 
 def test_codegen_vertex_fragment_roundtrip():

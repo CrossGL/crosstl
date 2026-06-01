@@ -231,6 +231,7 @@ class SlangToCrossGLConverter:
         }
 
     def generate(self, ast):
+        self.raise_for_unsupported_conformance_constructs(ast)
         exported_functions = [
             exp.item
             for exp in getattr(ast, "exports", [])
@@ -301,6 +302,56 @@ class SlangToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def raise_for_unsupported_conformance_constructs(self, ast):
+        constructs = []
+
+        for interface in getattr(ast, "interfaces", []) or []:
+            constructs.append(f"interface {interface.name}")
+
+        for struct in getattr(ast, "structs", []) or []:
+            conformances = getattr(struct, "conformances", []) or []
+            if conformances:
+                constructs.append(f"struct {struct.name} : {', '.join(conformances)}")
+
+        for extension in getattr(ast, "extensions", []) or []:
+            conformances = getattr(extension, "conformances", []) or []
+            suffix = f" : {', '.join(conformances)}" if conformances else ""
+            constructs.append(f"extension {extension.extended_type}{suffix}")
+
+        for function in getattr(ast, "functions", []) or []:
+            constructs.extend(self.format_function_generic_constraints(function))
+
+        for export in getattr(ast, "exports", []) or []:
+            item = getattr(export, "item", None)
+            if isinstance(item, InterfaceNode):
+                constructs.append(f"interface {item.name}")
+            elif isinstance(item, ExtensionNode):
+                conformances = getattr(item, "conformances", []) or []
+                suffix = f" : {', '.join(conformances)}" if conformances else ""
+                constructs.append(f"extension {item.extended_type}{suffix}")
+            elif isinstance(item, StructNode):
+                conformances = getattr(item, "conformances", []) or []
+                if conformances:
+                    constructs.append(f"struct {item.name} : {', '.join(conformances)}")
+            elif isinstance(item, FunctionNode):
+                constructs.extend(self.format_function_generic_constraints(item))
+
+        if constructs:
+            details = ", ".join(constructs)
+            raise NotImplementedError(
+                "Reverse Slang to CrossGL does not support "
+                f"interface/conformance constructs: {details}"
+            )
+
+    def format_function_generic_constraints(self, function):
+        constraints = []
+        for constraint in getattr(function, "generic_constraints", []) or []:
+            constraints.append(
+                f"function {function.name} where "
+                f"{constraint.parameter} : {constraint.constraint_type}"
+            )
+        return constraints
 
     def format_import_path(self, path):
         path = str(path)

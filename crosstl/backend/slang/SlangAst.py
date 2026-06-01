@@ -111,12 +111,43 @@ class GenericNode(ASTNode):
         return f"GenericNode(name={self.name}, constraints={self.constraints})"
 
 
+class GenericConstraintNode(ASTNode):
+    """Node representing a simple generic conformance constraint."""
+
+    def __init__(self, parameter, constraint_type):
+        self.parameter = parameter
+        self.constraint_type = constraint_type
+
+    def __repr__(self):
+        return (
+            "GenericConstraintNode("
+            f"parameter={self.parameter}, constraint_type={self.constraint_type})"
+        )
+
+
+class InterfaceNode(ASTNode):
+    """Node representing a Slang interface declaration."""
+
+    def __init__(self, name, methods=None, generic_parameters=None):
+        self.name = name
+        self.methods = methods or []
+        self.generic_parameters = generic_parameters
+
+    def __repr__(self):
+        return f"InterfaceNode(name={self.name}, methods={len(self.methods)})"
+
+
 class ExtensionNode(ASTNode):
     """Node representing a Slang extension"""
 
-    def __init__(self, extended_type, methods):
+    def __init__(self, extended_type, methods, conformances=None):
         self.extended_type = extended_type
         self.methods = methods
+        self.conformances = conformances or []
 
     def __repr__(self):
-        return f"ExtensionNode(extended_type={self.extended_type}, methods={len(self.methods)})"
+        return (
+            "ExtensionNode("
+            f"extended_type={self.extended_type}, conformances={self.conformances}, "
+            f"methods={len(self.methods)})"
+        )
