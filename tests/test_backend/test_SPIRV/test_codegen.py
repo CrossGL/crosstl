@@ -225,6 +225,27 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_CONSTANT_ASSEMBLY = """
+; Reduced from common Vulkan specialization constant assembly output.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpName %max_lights "MAX_LIGHTS"
+OpName %enable_shadows "ENABLE_SHADOWS"
+OpDecorate %max_lights SpecId 0
+OpDecorate %enable_shadows SpecId 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%bool = OpTypeBool
+%max_lights = OpSpecConstant %uint 4
+%enable_shadows = OpSpecConstantTrue %bool
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -526,6 +547,30 @@ def test_spirv_assembly_runtime_array_buffer_block_codegen():
         in generated_code
     )
     assert "%storage" not in generated_code
+
+
+def test_spirv_assembly_specialization_constants_codegen():
+    tokens = tokenize_code(SPIRV_SPEC_CONSTANT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "const uint MAX_LIGHTS @constant_id(0) = 4;" in generated_code
+    assert "const bool ENABLE_SHADOWS @constant_id(1) = true;" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_translate_api_accepts_spirv_assembly_specialization_constants(tmp_path):
+    import crosstl
+
+    shader_path = tmp_path / "constants.spvasm"
+    shader_path.write_text(SPIRV_SPEC_CONSTANT_ASSEMBLY, encoding="utf-8")
+
+    generated_code = crosstl.translate(
+        str(shader_path), backend="cgl", format_output=False
+    )
+
+    assert "const uint MAX_LIGHTS @constant_id(0) = 4;" in generated_code
+    assert "const bool ENABLE_SHADOWS @constant_id(1) = true;" in generated_code
 
 
 def test_translate_api_accepts_location_decorated_spirv_assembly(tmp_path):

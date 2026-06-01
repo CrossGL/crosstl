@@ -29,6 +29,7 @@ class HipToCrossGLConverter:
     }
 
     VECTOR_TYPE_MAPPING = {
+        "half2": "vec2<f16>",
         "float2": "vec2<f32>",
         "float3": "vec3<f32>",
         "float4": "vec4<f32>",
@@ -4469,6 +4470,10 @@ class HipToCrossGLConverter:
         if runtime_expression is not None:
             return runtime_expression
 
+        fp16_intrinsic = self.format_hip_fp16_intrinsic_call(func_name, args)
+        if fp16_intrinsic is not None:
+            return fp16_intrinsic
+
         resource_call = self.format_hip_resource_call(func_name, args, raw_args)
         if resource_call is not None:
             return resource_call
@@ -4476,6 +4481,25 @@ class HipToCrossGLConverter:
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_hip_fp16_intrinsic_call(self, function_name, args):
+        if function_name == "__float2half2_rn" and len(args) == 1:
+            return self.format_vector_constructor("vec2", [args[0], args[0]], "f16")
+        if function_name == "__low2float" and len(args) == 1:
+            return f"f32({self.format_vector_component_access(args[0], 'x')})"
+        if function_name == "__hadd2" and len(args) == 2:
+            return f"({args[0]} + {args[1]})"
+        if function_name == "__hmul2" and len(args) == 2:
+            return f"({args[0]} * {args[1]})"
+        if function_name == "__hfma2" and len(args) == 3:
+            return f"fma({args[0]}, {args[1]}, {args[2]})"
+        return None
+
+    def format_vector_component_access(self, expression, component):
+        text = str(expression).strip()
+        if text and all(char.isalnum() or char in "_." for char in text):
+            return f"{text}.{component}"
+        return f"({text}).{component}"
 
     def format_hip_resource_call(self, function_name, args, raw_args=None):
         base_name, template_args = self.parse_cpp_template(function_name)
@@ -5155,6 +5179,39 @@ class HipToCrossGLConverter:
         else:
             self.emit(f"// {node.sync_type}();")
 
+    def visit_HipAsmNode(self, node):
+        volatility = " volatile" if node.is_volatile else ""
+        self.emit(f"// HIP inline assembly{volatility}: {node.template}")
+        if node.outputs:
+            self.emit(
+                f"// HIP inline assembly outputs: {self.format_hip_asm_operands(node.outputs)}"
+            )
+        if node.inputs:
+            self.emit(
+                f"// HIP inline assembly inputs: {self.format_hip_asm_operands(node.inputs)}"
+            )
+        if node.clobbers:
+            self.emit(f"// HIP inline assembly clobbers: {', '.join(node.clobbers)}")
+
+    def format_hip_asm_operands(self, operands):
+        formatted = []
+        for operand in operands:
+            prefix = (
+                f"[{operand.symbolic_name}] "
+                if operand.symbolic_name is not None
+                else ""
+            )
+            expression = (
+                self.visit(operand.expression)
+                if operand.expression is not None
+                else None
+            )
+            if expression is None:
+                formatted.append(f"{prefix}{operand.constraint}")
+            else:
+                formatted.append(f"{prefix}{operand.constraint}({expression})")
+        return ", ".join(formatted)
+
     def visit_HipBuiltinNode(self, node):
         builtin_map = {
             "threadIdx": "gl_LocalInvocationID",
@@ -5431,6 +5488,9 @@ class HipToCrossGLConverter:
             "long long": "i64",
             "signed long long": "i64",
             "unsigned long long": "u64",
+            "half": "f16",
+            "__half": "f16",
+            "__half2": "vec2<f16>",
             "float": "f32",
             "double": "f64",
             "size_t": "u32",
@@ -5639,6 +5699,9 @@ class HipToCrossGLConverter:
             "short": "i16",
             "int": "i32",
             "long": "i64",
+            "half": "f16",
+            "__half": "f16",
+            "__half2": "vec2<f16>",
             "float": "f32",
             "double": "f64",
             "size_t": "u32",

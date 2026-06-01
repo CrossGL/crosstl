@@ -71,6 +71,31 @@ class TestCudaCodeGen:
         assert '// CUDA inline PTX clobbers: "memory"' in result
         assert "CudaAsmNode" not in result
 
+    def test_typedef_struct_with_alignment_conversion(self):
+        code = """
+        typedef struct __align__(8) {
+            unsigned int x;
+            unsigned int y;
+        } Pair;
+
+        __global__ void kernel(Pair* pairs) {
+            pairs[threadIdx.x].x = 1;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "struct Pair {" in result
+        assert "u32 x;" in result
+        assert "u32 y;" in result
+        assert "Pair" in result
+        assert "__align__" not in result
+
     def test_grid_constant_kernel_parameter_conversion(self):
         code = """
         __global__ void kernelLargeParam(__grid_constant__ const int scale,
@@ -203,12 +228,51 @@ class TestCudaCodeGen:
         assert codegen.convert_cuda_type_to_crossgl("void") == "void"
         assert codegen.convert_cuda_type_to_crossgl("long long") == "i64"
         assert codegen.convert_cuda_type_to_crossgl("unsigned long long") == "u64"
+        assert codegen.convert_cuda_type_to_crossgl("half") == "f16"
+        assert codegen.convert_cuda_type_to_crossgl("__half") == "f16"
+        assert codegen.convert_cuda_type_to_crossgl("half2") == "vec2<f16>"
+        assert codegen.convert_cuda_type_to_crossgl("__half2") == "vec2<f16>"
         assert codegen.convert_cuda_type_to_crossgl("float *") == "ptr<f32>"
         assert (
             codegen.convert_cuda_type_to_crossgl("unsigned long long *") == "ptr<u64>"
         )
+        assert codegen.convert_cuda_type_to_crossgl("half2 *") == "ptr<vec2<f16>>"
         assert codegen.convert_cuda_type_to_crossgl("void * *") == "ptr<ptr<void>>"
         assert codegen.convert_cuda_type_to_crossgl("void * []") == "array<ptr<void>>"
+
+    def test_cuda_fp16_half2_types_and_intrinsics_convert_to_crossgl(self):
+        code = """
+        __device__ half2 fp16_ops(half2 a, half2 b, float x) {
+            half2 scalar = __float2half2_rn(x);
+            half2 prod = __hmul2(a, b);
+            half2 sum = __hadd2(prod, scalar);
+            half2 fused = __hfma2(a, b, sum);
+            float low = __low2float(fused);
+            return fused;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "vec2<f16> fp16_ops(vec2<f16> a, vec2<f16> b, f32 x)" in result
+        assert "var scalar: vec2<f16> = vec2<f16>(x, x);" in result
+        assert "var prod: vec2<f16> = (a * b);" in result
+        assert "var sum: vec2<f16> = (prod + scalar);" in result
+        assert "var fused: vec2<f16> = fma(a, b, sum);" in result
+        assert "var low: f32 = f32(fused.x);" in result
+        for raw_name in (
+            "half2",
+            "__float2half2_rn",
+            "__hmul2",
+            "__hadd2",
+            "__hfma2",
+            "__low2float",
+        ):
+            assert raw_name not in result
 
     def test_constructor_style_vector_declaration_conversion(self):
         code = """

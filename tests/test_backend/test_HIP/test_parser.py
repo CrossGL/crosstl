@@ -12,6 +12,7 @@ from crosstl.backend.HIP.HipAst import (
     ForNode,
     FunctionCallNode,
     FunctionNode,
+    HipAsmNode,
     HipBuiltinNode,
     IfNode,
     InitializerListNode,
@@ -21,6 +22,7 @@ from crosstl.backend.HIP.HipAst import (
     NewNode,
     RangeForNode,
     ReturnNode,
+    StructNode,
     SwitchNode,
     SyncNode,
     TernaryOpNode,
@@ -1224,6 +1226,39 @@ class TestHipParser:
         ]
         assert function.body[5].name == "consume"
 
+    def test_typedef_struct_alias_parsing(self):
+        code = """
+        typedef struct Existing *ExistingPtr;
+        typedef struct {
+            unsigned int x;
+            unsigned int y;
+        } Pair;
+
+        __global__ void kernel(Pair* pairs) {
+            pairs[threadIdx.x].x = 1;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        alias = ast.statements[0]
+        pair = ast.statements[1]
+        kernel = ast.statements[2]
+        assert isinstance(alias, TypeAliasNode)
+        assert alias.name == "ExistingPtr"
+        assert alias.alias_type == "struct Existing *"
+        assert isinstance(pair, StructNode)
+        assert pair.name == "Pair"
+        assert [(member.vtype, member.name) for member in pair.members] == [
+            ("unsigned int", "x"),
+            ("unsigned int", "y"),
+        ]
+        assert isinstance(kernel, KernelNode)
+        assert kernel.params[0]["type"] == "Pair *"
+        assert kernel.params[0]["name"] == "pairs"
+
     def test_type_alias_c_style_cast_parsing(self):
         code = """
         typedef unsigned int LaneMask;
@@ -1688,6 +1723,31 @@ class TestHipParser:
         assert isinstance(unmasked_sync, SyncNode)
         assert unmasked_sync.sync_type == "__syncwarp"
         assert unmasked_sync.args == []
+
+    def test_inline_assembly_parsing(self):
+        code = r"""
+        __global__ void asmKernel(float* out, float in) {
+            asm volatile("v_mov_b32_e32 %0, %1" : "=v"(out[0]) : "v"(in));
+            asm __volatile__("s_waitcnt vmcnt(0)" ::: "memory");
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        kernel = ast.statements[0]
+        asm_statements = [stmt for stmt in kernel.body if isinstance(stmt, HipAsmNode)]
+        assert len(asm_statements) == 2
+        assert asm_statements[0].is_volatile is True
+        assert asm_statements[0].template == '"v_mov_b32_e32 %0, %1"'
+        assert asm_statements[0].outputs[0].constraint == '"=v"'
+        assert asm_statements[0].outputs[0].expression.array == "out"
+        assert asm_statements[0].inputs[0].constraint == '"v"'
+        assert asm_statements[0].inputs[0].expression == "in"
+        assert asm_statements[1].outputs == []
+        assert asm_statements[1].inputs == []
+        assert asm_statements[1].clobbers == ['"memory"']
 
     def test_c_style_for_structured_assignment_updates_parsing(self):
         code = """

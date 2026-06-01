@@ -47,6 +47,18 @@ class TestHipLexer:
             ("IDENTIFIER", "kernel"),
         ]
 
+    def test_inline_assembly_tokenization(self):
+        code = "asm __asm__ volatile __volatile__"
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+
+        assert [(token.type, token.value) for token in tokens] == [
+            ("ASM", "asm"),
+            ("ASM", "__asm__"),
+            ("VOLATILE", "volatile"),
+            ("VOLATILE", "__volatile__"),
+        ]
+
     def test_c_linkage_kernel_tokenization(self):
         code = """
         extern "C"

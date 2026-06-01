@@ -22,6 +22,7 @@ from crosstl.backend.CUDA.CudaAst import (
     ReturnNode,
     ShaderNode,
     SharedMemoryNode,
+    StructNode,
     SwitchNode,
     SyncNode,
     TernaryOpNode,
@@ -1294,6 +1295,38 @@ class TestCudaParser:
             "BufferPtr",
         ]
         assert function.body[5].name == "consume"
+
+    def test_typedef_struct_with_alignment_parsing(self):
+        code = """
+        typedef struct Existing *ExistingPtr;
+        typedef struct __align__(8) {
+            unsigned int x;
+            unsigned int y;
+        } Pair;
+
+        __global__ void kernel(Pair* pairs) {
+            pairs[threadIdx.x].x = 1;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.typedefs) == 1
+        assert ast.typedefs[0].name == "ExistingPtr"
+        assert ast.typedefs[0].alias_type == "struct Existing *"
+        assert len(ast.structs) == 1
+        pair = ast.structs[0]
+        assert isinstance(pair, StructNode)
+        assert pair.name == "Pair"
+        assert pair.attributes == ["__align__(8)"]
+        assert [(member.vtype, member.name) for member in pair.members] == [
+            ("unsigned int", "x"),
+            ("unsigned int", "y"),
+        ]
+        assert ast.kernels[0].params[0].vtype == "Pair *"
+        assert ast.kernels[0].params[0].name == "pairs"
 
     def test_type_alias_c_style_cast_parsing(self):
         code = """

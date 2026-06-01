@@ -206,6 +206,8 @@ class VulkanParser:
         member_names = {}
         types = {}
         constants = {}
+        constant_types = {}
+        spec_constant_ids = []
         variables = []
         entry_points = []
 
@@ -293,7 +295,23 @@ class VulkanParser:
                 }
             elif result_id and opcode in {"OpConstant", "OpSpecConstant"}:
                 if len(operands) >= 2:
+                    constant_types[result_id] = operands[0]
                     constants[result_id] = operands[1]
+                    if opcode == "OpSpecConstant":
+                        spec_constant_ids.append(result_id)
+            elif result_id and opcode in {
+                "OpConstantFalse",
+                "OpConstantTrue",
+                "OpSpecConstantFalse",
+                "OpSpecConstantTrue",
+            }:
+                if operands:
+                    constant_types[result_id] = operands[0]
+                    constants[result_id] = (
+                        "true" if opcode.endswith("True") else "false"
+                    )
+                    if opcode.startswith("OpSpecConstant"):
+                        spec_constant_ids.append(result_id)
             elif result_id and opcode == "OpVariable" and len(operands) >= 2:
                 variables.append(
                     {
@@ -317,6 +335,12 @@ class VulkanParser:
             member_names,
             types,
             constants,
+        )
+        global_variables = (
+            self.spirv_assembly_specialization_constants(
+                spec_constant_ids, names, decorations, types, constants, constant_types
+            )
+            + global_variables
         )
         if not global_variables:
             raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
@@ -452,6 +476,42 @@ class VulkanParser:
             )
 
         return layouts
+
+    def spirv_assembly_specialization_constants(
+        self, spec_constant_ids, names, decorations, types, constants, constant_types
+    ):
+        layouts = []
+        for result_id in spec_constant_ids:
+            constant_id = self.spirv_spec_constant_id(decorations.get(result_id, []))
+            if constant_id is None:
+                continue
+
+            data_type = self.spirv_type_name(constant_types.get(result_id), types)
+            if data_type is None:
+                continue
+
+            variable_name = names.get(result_id) or result_id.lstrip("%")
+            declaration = AssignmentNode(
+                VariableNode(f"const {data_type}", variable_name),
+                constants.get(result_id),
+            )
+            layouts.append(
+                LayoutNode(
+                    [("constant_id", constant_id)],
+                    declaration=declaration,
+                    layout_type="CONST",
+                    spirv_id=result_id,
+                    spirv_decorations=decorations.get(result_id, []),
+                )
+            )
+
+        return layouts
+
+    def spirv_spec_constant_id(self, decorations):
+        for decoration, operands in decorations:
+            if decoration == "SpecId" and operands:
+                return operands[0]
+        return None
 
     def spirv_assembly_resource_block_layout(
         self,

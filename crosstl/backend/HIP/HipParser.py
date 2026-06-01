@@ -18,6 +18,8 @@ from .HipAst import (
     ForNode,
     FunctionCallNode,
     FunctionNode,
+    HipAsmNode,
+    HipAsmOperandNode,
     HipBuiltinNode,
     IfNode,
     InitializerListNode,
@@ -424,6 +426,8 @@ class HipParser:
             return ContinueNode()
         if self.match("SYNCTHREADS", "SYNCWARP"):
             return self.parse_sync_statement()
+        if self.match("ASM"):
+            return self.parse_asm_statement()
         if self.match("LBRACE"):
             return self.parse_block()
         if self.is_identifier_value("delete"):
@@ -471,6 +475,9 @@ class HipParser:
 
     def parse_typedef_alias(self):
         self.consume("TYPEDEF")
+        if self.match("STRUCT"):
+            return self.parse_typedef_struct_alias()
+
         first_type = self.parse_type()
         base_type = self.strip_declarator_markers(first_type)
         aliases = [self.parse_type_alias_declarator(first_type, allow_prefix=False)]
@@ -494,6 +501,38 @@ class HipParser:
         alias_type += self.parse_array_suffix()
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
+
+    def parse_typedef_struct_alias(self):
+        self.consume("STRUCT")
+
+        tag_name = None
+        if self.match("IDENTIFIER"):
+            tag_name = self.current_token.value
+            self.advance()
+
+        if not self.match("LBRACE"):
+            alias = self.parse_type_alias_declarator(
+                f"struct {tag_name}", allow_prefix=True
+            )
+            if self.match("SEMICOLON"):
+                self.advance()
+            return alias
+
+        self.consume("LBRACE")
+        members = self.parse_struct_members()
+        self.consume("RBRACE")
+
+        alias_name = tag_name
+        if self.match("IDENTIFIER"):
+            alias_name = self.current_token.value
+            self.advance()
+        if not alias_name:
+            self.error("Expected typedef struct alias name")
+
+        if self.match("SEMICOLON"):
+            self.advance()
+        self.type_aliases.add(alias_name)
+        return StructNode(alias_name, members)
 
     def parse_using_alias(self):
         self.advance()
@@ -711,21 +750,33 @@ class HipParser:
         members = []
         if self.match("LBRACE"):
             self.consume("LBRACE")
-            while self.current_token and not self.match("RBRACE"):
-                if self.match("NEWLINE", "SEMICOLON"):
-                    self.advance()
-                    continue
-
-                member = self.parse_struct_member()
-                if member:
-                    members.append(member)
-
+            members = self.parse_struct_members()
             self.consume("RBRACE")
 
         if self.match("SEMICOLON"):
             self.advance()
 
         return StructNode(name, members)
+
+    def parse_struct_members(self):
+        members = []
+        while self.current_token and not self.match("RBRACE"):
+            if self.match("NEWLINE", "SEMICOLON"):
+                self.advance()
+                continue
+
+            try:
+                declarations = self.parse_variable_declaration_list(
+                    consume_semicolon=True
+                )
+                members.extend(declarations)
+            except Exception:
+                while self.current_token and not self.match("SEMICOLON", "RBRACE"):
+                    self.advance()
+                if self.match("SEMICOLON"):
+                    self.advance()
+
+        return members
 
     def parse_class(self):
         self.consume("CLASS")
@@ -1336,6 +1387,110 @@ class HipParser:
             self.advance()
 
         return SyncNode(sync_type, args)
+
+    def parse_asm_statement(self):
+        self.consume("ASM")
+        is_volatile = False
+        if self.match("VOLATILE"):
+            is_volatile = True
+            self.advance()
+
+        self.consume("LPAREN")
+        self.skip_newlines()
+        template = self.parse_asm_string_literal()
+        outputs = []
+        inputs = []
+        clobbers = []
+
+        self.skip_newlines()
+        section_index = self.consume_asm_section_delimiters()
+        if section_index == 1:
+            outputs = self.parse_asm_operands()
+        elif section_index == 2:
+            inputs = self.parse_asm_operands()
+        elif section_index >= 3:
+            clobbers = self.parse_asm_clobbers()
+
+        self.skip_newlines()
+        while self.match("COLON", "SCOPE"):
+            section_index += self.consume_asm_section_delimiters()
+            if section_index == 2:
+                inputs = self.parse_asm_operands()
+            elif section_index >= 3:
+                clobbers = self.parse_asm_clobbers()
+                break
+            self.skip_newlines()
+
+        self.skip_newlines()
+        self.consume("RPAREN")
+        if self.match("SEMICOLON"):
+            self.advance()
+        return HipAsmNode(template, outputs, inputs, clobbers, is_volatile)
+
+    def consume_asm_section_delimiters(self):
+        delimiter_count = 0
+        self.skip_newlines()
+        while self.match("COLON", "SCOPE"):
+            if self.match("COLON"):
+                delimiter_count += 1
+                self.advance()
+            else:
+                delimiter_count += 2
+                self.advance()
+            self.skip_newlines()
+        return delimiter_count
+
+    def parse_asm_string_literal(self):
+        value = self.consume("STRING").value
+        self.skip_newlines()
+        while self.match("STRING"):
+            next_value = self.consume("STRING").value
+            if value.endswith('"') and next_value.startswith('"'):
+                value = value[:-1] + next_value[1:]
+            else:
+                value += next_value
+            self.skip_newlines()
+        return value
+
+    def parse_asm_operands(self):
+        operands = []
+
+        self.skip_newlines()
+        while self.current_token and not self.match("COLON", "SCOPE", "RPAREN"):
+            symbolic_name = None
+            if self.match("LBRACKET"):
+                self.consume("LBRACKET")
+                symbolic_name = self.consume("IDENTIFIER").value
+                self.consume("RBRACKET")
+
+            constraint = self.consume("STRING").value
+            expression = None
+            if self.match("LPAREN"):
+                self.consume("LPAREN")
+                if not self.match("RPAREN"):
+                    expression = self.parse_expression()
+                self.consume("RPAREN")
+
+            operands.append(HipAsmOperandNode(constraint, expression, symbolic_name))
+            if not self.match("COMMA"):
+                break
+            self.advance()
+            self.skip_newlines()
+
+        return operands
+
+    def parse_asm_clobbers(self):
+        clobbers = []
+
+        self.skip_newlines()
+        while self.current_token and not self.match("RPAREN"):
+            clobbers.append(self.consume("STRING").value)
+            if not self.match("COMMA"):
+                break
+            self.advance()
+            self.skip_newlines()
+
+        return clobbers
 
     def parse_block(self):
         self.consume("LBRACE")

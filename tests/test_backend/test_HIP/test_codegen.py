@@ -58,6 +58,31 @@ class TestHipCodeGen:
         assert "__managed__" not in result
         assert "__shared__" not in result
 
+    def test_inline_assembly_conversion(self):
+        code = r"""
+        __global__ void asmKernel(float* out, float in) {
+            asm volatile(
+                "v_mov_b32_e32 %0, %1"
+                : [dst] "=v"(out[0])
+                : [src] "v"(in)
+                : "memory"
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert '// HIP inline assembly volatile: "v_mov_b32_e32 %0, %1"' in result
+        assert '// HIP inline assembly outputs: [dst] "=v"(out[0])' in result
+        assert '// HIP inline assembly inputs: [src] "v"(in)' in result
+        assert '// HIP inline assembly clobbers: "memory"' in result
+        assert "HipAsmNode" not in result
+
     def test_dynamic_shared_memory_codegen_marks_launch_sized_storage(self):
         code = """
         __global__ void kernel(float* out, const float* in) {
@@ -259,7 +284,12 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("double") == "f64"
         assert codegen.convert_hip_type_to_crossgl("bool") == "bool"
         assert codegen.convert_hip_type_to_crossgl("void") == "void"
+        assert codegen.convert_hip_type_to_crossgl("half") == "f16"
+        assert codegen.convert_hip_type_to_crossgl("__half") == "f16"
+        assert codegen.convert_hip_type_to_crossgl("half2") == "vec2<f16>"
+        assert codegen.convert_hip_type_to_crossgl("__half2") == "vec2<f16>"
         assert codegen.convert_hip_type_to_crossgl("float *") == "ptr<f32>"
+        assert codegen.convert_hip_type_to_crossgl("half2 *") == "ptr<vec2<f16>>"
         assert codegen.convert_hip_type_to_crossgl("void * *") == "ptr<ptr<void>>"
         assert codegen.convert_hip_type_to_crossgl("void * []") == "array<ptr<void>>"
         assert codegen.convert_hip_type_to_crossgl("hipArray_t") == "ptr<void>"
@@ -296,6 +326,40 @@ class TestHipCodeGen:
             )
             == "imageCubeArray"
         )
+
+    def test_hip_fp16_half2_types_and_intrinsics_convert_to_crossgl(self):
+        code = """
+        __device__ half2 fp16_ops(half2 a, half2 b, float x) {
+            half2 scalar = __float2half2_rn(x);
+            half2 prod = __hmul2(a, b);
+            half2 sum = __hadd2(prod, scalar);
+            half2 fused = __hfma2(a, b, sum);
+            float low = __low2float(fused);
+            return fused;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "vec2<f16> fp16_ops(vec2<f16> a, vec2<f16> b, f32 x)" in result
+        assert "var scalar: vec2<f16> = vec2<f16>(x, x);" in result
+        assert "var prod: vec2<f16> = (a * b);" in result
+        assert "var sum: vec2<f16> = (prod + scalar);" in result
+        assert "var fused: vec2<f16> = fma(a, b, sum);" in result
+        assert "var low: f32 = f32(fused.x);" in result
+        for raw_name in (
+            "half2",
+            "__float2half2_rn",
+            "__hmul2",
+            "__hadd2",
+            "__hfma2",
+            "__low2float",
+        ):
+            assert raw_name not in result
 
     def test_function_conversion(self):
         codegen = HipToCrossGLConverter()
@@ -680,6 +744,30 @@ class TestHipCodeGen:
 
         assert "// HIP to CrossGL conversion" in result
         assert "struct Point" in result
+
+    def test_typedef_struct_alias_conversion(self):
+        code = """
+        typedef struct {
+            unsigned int x;
+            unsigned int y;
+        } Pair;
+
+        __global__ void kernel(Pair* pairs) {
+            pairs[threadIdx.x].x = 1;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "struct Pair" in result
+        assert "u32 x;" in result
+        assert "u32 y;" in result
+        assert "Pair" in result
 
     def test_empty_program(self):
         code = ""

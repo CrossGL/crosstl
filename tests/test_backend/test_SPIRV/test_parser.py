@@ -197,6 +197,27 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_CONSTANT_ASSEMBLY = """
+; Reduced from common Vulkan specialization constant assembly output.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpName %max_lights "MAX_LIGHTS"
+OpName %enable_shadows "ENABLE_SHADOWS"
+OpDecorate %max_lights SpecId 0
+OpDecorate %enable_shadows SpecId 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%bool = OpTypeBool
+%max_lights = OpSpecConstant %uint 4
+%enable_shadows = OpSpecConstantTrue %bool
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
@@ -316,6 +337,28 @@ def test_spirv_assembly_runtime_array_buffer_block_parse():
     assert layout.struct_fields == [("uint", "header"), ("uint", "payload[]")]
     assert layout.qualifiers == [("set", "0"), ("binding", "4")]
     assert layout.spirv_storage_class == "Uniform"
+
+
+def test_spirv_assembly_specialization_constants_parse():
+    tokens = tokenize_code(SPIRV_SPEC_CONSTANT_ASSEMBLY)
+    ast = parse_code(tokens)
+    max_lights = ast.global_variables[0]
+    enable_shadows = ast.global_variables[1]
+
+    assert ast.spirv_assembly is True
+    assert max_lights.layout_type == "CONST"
+    assert max_lights.qualifiers == [("constant_id", "0")]
+    assert max_lights.spirv_id == "%max_lights"
+    assert max_lights.spirv_decorations == [("SpecId", ["0"])]
+    assert max_lights.declaration.left.vtype == "const uint"
+    assert max_lights.declaration.left.name == "MAX_LIGHTS"
+    assert max_lights.declaration.right == "4"
+
+    assert enable_shadows.layout_type == "CONST"
+    assert enable_shadows.qualifiers == [("constant_id", "1")]
+    assert enable_shadows.declaration.left.vtype == "const bool"
+    assert enable_shadows.declaration.left.name == "ENABLE_SHADOWS"
+    assert enable_shadows.declaration.right == "true"
 
 
 def test_spirv_assembly_without_location_interface_is_rejected():

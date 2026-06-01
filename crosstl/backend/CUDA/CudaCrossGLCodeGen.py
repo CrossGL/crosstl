@@ -25,6 +25,7 @@ class CudaToCrossGLConverter:
     }
 
     VECTOR_TYPE_MAPPING = {
+        "half2": "vec2<f16>",
         "float2": "vec2<f32>",
         "float3": "vec3<f32>",
         "float4": "vec4<f32>",
@@ -3981,12 +3982,35 @@ class CudaToCrossGLConverter:
         if self.is_user_defined_function(raw_name):
             return f"{raw_name}({args_str})"
 
+        fp16_intrinsic = self.format_cuda_fp16_intrinsic_call(raw_name, args)
+        if fp16_intrinsic is not None:
+            return fp16_intrinsic
+
         resource_call = self.format_cuda_resource_call(raw_name, args)
         if resource_call is not None:
             return resource_call
 
         func_name = self.convert_cuda_builtin_function(raw_name)
         return f"{func_name}({args_str})"
+
+    def format_cuda_fp16_intrinsic_call(self, function_name, args):
+        if function_name == "__float2half2_rn" and len(args) == 1:
+            return self.format_vector_constructor("vec2", [args[0], args[0]], "f16")
+        if function_name == "__low2float" and len(args) == 1:
+            return f"f32({self.format_vector_component_access(args[0], 'x')})"
+        if function_name == "__hadd2" and len(args) == 2:
+            return f"({args[0]} + {args[1]})"
+        if function_name == "__hmul2" and len(args) == 2:
+            return f"({args[0]} * {args[1]})"
+        if function_name == "__hfma2" and len(args) == 3:
+            return f"fma({args[0]}, {args[1]}, {args[2]})"
+        return None
+
+    def format_vector_component_access(self, expression, component):
+        text = str(expression).strip()
+        if text and all(char.isalnum() or char in "_." for char in text):
+            return f"{text}.{component}"
+        return f"({text}).{component}"
 
     def format_cooperative_group_call(self, node):
         if isinstance(node.name, MemberAccessNode):
@@ -4972,6 +4996,9 @@ class CudaToCrossGLConverter:
             "long long": "i64",
             "signed long long": "i64",
             "unsigned long long": "u64",
+            "half": "f16",
+            "__half": "f16",
+            "__half2": "vec2<f16>",
             "float": "f32",
             "double": "f64",
             "size_t": "u32",
@@ -5183,6 +5210,9 @@ class CudaToCrossGLConverter:
             "short": "i16",
             "int": "i32",
             "long": "i64",
+            "half": "f16",
+            "__half": "f16",
+            "__half2": "vec2<f16>",
             "float": "f32",
             "double": "f64",
             "size_t": "u32",

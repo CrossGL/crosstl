@@ -37,6 +37,23 @@ class TestCudaLexer:
             ("EOF", ""),
         ]
 
+    def test_cuda_alignment_attribute_tokens(self):
+        code = "__align__(8) alignas(16)"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        assert tokens == [
+            ("ALIGNAS", "__align__"),
+            ("LPAREN", "("),
+            ("NUMBER", "8"),
+            ("RPAREN", ")"),
+            ("ALIGNAS", "alignas"),
+            ("LPAREN", "("),
+            ("NUMBER", "16"),
+            ("RPAREN", ")"),
+            ("EOF", ""),
+        ]
+
     def test_restrict_qualifier_spellings(self):
         code = "__restrict__ __restrict"
         lexer = CudaLexer(code)

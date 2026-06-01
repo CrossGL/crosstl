@@ -277,7 +277,13 @@ class CudaParser:
             elif self.is_type_alias_start():
                 aliases = self.parse_type_alias()
                 if isinstance(aliases, list):
-                    typedefs.extend(aliases)
+                    for alias in aliases:
+                        if isinstance(alias, StructNode):
+                            structs.append(alias)
+                        elif alias is not None:
+                            typedefs.append(alias)
+                elif isinstance(aliases, StructNode):
+                    structs.append(aliases)
                 elif aliases is not None:
                     typedefs.append(aliases)
             elif self.current_token[0] == "STRUCT":
@@ -646,6 +652,9 @@ class CudaParser:
 
     def parse_typedef_alias(self):
         self.eat("TYPEDEF")
+        if self.current_token[0] == "STRUCT":
+            return self.parse_typedef_struct_alias()
+
         first_type = self.parse_type()
         base_type = self.strip_declarator_markers(first_type)
         aliases = [self.parse_type_alias_declarator(first_type, allow_prefix=False)]
@@ -669,6 +678,79 @@ class CudaParser:
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
 
+    def parse_typedef_struct_alias(self):
+        self.eat("STRUCT")
+        attributes = self.parse_alignment_attributes()
+
+        tag_name = None
+        if self.current_token[0] == "IDENTIFIER":
+            tag_name = self.eat("IDENTIFIER")[1]
+
+        if self.current_token[0] != "LBRACE":
+            alias = self.parse_type_alias_declarator(
+                f"struct {tag_name}", allow_prefix=True
+            )
+            self.eat("SEMICOLON")
+            return alias
+
+        self.eat("LBRACE")
+        members = self.parse_struct_members()
+        self.eat("RBRACE")
+
+        alias_name = tag_name
+        if self.current_token[0] == "IDENTIFIER":
+            alias_name = self.eat("IDENTIFIER")[1]
+        if not alias_name:
+            raise SyntaxError("Expected typedef struct alias name")
+
+        self.eat("SEMICOLON")
+        self.type_aliases.add(alias_name)
+        self.struct_names.add(alias_name)
+        return StructNode(alias_name, members, attributes=attributes)
+
+    def parse_alignment_attributes(self):
+        attributes = []
+        while self.current_token[0] == "ALIGNAS":
+            name = self.eat("ALIGNAS")[1]
+            self.eat("LPAREN")
+            args = self.collect_balanced_tokens_until("RPAREN")
+            self.eat("RPAREN")
+            attributes.append(f"{name}({args})")
+        return attributes
+
+    def collect_balanced_tokens_until(self, terminator):
+        tokens = []
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if (
+                token_type == terminator
+                and paren_depth == 0
+                and bracket_depth == 0
+                and brace_depth == 0
+            ):
+                break
+
+            tokens.append(token_value)
+            if token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN" and paren_depth > 0:
+                paren_depth -= 1
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET" and bracket_depth > 0:
+                bracket_depth -= 1
+            elif token_type == "LBRACE":
+                brace_depth += 1
+            elif token_type == "RBRACE" and brace_depth > 0:
+                brace_depth -= 1
+            self.eat(token_type)
+
+        return " ".join(tokens)
+
     def parse_using_alias(self):
         self.eat("IDENTIFIER")
         if self.current_token[0] == "NAMESPACE":
@@ -690,20 +772,27 @@ class CudaParser:
 
     def parse_struct(self):
         self.eat("STRUCT")
+        attributes = self.parse_alignment_attributes()
         name = self.eat("IDENTIFIER")[1]
         self.struct_names.add(name)
         self.eat("LBRACE")
-
-        members = []
-        while self.current_token[0] != "RBRACE":
-            member = self.parse_variable_declaration()
-            members.append(member)
-            self.eat("SEMICOLON")
-
+        members = self.parse_struct_members()
         self.eat("RBRACE")
         self.eat("SEMICOLON")
 
-        return StructNode(name, members)
+        return StructNode(name, members, attributes=attributes)
+
+    def parse_struct_members(self):
+        members = []
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                continue
+
+            member_declarations = self.parse_variable_declaration_list()
+            members.extend(member_declarations)
+            self.eat("SEMICOLON")
+        return members
 
     def parse_function(self):
         qualifiers = []

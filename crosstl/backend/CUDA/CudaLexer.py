@@ -31,6 +31,7 @@ TOKENS = tuple(
         ("CLUSTER_DIMS", r"\b__cluster_dims__\b"),
         ("BLOCK_SIZE", r"\b__block_size__\b"),
         ("GRID_CONSTANT", r"\b__grid_constant__\b"),
+        ("ALIGNAS", r"\b(?:alignas|__align__)\b"),
         ("ASM", r"\b(?:asm|__asm__)\b"),
         # CUDA built-in variables
         ("THREADIDX", r"\bthreadIdx\b"),
@@ -224,6 +225,8 @@ KEYWORDS = {
     "__cluster_dims__": "CLUSTER_DIMS",
     "__block_size__": "BLOCK_SIZE",
     "__grid_constant__": "GRID_CONSTANT",
+    "alignas": "ALIGNAS",
+    "__align__": "ALIGNAS",
     "asm": "ASM",
     "__asm__": "ASM",
     "__volatile__": "VOLATILE",
@@ -314,6 +317,7 @@ class TokenType(Enum):
     CLUSTER_DIMS = auto()
     BLOCK_SIZE = auto()
     GRID_CONSTANT = auto()
+    ALIGNAS = auto()
     ASM = auto()
     THREADIDX = auto()
     BLOCKIDX = auto()
