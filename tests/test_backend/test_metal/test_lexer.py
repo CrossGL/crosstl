@@ -255,6 +255,10 @@ def test_tokenizes_numeric_literals_and_suffixes():
         int f = 0b101011;
         float g = 3.14159;
         float h = 0.125;
+        float i = .5f;
+        float j = 53.f;
+        float k = 1.e-3f;
+        half l = .25h;
     }
     """
     values = token_values(tokenize_code(code))
@@ -267,6 +271,10 @@ def test_tokenizes_numeric_literals_and_suffixes():
     assert_literal_present(values, "0b101011", numeric_alt=43)
     assert_literal_present(values, "3.14159")
     assert_literal_present(values, "0.125")
+    assert_literal_present(values, ".5f")
+    assert_literal_present(values, "53.f")
+    assert_literal_present(values, "1.e-3f")
+    assert_literal_present(values, ".25h")
 
 
 def test_tokenizes_advanced_types_and_qualifiers():

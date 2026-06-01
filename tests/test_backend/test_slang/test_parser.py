@@ -447,6 +447,51 @@ def test_lambda_expression_parsing():
     assert mapped_lambda.args[1] == "{ return color; }"
 
 
+def test_generic_type_receiver_expression_parsing():
+    code = """
+    [TorchEntryPoint]
+    export __extern_cpp int main() {
+        var result = TorchTensor<float>.alloc(Shape(1));
+        let count = result.numel();
+        let vec = coopVecLoad<4>(input);
+        let rs = f.eval<DataTrait0>(1.0);
+        return 0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = ast.exports[0].item
+    result = function.body[0]
+    count = function.body[1]
+    vector_load = function.body[2]
+    generic_method = function.body[3]
+
+    assert isinstance(result, AssignmentNode)
+    assert result.left.vtype == "var"
+    assert result.left.name == "result"
+    assert isinstance(result.right, MethodCallNode)
+    assert result.right.object.name == "TorchTensor<float>"
+    assert result.right.method == "alloc"
+    assert result.right.args[0].name == "Shape"
+
+    assert isinstance(count, AssignmentNode)
+    assert count.left.vtype == "let"
+    assert count.left.name == "count"
+    assert isinstance(count.right, MethodCallNode)
+    assert count.right.object.name == "result"
+    assert count.right.method == "numel"
+
+    assert isinstance(vector_load.right, FunctionCallNode)
+    assert vector_load.right.name == "coopVecLoad<4>"
+    assert vector_load.right.args[0].name == "input"
+
+    assert isinstance(generic_method.right, MethodCallNode)
+    assert generic_method.right.object.name == "f"
+    assert generic_method.right.method == "eval<DataTrait0>"
+    assert generic_method.right.args[0] == "1.0"
+
+
 def test_for_update_parses_array_and_member_assignment_targets():
     code = """
     void main(){

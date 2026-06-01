@@ -757,7 +757,7 @@ class VulkanParser:
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
-            if value[-1:] in {"u", "U"}:
+            if value[-1:] in {"u", "U", "f", "F"}:
                 value = value[:-1]
             return value
         elif self.current_token[0] == "LPAREN":

@@ -750,6 +750,30 @@ def test_codegen_preserves_literals_and_swizzles():
     assert "1.61803" in result
 
 
+def test_codegen_preserves_leading_decimal_float_literals():
+    code = """
+    constexpr constant static float kvalues_mxfp4_f[4] = {0, .5f, 1.f, -.5f};
+    """
+    result = convert(code)
+
+    assert ".5f" in result
+    assert "1.f" in result
+    assert "(-.5f)" in result
+
+
+def test_codegen_lowers_as_type_float_template_call():
+    code = """
+    static inline float fp32_from_bits(uint32_t bits) {
+        return as_type<float>(bits);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "asfloat(bits)" in crossgl
+    assert "as_type<float>" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_preserves_binding_attributes():
     code = """
     #include <metal_stdlib>

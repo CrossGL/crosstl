@@ -98,6 +98,35 @@ def test_parse_main_with_void_parameter_list():
     assert main.params == []
 
 
+def test_parse_function_parameters_without_names():
+    code = textwrap.dedent("""
+        #version 400 core
+
+        void ftd(int, float, double) {}
+        void itf(int, double, int);
+
+        void main()
+        {
+            ftd(1, 1.0, 2.0);
+        }
+        """)
+
+    ast = parse_ok(code, "vertex")
+    ftd = next(function for function in ast.functions if function.name == "ftd")
+    itf = next(function for function in ast.functions if function.name == "itf")
+
+    assert [(param.vtype, param.name) for param in ftd.params] == [
+        ("int", "_param0"),
+        ("float", "_param1"),
+        ("double", "_param2"),
+    ]
+    assert [(param.vtype, param.name) for param in itf.params] == [
+        ("int", "_param0"),
+        ("double", "_param1"),
+        ("int", "_param2"),
+    ]
+
+
 def test_parse_struct_with_brace_on_next_line():
     code = textwrap.dedent("""
         #version 450

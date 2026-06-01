@@ -103,9 +103,10 @@ class MojoParser:
                 constants.append(node)
                 all_items.append(node)
             elif self.current_token[0] == "COMPTIME":
-                node = self.parse_comptime_declaration()
+                node = self.parse_comptime_statement()
                 self.attach_attributes(node, attributes)
-                global_variables.append(node)
+                if isinstance(node, VariableDeclarationNode):
+                    global_variables.append(node)
                 all_items.append(node)
             elif self.current_token[0] in self.FUNCTION_TOKENS:
                 node = self.parse_function(attributes)
@@ -765,8 +766,28 @@ class MojoParser:
     def parse_comptime_statement(self):
         self.eat("COMPTIME")
         if self.current_token[0] == "IF":
-            return self.parse_if_statement()
+            node = self.parse_if_statement()
+            node.is_comptime = True
+            return node
+        if self.is_comptime_expression_statement():
+            node = self.parse_expression()
+            self.consume_statement_terminator()
+            node.is_comptime = True
+            return node
         return self.parse_comptime_declaration(after_keyword=True)
+
+    def is_comptime_expression_statement(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+        return self.peek_token()[0] not in {
+            "COLON",
+            "EQUALS",
+            "SEMICOLON",
+            "NEWLINE",
+            "DEDENT",
+            "EOF",
+            "RBRACE",
+        }
 
     def parse_comptime_declaration(self, after_keyword=False):
         if not after_keyword:

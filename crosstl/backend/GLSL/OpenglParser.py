@@ -737,9 +737,14 @@ class GLSLParser:
                 type_array_sizes = []
                 if self.current_token[0] == "LBRACKET":
                     type_array_sizes = self.parse_array_suffixes()
-                param_name = self.parse_identifier_name("parameter name")
 
-                array_sizes = type_array_sizes + self.parse_array_suffixes()
+                if self.current_token[0] in ("COMMA", "RPAREN"):
+                    param_name = f"_param{len(params)}"
+                    array_sizes = type_array_sizes
+                else:
+                    param_name = self.parse_identifier_name("parameter name")
+                    array_sizes = type_array_sizes + self.parse_array_suffixes()
+
                 array_size = array_sizes[0] if array_sizes else None
 
                 params.append(

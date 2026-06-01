@@ -1033,6 +1033,29 @@ def test_comptime_declarations_and_raises_function_parse():
     assert function.body[3].else_body[0].name == "raise"
 
 
+def test_comptime_assert_statement_parse():
+    code = """
+    def outer_product_acc(res: TileTensor, size: Int):
+        comptime assert(type_of(res).flat_rank == 2)
+        comptime assert(size > 0, "bad size")
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "outer_product_acc")
+    rank_assert = function.body[0]
+    size_assert = function.body[1]
+
+    assert isinstance(rank_assert, FunctionCallNode)
+    assert getattr(rank_assert, "is_comptime", False)
+    assert rank_assert.name == "assert"
+    assert isinstance(rank_assert.args[0], BinaryOpNode)
+    assert rank_assert.args[0].op == "=="
+
+    assert isinstance(size_assert, FunctionCallNode)
+    assert getattr(size_assert, "is_comptime", False)
+    assert size_assert.args[1] == '"bad size"'
+
+
 def test_nested_decorator_and_generic_function_signature_parse():
     code = """
     @compiler.register("vector_addition")

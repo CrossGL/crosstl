@@ -51,6 +51,25 @@ def test_hex_integer_literal_tokenization():
     assert ("IDENTIFIER", "X10U") not in tokens
 
 
+def test_float_suffix_and_exponent_literal_tokenization():
+    tokens = tokenize_code("""
+        float direct = 2.0f;
+        float bare_fraction = 1.f;
+        float leading_dot = .5F;
+        float exponent = 2.3283064365386963e-10;
+        float suffixed_exponent = 6.0e+3f;
+    """)
+
+    assert ("NUMBER", "2.0f") in tokens
+    assert ("NUMBER", "1.f") in tokens
+    assert ("NUMBER", ".5F") in tokens
+    assert ("NUMBER", "2.3283064365386963e-10") in tokens
+    assert ("NUMBER", "6.0e+3f") in tokens
+    assert ("IDENTIFIER", "f") not in tokens
+    assert ("IDENTIFIER", "F") not in tokens
+    assert ("IDENTIFIER", "e") not in tokens
+
+
 def test_array_bracket_tokenization():
     code = """
         mat4 transforms[64];

@@ -312,6 +312,23 @@ def test_codegen_comma_separated_for_updates():
     assert "for (uint i = 0; (i < 3); (++i), (++plane_index))" in crossgl
 
 
+def test_codegen_unnamed_function_parameters_get_stable_names():
+    code = textwrap.dedent("""
+        #version 400 core
+
+        void ftd(int, float, double) {}
+
+        void main() {
+            ftd(1, 1.0, 2.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "void ftd(int _param0, float _param1, double _param2)" in crossgl
+    assert "ftd(1, 1.0, 2.0)" in crossgl
+
+
 def test_codegen_query_intrinsics_use_resource_descriptors():
     code = textwrap.dedent("""
         #version 450 core

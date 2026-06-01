@@ -35,7 +35,13 @@ TOKENS = tuple(
         ("POST_INCREMENT", r"(?<=[\w\]])\+\+"),
         ("POST_DECREMENT", r"(?<=[\w\]])--"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-        ("NUMBER", r"0[xX][0-9a-fA-F]+[uU]?|\d+(\.\d*)?[uU]?|\.\d+[uU]?"),
+        (
+            "NUMBER",
+            r"0[xX][0-9a-fA-F]+[uU]?"
+            r"|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fF]?"
+            r"|\d+[eE][+-]?\d+[fF]?"
+            r"|\d+[uU]?",
+        ),
         ("SEMICOLON", r";"),
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),

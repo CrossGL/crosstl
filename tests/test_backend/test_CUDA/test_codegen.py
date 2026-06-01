@@ -7136,6 +7136,30 @@ class TestCudaCodeGen:
         assert "var b: ptr<f32> = data;" in result
         assert "__restrict__" not in result
 
+    def test_single_trailing_restrict_pointer_qualifier_conversion(self):
+        code = """
+        static __global__ void kernel(float2 *__restrict out,
+                                      const int *__restrict indices) {
+            out[threadIdx.x] = out[threadIdx.x];
+        }
+        void host(float* data) {
+            float *__restrict a = data, *__restrict b = data;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out: array<vec2<f32>>" in result
+        assert "indices: array<i32>" in result
+        assert "var a: ptr<f32> = data;" in result
+        assert "var b: ptr<f32> = data;" in result
+        assert "__restrict" not in result
+
     def test_rvalue_reference_declarations_conversion(self):
         code = """
         void consume(float&& value, const float&& other) {

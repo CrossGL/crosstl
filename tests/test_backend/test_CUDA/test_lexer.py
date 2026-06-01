@@ -17,6 +17,17 @@ class TestCudaLexer:
 
         assert tokens == expected_tokens
 
+    def test_restrict_qualifier_spellings(self):
+        code = "__restrict__ __restrict"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        assert tokens == [
+            ("RESTRICT", "__restrict__"),
+            ("RESTRICT", "__restrict"),
+            ("EOF", ""),
+        ]
+
     def test_device_lambda_capture_tokenization(self):
         code = "[&] __device__ (int x) { return x; }"
         lexer = CudaLexer(code)

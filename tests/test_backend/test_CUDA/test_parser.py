@@ -586,6 +586,33 @@ class TestCudaParser:
         ]
         assert [var.name for var in body] == ["p", "cp", "a", "b"]
 
+    def test_single_trailing_restrict_pointer_qualifier_parsing(self):
+        code = """
+        static __global__ void kernel(float2 *__restrict out,
+                                      const int *__restrict indices) {
+            out[threadIdx.x] = out[threadIdx.x];
+        }
+        void host(float* data) {
+            float *__restrict a = data, *__restrict b = data;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [param.vtype for param in ast.kernels[0].params] == [
+            "float2 * __restrict",
+            "const int * __restrict",
+        ]
+
+        body = ast.functions[0].body
+        assert [var.vtype for var in body] == [
+            "float * __restrict",
+            "float * __restrict",
+        ]
+        assert [var.name for var in body] == ["a", "b"]
+
     def test_rvalue_reference_declarations_parsing(self):
         code = """
         void consume(float&& value, const float&& other) {

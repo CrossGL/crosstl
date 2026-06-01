@@ -1195,11 +1195,22 @@ class SlangParser:
     def parse_function_call_or_identifier(self):
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        if self.current_token[0] == "LESS_THAN" and self.is_generic_expression_suffix():
+            name += self.parse_generic_type_suffix()
         if self.current_token[0] == "LPAREN":
             node = self.parse_function_call(name)
         else:
             node = VariableNode("", name)
         return self.parse_postfix_suffixes(node)
+
+    def is_generic_expression_suffix(self):
+        try:
+            suffix_end = self.skip_generic_type_suffix_tokens(self.pos)
+        except SyntaxError:
+            return False
+        if suffix_end >= len(self.tokens):
+            return False
+        return self.tokens[suffix_end][0] in {"DOT", "LPAREN"}
 
     def parse_call_arguments(self):
         self.eat("LPAREN")
@@ -1237,6 +1248,11 @@ class SlangParser:
                     )
                 member = self.current_token[1]
                 self.eat("IDENTIFIER")
+                if (
+                    self.current_token[0] == "LESS_THAN"
+                    and self.is_generic_expression_suffix()
+                ):
+                    member += self.parse_generic_type_suffix()
                 node = MemberAccessNode(node, member)
                 continue
 

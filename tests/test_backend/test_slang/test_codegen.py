@@ -300,6 +300,29 @@ def test_lambda_expression_codegen():
     assert "=>" not in generated_code
 
 
+def test_generic_type_receiver_expression_codegen():
+    code = """
+    [TorchEntryPoint]
+    export __extern_cpp int main() {
+        var result = TorchTensor<float>.alloc(Shape(1));
+        let count = result.numel();
+        let vec = coopVecLoad<4>(input);
+        let rs = f.eval<DataTrait0>(1.0);
+        return 0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var result = TorchTensor<float>.alloc(Shape(1));" in generated_code
+    assert "let count = result.numel();" in generated_code
+    assert "let vec = coopVecLoad<4>(input);" in generated_code
+    assert "let rs = f.eval<DataTrait0>(1.0);" in generated_code
+    assert "return 0;" in generated_code
+
+
 def test_for_array_assignment_update_codegen():
     code = """
     void main(){

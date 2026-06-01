@@ -5012,7 +5012,15 @@ class CudaToCrossGLConverter:
         return mapped_type
 
     def strip_type_qualifiers(self, type_name):
-        qualifiers = {"const", "volatile", "__restrict__", "restrict", "&", "&&"}
+        qualifiers = {
+            "const",
+            "volatile",
+            "__restrict__",
+            "__restrict",
+            "restrict",
+            "&",
+            "&&",
+        }
         return " ".join(
             part for part in str(type_name).split() if part not in qualifiers
         )

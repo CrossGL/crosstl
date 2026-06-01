@@ -746,6 +746,21 @@ def test_user_defined_lerp_call_does_not_lower_to_mix():
     assert "let y = mix(1.0);" not in generated_code
 
 
+def test_comptime_assert_statement_codegen():
+    code = """
+    def outer_product_acc(res: TileTensor, size: Int):
+        comptime assert(type_of(res).flat_rank == 2)
+        comptime assert(size > 0, "bad size")
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "assert((type_of(res).flat_rank == 2));" in generated_code
+    assert 'assert((size > 0), "bad size");' in generated_code
+
+
 def test_user_defined_lerp_matching_arity_does_not_lower_to_mix():
     code = """
     fn lerp(a: Float32, b: Float32, t: Float32) -> Float32:

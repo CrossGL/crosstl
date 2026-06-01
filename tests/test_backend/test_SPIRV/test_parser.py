@@ -73,6 +73,30 @@ def test_bitwise_not_parsing():
         pytest.fail("Bitwise NOT operator parsing not implemented")
 
 
+def test_float_suffix_literals_parse_as_numbers():
+    code = """
+    void main() {
+        float direct = 2.0f;
+        float bare_fraction = 1.f;
+        float leading_dot = .5F;
+        float exponent = 2.3283064365386963e-10;
+        float suffixed_exponent = 6.0e+3f;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    values = [assignment.right for assignment in ast.functions[0].body]
+
+    assert values == [
+        "2.0",
+        "1.",
+        ".5",
+        "2.3283064365386963e-10",
+        "6.0e+3",
+    ]
+
+
 def test_function_parameter_qualifiers_parse():
     code = """
     void accumulate(in vec3 normal, inout float weight, out vec4 color) {

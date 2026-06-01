@@ -866,7 +866,15 @@ class CudaParser:
 
     def strip_declarator_markers(self, vtype):
         parts = str(vtype).split()
-        while parts and parts[-1] in {"*", "&", "&&", "__restrict__", "restrict"}:
+        declarator_markers = {
+            "*",
+            "&",
+            "&&",
+            "__restrict__",
+            "__restrict",
+            "restrict",
+        }
+        while parts and parts[-1] in declarator_markers:
             parts.pop()
         return " ".join(parts)
 

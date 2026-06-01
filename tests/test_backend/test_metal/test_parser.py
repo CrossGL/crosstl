@@ -4,6 +4,7 @@ import pytest
 
 from crosstl.backend.common_ast import (
     DiscardNode,
+    FunctionCallNode,
     IfNode,
     MemberAccessNode,
     MethodCallNode,
@@ -612,6 +613,25 @@ def test_parse_atomic_operations():
     }
     """
     parse_ok(code)
+
+
+def test_parse_leading_decimal_float_literals_in_constexpr_arrays():
+    code = """
+    constexpr constant static float kvalues_mxfp4_f[4] = {0, .5f, 1.f, -.5f};
+    """
+    parse_ok(code)
+
+
+def test_parse_as_type_template_call():
+    code = """
+    static inline float fp32_from_bits(uint32_t bits) {
+        return as_type<float>(bits);
+    }
+    """
+    ast = parse_ok(code)
+    calls = [node for node in iter_ast_nodes(ast) if isinstance(node, FunctionCallNode)]
+
+    assert any(node.name == "as_type<float>" for node in calls)
 
 
 def test_parse_preprocessor_define():

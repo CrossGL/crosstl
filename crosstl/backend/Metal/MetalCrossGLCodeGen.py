@@ -1246,10 +1246,11 @@ class MetalToCrossGLConverter:
                     return self.generate_initializer_list(
                         initializer, is_main, expr.name
                     )
+            function_name = self.map_function_call_name(expr.name)
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
-            return f"{expr.name}({args})"
+            return f"{function_name}({args})"
         elif isinstance(expr, CallNode):
             callee = self.generate_expression(expr.callee, is_main)
             args = ", ".join(
@@ -1395,6 +1396,21 @@ class MetalToCrossGLConverter:
             return str(expr)
         else:
             return f"/* Unhandled expression: {type(expr).__name__} */"
+
+    def map_function_call_name(self, name):
+        match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
+        if not match:
+            return name
+
+        target_type = self.normalized_metal_type(match.group(1))
+        mapped_type = self.map_type(target_type)
+        if target_type.startswith("float") or mapped_type in {"float", "double"}:
+            return "asfloat"
+        if target_type.startswith("uint") or mapped_type.startswith("uvec"):
+            return "asuint"
+        if target_type.startswith("int") or mapped_type.startswith("ivec"):
+            return "asint"
+        return name
 
     def generate_binary_operand(self, operand, parent_op, is_right, is_main=False):
         text = self.generate_expression(operand, is_main)

@@ -88,6 +88,26 @@ def test_vulkan_to_crossgl_emits_fragment_main():
     assert "gl_FragColor = color;" in generated_code
 
 
+def test_float_suffix_literals_codegen_from_vulkan_sample_style():
+    code = """
+    void main() {
+        vec2 uv = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
+        gl_Position = vec4(uv * 2.0f - 1.0f, 0.0f, 1.0f);
+        float tiny = 2.3283064365386963e-10;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "gl_Position = float4(((uv * 2.0) - 1.0), 0.0, 1.0);" in generated_code
+    assert "float tiny = 2.3283064365386963e-10;" in generated_code
+    assert "2.0f" not in generated_code
+    assert "0.0f" not in generated_code
+    assert "1.0f" not in generated_code
+
+
 def test_standalone_function_call_codegen():
     code = """
     void helper(int amount, int current) {

@@ -140,7 +140,7 @@ TOKENS = tuple(
         # Numeric literals (decimal/hex/binary with suffixes)
         (
             "NUMBER",
-            r"0[xX][0-9a-fA-F]+[uUlL]*|0[bB][01]+[uUlL]*|\d+\.\d+([eE][+-]?\d+)?[fFhH]?|\d+[eE][+-]?\d+[fFhH]?|\d+[fFhHuUlL]*",
+            r"0[xX][0-9a-fA-F]+[uUlL]*|0[bB][01]+[uUlL]*|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFhH]?|\d+[eE][+-]?\d+[fFhH]?|\d+[fFhHuUlL]*",
         ),
         # Brackets and braces
         ("LBRACE", r"\{"),

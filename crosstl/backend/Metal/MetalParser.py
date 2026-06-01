@@ -1352,6 +1352,14 @@ class MetalParser:
     def parse_postfix(self):
         node = self.parse_primary()
         while True:
+            if self.is_as_type_template_call(node):
+                template_args = self.parse_template_argument_suffix()
+                suffix = f"<{''.join(template_args)}>"
+                if isinstance(node, VariableNode):
+                    node.name += suffix
+                else:
+                    node.member += suffix
+                continue
             if self.current_token[0] == "LPAREN":
                 node = self.parse_call(node)
                 continue
@@ -1405,6 +1413,57 @@ class MetalParser:
                 continue
             break
         return node
+
+    def is_as_type_template_call(self, node):
+        if self.current_token[0] != "LESS_THAN":
+            return False
+        if isinstance(node, VariableNode):
+            callee_name = node.name
+        elif isinstance(node, MemberAccessNode):
+            callee_name = node.member
+        else:
+            return False
+        if callee_name.split("::")[-1] != "as_type":
+            return False
+        return self.template_argument_list_followed_by_call()
+
+    def template_argument_list_followed_by_call(self):
+        idx = self.pos
+        depth = 0
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    return (
+                        idx + 1 < len(self.tokens)
+                        and self.tokens[idx + 1][0] == "LPAREN"
+                    )
+            idx += 1
+        return False
+
+    def parse_template_argument_suffix(self):
+        self.eat("LESS_THAN")
+        depth = 1
+        parts = []
+        while depth > 0 and self.current_token[0] != "EOF":
+            if self.current_token[0] == "LESS_THAN":
+                depth += 1
+                parts.append(self.current_token[1])
+                self.eat("LESS_THAN")
+            elif self.current_token[0] == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("GREATER_THAN")
+                    break
+                parts.append(self.current_token[1])
+                self.eat("GREATER_THAN")
+            else:
+                parts.append(self.current_token[1])
+                self.eat(self.current_token[0])
+        return parts
 
     def parse_primary(self):
         if self.current_token[0] == "NUMBER":
