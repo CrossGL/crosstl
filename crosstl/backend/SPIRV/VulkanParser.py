@@ -186,6 +186,17 @@ class VulkanParser:
         self.eat("RPAREN")
 
         declaration_qualifiers = self.parse_layout_declaration_qualifiers()
+        if (
+            self.has_specialization_constant_qualifier(bindings)
+            and self.current_token[0] == "CONST"
+        ):
+            declaration = self.parse_assignment_or_function_call()
+            return LayoutNode(
+                bindings,
+                declaration=declaration,
+                layout_type="CONST",
+                declaration_qualifiers=declaration_qualifiers,
+            )
 
         layout_type = None
         block_name = None
@@ -257,6 +268,9 @@ class VulkanParser:
         raise SyntaxError(
             f"Expected layout qualifier value, got {self.current_token[0]}"
         )
+
+    def has_specialization_constant_qualifier(self, qualifiers):
+        return any(str(name).lower() == "constant_id" for name, _ in qualifiers)
 
     def is_data_type_token(self, allow_identifier=False):
         return self.current_token[1] in VALID_DATA_TYPES or (

@@ -1430,6 +1430,34 @@ class TestHipParser:
         assert ast.statements[6].name == "bounded"
         assert ast.statements[6].attributes == ["__launch_bounds__(256, 2)"]
 
+    def test_launch_bounds_after_return_type_kernel_parsing(self):
+        code = """
+        __global__ void __launch_bounds__(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)
+        documented_kernel(float* out) {
+            out[threadIdx.x] = 1.0f;
+        }
+
+        __global__ static __launch_bounds__(BlockSize) void reduction_kernel(float* out) {
+            out[threadIdx.x] = 2.0f;
+        }
+        """
+        ast = self.parse_code(code)
+
+        documented_kernel = ast.statements[0]
+        reduction_kernel = ast.statements[1]
+
+        assert isinstance(documented_kernel, KernelNode)
+        assert documented_kernel.name == "documented_kernel"
+        assert documented_kernel.attributes == [
+            "__launch_bounds__(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)"
+        ]
+        assert documented_kernel.params[0]["type"] == "float *"
+
+        assert isinstance(reduction_kernel, KernelNode)
+        assert reduction_kernel.name == "reduction_kernel"
+        assert reduction_kernel.attributes == ["__launch_bounds__(BlockSize)"]
+        assert reduction_kernel.params[0]["type"] == "float *"
+
     def test_hip_opaque_and_declared_type_pointer_declarations_parsing(self):
         code = """
         struct Pair {

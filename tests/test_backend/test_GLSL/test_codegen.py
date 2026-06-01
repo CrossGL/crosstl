@@ -331,6 +331,24 @@ def test_codegen_logical_xor_normalizes_to_boolean_inequality():
     assert "^^" not in crossgl
 
 
+def test_codegen_parenthesized_comma_assignment_expression():
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            int a = 0;
+            int b = (a = 1, a + 2);
+            fragColor = vec4(float((a = 3, b)));
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "int b = (a = 1, (a + 2));" in crossgl
+    assert "float((a = 3, b))" in crossgl
+
+
 def test_codegen_unnamed_function_parameters_get_stable_names():
     code = textwrap.dedent("""
         #version 400 core

@@ -27,6 +27,26 @@ class TestHipLexer:
         assert "CLASS" in token_types
         assert "STRUCT" in token_types
 
+    def test_launch_bounds_attribute_tokenization(self):
+        code = """
+        __global__ void __launch_bounds__(BlockSize, MinWarps)
+        kernel(float* out) {}
+        """
+        lexer = HipLexer(code)
+        tokens = [token for token in lexer.tokenize() if token.type != "NEWLINE"]
+
+        assert [(token.type, token.value) for token in tokens[:9]] == [
+            ("__GLOBAL__", "__global__"),
+            ("VOID", "void"),
+            ("__LAUNCH_BOUNDS__", "__launch_bounds__"),
+            ("LPAREN", "("),
+            ("IDENTIFIER", "BlockSize"),
+            ("COMMA", ","),
+            ("IDENTIFIER", "MinWarps"),
+            ("RPAREN", ")"),
+            ("IDENTIFIER", "kernel"),
+        ]
+
     def test_device_lambda_capture_tokenization(self):
         code = "[&] __device__ (int x) { return x; }"
         lexer = HipLexer(code)

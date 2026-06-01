@@ -870,6 +870,19 @@ def test_codegen_extra_attributes_emitted():
     assert "@ allow_uav_condition" in lowered
 
 
+def test_codegen_cxx11_namespaced_resource_attribute_passthrough():
+    hlsl = textwrap.dedent("""
+        [[vk::binding(3, 1)]]
+        Texture2D<float4> texture2 : register(t0, space0);
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ vk::binding(3, 1)" in output
+    assert "@ register(t0, space0)" in output
+    assert "sampler2D texture2;" in output
+
+
 def test_codegen_waveops_include_helper_lanes_attribute_passthrough():
     hlsl = textwrap.dedent("""
         [WaveOpsIncludeHelperLanes]

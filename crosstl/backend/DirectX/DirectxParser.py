@@ -274,36 +274,69 @@ class HLSLParser:
     def parse_attribute_list(self):
         attributes = []
         while self.current_token[0] == "LBRACKET":
+            is_double_bracket = self.peek()[0] == "LBRACKET"
             self.eat("LBRACKET")
-            if self.current_token[0] != "IDENTIFIER":
-                while (
-                    self.current_token[0] != "RBRACKET"
-                    and self.current_token[0] != "EOF"
-                ):
-                    self.eat(self.current_token[0])
-                self.eat("RBRACKET")
-                continue
 
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            args = []
-            if self.current_token[0] == "LPAREN":
-                self.eat("LPAREN")
-                if self.current_token[0] != "RPAREN":
-                    args.append(self.parse_expression())
-                    while self.current_token[0] == "COMMA":
-                        self.eat("COMMA")
-                        args.append(self.parse_expression())
-                self.eat("RPAREN")
+            if is_double_bracket:
+                self.eat("LBRACKET")
 
-            while (
-                self.current_token[0] != "RBRACKET" and self.current_token[0] != "EOF"
+            while self.current_token[0] != "EOF" and not self.is_attribute_list_end(
+                is_double_bracket
             ):
-                self.eat(self.current_token[0])
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    continue
+
+                if self.current_token[0] != "IDENTIFIER":
+                    self.eat(self.current_token[0])
+                    continue
+
+                name = self.parse_attribute_name()
+                args = []
+                if self.current_token[0] == "LPAREN":
+                    self.eat("LPAREN")
+                    if self.current_token[0] != "RPAREN":
+                        args.append(self.parse_expression())
+                        while self.current_token[0] == "COMMA":
+                            self.eat("COMMA")
+                            args.append(self.parse_expression())
+                    self.eat("RPAREN")
+
+                attributes.append(AttributeNode(name, args))
+
+                while not self.is_attribute_list_end(
+                    is_double_bracket
+                ) and self.current_token[0] not in {"COMMA", "EOF"}:
+                    self.eat(self.current_token[0])
+
+            if self.current_token[0] != "RBRACKET":
+                break
             self.eat("RBRACKET")
-            attributes.append(AttributeNode(name, args))
+            if is_double_bracket:
+                self.eat("RBRACKET")
 
         return attributes
+
+    def is_attribute_list_end(self, is_double_bracket):
+        if self.current_token[0] != "RBRACKET":
+            return False
+        return not is_double_bracket or self.peek()[0] == "RBRACKET"
+
+    def parse_attribute_name(self):
+        parts = [self.current_token[1]]
+        self.eat("IDENTIFIER")
+
+        while (
+            self.current_token[0] == "COLON"
+            and self.peek()[0] == "COLON"
+            and self.peek(2)[0] == "IDENTIFIER"
+        ):
+            self.eat("COLON")
+            self.eat("COLON")
+            parts.append(self.current_token[1])
+            self.eat("IDENTIFIER")
+
+        return "::".join(parts)
 
     def parse_qualifiers(self):
         qualifiers = []

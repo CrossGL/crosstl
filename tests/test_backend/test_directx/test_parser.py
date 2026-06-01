@@ -575,6 +575,22 @@ def test_parse_additional_attributes():
     assert_parses(code)
 
 
+def test_parse_cxx11_namespaced_attribute_on_top_level_resource_declaration():
+    ast = parse_code("""
+    [[vk::binding(3, 1)]]
+    Texture2D<float4> texture2 : register(t0, space0);
+    """)
+
+    resource = ast.global_variables[0]
+
+    assert resource.name == "texture2"
+    assert resource.vtype == "Texture2D<float4>"
+    assert resource.register == "t0, space0"
+    assert len(resource.attributes) == 1
+    assert resource.attributes[0].name == "vk::binding"
+    assert resource.attributes[0].args == [3, 1]
+
+
 def test_parse_wave_intrinsics():
     code = """
     uint WaveMain(uint value) {

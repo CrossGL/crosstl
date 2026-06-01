@@ -944,6 +944,35 @@ def test_layout_identifier_qualifier_values_parse():
     assert layout.variable_name == "albedoTex"
 
 
+def test_specialization_constant_layout_parsing():
+    code = """
+    layout(constant_id = 0) const uint a = 1;
+    layout(constant_id = 1) const float scale = 3.0;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    first_layout = ast.global_variables[0]
+    second_layout = ast.global_variables[1]
+
+    assert isinstance(first_layout, LayoutNode)
+    assert first_layout.qualifiers == [("constant_id", "0")]
+    assert first_layout.layout_type == "CONST"
+    assert isinstance(first_layout.declaration, AssignmentNode)
+    assert isinstance(first_layout.declaration.left, VariableNode)
+    assert first_layout.declaration.left.vtype == "const uint"
+    assert first_layout.declaration.left.name == "a"
+    assert first_layout.declaration.right == "1"
+
+    assert isinstance(second_layout, LayoutNode)
+    assert second_layout.qualifiers == [("constant_id", "1")]
+    assert isinstance(second_layout.declaration, AssignmentNode)
+    assert isinstance(second_layout.declaration.left, VariableNode)
+    assert second_layout.declaration.left.vtype == "const float"
+    assert second_layout.declaration.left.name == "scale"
+    assert second_layout.declaration.right == "3.0"
+
+
 def test_compute_local_size_layout_parsing():
     code = """
     layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;

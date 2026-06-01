@@ -602,6 +602,41 @@ def test_inner_and_nested_spirv_attributes_parse_from_rust_gpu_style_source():
     ]
 
 
+def test_rust_gpu_builtin_spirv_parameter_attributes_parse():
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(frag_coord)] in_frag_coord: Vec4,
+        #[spirv(front_facing)] is_front_facing: bool,
+    ) {}
+
+    #[spirv(vertex)]
+    pub fn main_vs(
+        #[spirv(instance_index)] instance_index: u32,
+    ) {}
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(local_invocation_index)] local_index: u32,
+    ) {}
+    """
+    ast = parse_code(code)
+
+    fragment = ast.functions[0]
+    assert [param.attributes[0].args for param in fragment.params] == [
+        ["frag_coord"],
+        ["front_facing"],
+    ]
+
+    vertex = ast.functions[1]
+    assert vertex.params[0].attributes[0].args == ["instance_index"]
+
+    compute = ast.functions[2]
+    assert compute.params[0].attributes[0].args == ["local_invocation_index"]
+
+
 def test_restricted_visibility_parsing():
     code = """
     #[inline]

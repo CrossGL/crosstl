@@ -508,6 +508,37 @@ def test_parse_logical_xor_precedence():
     assert result.value.right.right.op == "&&"
 
 
+def test_parse_parenthesized_comma_assignment_expression():
+    code = textwrap.dedent("""
+        #version 450 core
+        void main() {
+            int a = 0;
+            int b = (a = 1, a + 2);
+            sink((a = 3, b), b);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    main = next(function for function in ast.functions if function.name == "main")
+    b_decl = next(
+        stmt
+        for stmt in main.body
+        if isinstance(stmt, VariableNode) and stmt.name == "b"
+    )
+    call = main.body[2]
+
+    assert isinstance(b_decl.value, BinaryOpNode)
+    assert b_decl.value.op == ","
+    assert b_decl.value.left.operator == "="
+    assert isinstance(b_decl.value.right, BinaryOpNode)
+    assert b_decl.value.right.op == "+"
+
+    assert call.name.name == "sink"
+    assert len(call.args) == 2
+    assert isinstance(call.args[0], BinaryOpNode)
+    assert call.args[0].op == ","
+
+
 def test_parse_matrix_vector_operations():
     code = textwrap.dedent("""
         #version 450 core

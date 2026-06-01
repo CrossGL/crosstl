@@ -532,7 +532,7 @@ class GLSLParser:
             value = None
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
-                value = self.parse_expression()
+                value = self.parse_assignment_expression()
 
             var = VariableNode(
                 type_name,
@@ -842,7 +842,7 @@ class GLSLParser:
             self.skip_newlines()
             return self.parse_variable_declarations(type_name, qualifiers=[])
 
-        expr = self.parse_assignment_expression()
+        expr = self.parse_expression()
         self.skip_newlines()
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
@@ -1017,10 +1017,21 @@ class GLSLParser:
 
     def parse_expression(self):
         self.skip_newlines()
-        return self.parse_ternary()
+        return self.parse_comma_expression()
+
+    def parse_comma_expression(self):
+        expr = self.parse_assignment_expression()
+        self.skip_newlines()
+        while self.current_token[0] == "COMMA":
+            op = self.current_token[1]
+            self.eat("COMMA")
+            right = self.parse_assignment_expression()
+            expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
+        return expr
 
     def parse_assignment_expression(self):
-        expr = self.parse_expression()
+        expr = self.parse_ternary()
         self.skip_newlines()
         if self.current_token[0] in ASSIGNMENT_TOKENS:
             op = ASSIGNMENT_TOKENS[self.current_token[0]]
@@ -1246,7 +1257,7 @@ class GLSLParser:
         self.skip_newlines()
         if self.current_token[0] != "RPAREN":
             while True:
-                args.append(self.parse_expression())
+                args.append(self.parse_assignment_expression())
                 self.skip_newlines()
                 if self.current_token[0] != "COMMA":
                     break
@@ -1287,7 +1298,7 @@ class GLSLParser:
         elements = []
         self.skip_newlines()
         while self.current_token[0] != "RBRACE":
-            elements.append(self.parse_expression())
+            elements.append(self.parse_assignment_expression())
             self.skip_newlines()
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")

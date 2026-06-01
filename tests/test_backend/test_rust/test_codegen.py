@@ -167,6 +167,37 @@ def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
     assert "uint values[] @ binding(0)" in result
 
 
+def test_rust_gpu_builtin_spirv_aliases_drive_parameter_semantics():
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(frag_coord)] in_frag_coord: Vec4,
+        #[spirv(front_facing)] is_front_facing: bool,
+    ) {}
+
+    #[spirv(vertex)]
+    pub fn main_vs(
+        #[spirv(instance_index)] instance_index: u32,
+    ) {}
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(local_invocation_index)] local_index: u32,
+    ) {}
+    """
+    result = parse_and_generate(code)
+
+    assert "fragment main_fs {" in result
+    assert "vec4 in_frag_coord @ gl_FragCoord" in result
+    assert "bool is_front_facing @ gl_FrontFacing" in result
+    assert "vertex main_vs {" in result
+    assert "uint instance_index @ InstanceID" in result
+    assert "compute main_cs {" in result
+    assert "uint local_index @ gl_LocalInvocationIndex" in result
+
+
 def test_rust_shader_stage_local_aliases_shadow_parameter_after_initializer(tmp_path):
     code = """
     #[vertex_shader]

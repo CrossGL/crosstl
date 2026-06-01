@@ -58,6 +58,33 @@ class TestHipCodeGen:
         assert "__managed__" not in result
         assert "__shared__" not in result
 
+    def test_launch_bounds_after_return_type_conversion(self):
+        code = """
+        __global__ void __launch_bounds__(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)
+        documented_kernel(float* out) {
+            out[threadIdx.x] = 1.0f;
+        }
+
+        __global__ static __launch_bounds__(BlockSize) void reduction_kernel(float* out) {
+            out[threadIdx.x] = 2.0f;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// HIP launch bounds: "
+            "(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)"
+        ) in result
+        assert "// Kernel: documented_kernel" in result
+        assert "// HIP launch bounds: (BlockSize)" in result
+        assert "// Kernel: reduction_kernel" in result
+
     def test_device_function_conversion(self):
         code = """
         __device__ float add(float a, float b) {

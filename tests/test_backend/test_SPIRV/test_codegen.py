@@ -408,6 +408,22 @@ def test_vulkan_compute_local_size_layout_codegen():
     assert "fragment {" not in generated_code
 
 
+def test_vulkan_specialization_constant_layout_codegen():
+    code = """
+    layout(constant_id = 0) const uint a = 1;
+    layout(constant_id = 1) const float scale = 3.0;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "const uint a @constant_id(0) = 1;" in generated_code
+    assert "const float scale @constant_id(1) = 3.0;" in generated_code
+    assert "layout(constant_id" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
 def test_vulkan_uniform_block_instance_member_access_flattens_to_cbuffer_member():
     code = """
     layout(set = 0, binding = 0) uniform Camera {

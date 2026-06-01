@@ -251,6 +251,9 @@ class VulkanToCrossGLConverter:
 
     def generate_layout(self, node):
         code = ""
+        if self.is_specialization_constant_layout(node):
+            return self.generate_specialization_constant_layout(node)
+
         layout_type = node.layout_type.lower() if node.layout_type else ""
 
         if layout_type == "uniform":
@@ -293,6 +296,47 @@ class VulkanToCrossGLConverter:
                 )
 
         return code
+
+    def is_specialization_constant_layout(self, node):
+        if (getattr(node, "layout_type", None) or "").lower() != "const":
+            return False
+        return any(
+            str(name).lower() == "constant_id"
+            for name, _ in getattr(node, "qualifiers", []) or []
+        )
+
+    def generate_specialization_constant_layout(self, node):
+        declaration = getattr(node, "declaration", None)
+        if declaration is None:
+            return ""
+
+        constant_id = next(
+            (
+                value
+                for name, value in getattr(node, "qualifiers", []) or []
+                if str(name).lower() == "constant_id"
+            ),
+            None,
+        )
+        metadata = f" @constant_id({constant_id})" if constant_id is not None else ""
+
+        if isinstance(declaration, AssignmentNode):
+            lhs = self.specialization_constant_declaration_lhs(
+                self.assignment_left(declaration), metadata
+            )
+            rhs = self.generate_expression(self.assignment_right(declaration))
+            return f"    {lhs} = {rhs};\n"
+
+        lhs = self.specialization_constant_declaration_lhs(declaration, metadata)
+        return f"    {lhs};\n"
+
+    def specialization_constant_declaration_lhs(self, declaration, metadata):
+        if isinstance(declaration, VariableNode) and self.variable_type(declaration):
+            return (
+                f"{self.map_type(self.variable_type(declaration))} "
+                f"{declaration.name}{metadata}"
+            )
+        return f"{self.generate_expression(declaration)}{metadata}"
 
     def storage_image_layout_attribute_suffix(self, node):
         if not self.is_storage_image_type(getattr(node, "data_type", None)):

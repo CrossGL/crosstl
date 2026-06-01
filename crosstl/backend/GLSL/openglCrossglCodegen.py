@@ -1645,6 +1645,8 @@ class GLSLToCrossGLConverter:
             left = self.generate_expression(node.left)
             right = self.generate_expression(node.right)
             operator = self.operator_map.get(node.op, node.op)
+            if operator == ",":
+                return f"({left}, {right})"
             return f"({left} {operator} {right})"
         elif isinstance(node, UnaryOpNode):
             operand = self.generate_expression(node.operand)

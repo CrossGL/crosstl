@@ -232,6 +232,11 @@ class HipParser:
         if index is None:
             return None
 
+        while (
+            index < len(self.tokens) and self.tokens[index].type == "__LAUNCH_BOUNDS__"
+        ):
+            index = self.skip_launch_bounds_at_pos(index)
+
         if (
             index + 1 < len(self.tokens)
             and self.is_function_name_token(self.tokens[index])
@@ -530,6 +535,7 @@ class HipParser:
         while True:
             self.skip_newlines()
             if not self.match(
+                *self.FUNCTION_SPECIFIER_TOKENS,
                 "__DEVICE__",
                 "__HOST__",
                 "__GLOBAL__",
@@ -547,6 +553,11 @@ class HipParser:
 
         return_type = self.parse_type()
         self.skip_newlines()
+
+        while self.match("__LAUNCH_BOUNDS__"):
+            attributes.append(self.parse_launch_bounds_attribute())
+            self.skip_newlines()
+
         name = self.consume_function_name()
         self.user_function_names.add(name)
 
