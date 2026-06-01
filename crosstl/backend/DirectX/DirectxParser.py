@@ -161,6 +161,20 @@ class HLSLParser:
         typedefs = []
 
         while self.current_token[0] != "EOF":
+            if self.current_token_is_keyword("USING", "using"):
+                self.parse_using_directive()
+                continue
+
+            if self.current_token_is_keyword("NAMESPACE", "namespace"):
+                namespace_ast = self.parse_namespace_block()
+                structs.extend(namespace_ast.structs)
+                functions.extend(namespace_ast.functions)
+                global_variables.extend(namespace_ast.global_variables)
+                cbuffers.extend(getattr(namespace_ast, "cbuffers", []) or [])
+                enums.extend(getattr(namespace_ast, "enums", []) or [])
+                typedefs.extend(getattr(namespace_ast, "typedefs", []) or [])
+                continue
+
             if self.current_token[0] == "PREPROCESSOR":
                 directive = self.parse_preprocessor_directive()
                 if directive is not None:
@@ -248,6 +262,71 @@ class HLSLParser:
 
     def is_type_token(self, token_type):
         return token_type in TYPE_TOKENS
+
+    def current_token_is_keyword(self, token_type, value):
+        return self.current_token[0] == token_type or (
+            self.current_token[0] == "IDENTIFIER" and self.current_token[1] == value
+        )
+
+    def current_token_is_double_colon(self):
+        return self.current_token[0] == "COLON" and self.peek()[0] == "COLON"
+
+    def eat_keyword(self, token_type, value):
+        if self.current_token[0] == token_type:
+            return self.eat(token_type)
+        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == value:
+            return self.eat("IDENTIFIER")
+        raise SyntaxError(f"Expected {value}, got {self.current_token[0]}")
+
+    def eat_double_colon(self):
+        self.eat("COLON")
+        self.eat("COLON")
+
+    def parse_using_directive(self):
+        self.eat_keyword("USING", "using")
+        if self.current_token_is_keyword("NAMESPACE", "namespace"):
+            self.eat_keyword("NAMESPACE", "namespace")
+        while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+            if self.current_token_is_double_colon():
+                self.eat_double_colon()
+            else:
+                self.eat(self.current_token[0])
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+    def parse_namespace_block(self):
+        self.eat_keyword("NAMESPACE", "namespace")
+        if self.current_token[0] == "IDENTIFIER":
+            self.eat("IDENTIFIER")
+            while self.current_token_is_double_colon():
+                self.eat_double_colon()
+                self.eat("IDENTIFIER")
+
+        self.eat("LBRACE")
+        namespace_tokens = []
+        depth = 1
+        while depth > 0 and self.current_token[0] != "EOF":
+            if self.current_token[0] == "LBRACE":
+                depth += 1
+                namespace_tokens.append(self.current_token)
+                self.eat("LBRACE")
+                continue
+            if self.current_token[0] == "RBRACE":
+                depth -= 1
+                if depth == 0:
+                    break
+                namespace_tokens.append(self.current_token)
+                self.eat("RBRACE")
+                continue
+            namespace_tokens.append(self.current_token)
+            self.eat(self.current_token[0])
+
+        self.eat("RBRACE")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+        parser = HLSLParser(namespace_tokens + [("EOF", "")])
+        return parser.parse()
 
     def parse_preprocessor_directive(self):
         token = self.eat("PREPROCESSOR")
@@ -1358,6 +1437,8 @@ class HLSLParser:
                 member = self.current_token[1]
                 self.eat("IDENTIFIER")
                 expr = MemberAccessNode(expr, member)
+            elif self.current_token_is_double_colon():
+                expr = self.parse_scoped_name(expr)
             elif self.current_token[0] == "LPAREN":
                 args = self.parse_call_arguments()
 
@@ -1378,6 +1459,18 @@ class HLSLParser:
             else:
                 break
         return expr
+
+    def parse_scoped_name(self, prefix):
+        if not isinstance(prefix, str):
+            raise SyntaxError("Expected identifier before scoped name separator")
+
+        scoped_name = prefix
+        while self.current_token_is_double_colon():
+            self.eat_double_colon()
+            member = self.current_token[1]
+            self.eat("IDENTIFIER")
+            scoped_name = f"{scoped_name}::{member}"
+        return scoped_name
 
     def parse_call_arguments(self):
         self.eat("LPAREN")

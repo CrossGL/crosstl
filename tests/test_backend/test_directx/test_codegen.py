@@ -512,6 +512,26 @@ def test_codegen_export_function_specifier_imports_to_crossgl():
     parse_crossgl(crossgl)
 
 
+def test_codegen_namespace_block_scoped_call_imports_to_parseable_crossgl():
+    crossgl = generate_crossgl("""
+        using namespace dx;
+
+        namespace CrossBilateral {
+            float Weight(float value) {
+                return value;
+            }
+        }
+
+        float UseWeight(float value) {
+            return CrossBilateral::Weight(value);
+        }
+    """)
+
+    assert "float Weight(float value)" in crossgl
+    assert "CrossBilateral::Weight(value)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_anonymous_nested_struct_member_roundtrip():
     hlsl = textwrap.dedent("""
         struct NRCPathState {

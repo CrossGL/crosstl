@@ -332,6 +332,32 @@ def test_parse_interpolation_intrinsics_keep_free_function_calls():
     assert "EvaluateAttributeCentroid" in free_calls
 
 
+def test_parse_namespace_block_flattens_and_preserves_scoped_call_name():
+    code = """
+    using namespace dx;
+
+    namespace CrossBilateral {
+        float Weight(float value) {
+            return value;
+        }
+    }
+
+    float UseWeight(float value) {
+        return CrossBilateral::Weight(value);
+    }
+    """
+
+    ast = parse_code(code)
+    calls = [
+        node.name
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, FunctionCallNode) and isinstance(node.name, str)
+    ]
+
+    assert [function.name for function in ast.functions] == ["Weight", "UseWeight"]
+    assert "CrossBilateral::Weight" in calls
+
+
 def test_parse_clip_intrinsic_expression_statement():
     code = """
     float4 PSMain(float4 color : COLOR0) : SV_Target {

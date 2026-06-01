@@ -148,6 +148,9 @@ TOKENS = tuple(
         ("OUT", r"\bout\b"),
         ("INOUT", r"\binout\b"),
         ("UNIFORM", r"\buniform\b"),
+        # Namespace/import-like directives
+        ("NAMESPACE", r"\bnamespace\b"),
+        ("USING", r"\busing\b"),
         # Boolean literals
         ("TRUE", r"\btrue\b"),
         ("FALSE", r"\bfalse\b"),
@@ -330,6 +333,8 @@ KEYWORDS = {
     "out": "OUT",
     "inout": "INOUT",
     "uniform": "UNIFORM",
+    "namespace": "NAMESPACE",
+    "using": "USING",
     "true": "TRUE",
     "false": "FALSE",
 }
@@ -445,6 +450,8 @@ class TokenType(Enum):
     OUT = auto()
     INOUT = auto()
     UNIFORM = auto()
+    NAMESPACE = auto()
+    USING = auto()
     TRUE = auto()
     FALSE = auto()
     IDENTIFIER = auto()
