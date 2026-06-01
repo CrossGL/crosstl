@@ -23321,8 +23321,6 @@ def test_rust_type_conversions():
         pytest.fail("Rust type conversions not implemented")
 
 
-
-
 def test_rust_invalid_shader_empty_vertex_stage(tmp_path):
     code = """
     shader EmptyVertex {
@@ -23375,8 +23373,6 @@ def test_rust_invalid_shader_missing_return_type(tmp_path):
     assert "-> ()" in generated_code
     assert "let x: f32 = 1.0;" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
-
-
 
 
 def test_rust_cbuffer_basic_uniform_buffer():
@@ -23473,8 +23469,6 @@ def test_rust_cbuffer_used_in_vertex_stage():
     assert "pub fn main(" in generated_code
 
 
-
-
 def test_rust_struct_member_semantic_position():
     code = """
     shader main {
@@ -23555,8 +23549,6 @@ def test_rust_struct_member_multiple_texcoords():
     assert "// texcoord(2)" in generated_code
 
 
-
-
 def test_rust_stage_parameter_input_struct():
     code = """
     shader main {
@@ -23629,8 +23621,6 @@ def test_rust_stage_parameter_multiple_params():
     assert_rust_stage_attr(generated_code, "vertex")
     assert "input: VSInput" in generated_code
     assert "-> Vec4<f32>" in generated_code
-
-
 
 
 def test_rust_fragment_stage_basic():
@@ -23729,8 +23719,6 @@ def test_rust_fragment_stage_multiple_render_targets():
     assert "// target(0)" in generated_code
     assert "// target(1)" in generated_code
     assert "// target(2)" in generated_code
-
-
 
 
 def test_rust_vertex_stage_basic():
@@ -23870,8 +23858,6 @@ def test_rust_vertex_and_fragment_pipeline():
     assert "pub baseColor: Vec4<f32>," in generated_code
     assert "pub roughness: f32," in generated_code
     assert "// Constant Buffers" in generated_code
-
-
 
 
 def test_rust_cbuffer_repr_c_and_derive():
@@ -24186,8 +24172,6 @@ def test_rust_direct_return_semantics_emit_metadata_and_compile(tmp_path):
     assert "// CrossGL return semantic: depth(any)" in depth_generated_code
     assert "pub fn main() -> f32" in depth_generated_code
     assert_generated_rust_smoke_compiles(depth_generated_code, tmp_path)
-
-
 
 
 def test_rust_vertex_stage_position_output(tmp_path):
