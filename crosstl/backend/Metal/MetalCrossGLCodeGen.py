@@ -869,13 +869,13 @@ class MetalToCrossGLConverter:
             if qualifier == "vertex":
                 code += "    // Vertex Shader\n"
                 code += "    vertex {\n"
-                code += self.generate_function(f)
+                code += self.generate_function(f, stage_entry=f.name != "main")
                 code += "    }\n\n"
             elif qualifier == "fragment":
                 code += "    // Fragment Shader\n"
                 code += "    fragment {\n"
                 code += self.generate_fragment_execution_layouts(f)
-                code += self.generate_function(f)
+                code += self.generate_function(f, stage_entry=f.name != "main")
                 code += "    }\n\n"
             elif qualifier == "kernel":
                 code += "    // Compute Shader\n"
@@ -1055,9 +1055,12 @@ class MetalToCrossGLConverter:
             parts.append(access)
         return " ".join(part for part in parts if part)
 
-    def generate_function(self, func, indent=2):
+    def generate_function(self, func, indent=2, stage_entry=False):
         """Render one Metal function node as a CrossGL function block."""
         code = ""
+        if stage_entry:
+            code += "    " * indent
+            code += "@ stage_entry\n"
         code += "    " * indent
         previous_variable_types = self.current_variable_types
         self.current_variable_types = dict(self.global_variable_types)

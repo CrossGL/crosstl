@@ -769,6 +769,28 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     assert "data[tid] = value * 2.0;" in metal
 
 
+def test_roundtrip_scalar_thread_position_in_grid_from_apple_compute_sample():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void main(device const float* inA [[buffer(0)]],
+                     device float* result [[buffer(1)]],
+                     uint index [[thread_position_in_grid]]) {
+        result[index] = inA[index];
+    }
+    """
+    crossgl = convert(code)
+
+    assert "uint index @gl_GlobalInvocationID" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+
+    assert "uint index [[thread_position_in_grid]]" in metal
+    assert "result[index] = inA[index];" in metal
+
+
 def test_codegen_preserves_literals_and_swizzles():
     code = """
     #include <metal_stdlib>
@@ -1396,12 +1418,17 @@ def test_roundtrip_local_constexpr_sampler_options_from_apple_texture_sample():
 
     assert "_u3a_u3a" not in crossgl
     assert "sampler(mag_filter::linear, min_filter::linear)" in crossgl
+    assert "@ stage_entry" in crossgl
+    assert "vec4 samplingShader" in crossgl
 
     ast = parse_crossgl(crossgl)
     metal = MetalCodeGen().generate(ast)
     assert "_u3a_u3a" not in metal
     assert "mag_filter::linear" in metal
     assert "min_filter::linear" in metal
+    assert "fragment float4 samplingShader(" in metal
+    assert "texture2d<float> colorTexture [[texture(0)]]" in metal
+    assert "fragment void fragment_main()" not in metal
 
 
 def test_codegen_sanitizes_unicode_identifiers_for_crossgl_parse():

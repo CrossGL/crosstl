@@ -3661,7 +3661,7 @@ class MetalCodeGen:
 
     def validate_compute_builtin_parameter_types(self, parameters):
         expected_types = {
-            "thread_position_in_grid": "uint3",
+            "thread_position_in_grid": ("uint", "uint2", "uint3"),
             "thread_position_in_threadgroup": "uint3",
             "threadgroup_position_in_grid": "uint3",
             "thread_index_in_threadgroup": "uint",
@@ -3677,12 +3677,20 @@ class MetalCodeGen:
             if expected_type is None:
                 continue
             actual_type = self.map_type(self.parameter_raw_type(parameter))
-            if actual_type != expected_type:
+            expected_values = (
+                expected_type if isinstance(expected_type, tuple) else (expected_type,)
+            )
+            if actual_type not in expected_values:
                 name = getattr(parameter, "name", "<anonymous>")
+                expected_label = (
+                    expected_values[0]
+                    if len(expected_values) == 1
+                    else "one of " + ", ".join(expected_values)
+                )
                 raise ValueError(
                     f"Metal compute semantic '{semantic}' maps to "
                     f"'{metal_semantic}' and requires parameter '{name}' to "
-                    f"have type {expected_type}, got {actual_type}"
+                    f"have type {expected_label}, got {actual_type}"
                 )
 
     def collect_function_metal_wave_lane_dependencies(self, functions):
@@ -11534,6 +11542,8 @@ class MetalCodeGen:
 
     def stage_entry_base_name(self, stage_name, func):
         func_name = getattr(func, "name", None) or "main"
+        if self.function_has_explicit_stage_entry_attribute(func):
+            return func_name
         if stage_name == "vertex":
             return f"vertex_{func_name}"
         if stage_name == "fragment":
@@ -11566,6 +11576,14 @@ class MetalCodeGen:
         if stage_keyword:
             return f"{stage_keyword}_{func_name}"
         return func_name
+
+    def function_has_explicit_stage_entry_attribute(self, func):
+        if getattr(func, "preserve_stage_entry_name", False):
+            return True
+        return any(
+            str(getattr(attr, "name", "")).lower() == "stage_entry"
+            for attr in getattr(func, "attributes", []) or []
+        )
 
     def stage_entry_names(self, ast, target_stage=None):
         stage_entry_types = self.stage_entry_types()

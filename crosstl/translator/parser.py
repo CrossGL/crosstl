@@ -672,7 +672,18 @@ class Parser:
                 body=BlockNode([]),
             )
 
-        if stage_name:
+        explicit_stage_entry = self.function_has_explicit_stage_entry_attribute(
+            main_function
+        )
+        if explicit_stage_entry:
+            main_function.preserve_stage_entry_name = True
+            main_function.attributes = [
+                attr
+                for attr in getattr(main_function, "attributes", []) or []
+                if str(getattr(attr, "name", "")).lower() != "stage_entry"
+            ]
+
+        if stage_name and not explicit_stage_entry:
             main_function.name = stage_name
 
         execution_config.update(
@@ -693,6 +704,7 @@ class Parser:
     def function_has_stage_entry_attributes(self, function):
         """Return whether a non-main stage function carries entry metadata."""
         stage_entry_attributes = {
+            "stage_entry",
             "numthreads",
             "outputtopology",
             "max_vertices",
@@ -705,6 +717,13 @@ class Parser:
         }
         return any(
             str(getattr(attr, "name", "")).lower() in stage_entry_attributes
+            for attr in getattr(function, "attributes", []) or []
+        )
+
+    def function_has_explicit_stage_entry_attribute(self, function):
+        """Return whether a function explicitly asks to preserve entry identity."""
+        return any(
+            str(getattr(attr, "name", "")).lower() == "stage_entry"
             for attr in getattr(function, "attributes", []) or []
         )
 
