@@ -300,6 +300,27 @@ def test_validate_matrix_catches_inconsistent_generated_backlog():
         module.validate_matrix(matrix)
 
 
+def test_build_matrix_tracks_diagnostic_rows_in_backlog():
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    features["features"][0]["support"]["metal"] = {
+        "status": "diagnostic",
+        "notes": "Emits a deterministic fallback.",
+    }
+
+    matrix = module.build_matrix(backends, features)
+
+    assert {
+        "feature_id": "target.codegen",
+        "feature": "Code generation",
+        "category": "target",
+        "backend_id": "metal",
+        "backend": "metal",
+        "status": "diagnostic",
+        "notes": "Emits a deterministic fallback.",
+    } in matrix["backlog"]
+
+
 def test_audit_accepts_comma_separated_status_filters(capsys):
     module = load_support_matrix_module()
     backends, features = _minimal_catalogs(module)

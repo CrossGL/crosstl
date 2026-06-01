@@ -1737,7 +1737,7 @@ def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
     assert "github.event_name == 'schedule'" in support_matrix
     assert "github.event_name == 'workflow_dispatch'" in support_matrix
     assert (
-        "python tools/support_matrix.py docs --output "
+        "python tools/support_signals.py docs --output "
         "support/generated/backend-docs-report.json"
     ) in support_matrix
     assert "actions/upload-artifact@v4" in support_matrix

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -101,3 +102,69 @@ def test_write_summary_json_writes_stable_machine_readable_report(tmp_path):
     assert text.endswith("\n")
     assert '"schema_version": 1' in text
     assert '"within_regression_budget": true' in text
+
+
+def test_main_is_independent_of_current_working_directory(monkeypatch, tmp_path):
+    module = load_examples_test_module()
+    examples_root = tmp_path / "examples"
+    source = examples_root / "graphics" / "SimpleShader.cgl"
+    source.parent.mkdir(parents=True)
+    source.write_text("shader SimpleShader {}", encoding="utf-8")
+    summary_path = tmp_path / "summary.json"
+
+    monkeypatch.setattr(module, "EXAMPLES_ROOT", examples_root)
+    monkeypatch.setattr(
+        module, "EXAMPLES_BY_CATEGORY", {"graphics": ["SimpleShader.cgl"]}
+    )
+    monkeypatch.setattr(module, "BACKENDS", {"metal": ".metal"})
+    monkeypatch.setattr(module, "BACKEND_COMPATIBILITY", {"graphics": ["metal"]})
+    monkeypatch.setattr(module, "EXAMPLE_BACKEND_SKIPS", {})
+    monkeypatch.chdir(tmp_path)
+
+    def translate(input_path, backend, save_shader=None):
+        assert Path(input_path).is_absolute()
+        if save_shader:
+            Path(save_shader).write_text("//" + ("x" * 120), encoding="utf-8")
+        return "x" * 120
+
+    monkeypatch.setattr(module.crosstl, "translate", translate)
+
+    assert module.main(["--summary-json", str(summary_path)]) == 0
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["within_regression_budget"] is True
+    assert (
+        examples_root / "output" / "metal" / "graphics" / "SimpleShader.metal"
+    ).exists()
+
+
+def test_main_returns_failure_when_regression_budget_is_exceeded(
+    monkeypatch, tmp_path, capsys
+):
+    module = load_examples_test_module()
+    examples_root = tmp_path / "examples"
+    source = examples_root / "graphics" / "SimpleShader.cgl"
+    source.parent.mkdir(parents=True)
+    source.write_text("shader SimpleShader {}", encoding="utf-8")
+
+    monkeypatch.setattr(module, "EXAMPLES_ROOT", examples_root)
+    monkeypatch.setattr(
+        module, "EXAMPLES_BY_CATEGORY", {"graphics": ["SimpleShader.cgl"]}
+    )
+    monkeypatch.setattr(module, "BACKENDS", {"metal": ".metal"})
+    monkeypatch.setattr(module, "BACKEND_COMPATIBILITY", {"graphics": ["metal"]})
+    monkeypatch.setattr(module, "EXAMPLE_BACKEND_SKIPS", {})
+    monkeypatch.setattr(
+        module,
+        "test_cross_backend_consistency",
+        lambda: {"successful": 0, "total": 0},
+    )
+
+    def translate(*args, **kwargs):
+        raise RuntimeError("forced failure")
+
+    monkeypatch.setattr(module.crosstl, "translate", translate)
+
+    assert module.main([]) == 1
+    captured = capsys.readouterr()
+    assert "Example regression budget exceeded" in captured.err

@@ -68,7 +68,7 @@ jobs:
           python-version: "3.12"
 
       - name: Probe backend documentation sources
-        run: python tools/support_matrix.py docs --output support/generated/backend-docs-report.json
+        run: python tools/support_signals.py docs --output support/generated/backend-docs-report.json
 
       - name: Upload documentation probe report
         if: always()

@@ -226,6 +226,19 @@ shader PBRShader {
 }
 ```
 
+## Backend Compatibility
+
+All backends support the core CrossGL language (structs, arrays, functions, control flow, texture sampling, shader stages). Some advanced language features have partial backend coverage:
+
+| Feature | Not yet supported in |
+|---------|---------------------|
+| Generic functions | SPIR-V, CUDA, HIP, Mojo, Slang (pending monomorphization) |
+| Geometry stage | Metal, CUDA, HIP, Mojo, Rust (diagnostic fallback) |
+| Tessellation stage | OpenGL, Metal, CUDA, HIP, Mojo, Rust (diagnostic fallback) |
+| Mesh/Task stage | CUDA, HIP, Mojo, Rust, Slang (diagnostic fallback) |
+
+Translation calls targeting unsupported feature/backend combinations raise a clear error with a reason string.
+
 ## Getting Started
 
 Install CrossTL:

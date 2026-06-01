@@ -75,6 +75,7 @@ FRONTEND_NAME = "Frontend / IR / Parser"
 
 BACKLOG_STATUSES = {
     "partial",
+    "diagnostic",
     "unsupported",
     "unknown",
 }

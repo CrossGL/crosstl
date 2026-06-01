@@ -11,8 +11,54 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import crosstl
 
+EXAMPLES_ROOT = Path(__file__).resolve().parent
 KNOWN_FAILURE_BUDGET = 2
 MIN_SUCCESS_RATE = 90.0
+EXAMPLES_BY_CATEGORY = {
+    "graphics": ["SimpleShader.cgl", "PerlinNoise.cgl", "ComplexShader.cgl"],
+    "advanced": ["ArrayTest.cgl", "GenericPatternMatching.cgl"],
+    "compute": ["ParticleSimulation.cgl"],
+    "cross_platform": ["UniversalPBRShader.cgl"],
+    "gpu_computing": ["MatrixMultiplication.cgl"],
+}
+BACKENDS = {
+    "metal": ".metal",
+    "directx": ".hlsl",
+    "opengl": ".glsl",
+    "vulkan": ".spvasm",
+    "rust": ".rs",
+    "mojo": ".mojo",
+    "cuda": ".cu",
+    "hip": ".hip",
+    "slang": ".slang",
+}
+BACKEND_COMPATIBILITY = {
+    "graphics": [
+        "metal",
+        "directx",
+        "opengl",
+        "vulkan",
+        "rust",
+        "mojo",
+        "cuda",
+        "hip",
+        "slang",
+    ],
+    "advanced": [
+        "metal",
+        "directx",
+        "opengl",
+        "vulkan",
+        "rust",
+        "mojo",
+        "cuda",
+        "hip",
+        "slang",
+    ],
+    "compute": ["metal", "directx", "opengl", "vulkan", "cuda", "hip"],
+    "cross_platform": ["metal", "directx", "opengl", "vulkan", "rust"],
+    "gpu_computing": ["cuda", "hip", "mojo", "rust"],
+}
 EXAMPLE_BACKEND_SKIPS = {
     (
         "advanced",
@@ -117,90 +163,47 @@ def write_summary_json(summary, path):
     path.write_text(stable_json(summary), encoding="utf-8")
 
 
+def display_path(path):
+    return path.relative_to(EXAMPLES_ROOT).as_posix()
+
+
 def main(argv=None):
     """Test comprehensive translation functionality across all example categories."""
     args = parse_args(argv)
 
-    examples_by_category = {
-        "graphics": ["SimpleShader.cgl", "PerlinNoise.cgl", "ComplexShader.cgl"],
-        "advanced": ["ArrayTest.cgl", "GenericPatternMatching.cgl"],
-        "compute": ["ParticleSimulation.cgl"],
-        "cross_platform": ["UniversalPBRShader.cgl"],
-        "gpu_computing": ["MatrixMultiplication.cgl"],
-    }
-
-    backends = {
-        "metal": ".metal",
-        "directx": ".hlsl",
-        "opengl": ".glsl",
-        "vulkan": ".spvasm",
-        "rust": ".rs",
-        "mojo": ".mojo",
-        "cuda": ".cu",
-        "hip": ".hip",
-        "slang": ".slang",
-    }
-
-    backend_compatibility = {
-        "graphics": [
-            "metal",
-            "directx",
-            "opengl",
-            "vulkan",
-            "rust",
-            "mojo",
-            "cuda",
-            "hip",
-            "slang",
-        ],
-        "advanced": [
-            "metal",
-            "directx",
-            "opengl",
-            "vulkan",
-            "rust",
-            "mojo",
-            "cuda",
-            "hip",
-            "slang",
-        ],
-        "compute": ["metal", "directx", "opengl", "vulkan", "cuda", "hip"],
-        "cross_platform": ["metal", "directx", "opengl", "vulkan", "rust"],
-        "gpu_computing": ["cuda", "hip", "mojo", "rust"],
-    }
-
     print("[CROSSGL] CrossGL Comprehensive Translation Test")
     print("=" * 60)
 
-    for backend in backends:
-        os.makedirs(f"output/{backend}", exist_ok=True)
+    output_root = EXAMPLES_ROOT / "output"
+    for backend in BACKENDS:
+        (output_root / backend).mkdir(parents=True, exist_ok=True)
 
     total_tests = 0
     successful_tests = 0
     failed_tests = []
     skipped_tests = []
 
-    for category, examples in examples_by_category.items():
+    for category, examples in EXAMPLES_BY_CATEGORY.items():
         print(f"\n[TESTING] {category.upper()} examples:")
         print("-" * 40)
 
         for example in examples:
-            example_path = f"{category}/{example}"
+            example_path = EXAMPLES_ROOT / category / example
             example_name = Path(example).stem
 
-            if not Path(example_path).exists():
+            if not example_path.exists():
                 print(f"[WARNING] Skipping {example} (not found)")
                 continue
 
             print(f"\n[TRANSLATING] {example_name}:")
 
             # Get compatible backends for this category
-            compatible_backends = backend_compatibility.get(
-                category, list(backends.keys())
+            compatible_backends = BACKEND_COMPATIBILITY.get(
+                category, list(BACKENDS.keys())
             )
 
             for backend in compatible_backends:
-                if backend not in backends:
+                if backend not in BACKENDS:
                     continue
 
                 skip_reason = EXAMPLE_BACKEND_SKIPS.get(
@@ -213,22 +216,20 @@ def main(argv=None):
 
                 total_tests += 1
                 try:
-                    backend_output_dir = f"output/{backend}/{category}"
-                    os.makedirs(backend_output_dir, exist_ok=True)
-
+                    backend_output_dir = output_root / backend / category
+                    backend_output_dir.mkdir(parents=True, exist_ok=True)
                     output_file = (
-                        f"{backend_output_dir}/{example_name}{backends[backend]}"
+                        backend_output_dir / f"{example_name}{BACKENDS[backend]}"
                     )
 
                     result = crosstl.translate(
-                        example_path, backend=backend, save_shader=output_file
+                        str(example_path),
+                        backend=backend,
+                        save_shader=str(output_file),
                     )
 
-                    if (
-                        Path(output_file).exists()
-                        and Path(output_file).stat().st_size > 100
-                    ):
-                        print(f"  [SUCCESS] {backend:8} -> {output_file}")
+                    if output_file.exists() and output_file.stat().st_size > 100:
+                        print(f"  [SUCCESS] {backend:8} -> {display_path(output_file)}")
                         successful_tests += 1
                     else:
                         print(f"  [WARNING] {backend:8} -> Output too small or missing")
@@ -272,15 +273,24 @@ def main(argv=None):
     print(
         f"[OUTPUT] Check output/ directory for organized results by backend and category."
     )
+    if not summary["within_regression_budget"]:
+        print(
+            "[ERROR] Example regression budget exceeded: "
+            f"failed={summary['failed']}, success_rate={summary['success_rate']:.1f}%",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
 
 
 def test_cross_backend_consistency():
     """Test that the same shader produces valid output across multiple backends."""
-    test_shader = "graphics/SimpleShader.cgl"
-    if not Path(test_shader).exists():
+    test_shader = EXAMPLES_ROOT / "graphics" / "SimpleShader.cgl"
+    test_shader_display = display_path(test_shader)
+    if not test_shader.exists():
         print("[WARNING] SimpleShader.cgl not found for consistency test")
         return {
-            "shader": test_shader,
+            "shader": test_shader_display,
             "backends": [],
             "outputs": {},
             "successful": 0,
@@ -292,7 +302,7 @@ def test_cross_backend_consistency():
 
     for backend in consistency_backends:
         try:
-            result = crosstl.translate(test_shader, backend=backend)
+            result = crosstl.translate(str(test_shader), backend=backend)
             outputs[backend] = len(result) if result else 0
         except Exception:
             outputs[backend] = 0
@@ -303,7 +313,7 @@ def test_cross_backend_consistency():
         f"  [SUCCESS] {len(non_zero_outputs)}/{len(consistency_backends)} backends produced substantial output"
     )
     return {
-        "shader": test_shader,
+        "shader": test_shader_display,
         "backends": consistency_backends,
         "outputs": outputs,
         "successful": len(non_zero_outputs),
@@ -312,4 +322,4 @@ def test_cross_backend_consistency():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
