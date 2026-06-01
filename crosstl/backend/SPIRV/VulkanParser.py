@@ -278,6 +278,11 @@ class VulkanParser:
                     "element_type": operands[0],
                     "length_id": operands[1],
                 }
+            elif result_id and opcode == "OpTypeRuntimeArray" and len(operands) >= 1:
+                types[result_id] = {
+                    "kind": "runtime_array",
+                    "element_type": operands[0],
+                }
             elif result_id and opcode == "OpTypeStruct":
                 types[result_id] = {"kind": "struct", "member_types": operands}
             elif result_id and opcode == "OpTypePointer" and len(operands) >= 2:
@@ -658,6 +663,14 @@ class VulkanParser:
             length_id = type_info.get("length_id")
             length = constants.get(length_id, str(length_id).lstrip("%"))
             return base_type, f"[{length}]{suffix}"
+
+        if type_info.get("kind") == "runtime_array":
+            base_type, suffix = self.spirv_type_name_and_suffix(
+                type_info.get("element_type"), types, constants
+            )
+            if base_type is None:
+                return None, ""
+            return base_type, f"[]{suffix}"
 
         return type_info.get("name"), ""
 

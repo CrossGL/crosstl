@@ -5855,6 +5855,7 @@ def test_numeric_literal_suffix_conversion():
         let octal = 0o77usize;
         let grouped_float = 1_000.5f32;
         let exponent = 1.0e-3f32;
+        let trailing_dot = 1.;
         match mode {
             1u32 => hit_one(),
             0xffu32 => hit_hex(),
@@ -5878,6 +5879,7 @@ def test_numeric_literal_suffix_conversion():
         assert "octal = 63;" in result
         assert "grouped_float = 1000.5;" in result
         assert "exponent = 1.0e-3;" in result
+        assert "trailing_dot = 1.;" in result
         assert "case 1:" in result
         assert "case 255:" in result
         assert "i32" not in result

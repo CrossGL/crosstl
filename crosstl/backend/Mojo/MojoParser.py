@@ -572,16 +572,21 @@ class MojoParser:
                     f"Unexpected token in parameter list: {self.current_token[0]}"
                 )
 
+            default_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_value = self.parse_expression()
+
             param_attributes = self.parse_attributes(skip_trailing_newlines=False)
             attributes.extend(param_attributes)
-            params.append(
-                VariableNode(
-                    vtype,
-                    name,
-                    attributes=attributes,
-                    parameter_convention=convention,
-                )
+            param = VariableNode(
+                vtype,
+                name,
+                attributes=attributes,
+                parameter_convention=convention,
             )
+            param.default_value = default_value
+            params.append(param)
             self.skip_layout_tokens()
 
             if self.current_token[0] == "COMMA":
@@ -1224,7 +1229,16 @@ class MojoParser:
             self.eat(self.current_token[0])
             operand = self.parse_unary()
             return UnaryOpNode(op, operand)
-        return self.parse_primary()
+        return self.parse_power()
+
+    def parse_power(self):
+        left = self.parse_primary()
+        if self.current_token[0] == "POWER":
+            op = self.current_token[1]
+            self.eat("POWER")
+            right = self.parse_unary()
+            return BinaryOpNode(left, op, right)
+        return left
 
     def parse_primary(self):
         if self.current_token[0] == "IDENTIFIER":

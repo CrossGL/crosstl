@@ -595,6 +595,24 @@ def test_parse_cbuffer_preserves_buffer_and_member_bindings():
     assert cbuffer.members[1].register is None
 
 
+def test_parse_anonymous_old_style_cbuffer_uses_synthetic_name():
+    code = """
+    cbuffer : register(b1)
+    {
+        float4 a;
+        int2 b;
+    };
+    """
+
+    ast = parse_code(code)
+    cbuffer = ast.cbuffers[0]
+
+    assert cbuffer.name == "AnonymousCBuffer_b1"
+    assert cbuffer.register == "b1"
+    assert [member.name for member in cbuffer.members] == ["a", "b"]
+    assert [member.vtype for member in cbuffer.members] == ["float4", "int2"]
+
+
 def test_parse_tbuffer_preserves_texture_buffer_metadata():
     ast = parse_code("""
     tbuffer LookupData : register(t3, space2) {

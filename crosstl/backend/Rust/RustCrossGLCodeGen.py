@@ -11,7 +11,8 @@ RUST_NUMERIC_LITERAL_RE = re.compile(
     r"0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|"
     r"0[bB][01](?:_?[01])*|"
     r"0[oO][0-7](?:_?[0-7])*|"
-    r"\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d(?:_?\d)*)?"
+    r"\d(?:_?\d)*(?:(?:\.\d(?:_?\d)*)|\.(?![._A-Za-z0-9]))?"
+    r"(?:[eE][+-]?\d(?:_?\d)*)?"
     r")(?P<suffix>(?:[iu](?:8|16|32|64|128|size))|f(?:32|64))?$"
 )
 RUST_RAW_STRING_RE = re.compile(r'^r(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)

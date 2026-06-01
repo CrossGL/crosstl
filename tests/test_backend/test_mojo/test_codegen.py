@@ -130,6 +130,18 @@ def test_function_parameter_separator_markers_codegen_drops_markers():
     assert "/, b1" not in generated_code
 
 
+def test_function_optional_argument_default_codegen_preserves_default():
+    code = """
+    fn my_pow(base: Int, exp: Int = 2) -> Int:
+        return base ** exp
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int my_pow(int base, int exp = 2)" in generated_code
+    assert "return (base ** exp);" in generated_code
+
+
 def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     code = """
     struct Resources {

@@ -133,6 +133,22 @@ def test_function_parameter_separator_markers_parse_from_official_docs():
     ]
 
 
+def test_function_optional_argument_default_parses_from_official_docs():
+    code = """
+    fn my_pow(base: Int, exp: Int = 2) -> Int:
+        return base ** exp
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "my_pow")
+
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("base", "Int"),
+        ("exp", "Int"),
+    ]
+    assert function.params[0].default_value is None
+    assert function.params[1].default_value == "2"
+
+
 def test_struct_parsing():
     code = """
     struct VSInput:

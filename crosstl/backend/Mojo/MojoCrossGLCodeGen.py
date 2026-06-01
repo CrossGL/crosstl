@@ -375,6 +375,9 @@ class MojoToCrossGLConverter:
                 if not p.vtype:
                     continue
                 param_str = f"{self.map_type(p.vtype)} {p.name}"
+                if getattr(p, "default_value", None) is not None:
+                    default_value = self.generate_expression(p.default_value)
+                    param_str += f" = {default_value}"
                 if hasattr(p, "attributes") and p.attributes:
                     semantic = self.map_semantic(p.attributes)
                     if semantic:

@@ -198,6 +198,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_RUNTIME_ARRAY_BUFFER_BLOCK_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %StorageBuffer "StorageBuffer"
+OpName %storage "storage"
+OpMemberName %StorageBuffer 0 "header"
+OpMemberName %StorageBuffer 1 "payload"
+OpDecorate %StorageBuffer BufferBlock
+OpDecorate %storage DescriptorSet 0
+OpDecorate %storage Binding 4
+OpMemberDecorate %StorageBuffer 0 Offset 0
+OpMemberDecorate %StorageBuffer 1 Offset 4
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%runtimearr_uint = OpTypeRuntimeArray %uint
+%StorageBuffer = OpTypeStruct %uint %runtimearr_uint
+%ptr_storage = OpTypePointer Uniform %StorageBuffer
+%storage = OpVariable %ptr_storage Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -484,6 +511,21 @@ def test_spirv_assembly_buffer_block_codegen():
     assert "float4 value;" in generated_code
     assert "RWStructuredBuffer<Data> data @set(0) @binding(1);" in generated_code
     assert "%data" not in generated_code
+
+
+def test_spirv_assembly_runtime_array_buffer_block_codegen():
+    tokens = tokenize_code(SPIRV_RUNTIME_ARRAY_BUFFER_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct StorageBuffer" in generated_code
+    assert "uint header;" in generated_code
+    assert "uint payload[];" in generated_code
+    assert (
+        "RWStructuredBuffer<StorageBuffer> storage @set(0) @binding(4);"
+        in generated_code
+    )
+    assert "%storage" not in generated_code
 
 
 def test_translate_api_accepts_location_decorated_spirv_assembly(tmp_path):

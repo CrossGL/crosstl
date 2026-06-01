@@ -170,6 +170,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_RUNTIME_ARRAY_BUFFER_BLOCK_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %StorageBuffer "StorageBuffer"
+OpName %storage "storage"
+OpMemberName %StorageBuffer 0 "header"
+OpMemberName %StorageBuffer 1 "payload"
+OpDecorate %StorageBuffer BufferBlock
+OpDecorate %storage DescriptorSet 0
+OpDecorate %storage Binding 4
+OpMemberDecorate %StorageBuffer 0 Offset 0
+OpMemberDecorate %StorageBuffer 1 Offset 4
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%runtimearr_uint = OpTypeRuntimeArray %uint
+%StorageBuffer = OpTypeStruct %uint %runtimearr_uint
+%ptr_storage = OpTypePointer Uniform %StorageBuffer
+%storage = OpVariable %ptr_storage Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
@@ -274,6 +301,20 @@ def test_spirv_assembly_buffer_block_parse():
     assert layout.variable_name == "data"
     assert layout.struct_fields == [("vec4", "value")]
     assert layout.qualifiers == [("set", "0"), ("binding", "1")]
+    assert layout.spirv_storage_class == "Uniform"
+
+
+def test_spirv_assembly_runtime_array_buffer_block_parse():
+    tokens = tokenize_code(SPIRV_RUNTIME_ARRAY_BUFFER_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert layout.layout_type == "BUFFER"
+    assert layout.block_name == "StorageBuffer"
+    assert layout.variable_name == "storage"
+    assert layout.struct_fields == [("uint", "header"), ("uint", "payload[]")]
+    assert layout.qualifiers == [("set", "0"), ("binding", "4")]
     assert layout.spirv_storage_class == "Uniform"
 
 

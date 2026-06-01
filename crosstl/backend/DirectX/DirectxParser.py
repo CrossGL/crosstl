@@ -151,6 +151,7 @@ class HLSLParser:
         self.current_index = 0
         self.current_token = tokens[0] if tokens else ("EOF", "")
         self.synthetic_structs = []
+        self.synthetic_cbuffer_names = set()
 
     def parse(self):
         structs = []
@@ -670,14 +671,19 @@ class HLSLParser:
     def parse_cbuffer(self, attributes=None):
         buffer_kind = self.current_token[1]
         self.eat(self.current_token[0])
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = None
+        if self.current_token[0] == "IDENTIFIER":
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
 
         if self.current_token[0] == "COLON":
             _, cbuffer_register, cbuffer_packoffset = self.parse_semantic_or_register()
         else:
             cbuffer_register = None
             cbuffer_packoffset = None
+
+        if name is None:
+            name = self.synthetic_cbuffer_name(cbuffer_register)
 
         self.eat("LBRACE")
         members = []
@@ -703,6 +709,19 @@ class HLSLParser:
         cbuffer_node.packoffset = cbuffer_packoffset
         cbuffer_node.attributes = attributes or []
         return cbuffer_node
+
+    def synthetic_cbuffer_name(self, cbuffer_register):
+        suffix = ""
+        if cbuffer_register:
+            suffix = re.sub(r"\W+", "_", cbuffer_register).strip("_")
+        base = f"AnonymousCBuffer_{suffix}" if suffix else "AnonymousCBuffer"
+        name = base
+        index = 1
+        while name in self.synthetic_cbuffer_names:
+            name = f"{base}_{index}"
+            index += 1
+        self.synthetic_cbuffer_names.add(name)
+        return name
 
     def parse_function(self, return_type, name, qualifiers, attributes):
         params = self.parse_parameters()

@@ -1009,6 +1009,23 @@ def test_codegen_cxx11_namespaced_cbuffer_attribute_passthrough():
     assert "vec4 tint;" in output
 
 
+def test_codegen_anonymous_old_style_cbuffer_uses_synthetic_name():
+    hlsl = textwrap.dedent("""
+        cbuffer : register(b1)
+        {
+            float4 a;
+            int2 b;
+        };
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ register(b1)" in output
+    assert "cbuffer AnonymousCBuffer_b1" in output
+    assert "vec4 a;" in output
+    assert "ivec2 b;" in output
+
+
 def test_codegen_cbuffer_member_layout_metadata_passthrough():
     hlsl = textwrap.dedent("""
         cbuffer Material : register(b0) {
