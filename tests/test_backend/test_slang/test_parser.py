@@ -492,6 +492,48 @@ def test_generic_type_receiver_expression_parsing():
     assert generic_method.right.args[0] == "1.0"
 
 
+def test_generic_function_declaration_after_name_parsing():
+    code = """
+    float GetRayT<let RAY_QUERY_FLAGS: uint>(uint rayInlineFlags)
+    {
+        return 0.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "GetRayT")
+
+    assert function.return_type == "float"
+    assert getattr(function, "is_generic", False)
+    assert function.generic_parameters == "<letRAY_QUERY_FLAGS:uint>"
+    assert function.params[0].vtype == "uint"
+    assert function.params[0].name == "rayInlineFlags"
+    assert isinstance(function.body[0], ReturnNode)
+
+
+def test_generic_struct_declaration_after_name_parsing():
+    code = """
+    struct GenericStruct<T, let N: int>
+    {
+        T value;
+        float weights[N];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert struct.name == "GenericStruct"
+    assert struct.generic_parameters == "<T, letN:int>"
+    assert [(member.vtype, member.name) for member in struct.members] == [
+        ("T", "value"),
+        ("float", "weights"),
+    ]
+    assert struct.members[1].array_sizes[0].name == "N"
+
+
 def test_for_update_parses_array_and_member_assignment_targets():
     code = """
     void main(){

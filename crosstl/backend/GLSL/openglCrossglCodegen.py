@@ -414,6 +414,7 @@ class GLSLToCrossGLConverter:
             "EQUAL": "==",
             "NOT_EQUAL": "!=",
             "LOGICAL_AND": "&&",
+            "LOGICAL_XOR": "!=",
             "LOGICAL_OR": "||",
             "ASSIGN_ADD": "+=",
             "ASSIGN_SUB": "-=",
@@ -429,6 +430,7 @@ class GLSLToCrossGLConverter:
             "ASSIGN_AND": "&=",
             "ASSIGN_OR": "|=",
             "ASSIGN_XOR": "^=",
+            "^^": "!=",
         }
 
         # Shader-specific info

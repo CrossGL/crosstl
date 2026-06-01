@@ -613,6 +613,32 @@ class TestCudaParser:
         ]
         assert [var.name for var in body] == ["a", "b"]
 
+    def test_launch_bounds_kernel_attribute_parsing(self):
+        code = """
+        __launch_bounds__(128) __global__ void BlackScholesGPU(
+            float2 *__restrict d_CallResult,
+            float2 *__restrict d_PutResult) {
+            d_CallResult[threadIdx.x] = d_PutResult[threadIdx.x];
+        }
+
+        extern "C" __launch_bounds__(256, 2) __global__ void bounded(float* data) {
+            data[threadIdx.x] = 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [kernel.name for kernel in ast.kernels] == [
+            "BlackScholesGPU",
+            "bounded",
+        ]
+        assert ast.kernels[0].attributes == ["__launch_bounds__(128)"]
+        assert ast.kernels[1].attributes == ["__launch_bounds__(256, 2)"]
+        assert ast.kernels[0].params[0].vtype == "float2 * __restrict"
+        assert ast.kernels[1].qualifiers == ["__global__"]
+
     def test_rvalue_reference_declarations_parsing(self):
         code = """
         void consume(float&& value, const float&& other) {

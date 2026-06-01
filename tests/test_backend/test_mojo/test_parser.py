@@ -297,6 +297,32 @@ def test_for_in_range_parsing_preserves_range_call():
     assert loop.iterable.args[2].operand == "1"
 
 
+def test_comptime_for_parsing_preserves_loop_shape():
+    code = """
+    fn main():
+        comptime for value in values:
+            sink(value)
+        comptime for var i: Int = 0; i < 4; i = i + 1:
+            sink(i)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "main")
+    range_loop = function.body[0]
+    c_style_loop = function.body[1]
+
+    assert isinstance(range_loop, RangeForNode)
+    assert getattr(range_loop, "is_comptime", False)
+    assert range_loop.name == "value"
+    assert range_loop.iterable.name == "values"
+
+    assert isinstance(c_style_loop, ForNode)
+    assert getattr(c_style_loop, "is_comptime", False)
+    assert c_style_loop.init.name == "i"
+    assert c_style_loop.condition.op == "<"
+    assert isinstance(c_style_loop.update, AssignmentNode)
+
+
 def test_while_parsing():
     code = """
     fn main():

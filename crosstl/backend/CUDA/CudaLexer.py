@@ -27,6 +27,7 @@ TOKENS = tuple(
         ("MANAGED", r"\b__managed__\b"),
         ("NOINLINE", r"\b__noinline__\b"),
         ("FORCEINLINE", r"\b__forceinline__\b"),
+        ("LAUNCH_BOUNDS", r"\b__launch_bounds__\b"),
         # CUDA built-in variables
         ("THREADIDX", r"\bthreadIdx\b"),
         ("BLOCKIDX", r"\bblockIdx\b"),
@@ -215,6 +216,7 @@ KEYWORDS = {
     "__managed__": "MANAGED",
     "__noinline__": "NOINLINE",
     "__forceinline__": "FORCEINLINE",
+    "__launch_bounds__": "LAUNCH_BOUNDS",
     "threadIdx": "THREADIDX",
     "blockIdx": "BLOCKIDX",
     "gridDim": "GRIDDIM",

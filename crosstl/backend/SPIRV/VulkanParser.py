@@ -368,6 +368,10 @@ class VulkanParser:
 
     def parse_parameters(self):
         params = []
+        if self.current_token[0] == "VOID" and self.peek(1) == "RPAREN":
+            self.eat("VOID")
+            return params
+
         while self.current_token[0] != "RPAREN":
             qualifiers = []
             while self.current_token[0] in self.PARAMETER_QUALIFIER_TOKENS:

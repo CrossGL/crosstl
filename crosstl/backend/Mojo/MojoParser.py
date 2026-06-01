@@ -769,6 +769,10 @@ class MojoParser:
             node = self.parse_if_statement()
             node.is_comptime = True
             return node
+        if self.current_token[0] == "FOR":
+            node = self.parse_for_statement()
+            node.is_comptime = True
+            return node
         if self.is_comptime_expression_statement():
             node = self.parse_expression()
             self.consume_statement_terminator()

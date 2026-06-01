@@ -294,6 +294,22 @@ def test_for_in_descending_range_codegen_uses_greater_than_condition():
     )
 
 
+def test_comptime_for_codegen_preserves_loop_output():
+    code = """
+    fn main():
+        comptime for value in values:
+            sink(value)
+        comptime for var i: Int = 0; i < 4; i = i + 1:
+            sink(i)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for value in values {" in generated_code
+    assert "for (int i = 0; (i < 4); i = (i + 1))" in generated_code
+
+
 def test_for_in_dynamic_step_range_codegen_uses_step_sign_condition():
     code = """
     fn main(step: Int):

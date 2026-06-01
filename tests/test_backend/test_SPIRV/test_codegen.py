@@ -88,6 +88,23 @@ def test_vulkan_to_crossgl_emits_fragment_main():
     assert "gl_FragColor = color;" in generated_code
 
 
+def test_vulkan_void_parameter_main_codegen():
+    code = """
+    void main(void) {
+        gl_FragColor = vec4(1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.functions[0].params == []
+    assert "void main()" in generated_code
+    assert "void main(void)" not in generated_code
+    assert "gl_FragColor = float4(1.0);" in generated_code
+
+
 def test_float_suffix_literals_codegen_from_vulkan_sample_style():
     code = """
     void main() {

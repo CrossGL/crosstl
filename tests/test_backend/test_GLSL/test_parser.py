@@ -3,7 +3,11 @@ from typing import List
 
 import pytest
 
-from crosstl.backend.GLSL.OpenglAst import InitializerListNode, VariableNode
+from crosstl.backend.GLSL.OpenglAst import (
+    BinaryOpNode,
+    InitializerListNode,
+    VariableNode,
+)
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
 
@@ -474,6 +478,34 @@ def test_parse_ternary_and_bitwise_expressions():
         }
         """)
     parse_ok(code, "vertex")
+
+
+def test_parse_logical_xor_precedence():
+    code = textwrap.dedent("""
+        #version 450 core
+        void main() {
+            bool a = true;
+            bool b = false;
+            bool c = true;
+            bool d = false;
+            bool result = a || b ^^ c && d;
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    main = next(function for function in ast.functions if function.name == "main")
+    result = next(
+        stmt
+        for stmt in main.body
+        if isinstance(stmt, VariableNode) and stmt.name == "result"
+    )
+
+    assert isinstance(result.value, BinaryOpNode)
+    assert result.value.op == "||"
+    assert isinstance(result.value.right, BinaryOpNode)
+    assert result.value.right.op == "^^"
+    assert isinstance(result.value.right.right, BinaryOpNode)
+    assert result.value.right.right.op == "&&"
 
 
 def test_parse_matrix_vector_operations():

@@ -23,6 +23,23 @@ class TestCudaCodeGen:
         assert "// CUDA to CrossGL conversion" in result
         assert "// Kernel: simple_kernel" in result
 
+    def test_launch_bounds_kernel_attribute_conversion(self):
+        code = """
+        __launch_bounds__(128) __global__ void bounded(float* data) {
+            data[threadIdx.x] = 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA launch bounds: (128)" in result
+        assert "// Kernel: bounded" in result
+
     def test_device_function_conversion(self):
         code = """
         __device__ float add(float a, float b) {

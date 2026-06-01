@@ -1042,11 +1042,22 @@ class GLSLParser:
         return expr
 
     def parse_logical_or(self):
-        expr = self.parse_logical_and()
+        expr = self.parse_logical_xor()
         self.skip_newlines()
         while self.current_token[0] == "LOGICAL_OR":
             op = self.current_token[1]
             self.eat("LOGICAL_OR")
+            right = self.parse_logical_xor()
+            expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
+        return expr
+
+    def parse_logical_xor(self):
+        expr = self.parse_logical_and()
+        self.skip_newlines()
+        while self.current_token[0] == "LOGICAL_XOR":
+            op = self.current_token[1]
+            self.eat("LOGICAL_XOR")
             right = self.parse_logical_and()
             expr = BinaryOpNode(expr, op, right)
             self.skip_newlines()

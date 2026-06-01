@@ -109,6 +109,7 @@ class CudaParser:
         "CONSTEXPR",
         "FORCEINLINE",
         "NOINLINE",
+        "LAUNCH_BOUNDS",
     }
     TYPE_TOKENS = {
         "VOID",
@@ -214,6 +215,9 @@ class CudaParser:
             index < len(self.tokens)
             and self.tokens[index][0] in self.FUNCTION_SPECIFIER_TOKENS
         ):
+            if self.tokens[index][0] == "LAUNCH_BOUNDS":
+                index = self.skip_launch_bounds_at_index(index)
+                continue
             if (
                 self.tokens[index][0] == "EXTERN"
                 and index + 1 < len(self.tokens)
@@ -288,6 +292,9 @@ class CudaParser:
             saved_index < len(self.tokens)
             and self.tokens[saved_index][0] in self.FUNCTION_SPECIFIER_TOKENS
         ):
+            if self.tokens[saved_index][0] == "LAUNCH_BOUNDS":
+                saved_index = self.skip_launch_bounds_at_index(saved_index)
+                continue
             if (
                 self.tokens[saved_index][0] == "EXTERN"
                 and saved_index + 1 < len(self.tokens)
@@ -438,6 +445,26 @@ class CudaParser:
             and self.tokens[index][0] in self.POSTFIX_TYPE_QUALIFIER_TOKENS
         ):
             index += 1
+        return index
+
+    def skip_launch_bounds_at_index(self, index):
+        index += 1
+        if index >= len(self.tokens) or self.tokens[index][0] != "LPAREN":
+            return index
+
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            elif token_type == "EOF":
+                return index
+            index += 1
+
         return index
 
     def skip_template_at_index(self, index):
@@ -591,11 +618,17 @@ class CudaParser:
 
     def parse_function(self):
         qualifiers = []
+        attributes = []
 
         while self.current_token[0] in self.FUNCTION_SPECIFIER_TOKENS:
-            qualifiers.append(self.current_token[1])
+            if self.current_token[0] == "LAUNCH_BOUNDS":
+                attributes.append(self.parse_launch_bounds_attribute())
+                continue
+
+            qualifier = self.current_token[1]
+            qualifiers.append(qualifier)
             self.eat(self.current_token[0])
-            if qualifiers[-1] == "extern" and self.current_token[0] == "STRING":
+            if qualifier == "extern" and self.current_token[0] == "STRING":
                 qualifiers.append(self.current_token[1])
                 self.eat("STRING")
 
@@ -612,9 +645,39 @@ class CudaParser:
             self.eat("LBRACE")
 
         if "__global__" in qualifiers:
-            return KernelNode(return_type, name, params, body)
+            return KernelNode(return_type, name, params, body, attributes)
         else:
-            return FunctionNode(return_type, name, params, body, qualifiers)
+            return FunctionNode(return_type, name, params, body, qualifiers, attributes)
+
+    def parse_launch_bounds_attribute(self):
+        self.eat("LAUNCH_BOUNDS")
+        values = []
+
+        if self.current_token[0] == "LPAREN":
+            self.eat("LPAREN")
+            depth = 1
+            while self.current_token[0] != "EOF" and depth > 0:
+                token_type, token_value = self.current_token
+                if token_type == "LPAREN":
+                    depth += 1
+                    values.append(token_value)
+                    self.eat("LPAREN")
+                elif token_type == "RPAREN":
+                    depth -= 1
+                    if depth == 0:
+                        self.eat("RPAREN")
+                        break
+                    values.append(token_value)
+                    self.eat("RPAREN")
+                else:
+                    values.append(token_value)
+                    self.eat(token_type)
+
+        return f"__launch_bounds__({self.format_attribute_tokens(values)})"
+
+    def format_attribute_tokens(self, values):
+        text = "".join(values).strip()
+        return text.replace(",", ", ")
 
     def parse_parameters(self):
         self.eat("LPAREN")

@@ -3,6 +3,7 @@ from typing import List
 import pytest
 
 from crosstl.backend.common_ast import (
+    CastNode,
     DiscardNode,
     FunctionCallNode,
     IfNode,
@@ -632,6 +633,44 @@ def test_parse_as_type_template_call():
     calls = [node for node in iter_ast_nodes(ast) if isinstance(node, FunctionCallNode)]
 
     assert any(node.name == "as_type<float>" for node in calls)
+
+
+def test_parse_template_dequantize_helper_from_llama_cpp():
+    code = """
+    template <typename type4x4>
+    void dequantize_f32(device const float4x4 * src, short il, thread type4x4 & reg) {
+        reg = (type4x4)(*src);
+    }
+    """
+    ast = parse_ok(code)
+    casts = [node for node in iter_ast_nodes(ast) if isinstance(node, CastNode)]
+
+    assert [func.name for func in ast.functions] == ["dequantize_f32"]
+    assert ast.functions[0].generics == ["type4x4"]
+    assert ast.functions[0].params[0].vtype == "float4x4*"
+    assert ast.functions[0].params[0].qualifiers == ["device", "const"]
+    assert ast.functions[0].params[2].vtype == "type4x4&"
+    assert ast.functions[0].params[2].qualifiers == ["thread"]
+    assert any(node.target_type == "type4x4" for node in casts)
+
+
+def test_parse_template_kernel_typename_without_space_from_llama_cpp():
+    code = """
+    template<typename T>
+    kernel void kernel_memset(
+            constant ggml_metal_kargs_memset & args,
+            device T * dst,
+            uint tpig [[thread_position_in_grid]]) {
+        dst[tpig] = args.val;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [func.name for func in ast.functions] == ["kernel_memset"]
+    assert ast.functions[0].qualifier == "kernel"
+    assert ast.functions[0].generics == ["T"]
+    assert ast.functions[0].params[1].vtype == "T*"
+    assert ast.functions[0].params[1].qualifiers == ["device"]
 
 
 def test_parse_preprocessor_define():

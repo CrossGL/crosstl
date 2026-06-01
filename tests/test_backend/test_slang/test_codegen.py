@@ -323,6 +323,42 @@ def test_generic_type_receiver_expression_codegen():
     assert "return 0;" in generated_code
 
 
+def test_generic_function_declaration_after_name_codegen():
+    code = """
+    float GetRayT<let RAY_QUERY_FLAGS: uint>(uint rayInlineFlags)
+    {
+        return 0.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float GetRayT(uint rayInlineFlags)" in generated_code
+    assert "return 0.0;" in generated_code
+    assert "<let" not in generated_code
+
+
+def test_generic_struct_declaration_after_name_codegen():
+    code = """
+    struct GenericStruct<T, let N: int>
+    {
+        T value;
+        float weights[N];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct GenericStruct" in generated_code
+    assert "T value;" in generated_code
+    assert "float weights[N];" in generated_code
+    assert "GenericStruct<" not in generated_code
+
+
 def test_for_array_assignment_update_codegen():
     code = """
     void main(){

@@ -259,6 +259,10 @@ class MetalParser:
                 alias = self.parse_using_statement()
                 if alias is not None:
                     typedefs.append(alias)
+            elif self.is_template_declaration_start():
+                function = self.parse_template_declaration()
+                if function is not None:
+                    functions.append(function)
             elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
             elif self.current_token[0] == "ALIGNAS":
@@ -329,6 +333,109 @@ class MetalParser:
         next_tok = self.peek(1)
         next_next = self.peek(2)
         return next_tok[0] == "IDENTIFIER" and next_next[0] == "LBRACE"
+
+    def is_template_declaration_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "template"
+        )
+
+    def parse_template_declaration(self):
+        template_parameters = self.parse_template_prefix()
+        template_type_names = {
+            name
+            for kind, name in template_parameters
+            if kind in {"typename", "class"} and name
+        }
+        added_type_names = template_type_names - self.known_types
+        self.known_types.update(added_type_names)
+
+        try:
+            if not self.is_function_definition():
+                self.skip_template_declaration()
+                return None
+
+            function = self.parse_function()
+            if function is not None:
+                function.generics = [
+                    name for _kind, name in template_parameters if name
+                ]
+                function.template_parameters = template_parameters
+            return function
+        finally:
+            self.known_types.difference_update(added_type_names)
+
+    def parse_template_prefix(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] != "LESS_THAN":
+            return []
+
+        parameters = []
+        parameter_tokens = []
+        depth = 1
+        self.eat("LESS_THAN")
+
+        while depth > 0 and self.current_token[0] != "EOF":
+            token = self.current_token
+            if token[0] == "LESS_THAN":
+                depth += 1
+                parameter_tokens.append(token)
+                self.eat("LESS_THAN")
+            elif token[0] == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("GREATER_THAN")
+                    break
+                parameter_tokens.append(token)
+                self.eat("GREATER_THAN")
+            elif token[0] == "COMMA" and depth == 1:
+                parsed = self.parse_template_parameter_tokens(parameter_tokens)
+                if parsed is not None:
+                    parameters.append(parsed)
+                parameter_tokens = []
+                self.eat("COMMA")
+            else:
+                parameter_tokens.append(token)
+                self.eat(token[0])
+
+        parsed = self.parse_template_parameter_tokens(parameter_tokens)
+        if parsed is not None:
+            parameters.append(parsed)
+        return parameters
+
+    def parse_template_parameter_tokens(self, tokens):
+        for idx, (token_type, value) in enumerate(tokens):
+            if value == "typename" or token_type == "CLASS":
+                if idx + 1 < len(tokens) and tokens[idx + 1][0] == "IDENTIFIER":
+                    return (value, tokens[idx + 1][1])
+        if len(tokens) >= 2 and tokens[-1][0] == "IDENTIFIER":
+            return ("value", tokens[-1][1])
+        return None
+
+    def skip_template_declaration(self):
+        paren_depth = 0
+        brace_depth = 0
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN":
+                paren_depth = max(0, paren_depth - 1)
+            elif token_type == "LBRACE":
+                brace_depth += 1
+            elif token_type == "RBRACE":
+                if brace_depth > 0:
+                    brace_depth -= 1
+                    self.eat("RBRACE")
+                    if brace_depth == 0 and paren_depth == 0:
+                        return
+                    continue
+                self.eat("RBRACE")
+                return
+            elif token_type == "SEMICOLON" and paren_depth == 0 and brace_depth == 0:
+                self.eat("SEMICOLON")
+                return
+            self.eat(token_type)
 
     def is_function_definition(self):
         idx = self.pos

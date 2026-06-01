@@ -3566,6 +3566,12 @@ class CudaToCrossGLConverter:
         self.emit("}")
 
     def visit_kernel_as_compute_shader(self, kernel):
+        for attribute in getattr(kernel, "attributes", []) or []:
+            attribute_text = str(attribute)
+            if attribute_text.startswith("__launch_bounds__"):
+                bounds = attribute_text[len("__launch_bounds__") :]
+                self.emit(f"// CUDA launch bounds: {bounds}")
+
         self.emit("@compute")
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 

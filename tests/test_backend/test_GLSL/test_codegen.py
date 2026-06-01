@@ -312,6 +312,25 @@ def test_codegen_comma_separated_for_updates():
     assert "for (uint i = 0; (i < 3); (++i), (++plane_index))" in crossgl
 
 
+def test_codegen_logical_xor_normalizes_to_boolean_inequality():
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            bool a = true;
+            bool b = false;
+            bool c = a ^^ b;
+            fragColor = c ? vec4(1.0) : vec4(0.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "bool c = (a != b)" in crossgl
+    assert "^^" not in crossgl
+
+
 def test_codegen_unnamed_function_parameters_get_stable_names():
     code = textwrap.dedent("""
         #version 400 core

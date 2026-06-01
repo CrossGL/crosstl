@@ -115,6 +115,24 @@ def test_function_parameter_qualifiers_parse():
     ]
 
 
+def test_void_parameter_list_parses_as_empty_parameters():
+    # Khronos glslang Test/spv.debuginfo.glsl.geom uses this entry point form.
+    code = """
+    void main(void) {
+        return;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = ast.functions[0]
+
+    assert function.return_type == "void"
+    assert function.name == "main"
+    assert function.params == []
+    assert isinstance(function.body[0], ReturnNode)
+
+
 def test_function_parameter_array_suffixes_parse():
     code = """
     void sampleResources(sampler2D textures[4], uimage2D outputs[2]) {

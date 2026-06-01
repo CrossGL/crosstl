@@ -136,6 +136,7 @@ class SlangParser:
         if self.tokens[current_pos][0] != "IDENTIFIER":
             return False
         current_pos += 1
+        current_pos = self.skip_generic_type_suffix_tokens(current_pos)
         return self.tokens[current_pos][0] == "LPAREN"
 
     def skip_declaration_prefix_tokens(self, current_pos, include_generic=False):
@@ -410,6 +411,9 @@ class SlangParser:
         self.eat("STRUCT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        generic_parameters = None
+        if self.current_token[0] == "LESS_THAN":
+            generic_parameters = self.parse_generic_type_suffix()
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":
@@ -432,7 +436,9 @@ class SlangParser:
                 )
             )
         self.eat("RBRACE")
-        return StructNode(name, members)
+        node = StructNode(name, members)
+        node.generic_parameters = generic_parameters
+        return node
 
     def parse_typedef(self):
         self.eat("TYPEDEF")
@@ -451,6 +457,10 @@ class SlangParser:
         return_type = self.parse_type_name()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        generic_parameters = None
+        if self.current_token[0] == "LESS_THAN":
+            generic_parameters = self.parse_generic_type_suffix()
+            is_generic = True
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
@@ -469,6 +479,7 @@ class SlangParser:
             qualifier=shader_type,
             semantic=semantic,
             is_generic=is_generic,
+            generic_parameters=generic_parameters,
             attributes=attributes,
             numthreads=self.get_numthreads_attribute(attributes),
         )

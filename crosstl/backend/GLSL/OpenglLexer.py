@@ -42,6 +42,7 @@ TOKENS = tuple(
         ("EQUAL", r"=="),
         ("NOT_EQUAL", r"!="),
         ("LOGICAL_AND", r"&&"),
+        ("LOGICAL_XOR", r"\^\^"),
         ("LOGICAL_OR", r"\|\|"),
         ("LOGICAL_NOT", r"!"),
         ("BITWISE_NOT", r"~"),
