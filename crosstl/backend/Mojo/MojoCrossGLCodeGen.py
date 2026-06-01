@@ -752,11 +752,18 @@ class MojoToCrossGLConverter:
             return f"{type_name}({args_str})"
         elif isinstance(expr, ArrayAccessNode):
             array = self.generate_expression(expr.array)
-            index = self.generate_expression(expr.index)
+            index = self.generate_array_index(expr.index)
             return f"{array}[{index}]"
         else:
             # For any unhandled expression type
             return f"/* Unhandled expression: {type(expr).__name__} */"
+
+    def generate_array_index(self, index):
+        if isinstance(index, TupleNode):
+            return ", ".join(
+                self.generate_expression(element) for element in index.elements
+            )
+        return self.generate_expression(index)
 
     def map_type(self, mojo_type):
         """Map a Mojo type name to the closest CrossGL type name."""

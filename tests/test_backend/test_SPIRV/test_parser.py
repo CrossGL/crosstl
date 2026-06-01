@@ -74,12 +74,32 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_MATRIX_INTERFACE_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %model
+OpName %model "model"
+OpDecorate %model Location 0
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%mat4 = OpTypeMatrix %v4float 4
+%void = OpTypeVoid
+%ptr_input_mat4 = OpTypePointer Input %mat4
+%fn = OpTypeFunction %void
+%model = OpVariable %ptr_input_mat4 Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
     ast = parse_code(tokens)
     input_layout = ast.global_variables[0]
     output_layout = ast.global_variables[1]
+    builtin_layout = ast.global_variables[2]
 
     assert ast.spirv_assembly is True
     assert ast.spirv_entry_points == [
@@ -94,7 +114,7 @@ def test_spirv_assembly_location_decorated_interfaces_parse():
     assert ast.spirv_decorations["%17"] == [("Block", [])]
     assert ast.spirv_member_decorations["%17"] == [("0", "BuiltIn", ["Position"])]
     assert ast.spirv_types["%2"]["name"] == "vec4"
-    assert len(ast.global_variables) == 2
+    assert len(ast.global_variables) == 3
     assert isinstance(input_layout, LayoutNode)
     assert input_layout.spirv_id == "%4"
     assert input_layout.spirv_storage_class == "Input"
@@ -111,6 +131,29 @@ def test_spirv_assembly_location_decorated_interfaces_parse():
     assert output_layout.data_type == "vec4"
     assert output_layout.variable_name == "ANGLEXfbPosition"
     assert output_layout.qualifiers == [("location", "0")]
+
+    assert isinstance(builtin_layout, LayoutNode)
+    assert builtin_layout.spirv_id == "%19.0"
+    assert builtin_layout.spirv_storage_class == "Output"
+    assert builtin_layout.layout_type == "OUT"
+    assert builtin_layout.data_type == "vec4"
+    assert builtin_layout.variable_name == "gl_Position"
+    assert builtin_layout.qualifiers == [("builtin", "Position")]
+    assert builtin_layout.spirv_decorations == [("BuiltIn", ["Position"])]
+
+
+def test_spirv_assembly_matrix_interface_parse():
+    tokens = tokenize_code(SPIRV_MATRIX_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    input_layout = ast.global_variables[0]
+
+    assert ast.spirv_types["%mat4"]["kind"] == "matrix"
+    assert ast.spirv_types["%mat4"]["name"] == "mat4"
+    assert input_layout.spirv_id == "%model"
+    assert input_layout.layout_type == "IN"
+    assert input_layout.data_type == "mat4"
+    assert input_layout.variable_name == "model"
+    assert input_layout.qualifiers == [("location", "0")]
 
 
 def test_spirv_assembly_without_location_interface_is_rejected():

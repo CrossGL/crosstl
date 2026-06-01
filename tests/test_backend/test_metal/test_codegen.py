@@ -250,6 +250,27 @@ def test_codegen_texture_sample_preserves_explicit_sampler_roundtrip():
     assert "albedo.sample(linearSampler, uv, level(lod))" in metal
 
 
+def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    [[early_fragment_tests]]
+    fragment float4 fragment_main() {
+        return float4(1.0);
+    }
+    """
+    result = convert(code)
+
+    assert "fragment {" in result
+    assert "layout(early_fragment_tests) in;" in result
+    assert "@early_fragment_tests" not in result
+    assert result.index("layout(early_fragment_tests) in;") < result.index(
+        "vec4 fragment_main"
+    )
+    parse_crossgl(result)
+
+
 def test_codegen_texture_sample_level_option_roundtrip():
     code = """
     float4 sampleLevel(texture2d<float> tex, sampler samp, float2 uv, float lod) {

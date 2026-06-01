@@ -847,6 +847,22 @@ def test_bound_cbuffer_codegen():
     assert "mat4 transforms[2][3];" in generated_code
 
 
+def test_vulkan_attributes_on_cbuffer_codegen():
+    code = """
+    [[vk::binding(0, 1)]]
+    [[vk::push_constant]]
+    cbuffer Camera : register(b0) {
+        float4x4 viewProj;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "cbuffer Camera @set(1) @binding(0) @push_constant {" in generated_code
+    assert "mat4 viewProj;" in generated_code
+
+
 def test_global_resource_array_codegen():
     code = """
     StructuredBuffer<float> inputs[2];

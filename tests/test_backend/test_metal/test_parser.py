@@ -253,6 +253,24 @@ def test_parse_defaulted_function_constant_preserves_attribute():
     assert constant.right == "true"
 
 
+def test_parse_fragment_early_tests_attribute():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    [[early_fragment_tests]]
+    fragment float4 fragment_main() {
+        return float4(1.0);
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+
+    assert function.qualifier == "fragment"
+    assert function.attributes[0].name == "early_fragment_tests"
+    assert function.attributes[0].args == []
+
+
 def test_parse_access_qualified_textures_and_methods():
     code = """
     #include <metal_stdlib>

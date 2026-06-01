@@ -40,6 +40,27 @@ class VulkanToCrossGLConverter:
             "mat2": "float2x2",
             "mat3": "float3x3",
             "mat4": "float4x4",
+            "mat2x2": "float2x2",
+            "mat2x3": "float2x3",
+            "mat2x4": "float2x4",
+            "mat3x2": "float3x2",
+            "mat3x3": "float3x3",
+            "mat3x4": "float3x4",
+            "mat4x2": "float4x2",
+            "mat4x3": "float4x3",
+            "mat4x4": "float4x4",
+            "dmat2": "double2x2",
+            "dmat3": "double3x3",
+            "dmat4": "double4x4",
+            "dmat2x2": "double2x2",
+            "dmat2x3": "double2x3",
+            "dmat2x4": "double2x4",
+            "dmat3x2": "double3x2",
+            "dmat3x3": "double3x3",
+            "dmat3x4": "double3x4",
+            "dmat4x2": "double4x2",
+            "dmat4x3": "double4x3",
+            "dmat4x4": "double4x4",
             "int": "int",
             "ivec2": "int2",
             "ivec3": "int3",
@@ -461,6 +482,8 @@ class VulkanToCrossGLConverter:
                 and value is not None
             ):
                 attributes.append(f"@{qualifier_name}({value})")
+            elif qualifier_name == "builtin" and value is not None:
+                attributes.append(self.crossgl_builtin_attribute(value))
 
         supported_qualifiers = {
             "centroid",
@@ -482,6 +505,34 @@ class VulkanToCrossGLConverter:
                 attributes.append(f"@{qualifier_text}")
 
         return f" {' '.join(attributes)}"
+
+    def crossgl_builtin_attribute(self, builtin_name):
+        mapped_builtins = {
+            "BaseInstance": "gl_BaseInstance",
+            "BaseVertex": "gl_BaseVertex",
+            "ClipDistance": "gl_ClipDistance",
+            "CullDistance": "gl_CullDistance",
+            "FragCoord": "gl_FragCoord",
+            "FragDepth": "gl_FragDepth",
+            "FrontFacing": "gl_FrontFacing",
+            "GlobalInvocationId": "gl_GlobalInvocationID",
+            "InstanceIndex": "gl_InstanceID",
+            "LocalInvocationId": "gl_LocalInvocationID",
+            "LocalInvocationIndex": "gl_LocalInvocationIndex",
+            "NumWorkgroups": "gl_NumWorkGroups",
+            "PointCoord": "gl_PointCoord",
+            "PointSize": "gl_PointSize",
+            "Position": "gl_Position",
+            "PrimitiveId": "gl_PrimitiveID",
+            "SubgroupLocalInvocationId": "gl_SubgroupInvocationID",
+            "SubgroupSize": "gl_SubgroupSize",
+            "VertexIndex": "gl_VertexID",
+            "WorkgroupId": "gl_WorkGroupID",
+        }
+        mapped_name = mapped_builtins.get(str(builtin_name))
+        if mapped_name:
+            return f"@{mapped_name}"
+        return f"@builtin({str(builtin_name).lower()})"
 
     def record_flattened_uniform_block_instance(self, node):
         if not node.variable_name:

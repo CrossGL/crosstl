@@ -1320,8 +1320,18 @@ class MojoParser:
 
     def parse_array_access(self, array):
         self.eat("LBRACKET")
-        index = self.parse_expression()
+        self.skip_layout_tokens()
+        indices = [self.parse_expression()]
+        self.skip_layout_tokens()
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            self.skip_layout_tokens()
+            if self.current_token[0] == "RBRACKET":
+                break
+            indices.append(self.parse_expression())
+            self.skip_layout_tokens()
         self.eat("RBRACKET")
+        index = indices[0] if len(indices) == 1 else TupleNode(indices)
         return ArrayAccessNode(array, index)
 
     def is_generic_constructor_suffix(self, node):

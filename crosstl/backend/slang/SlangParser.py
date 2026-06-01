@@ -103,7 +103,7 @@ class SlangParser:
             elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
             elif self.current_token[0] == "CBUFFER":
-                cbuffers.append(self.parse_cbuffer())
+                cbuffers.append(self.parse_cbuffer(attributes=pending_attributes))
             elif self.current_token[0] == "TYPEDEF":
                 typedefs.append(self.parse_typedef())
             elif self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS:
@@ -369,7 +369,8 @@ class SlangParser:
             self.eat("RBRACKET")
         return sizes
 
-    def parse_cbuffer(self):
+    def parse_cbuffer(self, attributes=None):
+        attributes = attributes or []
         self.eat("CBUFFER")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -388,6 +389,7 @@ class SlangParser:
             self.eat("SEMICOLON")
         node = StructNode(name, members)
         node.register = register_name
+        node.attributes = attributes
         return node
 
     def parse_global_variable(self, attributes=None):

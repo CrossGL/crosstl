@@ -102,6 +102,25 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_MATRIX_INTERFACE_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %model
+OpName %model "model"
+OpDecorate %model Location 0
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%mat4 = OpTypeMatrix %v4float 4
+%void = OpTypeVoid
+%ptr_input_mat4 = OpTypePointer Input %mat4
+%fn = OpTypeFunction %void
+%model = OpVariable %ptr_input_mat4 Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -342,7 +361,18 @@ def test_spirv_assembly_location_decorated_interfaces_codegen():
 
     assert "float4 _ua_position @input @location(0);" in generated_code
     assert "float4 ANGLEXfbPosition @output @location(0);" in generated_code
+    assert "float4 gl_Position @output @gl_Position;" in generated_code
     assert "%4" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_matrix_interface_codegen():
+    tokens = tokenize_code(SPIRV_MATRIX_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4x4 model @input @location(0);" in generated_code
+    assert "%model" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -358,6 +388,7 @@ def test_translate_api_accepts_location_decorated_spirv_assembly(tmp_path):
 
     assert "float4 _ua_position @input @location(0);" in generated_code
     assert "float4 ANGLEXfbPosition @output @location(0);" in generated_code
+    assert "float4 gl_Position @output @gl_Position;" in generated_code
 
 
 def test_translate_api_rejects_unsupported_spirv_assembly_with_clear_error(tmp_path):

@@ -960,6 +960,27 @@ def test_bound_cbuffer_parsing():
     ]
 
 
+def test_vulkan_attributes_on_cbuffer_parsing():
+    code = """
+    [[vk::binding(0, 1)]]
+    [[vk::push_constant]]
+    cbuffer Camera : register(b0) {
+        float4x4 viewProj;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    cbuffer = ast.cbuffers[0]
+
+    assert cbuffer.name == "Camera"
+    assert cbuffer.register == "b0"
+    assert cbuffer.attributes == [
+        {"name": "vk::binding", "arguments": ["0", "1"]},
+        {"name": "vk::push_constant", "arguments": []},
+    ]
+    assert cbuffer.members[0].name == "viewProj"
+
+
 def test_global_resource_array_parsing():
     code = """
     StructuredBuffer<float> inputs[2];

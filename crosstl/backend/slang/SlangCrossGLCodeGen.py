@@ -332,7 +332,8 @@ class SlangToCrossGLConverter:
         code = ""
         for node in ast.cbuffers:
             if isinstance(node, StructNode):
-                code += f"    cbuffer {node.name} {{\n"
+                metadata = self.format_variable_metadata(node)
+                code += f"    cbuffer {node.name}{metadata} {{\n"
                 for member in node.members:
                     code += (
                         f"        {self.map_type(member.vtype)} {member.name}"
@@ -531,6 +532,8 @@ class SlangToCrossGLConverter:
                 if len(arguments) > 1:
                     metadata.append(f"@set({arguments[1]})")
                 metadata.append(f"@binding({arguments[0]})")
+            elif name == "vk::push_constant":
+                metadata.append("@push_constant")
 
         if not metadata:
             return ""

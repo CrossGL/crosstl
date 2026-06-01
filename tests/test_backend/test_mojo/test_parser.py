@@ -957,6 +957,34 @@ def test_array_member_access_chain_parsing():
     assert expression.object.index == "0"
 
 
+def test_gpu_tile_tensor_multi_index_access_parsing():
+    code = """
+    from std.gpu import thread_idx
+
+    fn tiled_load(tile: TileTensor, matrix: TileTensor):
+        tile[thread_idx.y, thread_idx.x] = matrix[
+            thread_idx.y,
+            thread_idx.x,
+        ]
+        let value = tile[thread_idx.y, thread_idx.x]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "tiled_load")
+    store = function.body[0]
+    load = function.body[1].initial_value
+
+    assert isinstance(store.left, ArrayAccessNode)
+    assert isinstance(store.left.index, TupleNode)
+    assert [index.member for index in store.left.index.elements] == ["y", "x"]
+
+    assert isinstance(store.right, ArrayAccessNode)
+    assert isinstance(store.right.index, TupleNode)
+    assert [index.member for index in store.right.index.elements] == ["y", "x"]
+
+    assert isinstance(load, ArrayAccessNode)
+    assert isinstance(load.index, TupleNode)
+
+
 def test_parenthesized_call_indexing_parsing():
     code = """
     fn main():

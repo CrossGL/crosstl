@@ -1174,6 +1174,7 @@ class HLSLCodeGen:
         texture_registers = {}
         sampler_registers = {}
         uav_registers = {}
+        cbuffer_registers = {}
         used_resource_registers = {}
         self.reserve_explicit_global_resource_registers(
             global_vars, used_resource_registers
@@ -1319,6 +1320,8 @@ class HLSLCodeGen:
                 or self.is_multisample_storage_image_resource_type(mapped_type)
                 or self.is_hlsl_acceleration_structure_type(mapped_type)
                 or self.is_hlsl_uav_buffer_type(mapped_type)
+                or self.is_hlsl_constant_buffer_type(mapped_type)
+                or self.is_hlsl_texture_buffer_type(mapped_type)
                 or self.is_hlsl_readonly_buffer_type(mapped_type)
                 or mapped_type in ["SamplerState", "SamplerComparisonState"]
             )
@@ -1451,6 +1454,56 @@ class HLSLCodeGen:
                 register = self.resource_register_suffix("u", binding, node)
                 self.advance_resource_register(
                     uav_registers, space, binding, resource_count
+                )
+            elif self.is_hlsl_constant_buffer_type(mapped_type):
+                space = self.explicit_resource_register_space(node)
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "buffer"}, ("b",)
+                )
+                if binding is None:
+                    binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "b",
+                        cbuffer_registers,
+                        space,
+                        resource_count,
+                    )
+                self.reserve_resource_register_range(
+                    used_resource_registers,
+                    "b",
+                    binding,
+                    resource_count,
+                    var_name,
+                    space,
+                )
+                register = self.resource_register_suffix("b", binding, node)
+                self.advance_resource_register(
+                    cbuffer_registers, space, binding, resource_count
+                )
+            elif self.is_hlsl_texture_buffer_type(mapped_type):
+                space = self.explicit_resource_register_space(node)
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "texture"}, ("t",)
+                )
+                if binding is None:
+                    binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "t",
+                        texture_registers,
+                        space,
+                        resource_count,
+                    )
+                self.reserve_resource_register_range(
+                    used_resource_registers,
+                    "t",
+                    binding,
+                    resource_count,
+                    var_name,
+                    space,
+                )
+                register = self.resource_register_suffix("t", binding, node)
+                self.advance_resource_register(
+                    texture_registers, space, binding, resource_count
                 )
             elif self.is_hlsl_readonly_buffer_type(mapped_type):
                 space = self.explicit_resource_register_space(node)
@@ -12787,6 +12840,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             elif self.is_hlsl_uav_buffer_type(mapped_type):
                 prefix = "u"
                 attribute_names = {"binding", "texture", "uav"}
+            elif self.is_hlsl_constant_buffer_type(mapped_type):
+                prefix = "b"
+                attribute_names = {"binding", "buffer"}
+            elif self.is_hlsl_texture_buffer_type(mapped_type):
+                prefix = "t"
+                attribute_names = {"binding", "texture"}
             elif self.is_hlsl_readonly_buffer_type(mapped_type):
                 prefix = "t"
                 attribute_names = {"binding", "texture"}
@@ -17847,6 +17906,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def is_hlsl_feedback_texture_type(self, vtype):
         return self.hlsl_resource_type_name(vtype).startswith("FeedbackTexture")
+
+    def is_hlsl_constant_buffer_type(self, vtype):
+        return self.hlsl_resource_type_name(vtype) == "ConstantBuffer"
+
+    def is_hlsl_texture_buffer_type(self, vtype):
+        return self.hlsl_resource_type_name(vtype) == "TextureBuffer"
 
     def is_hlsl_readonly_buffer_type(self, vtype):
         return self.hlsl_resource_type_name(vtype) in {

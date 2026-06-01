@@ -982,6 +982,40 @@ def test_codegen_hlsl_tbuffer_roundtrips_with_texture_register():
     assert "float scale;" in regenerated_hlsl
 
 
+def test_codegen_object_style_constant_and_texture_buffers_roundtrip():
+    hlsl = textwrap.dedent("""
+        struct FrameConstants {
+            float4 tint;
+        };
+
+        ConstantBuffer<FrameConstants> frame : register(b2, space1);
+        TextureBuffer<FrameConstants> lookup : register(t5, space3);
+
+        float4 main() : SV_Target0 {
+            return frame.tint + lookup.tint;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "ConstantBuffer<FrameConstants> frame;" in output
+    assert "@ register(b2, space1)" in output
+    assert "TextureBuffer<FrameConstants> lookup;" in output
+    assert "@ register(t5, space3)" in output
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+
+    assert (
+        "ConstantBuffer<FrameConstants> frame : register(b2, space1);"
+        in regenerated_hlsl
+    )
+    assert (
+        "TextureBuffer<FrameConstants> lookup : register(t5, space3);"
+        in regenerated_hlsl
+    )
+    assert "return (frame.tint + lookup.tint);" in regenerated_hlsl
+
+
 def test_codegen_waveops_include_helper_lanes_attribute_passthrough():
     hlsl = textwrap.dedent("""
         [WaveOpsIncludeHelperLanes]

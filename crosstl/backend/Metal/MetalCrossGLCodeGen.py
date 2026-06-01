@@ -323,6 +323,9 @@ class MetalToCrossGLConverter:
             "get_depth",
             "get_array_size",
         }
+        self.fragment_execution_attribute_names = {
+            "early_fragment_tests",
+        }
 
         self.map_semantics = {
             # Vertex attributes
@@ -844,6 +847,7 @@ class MetalToCrossGLConverter:
             elif qualifier == "fragment":
                 code += "    // Fragment Shader\n"
                 code += "    fragment {\n"
+                code += self.generate_fragment_execution_layouts(f)
                 code += self.generate_function(f)
                 code += "    }\n\n"
             elif qualifier == "kernel":
@@ -1045,7 +1049,7 @@ class MetalToCrossGLConverter:
             params = ", ".join(
                 self.format_decl(p, include_semantic=True) for p in func.params
             )
-            fn_semantic = self.map_semantic(func.attributes)
+            fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
             suffix = f" {fn_semantic}" if fn_semantic else ""
             function_name = self.sanitize_identifier(func.name)
             code += f"{self.map_type(func.return_type)} {function_name}({params}){suffix} {{\n"
@@ -1057,6 +1061,28 @@ class MetalToCrossGLConverter:
             self.current_storage_texture_names = previous_storage_texture_names
             self.current_structured_buffer_names = previous_structured_buffer_names
         return code
+
+    def function_semantic_attributes(self, func):
+        return [
+            attr
+            for attr in getattr(func, "attributes", []) or []
+            if getattr(attr, "name", None)
+            not in self.fragment_execution_attribute_names
+        ]
+
+    def generate_fragment_execution_layouts(self, func):
+        layouts = []
+        for attr in getattr(func, "attributes", []) or []:
+            name = getattr(attr, "name", None)
+            if name not in self.fragment_execution_attribute_names:
+                continue
+            if getattr(attr, "args", None):
+                continue
+            if name not in layouts:
+                layouts.append(name)
+        if not layouts:
+            return ""
+        return f"        layout({', '.join(layouts)}) in;\n"
 
     def generate_function_body(self, body, indent=0, is_main=False):
         code = ""

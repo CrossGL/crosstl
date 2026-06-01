@@ -19,9 +19,11 @@ class HLSLToCrossGLConverter:
     def __init__(self):
         self.structured_buffer_types = {
             "Buffer",
+            "ConstantBuffer",
             "RWBuffer",
             "StructuredBuffer",
             "RWStructuredBuffer",
+            "TextureBuffer",
             "AppendStructuredBuffer",
             "ConsumeStructuredBuffer",
         }

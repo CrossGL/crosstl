@@ -1197,6 +1197,28 @@ def test_array_member_access_chain_codegen():
     assert "let channel = values[0].x;" in generated_code
 
 
+def test_gpu_tile_tensor_multi_index_access_codegen():
+    code = """
+    from std.gpu import thread_idx
+
+    fn tiled_load(tile: TileTensor, matrix: TileTensor):
+        tile[thread_idx.y, thread_idx.x] = matrix[
+            thread_idx.y,
+            thread_idx.x,
+        ]
+        let value = tile[thread_idx.y, thread_idx.x]
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "tile[thread_idx.y, thread_idx.x] = matrix[thread_idx.y, thread_idx.x];"
+        in generated_code
+    )
+    assert "let value = tile[thread_idx.y, thread_idx.x];" in generated_code
+
+
 def test_parenthesized_call_indexing_codegen():
     code = """
     fn main():

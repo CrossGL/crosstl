@@ -517,6 +517,23 @@ def test_parse_tbuffer_preserves_texture_buffer_metadata():
     assert tbuffer.members[1].packoffset == "c4.x"
 
 
+def test_parse_object_style_buffer_resource_templates():
+    ast = parse_code("""
+    struct FrameConstants {
+        float4 tint;
+    };
+    ConstantBuffer<FrameConstants> frame : register(b2, space1);
+    TextureBuffer<FrameConstants> lookup : register(t5, space3);
+    """)
+
+    globals_by_name = {node.name: node for node in ast.global_variables}
+
+    assert globals_by_name["frame"].vtype == "ConstantBuffer<FrameConstants>"
+    assert globals_by_name["frame"].register == "b2, space1"
+    assert globals_by_name["lookup"].vtype == "TextureBuffer<FrameConstants>"
+    assert globals_by_name["lookup"].register == "t5, space3"
+
+
 def test_parse_cxx11_namespaced_attribute_on_cbuffer():
     ast = parse_code("""
     [[vk::push_constant]]

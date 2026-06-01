@@ -8574,6 +8574,29 @@ class TestCudaCodeGen:
         assert "consume(h, owned);" in result
         assert "using namespace" not in result
 
+    def test_cub_dependent_shared_temp_storage_conversion(self):
+        code = """
+        using WarpReduce = cub::WarpReduce<int>;
+
+        __global__ void kernel(int* out, int value) {
+            __shared__ typename WarpReduce::TempStorage temp_storage[4];
+            out[threadIdx.x] = value;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "typedef cub::WarpReduce<int> WarpReduce;" in result
+        assert (
+            "var<workgroup> temp_storage: array<WarpReduce::TempStorage, 4>;" in result
+        )
+        assert "typename" not in result
+
     def test_typedef_multi_declarator_alias_conversion(self):
         code = """
         typedef float Real, *RealPtr;

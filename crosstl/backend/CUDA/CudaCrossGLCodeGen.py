@@ -5028,6 +5028,7 @@ class CudaToCrossGLConverter:
             "__restrict",
             "restrict",
             "__grid_constant__",
+            "typename",
             "&",
             "&&",
         }

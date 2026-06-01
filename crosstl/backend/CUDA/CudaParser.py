@@ -49,6 +49,7 @@ class CudaParser:
         "SIGNED",
         "RESTRICT",
         "GRID_CONSTANT",
+        "TYPENAME",
     }
     POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "RESTRICT"}
     TYPE_REFERENCE_TOKENS = {"BITWISE_AND", "LOGICAL_AND"}

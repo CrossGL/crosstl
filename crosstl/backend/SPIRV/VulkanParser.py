@@ -45,6 +45,7 @@ class VulkanParser:
     )
     SPIRV_INTERFACE_STORAGE_CLASSES = {"Input": "IN", "Output": "OUT"}
     SPIRV_INTERFACE_DECORATIONS = {
+        "BuiltIn": "builtin",
         "Location": "location",
         "Component": "component",
         "Index": "index",
@@ -62,6 +63,28 @@ class VulkanParser:
         ("bool", "2"): "bvec2",
         ("bool", "3"): "bvec3",
         ("bool", "4"): "bvec4",
+    }
+    SPIRV_BUILTIN_VARIABLE_NAMES = {
+        "BaseInstance": "gl_BaseInstance",
+        "BaseVertex": "gl_BaseVertex",
+        "ClipDistance": "gl_ClipDistance",
+        "CullDistance": "gl_CullDistance",
+        "FragCoord": "gl_FragCoord",
+        "FragDepth": "gl_FragDepth",
+        "FrontFacing": "gl_FrontFacing",
+        "GlobalInvocationId": "gl_GlobalInvocationID",
+        "InstanceIndex": "gl_InstanceID",
+        "LocalInvocationId": "gl_LocalInvocationID",
+        "LocalInvocationIndex": "gl_LocalInvocationIndex",
+        "NumWorkgroups": "gl_NumWorkGroups",
+        "PointCoord": "gl_PointCoord",
+        "PointSize": "gl_PointSize",
+        "Position": "gl_Position",
+        "PrimitiveId": "gl_PrimitiveID",
+        "SubgroupLocalInvocationId": "gl_SubgroupInvocationID",
+        "SubgroupSize": "gl_SubgroupSize",
+        "VertexIndex": "gl_VertexID",
+        "WorkgroupId": "gl_WorkGroupID",
     }
 
     def __init__(self, tokens):
@@ -180,6 +203,7 @@ class VulkanParser:
         names = {}
         decorations = {}
         member_decorations = {}
+        member_names = {}
         types = {}
         constants = {}
         variables = []
@@ -188,6 +212,9 @@ class VulkanParser:
         for result_id, opcode, operands, _line_number in instructions:
             if opcode == "OpName" and len(operands) >= 2:
                 names[operands[0]] = operands[1]
+            elif opcode == "OpMemberName" and len(operands) >= 3:
+                target, member, name = operands[0], operands[1], operands[2]
+                member_names.setdefault(target, {})[member] = name
             elif opcode == "OpDecorate" and len(operands) >= 2:
                 target, decoration = operands[0], operands[1]
                 decorations.setdefault(target, []).append((decoration, operands[2:]))
@@ -230,6 +257,21 @@ class VulkanParser:
                     "component_type": operands[0],
                     "component_count": operands[1],
                 }
+            elif result_id and opcode == "OpTypeMatrix" and len(operands) >= 2:
+                column_type = types.get(operands[0], {})
+                component_type = self.spirv_type_name(
+                    column_type.get("component_type"), types
+                )
+                types[result_id] = {
+                    "kind": "matrix",
+                    "name": self.spirv_matrix_type_name(
+                        component_type,
+                        column_type.get("component_count"),
+                        operands[1],
+                    ),
+                    "column_type": operands[0],
+                    "column_count": operands[1],
+                }
             elif result_id and opcode == "OpTypeArray" and len(operands) >= 2:
                 types[result_id] = {
                     "kind": "array",
@@ -267,6 +309,7 @@ class VulkanParser:
             names,
             decorations,
             member_decorations,
+            member_names,
             types,
             constants,
         )
@@ -282,6 +325,7 @@ class VulkanParser:
             spirv_names=names,
             spirv_decorations=decorations,
             spirv_member_decorations=member_decorations,
+            spirv_member_names=member_names,
             spirv_types=types,
         )
 
@@ -325,10 +369,10 @@ class VulkanParser:
         names,
         decorations,
         member_decorations,
+        member_names,
         types,
         constants,
     ):
-        del member_decorations
         layouts = []
         for variable in variables:
             pointer_type = types.get(variable["pointer_type_id"], {})
@@ -341,11 +385,26 @@ class VulkanParser:
             if entry_interface_ids and variable["id"] not in entry_interface_ids:
                 continue
 
+            if pointer_type.get("kind") != "pointer":
+                continue
+
+            struct_layouts = self.spirv_assembly_struct_interface_layouts(
+                variable,
+                pointer_type,
+                storage_class,
+                names,
+                member_decorations,
+                member_names,
+                types,
+                constants,
+            )
+            if struct_layouts:
+                layouts.extend(struct_layouts)
+                continue
+
             variable_decorations = decorations.get(variable["id"], [])
             qualifiers = self.spirv_layout_qualifiers(variable_decorations)
-            if not any(name == "location" for name, _value in qualifiers):
-                continue
-            if pointer_type.get("kind") != "pointer":
+            if not self.spirv_has_interface_qualifier(qualifiers):
                 continue
 
             data_type, array_suffix = self.spirv_type_name_and_suffix(
@@ -355,6 +414,9 @@ class VulkanParser:
                 continue
 
             variable_name = names.get(variable["id"]) or variable["id"].lstrip("%")
+            variable_name = self.spirv_builtin_variable_name_from_qualifiers(
+                qualifiers, variable_name
+            )
             variable_name += array_suffix
             layouts.append(
                 LayoutNode(
@@ -370,6 +432,67 @@ class VulkanParser:
 
         return layouts
 
+    def spirv_assembly_struct_interface_layouts(
+        self,
+        variable,
+        pointer_type,
+        storage_class,
+        names,
+        member_decorations,
+        member_names,
+        types,
+        constants,
+    ):
+        struct_type_id = pointer_type.get("type_id")
+        struct_type = types.get(struct_type_id, {})
+        if struct_type.get("kind") != "struct":
+            return []
+
+        layouts = []
+        block_name = names.get(variable["id"]) or variable["id"].lstrip("%")
+        for member_index, member_type_id in enumerate(
+            struct_type.get("member_types", [])
+        ):
+            member_key = str(member_index)
+            member_layout_decorations = [
+                (decoration, operands)
+                for member, decoration, operands in member_decorations.get(
+                    struct_type_id, []
+                )
+                if member == member_key
+            ]
+            qualifiers = self.spirv_layout_qualifiers(member_layout_decorations)
+            if not self.spirv_has_interface_qualifier(qualifiers):
+                continue
+
+            data_type, array_suffix = self.spirv_type_name_and_suffix(
+                member_type_id, types, constants
+            )
+            if data_type is None:
+                continue
+
+            variable_name = self.spirv_struct_member_variable_name(
+                struct_type_id,
+                member_key,
+                block_name,
+                qualifiers,
+                member_names,
+            )
+            variable_name += array_suffix
+            layouts.append(
+                LayoutNode(
+                    qualifiers,
+                    layout_type=self.SPIRV_INTERFACE_STORAGE_CLASSES[storage_class],
+                    data_type=data_type,
+                    variable_name=variable_name,
+                    spirv_id=f"{variable['id']}.{member_key}",
+                    spirv_decorations=member_layout_decorations,
+                    spirv_storage_class=storage_class,
+                )
+            )
+
+        return layouts
+
     def spirv_layout_qualifiers(self, decorations):
         qualifiers = []
         for decoration, operands in decorations:
@@ -377,6 +500,37 @@ class VulkanParser:
             if qualifier_name and operands:
                 qualifiers.append((qualifier_name, operands[0]))
         return qualifiers
+
+    def spirv_has_interface_qualifier(self, qualifiers):
+        return any(name in {"builtin", "location"} for name, _value in qualifiers)
+
+    def spirv_struct_member_variable_name(
+        self,
+        struct_type_id,
+        member_key,
+        block_name,
+        qualifiers,
+        member_names,
+    ):
+        member_name = member_names.get(struct_type_id, {}).get(member_key)
+        if member_name:
+            return member_name
+
+        builtin_name = self.spirv_builtin_variable_name_from_qualifiers(qualifiers)
+        if builtin_name:
+            return builtin_name
+
+        if block_name:
+            return f"{block_name}_{member_key}"
+        return f"member{member_key}"
+
+    def spirv_builtin_variable_name_from_qualifiers(
+        self, qualifiers, fallback_name=None
+    ):
+        for name, value in qualifiers:
+            if name == "builtin":
+                return self.SPIRV_BUILTIN_VARIABLE_NAMES.get(value, value)
+        return fallback_name
 
     def spirv_type_name_and_suffix(self, type_id, types, constants):
         type_info = types.get(type_id)
@@ -400,6 +554,18 @@ class VulkanParser:
         if type_info is None:
             return None
         return type_info.get("name")
+
+    def spirv_matrix_type_name(self, component_type, row_count, column_count):
+        if not component_type or not row_count or not column_count:
+            return None
+
+        prefix = {"double": "dmat", "float": "mat"}.get(component_type)
+        if prefix is None:
+            return None
+
+        if row_count == column_count:
+            return f"{prefix}{column_count}"
+        return f"{prefix}{column_count}x{row_count}"
 
     def spirv_float_type_name(self, width):
         if width == "64":

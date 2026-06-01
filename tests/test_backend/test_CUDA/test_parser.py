@@ -1180,6 +1180,38 @@ class TestCudaParser:
         assert body[4].vtype == "Table"
         assert body[5].name == "consume"
 
+    def test_cub_dependent_shared_temp_storage_parsing(self):
+        code = """
+        using WarpReduce = cub::WarpReduce<int>;
+
+        __global__ void kernel(int* out, int value) {
+            __shared__ typename WarpReduce::TempStorage temp_storage[4];
+            int warp_id = threadIdx.x / 32;
+            int aggregate = WarpReduce(temp_storage[warp_id]).Sum(value);
+            out[threadIdx.x] = aggregate;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.typedefs[0].name == "WarpReduce"
+        assert ast.typedefs[0].alias_type == "cub::WarpReduce<int>"
+
+        body = ast.kernels[0].body
+        assert isinstance(body[0], SharedMemoryNode)
+        assert body[0].vtype == "typename WarpReduce::TempStorage[4]"
+        assert body[0].name == "temp_storage"
+        assert body[1].vtype == "int"
+        assert isinstance(body[2].value, FunctionCallNode)
+        assert isinstance(body[2].value.name, MemberAccessNode)
+        assert body[2].value.name.member == "Sum"
+        storage_arg = body[2].value.name.object.args[0]
+        assert isinstance(storage_arg, ArrayAccessNode)
+        assert storage_arg.array == "temp_storage"
+        assert storage_arg.index == "warp_id"
+
     def test_typedef_multi_declarator_alias_parsing(self):
         code = """
         typedef float Real, *RealPtr;
