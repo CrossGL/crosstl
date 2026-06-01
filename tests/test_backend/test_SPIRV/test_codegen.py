@@ -121,6 +121,31 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_PUSH_CONSTANT_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main"
+OpName %PushConstants "PushConstants"
+OpName %pc "pc"
+OpMemberName %PushConstants 0 "model"
+OpMemberName %PushConstants 1 "tint"
+OpDecorate %PushConstants Block
+OpMemberDecorate %PushConstants 0 Offset 0
+OpMemberDecorate %PushConstants 1 Offset 64
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%mat4 = OpTypeMatrix %v4float 4
+%PushConstants = OpTypeStruct %mat4 %v4float
+%ptr_pc = OpTypePointer PushConstant %PushConstants
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%pc = OpVariable %ptr_pc PushConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -374,6 +399,17 @@ def test_spirv_assembly_matrix_interface_codegen():
     assert "float4x4 model @input @location(0);" in generated_code
     assert "%model" not in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_push_constant_block_codegen():
+    tokens = tokenize_code(SPIRV_PUSH_CONSTANT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "cbuffer PushConstants @push_constant {" in generated_code
+    assert "float4x4 model;" in generated_code
+    assert "float4 tint;" in generated_code
+    assert "%pc" not in generated_code
 
 
 def test_translate_api_accepts_location_decorated_spirv_assembly(tmp_path):

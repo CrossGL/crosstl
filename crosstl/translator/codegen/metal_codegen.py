@@ -6810,6 +6810,12 @@ class MetalCodeGen:
             if mesh_output_call is not None:
                 return mesh_output_call
 
+            min_lod_clamp_call = self.generate_texture_min_lod_clamp_call(
+                func_name, expr.args
+            )
+            if min_lod_clamp_call is not None:
+                return min_lod_clamp_call
+
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
                 return texture_call
@@ -19187,6 +19193,34 @@ class MetalCodeGen:
             return f"{texture_name}.read(({coord} + {offset}), {lod})"
 
         return None
+
+    def generate_texture_min_lod_clamp_call(self, func_name, args):
+        if func_name not in {"textureMinLodClamp", "textureMinLodClampOffset"}:
+            return None
+
+        parts = self.texture_call_parts(args)
+        if parts is None:
+            return None
+
+        texture_name, sampler_arg, coord, extra_args = parts
+        expected_extra_args = 2 if func_name == "textureMinLodClampOffset" else 1
+        if len(extra_args) != expected_extra_args:
+            return None
+
+        texture_type = self.texture_argument_resource_type(args[0])
+        sample_args = [sampler_arg]
+        if self.is_array_texture_resource(texture_type):
+            coord_xy, layer = self.texture_coordinate_parts(texture_type, coord)
+            sample_args.extend([coord_xy, layer])
+        else:
+            sample_args.append(coord)
+
+        min_lod = self.generate_expression(extra_args[0])
+        sample_args.append(f"min_lod_clamp({min_lod})")
+        if expected_extra_args == 2:
+            sample_args.append(self.generate_expression(extra_args[1]))
+
+        return f"{texture_name}.sample({', '.join(sample_args)})"
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""

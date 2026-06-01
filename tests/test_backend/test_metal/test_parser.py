@@ -705,6 +705,19 @@ def test_parse_as_type_template_call():
     assert any(node.name == "as_type<float>" for node in calls)
 
 
+def test_parse_static_cast_from_apple_compute_sample():
+    code = """
+    kernel void process(uint2 gid [[thread_position_in_grid]]) {
+        float2 p0 = static_cast<float2>(gid);
+    }
+    """
+    ast = parse_ok(code)
+    casts = [node for node in iter_ast_nodes(ast) if isinstance(node, CastNode)]
+
+    assert len(casts) == 1
+    assert casts[0].target_type == "float2"
+
+
 def test_parse_template_dequantize_helper_from_llama_cpp():
     code = """
     template <typename type4x4>

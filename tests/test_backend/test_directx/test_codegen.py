@@ -492,6 +492,26 @@ def test_hlsl_psize_roundtrips_to_gl_point_size():
     assert "@ PointSize" not in crossgl
 
 
+def test_codegen_clip_intrinsic_imports_to_parseable_crossgl():
+    crossgl = generate_crossgl("""
+        float4 PSMain(float4 color : COLOR0) : SV_Target {
+            clip(color.a < 0.1f ? -1 : 1);
+            return color;
+        }
+    """)
+
+    assert "clip(color.a < 0.1 ? -1 : 1);" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_export_function_specifier_imports_to_crossgl():
+    crossgl = generate_crossgl("export void LogTraceRayStart() { }")
+
+    assert "void LogTraceRayStart()" in crossgl
+    assert "export" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_anonymous_nested_struct_member_roundtrip():
     hlsl = textwrap.dedent("""
         struct NRCPathState {

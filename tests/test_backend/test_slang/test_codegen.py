@@ -43,6 +43,25 @@ def test_struct_codegen():
         pytest.fail("Struct parsing or code generation not implemented.")
 
 
+def test_import_and_include_paths_codegen():
+    code = """
+    import MyApp.Shadowing;
+    import "dir/file-name.slang";
+    __include "scene-helpers";
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "import MyApp.Shadowing;" in generated_code
+    assert 'import "dir/file-name.slang";' in generated_code
+    assert 'import "scene-helpers";' in generated_code
+    assert "dir/file-name.slang;" not in generated_code.replace(
+        '"dir/file-name.slang"', ""
+    )
+
+
 def test_struct_array_member_codegen():
     code = """
     struct Cluster {

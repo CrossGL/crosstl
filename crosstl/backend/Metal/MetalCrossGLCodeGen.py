@@ -489,6 +489,17 @@ class MetalToCrossGLConverter:
                 )
             return f"textureGrad({', '.join(sample_args + [ddx, ddy])})"
 
+        min_lod_clamp_arg = self.unwrap_texture_option_argument(option, "min_lod_clamp")
+        if min_lod_clamp_arg is not option:
+            min_lod = self.generate_expression(min_lod_clamp_arg, is_main)
+            if offset is not None:
+                rendered_offset = self.generate_expression(offset, is_main)
+                return (
+                    "textureMinLodClampOffset("
+                    f"{', '.join(sample_args + [min_lod, rendered_offset])})"
+                )
+            return f"textureMinLodClamp({', '.join(sample_args + [min_lod])})"
+
         level_arg = self.unwrap_texture_option_argument(option, "level")
         if level_arg is not option or not self.texture_sample_option_is_offset(option):
             lod = self.generate_expression(level_arg, is_main)

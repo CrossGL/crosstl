@@ -454,6 +454,26 @@ def test_codegen_texture_sample_bias_and_gradient_options_roundtrip():
     assert "level(gradient2d(" not in metal
 
 
+def test_codegen_texture_sample_min_lod_clamp_option_roundtrip():
+    code = """
+    float4 sparseSample(texture2d<float> colorMap,
+                        sampler colorSampler,
+                        float2 uv,
+                        float firstTailMip) {
+        return colorMap.sample(colorSampler, uv, min_lod_clamp(firstTailMip));
+    }
+    """
+    crossgl = convert(code)
+
+    assert "textureMinLodClamp(colorMap, colorSampler, uv, firstTailMip)" in crossgl
+    assert "textureLod(colorMap" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "colorMap.sample(colorSampler, uv, min_lod_clamp(firstTailMip))" in metal
+    assert "level(min_lod_clamp(" not in metal
+
+
 def test_codegen_texture_sample_offset_options_roundtrip():
     code = """
     float4 sampleOffsetOptions(texture2d<float> tex,
@@ -792,6 +812,19 @@ def test_codegen_lowers_as_type_float_template_call():
 
     assert "asfloat(bits)" in crossgl
     assert "as_type<float>" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_lowers_static_cast_from_apple_compute_sample():
+    code = """
+    kernel void process(uint2 gid [[thread_position_in_grid]]) {
+        float2 p0 = static_cast<float2>(gid);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "vec2 p0 = (vec2)gid;" in crossgl
+    assert "static_cast" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

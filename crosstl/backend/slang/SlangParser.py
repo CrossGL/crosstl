@@ -84,6 +84,9 @@ class SlangParser:
     def parse_shader(self):
         imports = []
         exports = []
+        includes = []
+        modules = []
+        implementing_modules = []
         functions = []
         structs = []
         typedefs = []
@@ -98,6 +101,12 @@ class SlangParser:
 
             if self.current_token[0] == "IMPORT":
                 imports.append(self.parse_import())
+            elif self.current_token[0] == "INCLUDE":
+                includes.append(self.parse_include())
+            elif self.current_token[0] == "MODULE":
+                modules.append(self.parse_module_declaration())
+            elif self.current_token[0] == "IMPLEMENTING":
+                implementing_modules.append(self.parse_implementing_declaration())
             elif self.current_token[0] == "EXPORT":
                 exports.append(self.parse_export(attributes=pending_attributes))
             elif self.current_token[0] == "STRUCT":
@@ -124,6 +133,9 @@ class SlangParser:
             exports=exports,
             typedefs=typedefs,
             cbuffers=cbuffers,
+            includes=includes,
+            modules=modules,
+            implementing_modules=implementing_modules,
         )
 
     def is_function(self):
@@ -420,14 +432,41 @@ class SlangParser:
 
     def parse_import(self):
         self.eat("IMPORT")
+        module_path = self.parse_module_path()
+        self.eat("SEMICOLON")
+        return ImportNode(module_path)
+
+    def parse_include(self):
+        self.eat("INCLUDE")
+        include_path = self.parse_module_path()
+        self.eat("SEMICOLON")
+        return include_path
+
+    def parse_module_declaration(self):
+        self.eat("MODULE")
+        module_path = self.parse_module_path(allow_string=False)
+        self.eat("SEMICOLON")
+        return module_path
+
+    def parse_implementing_declaration(self):
+        self.eat("IMPLEMENTING")
+        module_path = self.parse_module_path(allow_string=False)
+        self.eat("SEMICOLON")
+        return module_path
+
+    def parse_module_path(self, allow_string=True):
+        if allow_string and self.current_token[0] == "STRING":
+            module_path = self.current_token[1][1:-1]
+            self.eat("STRING")
+            return module_path
+
         parts = [self.current_token[1]]
         self.eat("IDENTIFIER")
         while self.current_token[0] == "DOT":
             self.eat("DOT")
             parts.append(self.current_token[1])
             self.eat("IDENTIFIER")
-        self.eat("SEMICOLON")
-        return ImportNode(".".join(parts))
+        return ".".join(parts)
 
     def parse_export(self, attributes=None):
         self.eat("EXPORT")

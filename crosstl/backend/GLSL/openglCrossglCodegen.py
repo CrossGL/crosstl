@@ -450,6 +450,7 @@ class GLSLToCrossGLConverter:
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
         self.interface_block_struct_names = set()
+        self.flattened_uniform_block_instances = {}
         self.task_payload_shared_names = set()
         self.variable_type_scopes = []
 
@@ -682,6 +683,7 @@ class GLSLToCrossGLConverter:
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
         self.variable_type_scopes = [{}]
+        self.flattened_uniform_block_instances = {}
 
         for var in getattr(node, "uniforms", []) or []:
             self.register_variable_type(var)
@@ -973,6 +975,75 @@ class GLSLToCrossGLConverter:
         block_name = getattr(var, "interface_block", None)
         return bool(block_name and block_name in self.interface_block_struct_names)
 
+    def has_push_constant_layout(self, node):
+        layout = getattr(node, "layout", None) or getattr(
+            node, "interface_layout", None
+        )
+        return any(str(key).lower() == "push_constant" for key in layout or {})
+
+    def is_push_constant_uniform(self, var):
+        if self.has_push_constant_layout(var):
+            return True
+
+        block_name = getattr(var, "interface_block", None)
+        if block_name is None:
+            block_name = getattr(var, "vtype", None)
+        block_struct = self.structs_by_name.get(block_name)
+        return bool(block_struct and self.has_push_constant_layout(block_struct))
+
+    def is_push_constant_interface_block_struct(self, struct):
+        return bool(
+            getattr(struct, "interface_block", False)
+            and self.has_push_constant_layout(struct)
+        )
+
+    def push_constant_block_name(self, var):
+        return getattr(var, "interface_block", None) or getattr(var, "vtype", None)
+
+    def push_constant_block_fields(self, block_name, uniforms):
+        block_struct = self.structs_by_name.get(block_name)
+        if block_struct is not None:
+            return getattr(block_struct, "members", None) or getattr(
+                block_struct, "fields", []
+            )
+        return uniforms
+
+    def record_flattened_push_constant_instance(self, block_name, uniforms, fields):
+        field_names = {getattr(field, "name", None) for field in fields}
+        field_names.discard(None)
+        if not field_names:
+            return
+
+        block_struct = self.structs_by_name.get(block_name)
+        instance_names = set()
+        if block_struct is not None:
+            instance_name = getattr(block_struct, "interface_instance_name", None)
+            if instance_name:
+                instance_names.add(str(instance_name).split("[", 1)[0])
+
+        for uniform in uniforms:
+            if getattr(uniform, "vtype", None) == block_name:
+                instance_names.add(str(uniform.name).split("[", 1)[0])
+
+        for instance_name in instance_names:
+            if instance_name:
+                self.flattened_uniform_block_instances[instance_name] = field_names
+
+    def generate_push_constant_block(self, block_name, uniforms):
+        fields = self.push_constant_block_fields(block_name, uniforms)
+        self.record_flattened_push_constant_instance(block_name, uniforms, fields)
+
+        result = f"cbuffer {block_name} @push_constant {{\n"
+        self.increase_indent()
+        for field in fields:
+            var_type = self.convert_type(getattr(field, "vtype", ""))
+            var_name = getattr(field, "name", "")
+            array_suffix = self.array_suffix(field)
+            result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
+        self.decrease_indent()
+        result += self.indent_str + "};\n"
+        return result
+
     def interface_block_attribute_prefix(self, node):
         if not self.is_graphics_interface_block_struct(node):
             return ""
@@ -1084,6 +1155,8 @@ class GLSLToCrossGLConverter:
         for struct in node.structs:
             if struct.name in self.converted_ssbo_struct_names:
                 continue
+            if self.is_push_constant_interface_block_struct(struct):
+                continue
             result += self.indent_str + self.generate_struct(struct) + "\n\n"
 
         # Generate input struct if needed
@@ -1115,6 +1188,14 @@ class GLSLToCrossGLConverter:
             data_uniforms = [
                 u for u in self.uniform_vars if not self._is_resource_type(u.vtype)
             ]
+            push_constant_blocks = {}
+            ordinary_data_uniforms = []
+            for uniform in data_uniforms:
+                if self.is_push_constant_uniform(uniform):
+                    block_name = self.push_constant_block_name(uniform)
+                    push_constant_blocks.setdefault(block_name, []).append(uniform)
+                else:
+                    ordinary_data_uniforms.append(uniform)
 
             for uniform in resource_uniforms:
                 var_type = self.convert_type(uniform.vtype)
@@ -1126,10 +1207,15 @@ class GLSLToCrossGLConverter:
                     + f"{var_type} {var_name}{array_suffix}{attributes};\n"
                 )
 
-            if data_uniforms:
+            for block_name, uniforms in push_constant_blocks.items():
+                result += self.indent_str + self.generate_push_constant_block(
+                    block_name, uniforms
+                )
+
+            if ordinary_data_uniforms:
                 result += self.indent_str + "cbuffer Uniforms {\n"
                 self.increase_indent()
-                for uniform in data_uniforms:
+                for uniform in ordinary_data_uniforms:
                     var_type = self.convert_type(uniform.vtype)
                     var_name = uniform.name
                     array_suffix = self.array_suffix(uniform)
@@ -1801,6 +1887,10 @@ class GLSLToCrossGLConverter:
         return None
 
     def generate_member_access(self, node):
+        flattened_member = self.flattened_uniform_block_member(node)
+        if flattened_member is not None:
+            return flattened_member
+
         object_name = ""
         if isinstance(node.object, VariableNode):
             if self.shader_type in (
@@ -1821,6 +1911,15 @@ class GLSLToCrossGLConverter:
             object_name = self.generate_expression(node.object)
 
         return f"{object_name}.{node.member}"
+
+    def flattened_uniform_block_member(self, node):
+        instance_name = self.expression_base_name(getattr(node, "object", None))
+        if instance_name is None:
+            return None
+        fields = self.flattened_uniform_block_instances.get(instance_name)
+        if fields is None or node.member not in fields:
+            return None
+        return node.member
 
     def generate_array_access(self, node):
         structured_access = self.structured_buffer_access_parts(node)

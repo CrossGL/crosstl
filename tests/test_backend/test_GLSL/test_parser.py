@@ -170,7 +170,9 @@ def test_parse_interface_block_with_newline_brace_and_instance():
 
     assert ast.structs[0].name == "Registers"
     assert ast.structs[0].interface_block is True
+    assert ast.structs[0].interface_layout == {"push_constant": None}
     assert ast.uniforms[0].name == "registers"
+    assert ast.uniforms[0].layout == {"push_constant": None}
 
 
 def test_parse_control_flow_with_brace_on_next_line():

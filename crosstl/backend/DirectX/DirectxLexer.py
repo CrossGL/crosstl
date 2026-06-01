@@ -29,6 +29,7 @@ TOKENS = tuple(
         ("CONST", r"\bconst\b"),
         ("INLINE", r"\binline\b"),
         ("EXTERN", r"\bextern\b"),
+        ("EXPORT", r"\bexport\b"),
         ("VOLATILE", r"\bvolatile\b"),
         ("PRECISE", r"\bprecise\b"),
         ("GLOBALLYCOHERENT", r"\bgloballycoherent\b"),

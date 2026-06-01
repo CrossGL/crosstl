@@ -77,6 +77,32 @@ def test_compound_import_parsing():
     assert [node.module_name for node in ast.imports] == ["MyApp.Shadowing"]
 
 
+def test_string_import_path_parsing():
+    code = 'import "dir/file-name.slang";\n'
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert [node.module_name for node in ast.imports] == ["dir/file-name.slang"]
+    assert ast.global_vars == []
+
+
+def test_module_include_declarations_do_not_parse_as_globals():
+    code = """
+    module scene;
+    __include "scene-helpers";
+    implementing scene;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.modules == ["scene"]
+    assert ast.includes == ["scene-helpers"]
+    assert ast.implementing_modules == ["scene"]
+    assert ast.global_vars == []
+
+
 def test_struct_array_member_declarator_parsing():
     code = """
     struct Cluster {

@@ -583,6 +583,30 @@ def test_codegen_interface_block_roundtrip():
     assert "cbuffer Uniforms" in output
 
 
+def test_codegen_push_constant_interface_block_preserves_attribute():
+    code = textwrap.dedent("""
+        #version 450
+        layout(push_constant, std430) uniform MVPUniform {
+            mat4 model;
+            mat4 view_proj;
+        } mvp_uniform;
+
+        void main() {
+            gl_Position = mvp_uniform.view_proj * vec4(1.0);
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(code, "vertex")
+
+    assert "cbuffer MVPUniform @push_constant {" in crossgl
+    assert "mat4 model;" in crossgl
+    assert "mat4 view_proj;" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert "mvp_uniform.view_proj" not in crossgl
+    assert "gl_Position = (view_proj * vec4(1.0));" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_multidimensional_interface_and_parameter_arrays_roundtrip():
     code = textwrap.dedent("""
         #version 460 core

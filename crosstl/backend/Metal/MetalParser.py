@@ -1459,6 +1459,14 @@ class MetalParser:
     def parse_postfix(self):
         node = self.parse_primary()
         while True:
+            if self.is_static_cast_template_call(node):
+                template_args = self.parse_template_argument_suffix()
+                target_type = "".join(template_args)
+                self.eat("LPAREN")
+                expression = self.parse_expression()
+                self.eat("RPAREN")
+                node = CastNode(target_type, expression)
+                continue
             if self.is_as_type_template_call(node):
                 template_args = self.parse_template_argument_suffix()
                 suffix = f"<{''.join(template_args)}>"
@@ -1520,6 +1528,19 @@ class MetalParser:
                 continue
             break
         return node
+
+    def is_static_cast_template_call(self, node):
+        if self.current_token[0] != "LESS_THAN":
+            return False
+        if isinstance(node, VariableNode):
+            callee_name = node.name
+        elif isinstance(node, MemberAccessNode):
+            callee_name = node.member
+        else:
+            return False
+        if callee_name.split("::")[-1] != "static_cast":
+            return False
+        return self.template_argument_list_followed_by_call()
 
     def is_as_type_template_call(self, node):
         if self.current_token[0] != "LESS_THAN":

@@ -379,13 +379,28 @@ class VulkanParser:
             storage_class = variable["storage_class"] or pointer_type.get(
                 "storage_class"
             )
+            if pointer_type.get("kind") != "pointer":
+                continue
+
+            if storage_class == "PushConstant":
+                push_constant_layout = self.spirv_assembly_push_constant_layout(
+                    variable,
+                    pointer_type,
+                    names,
+                    decorations,
+                    member_decorations,
+                    member_names,
+                    types,
+                    constants,
+                )
+                if push_constant_layout is not None:
+                    layouts.append(push_constant_layout)
+                continue
+
             layout_type = self.SPIRV_INTERFACE_STORAGE_CLASSES.get(storage_class)
             if layout_type is None:
                 continue
             if entry_interface_ids and variable["id"] not in entry_interface_ids:
-                continue
-
-            if pointer_type.get("kind") != "pointer":
                 continue
 
             struct_layouts = self.spirv_assembly_struct_interface_layouts(
@@ -431,6 +446,60 @@ class VulkanParser:
             )
 
         return layouts
+
+    def spirv_assembly_push_constant_layout(
+        self,
+        variable,
+        pointer_type,
+        names,
+        decorations,
+        member_decorations,
+        member_names,
+        types,
+        constants,
+    ):
+        struct_type_id = pointer_type.get("type_id")
+        struct_type = types.get(struct_type_id, {})
+        if struct_type.get("kind") != "struct":
+            return None
+
+        struct_fields = []
+        for member_index, member_type_id in enumerate(
+            struct_type.get("member_types", [])
+        ):
+            data_type, array_suffix = self.spirv_type_name_and_suffix(
+                member_type_id, types, constants
+            )
+            if data_type is None:
+                continue
+
+            member_key = str(member_index)
+            field_name = member_names.get(struct_type_id, {}).get(
+                member_key, f"member{member_key}"
+            )
+            struct_fields.append((data_type, f"{field_name}{array_suffix}"))
+
+        if not struct_fields:
+            return None
+
+        variable_id = variable["id"]
+        variable_name = names.get(variable_id) or variable_id.lstrip("%")
+        block_name = (
+            names.get(struct_type_id) or variable_name or struct_type_id.lstrip("%")
+        )
+
+        return LayoutNode(
+            [],
+            layout_type="UNIFORM",
+            push_constant=True,
+            block_name=block_name,
+            variable_name=variable_name,
+            struct_fields=struct_fields,
+            spirv_id=variable_id,
+            spirv_decorations=decorations.get(struct_type_id, [])
+            + decorations.get(variable_id, []),
+            spirv_storage_class="PushConstant",
+        )
 
     def spirv_assembly_struct_interface_layouts(
         self,

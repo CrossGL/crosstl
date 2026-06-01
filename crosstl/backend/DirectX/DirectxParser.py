@@ -111,6 +111,7 @@ QUALIFIER_TOKENS = {
     "CONST",
     "INLINE",
     "EXTERN",
+    "EXPORT",
     "VOLATILE",
     "PRECISE",
     "GLOBALLYCOHERENT",
@@ -1425,6 +1426,9 @@ class HLSLParser:
             return VectorConstructorNode(type_name, args)
         if token_type == "IDENTIFIER":
             self.eat("IDENTIFIER")
+            return value
+        if token_type == "CLIP":
+            self.eat("CLIP")
             return value
         if token_type in ["NUMBER", "HEX_NUMBER", "BINARY_NUMBER", "OCT_NUMBER"]:
             self.eat(token_type)

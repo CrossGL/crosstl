@@ -245,7 +245,11 @@ class SlangToCrossGLConverter:
         code = "shader main {\n"
         if ast.imports:
             for imp in ast.imports:
-                code += f"    import {imp.module_name};\n"
+                code += f"    import {self.format_import_path(imp.module_name)};\n"
+            code += "\n"
+        if getattr(ast, "includes", None):
+            for include in ast.includes:
+                code += f"    import {self.format_import_path(include)};\n"
             code += "\n"
         if ast.exports:
             for exp in ast.exports:
@@ -297,6 +301,13 @@ class SlangToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def format_import_path(self, path):
+        path = str(path)
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", path):
+            return path
+        escaped = path.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
 
     def generate_export(self, exp):
         item = exp.item

@@ -319,6 +319,32 @@ def test_parse_interpolation_intrinsics_keep_free_function_calls():
     assert "EvaluateAttributeCentroid" in free_calls
 
 
+def test_parse_clip_intrinsic_expression_statement():
+    code = """
+    float4 PSMain(float4 color : COLOR0) : SV_Target {
+        clip(color.a < 0.1f ? -1 : 1);
+        return color;
+    }
+    """
+
+    ast = parse_code(code)
+    calls = [
+        node
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, FunctionCallNode) and node.name == "clip"
+    ]
+
+    assert len(calls) == 1
+
+
+def test_parse_export_function_specifier():
+    ast = parse_code("export void LogTraceRayStart() { }")
+
+    assert ast.functions[0].name == "LogTraceRayStart"
+    assert ast.functions[0].return_type == "void"
+    assert "export" in ast.functions[0].qualifiers
+
+
 def test_parse_preprocessor_directives():
     assert_parses(PREPROCESSOR_HLSL)
 

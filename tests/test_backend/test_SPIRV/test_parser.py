@@ -93,6 +93,31 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_PUSH_CONSTANT_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main"
+OpName %PushConstants "PushConstants"
+OpName %pc "pc"
+OpMemberName %PushConstants 0 "model"
+OpMemberName %PushConstants 1 "tint"
+OpDecorate %PushConstants Block
+OpMemberDecorate %PushConstants 0 Offset 0
+OpMemberDecorate %PushConstants 1 Offset 64
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%mat4 = OpTypeMatrix %v4float 4
+%PushConstants = OpTypeStruct %mat4 %v4float
+%ptr_pc = OpTypePointer PushConstant %PushConstants
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%pc = OpVariable %ptr_pc PushConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
@@ -154,6 +179,20 @@ def test_spirv_assembly_matrix_interface_parse():
     assert input_layout.data_type == "mat4"
     assert input_layout.variable_name == "model"
     assert input_layout.qualifiers == [("location", "0")]
+
+
+def test_spirv_assembly_push_constant_block_parse():
+    tokens = tokenize_code(SPIRV_PUSH_CONSTANT_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert layout.layout_type == "UNIFORM"
+    assert layout.push_constant is True
+    assert layout.block_name == "PushConstants"
+    assert layout.variable_name == "pc"
+    assert layout.struct_fields == [("mat4", "model"), ("vec4", "tint")]
+    assert layout.spirv_storage_class == "PushConstant"
 
 
 def test_spirv_assembly_without_location_interface_is_rejected():
