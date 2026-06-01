@@ -1,42 +1,5 @@
 {
-  "backlog": [
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "stages",
-      "feature": "Geometry stage",
-      "feature_id": "stage.geometry",
-      "notes": "Metal has no traditional native geometry shader stage, so CrossGL geometry entry points lower to deterministic Metal helper functions with CrossGL geometry-stage metadata and compile-oriented PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder stream helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
-      "status": "diagnostic"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "stages",
-      "feature": "Tessellation stages",
-      "feature_id": "stage.tessellation",
-      "notes": "GLSL tessellation control/evaluation stages lower native layout metadata and tessellation builtins, while unsupported patchconstantfunc metadata is rejected with a deterministic diagnostic instead of emitting invalid GLSL.",
-      "status": "diagnostic"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "stages",
-      "feature": "Tessellation stages",
-      "feature_id": "stage.tessellation",
-      "notes": "Metal tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves domain, partitioning, output topology, outputcontrolpoints, patchconstantfunc, maxtessfactor, patch parameter element/count metadata, and tessellation helper semantics while validating patch signatures and domain-location shapes.",
-      "status": "diagnostic"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "images",
-      "feature": "Multisample storage images",
-      "feature_id": "image.multisample_storage",
-      "notes": "Represents multisample storage images as read-capable SRVs, preserves size/sample queries and arrays, and emits deterministic diagnostics for DirectX-unsupported stores and atomics.",
-      "status": "diagnostic"
-    }
-  ],
+  "backlog": [],
   "features": [
     {
       "category": "target",
@@ -1671,18 +1634,11 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 4,
-      "by_backend": {
-        "directx": 1,
-        "metal": 2,
-        "opengl": 1
-      },
-      "by_category": {
-        "images": 1,
-        "stages": 3
-      },
+      "backlog_count": 0,
+      "by_backend": {},
+      "by_category": {},
       "by_status": {
-        "diagnostic": 4,
+        "diagnostic": 0,
         "partial": 0,
         "supported": 0,
         "unknown": 0,

@@ -321,23 +321,6 @@ def test_build_desired_issues_creates_parent_and_backlog_entries():
     assert "`tests/example.py::def test_gather`" in child.body
 
 
-def test_build_desired_issues_treats_diagnostic_rows_as_backlog():
-    module = load_sync_module()
-    matrix = sample_matrix()
-    matrix["backlog"][0]["status"] = "diagnostic"
-    matrix["features"][1]["support"]["directx"]["status"] = "diagnostic"
-    matrix["summary"]["status_counts"]["directx"]["partial"] = 0
-    matrix["summary"]["status_counts"]["directx"]["diagnostic"] = 1
-
-    desired = module.build_desired_issues(matrix)
-    errors = module.validate_desired_issues(matrix, {"issues": []}, desired)
-
-    child = desired["backlog:directx:textures.gather"]
-    assert errors == []
-    assert module.LABEL_PREFIX_STATUS + "diagnostic" in child.labels
-    assert "Status | diagnostic" in child.body
-
-
 def test_build_desired_issues_skips_empty_parent_trackers():
     module = load_sync_module()
     matrix = sample_matrix()

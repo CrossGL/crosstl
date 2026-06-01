@@ -49,7 +49,6 @@ STATUS_ORDER = [
 
 BACKLOG_STATUSES = {
     "partial",
-    "diagnostic",
     "unsupported",
     "unknown",
 }
