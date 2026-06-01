@@ -10,6 +10,26 @@ class SlangParser:
     DECLARATION_TYPE_TOKENS = {"FLOAT", "FVECTOR", "INT", "UINT", "BOOL", "MATRIX"}
     RESOURCE_TYPE_TOKENS = {"TEXTURE2D", "SAMPLER_STATE"}
     QUALIFIER_TOKENS = {"CONST", "CONSTEXPR", "INLINE", "STATIC"}
+    IDENTIFIER_QUALIFIERS = {"uniform", "in", "out", "inout"}
+    BUILTIN_IDENTIFIER_TYPES = {
+        "double",
+        "double2",
+        "double3",
+        "double4",
+        "half",
+        "half2",
+        "half3",
+        "half4",
+        "int2",
+        "int3",
+        "int4",
+        "uint2",
+        "uint3",
+        "uint4",
+        "bool2",
+        "bool3",
+        "bool4",
+    }
     TYPE_NAME_TOKENS = (
         DECLARATION_TYPE_TOKENS | RESOURCE_TYPE_TOKENS | {"IDENTIFIER", "VOID"}
     )
@@ -111,20 +131,22 @@ class SlangParser:
         return self.tokens[current_pos][0] == "LPAREN"
 
     def skip_declaration_prefix_tokens(self, current_pos, include_generic=False):
-        prefix_tokens = set(self.QUALIFIER_TOKENS)
-        if include_generic:
-            prefix_tokens.add("GENERIC")
-
-        while (
-            current_pos < len(self.tokens)
-            and self.tokens[current_pos][0] in prefix_tokens
+        while current_pos < len(self.tokens) and (
+            self.is_qualifier_token_at(current_pos)
+            or (include_generic and self.tokens[current_pos][0] == "GENERIC")
         ):
             current_pos += 1
         return current_pos
 
+    def is_qualifier_token_at(self, index):
+        token_type, token_value = self.tokens[index]
+        return token_type in self.QUALIFIER_TOKENS or (
+            token_type == "IDENTIFIER" and token_value in self.IDENTIFIER_QUALIFIERS
+        )
+
     def parse_qualifiers(self):
         qualifiers = []
-        while self.current_token[0] in self.QUALIFIER_TOKENS:
+        while self.is_qualifier_token_at(self.pos):
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
         return qualifiers
@@ -132,7 +154,9 @@ class SlangParser:
     def parse_declaration_prefixes(self):
         qualifiers = []
         is_generic = False
-        while self.current_token[0] in self.QUALIFIER_TOKENS | {"GENERIC"}:
+        while self.current_token[0] == "GENERIC" or self.is_qualifier_token_at(
+            self.pos
+        ):
             if self.current_token[0] == "GENERIC":
                 is_generic = True
             else:
@@ -312,8 +336,7 @@ class SlangParser:
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":
-            vtype = self.current_token[1]
-            self.eat(self.current_token[0])
+            vtype = self.parse_type_name()
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
             array_sizes = self.parse_array_suffixes()
@@ -377,8 +400,7 @@ class SlangParser:
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":
-            vtype = self.current_token[1]
-            self.eat(self.current_token[0])  # Eat the type (FVECTOR, FLOAT, etc.)
+            vtype = self.parse_type_name()
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
             array_sizes = self.parse_array_suffixes()
@@ -856,7 +878,60 @@ class SlangParser:
             self.eat(self.current_token[0])
             operand = self.parse_unary()
             return UnaryOpNode(op, operand)
+        if self.current_token[0] == "LPAREN" and self.is_c_style_cast_start():
+            return self.parse_c_style_cast()
         return self.parse_primary()
+
+    def is_c_style_cast_start(self):
+        if self.current_token[0] != "LPAREN":
+            return False
+
+        type_pos = self.pos + 1
+        if type_pos >= len(self.tokens):
+            return False
+
+        token_type, token_value = self.tokens[type_pos]
+        if token_type == "IDENTIFIER":
+            if (
+                token_value not in self.BUILTIN_IDENTIFIER_TYPES
+                and self.tokens[type_pos + 1][0] != "LESS_THAN"
+            ):
+                return False
+        elif token_type not in self.DECLARATION_TYPE_TOKENS | self.RESOURCE_TYPE_TOKENS:
+            return False
+
+        close_pos = self.skip_generic_type_suffix_tokens(type_pos + 1)
+        if close_pos >= len(self.tokens) or self.tokens[close_pos][0] != "RPAREN":
+            return False
+
+        operand_pos = close_pos + 1
+        if operand_pos >= len(self.tokens):
+            return False
+
+        return self.tokens[operand_pos][0] in {
+            "IDENTIFIER",
+            "NUMBER",
+            "LPAREN",
+            "LBRACE",
+            "INT",
+            "FLOAT",
+            "FVECTOR",
+            "MATRIX",
+            "UINT",
+            "BOOL",
+            "INCREMENT",
+            "DECREMENT",
+            "PLUS",
+            "MINUS",
+            "BITWISE_NOT",
+            "NOT",
+        }
+
+    def parse_c_style_cast(self):
+        self.eat("LPAREN")
+        target_type = self.parse_type_name()
+        self.eat("RPAREN")
+        return CastNode(target_type, self.parse_unary())
 
     def parse_primary(self):
         if self.current_token[0] in [

@@ -53,9 +53,9 @@ class HipProgramNode(ASTNode):
 class HipParser:
     """Parse HIP tokens into the HIP backend AST."""
 
-    FUNCTION_SPECIFIER_TOKENS = {"STATIC", "INLINE", "EXTERN"}
+    FUNCTION_SPECIFIER_TOKENS = {"STATIC", "INLINE", "EXTERN", "CONSTEXPR"}
     TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "UNSIGNED", "SIGNED", "__RESTRICT__"}
-    POSTFIX_TYPE_QUALIFIER_TOKENS = {"__RESTRICT__"}
+    POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "__RESTRICT__"}
     TYPE_REFERENCE_TOKENS = {"AMPERSAND", "AND"}
     CPP_NAMED_CASTS = {"static_cast", "reinterpret_cast", "const_cast", "dynamic_cast"}
     ATOMIC_FUNCTION_TOKENS = {
@@ -516,14 +516,18 @@ class HipParser:
         qualifiers = []
         attributes = []
 
-        while self.match(
-            "__DEVICE__",
-            "__HOST__",
-            "__GLOBAL__",
-            "__FORCEINLINE__",
-            "__NOINLINE__",
-            "__LAUNCH_BOUNDS__",
-        ):
+        while True:
+            self.skip_newlines()
+            if not self.match(
+                "__DEVICE__",
+                "__HOST__",
+                "__GLOBAL__",
+                "__FORCEINLINE__",
+                "__NOINLINE__",
+                "__LAUNCH_BOUNDS__",
+                "CONSTEXPR",
+            ):
+                break
             if self.match("__LAUNCH_BOUNDS__"):
                 attributes.append(self.parse_launch_bounds_attribute())
             else:
@@ -531,6 +535,7 @@ class HipParser:
                 self.advance()
 
         return_type = self.parse_type()
+        self.skip_newlines()
         name = self.consume_function_name()
         self.user_function_names.add(name)
 
@@ -587,6 +592,7 @@ class HipParser:
             self.advance()
 
         return_type = self.parse_type()
+        self.skip_newlines()
         name = self.consume_function_name()
         self.user_function_names.add(name)
 
@@ -688,6 +694,7 @@ class HipParser:
             "__DEVICE__",
             "STATIC",
             "EXTERN",
+            "CONSTEXPR",
         ):
             qualifiers.append(self.current_token.value)
             self.advance()
@@ -720,6 +727,7 @@ class HipParser:
             "__DEVICE__",
             "STATIC",
             "EXTERN",
+            "CONSTEXPR",
         ):
             qualifiers.append(self.current_token.value)
             self.advance()
@@ -811,12 +819,17 @@ class HipParser:
 
     def parse_type(self):
         type_parts = []
+        saw_integral_sign = False
 
         while self.match(*self.TYPE_QUALIFIER_TOKENS):
+            if self.current_token.type in {"SIGNED", "UNSIGNED"}:
+                saw_integral_sign = True
             type_parts.append(self.current_token.value)
             self.advance()
 
-        if (
+        if self.is_implicit_int_current_type(saw_integral_sign):
+            type_parts.append("int")
+        elif (
             self.is_builtin_type_token()
             or self.match(*self.VECTOR_TYPE_TOKENS)
             or self.match(*self.RESOURCE_TYPE_TOKENS)
@@ -845,12 +858,17 @@ class HipParser:
 
     def parse_type_without_array_suffix(self):
         type_parts = []
+        saw_integral_sign = False
 
         while self.match(*self.TYPE_QUALIFIER_TOKENS):
+            if self.current_token.type in {"SIGNED", "UNSIGNED"}:
+                saw_integral_sign = True
             type_parts.append(self.current_token.value)
             self.advance()
 
-        if (
+        if self.is_implicit_int_current_type(saw_integral_sign):
+            type_parts.append("int")
+        elif (
             self.is_builtin_type_token()
             or self.match(*self.VECTOR_TYPE_TOKENS)
             or self.match(*self.RESOURCE_TYPE_TOKENS)
@@ -872,6 +890,9 @@ class HipParser:
             self.parse_postfix_type_qualifiers(type_parts)
 
         return " ".join(type_parts)
+
+    def is_implicit_int_current_type(self, saw_integral_sign):
+        return self.is_implicit_int_type_at_pos(self.pos, saw_integral_sign)
 
     def parse_postfix_type_qualifiers(self, type_parts):
         while self.match(*self.POSTFIX_TYPE_QUALIFIER_TOKENS):
@@ -902,6 +923,9 @@ class HipParser:
 
         self.skip_newlines()
         if self.match("RPAREN"):
+            return params
+        if self.match("VOID") and self.peek() and self.peek().type == "RPAREN":
+            self.advance()
             return params
 
         while True:
@@ -954,6 +978,7 @@ class HipParser:
             if_body = self.parse_statement()
 
         else_body = None
+        self.skip_newlines()
         if self.match("ELSE"):
             self.advance()
             self.skip_newlines()
@@ -1185,6 +1210,7 @@ class HipParser:
     def parse_expression_statement(self):
         expr = self.parse_expression()
 
+        self.skip_newlines()
         self.consume("SEMICOLON")
 
         return expr
@@ -1194,6 +1220,7 @@ class HipParser:
 
     def parse_assignment_expression(self):
         left = self.parse_ternary_expression()
+        self.skip_newlines()
 
         if self.match(
             "ASSIGN",
@@ -1212,6 +1239,7 @@ class HipParser:
         ):
             op = self.current_token.value
             self.advance()
+            self.skip_newlines()
             right = self.parse_assignment_expression()
             return AssignmentNode(left, right, op)
 
@@ -1219,11 +1247,15 @@ class HipParser:
 
     def parse_ternary_expression(self):
         expr = self.parse_logical_or_expression()
+        self.skip_newlines()
 
         if self.match("QUESTION"):
             self.advance()
+            self.skip_newlines()
             true_expr = self.parse_expression()
+            self.skip_newlines()
             self.consume("COLON")
+            self.skip_newlines()
             false_expr = self.parse_expression()
             return TernaryOpNode(expr, true_expr, false_expr)
 
@@ -1308,12 +1340,15 @@ class HipParser:
 
     def parse_shift_expression(self):
         left = self.parse_additive_expression()
+        self.skip_newlines()
 
         while self.match("SHIFT_LEFT", "SHIFT_RIGHT", "LSHIFT", "RSHIFT"):
             op = self.current_token.value
             self.advance()
+            self.skip_newlines()
             right = self.parse_additive_expression()
             left = BinaryOpNode(left, op, right)
+            self.skip_newlines()
 
         return left
 
@@ -1361,6 +1396,7 @@ class HipParser:
         expr = self.parse_primary_expression()
 
         while True:
+            self.skip_newlines()
             if self.match("LBRACKET"):
                 self.consume("LBRACKET")
                 index = self.parse_expression()
@@ -1459,9 +1495,15 @@ class HipParser:
             elif token_type == "GT":
                 depth -= 1
                 if depth == 0:
+                    next_index = index + 1
+                    while (
+                        next_index < len(self.tokens)
+                        and self.tokens[next_index].type == "NEWLINE"
+                    ):
+                        next_index += 1
                     next_type = (
-                        self.tokens[index + 1].type
-                        if index + 1 < len(self.tokens)
+                        self.tokens[next_index].type
+                        if next_index < len(self.tokens)
                         else "EOF"
                     )
                     return next_type in {
@@ -1475,9 +1517,15 @@ class HipParser:
             elif token_type == "RSHIFT":
                 depth -= 2
                 if depth == 0:
+                    next_index = index + 1
+                    while (
+                        next_index < len(self.tokens)
+                        and self.tokens[next_index].type == "NEWLINE"
+                    ):
+                        next_index += 1
                     next_type = (
-                        self.tokens[index + 1].type
-                        if index + 1 < len(self.tokens)
+                        self.tokens[next_index].type
+                        if next_index < len(self.tokens)
                         else "EOF"
                     )
                     return next_type in {
@@ -2242,10 +2290,9 @@ class HipParser:
             "__DEVICE__",
             "STATIC",
             "EXTERN",
+            "CONSTEXPR",
             "CONST",
             "VOLATILE",
-            "UNSIGNED",
-            "SIGNED",
         }:
             index += 1
 
@@ -2266,22 +2313,32 @@ class HipParser:
         return False
 
     def skip_type_at_pos(self, index):
+        saw_integral_sign = False
         while (
             index < len(self.tokens)
             and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS
         ):
+            if self.tokens[index].type in {"SIGNED", "UNSIGNED"}:
+                saw_integral_sign = True
             index += 1
 
-        if index >= len(self.tokens) or not self.is_type_token(self.tokens[index]):
+        if index >= len(self.tokens):
             return None
 
-        type_token = self.tokens[index].type
-        type_value = self.tokens[index].value
+        if self.is_implicit_int_type_at_pos(index, saw_integral_sign):
+            type_token = "INT"
+            type_value = "int"
+        elif self.is_type_token(self.tokens[index]):
+            type_token = self.tokens[index].type
+            type_value = self.tokens[index].value
+            index += 1
+            if type_token == "LONG" and index < len(self.tokens):
+                if self.tokens[index].type == "LONG":
+                    index += 1
+        else:
+            return None
+
         has_qualified_suffix = False
-        index += 1
-        if type_token == "LONG" and index < len(self.tokens):
-            if self.tokens[index].type == "LONG":
-                index += 1
 
         while (
             index + 1 < len(self.tokens)
@@ -2319,6 +2376,29 @@ class HipParser:
             index = self.skip_postfix_type_qualifiers_at_pos(index)
 
         return self.skip_array_suffix_at_pos(index)
+
+    def is_implicit_int_type_at_pos(self, index, saw_integral_sign):
+        if not saw_integral_sign or index >= len(self.tokens):
+            return False
+
+        token_type = self.tokens[index].type
+        if token_type in {"ASTERISK", "STAR", *self.TYPE_REFERENCE_TOKENS}:
+            return True
+
+        if token_type != "IDENTIFIER":
+            return False
+
+        next_type = (
+            self.tokens[index + 1].type if index + 1 < len(self.tokens) else "EOF"
+        )
+        return next_type in {
+            "SEMICOLON",
+            "ASSIGN",
+            "LBRACKET",
+            "LPAREN",
+            "LBRACE",
+            "COMMA",
+        }
 
     def is_hip_opaque_handle_type(self, type_name):
         return (

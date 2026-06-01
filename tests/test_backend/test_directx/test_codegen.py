@@ -492,6 +492,47 @@ def test_hlsl_psize_roundtrips_to_gl_point_size():
     assert "@ PointSize" not in crossgl
 
 
+def test_brace_initializer_declarations_generate_crossgl():
+    output = generate_crossgl(textwrap.dedent("""
+            struct MyPayload {
+                int val;
+            };
+
+            struct RayDesc {
+                float3 Origin;
+                float TMin;
+                float3 Direction;
+                float TMax;
+            };
+
+            void RayGen() {
+                float3 origin = float3(0.0, 0.0, 0.0);
+                float3 rayDir = float3(0.0, 0.0, 1.0);
+                RayDesc myRay = { origin, 0.0f, rayDir, 10000.0f };
+                MyPayload payload = { 0 };
+            }
+
+            [shader("miss")]
+            void Miss(inout MyPayload payload) {
+                payload.val = 1;
+            }
+
+            [shader("closesthit")]
+            void Hit(
+                inout MyPayload payload,
+                in BuiltInTriangleIntersectionAttributes attr
+            ) {
+                payload.val = 2;
+            }
+            """))
+
+    assert "RayDesc myRay = {origin, 0.0, rayDir, 10000.0};" in output
+    assert "MyPayload payload = {0};" in output
+    assert "void main(MyPayload payload @ payload)" in output
+    assert "BuiltInTriangleIntersectionAttributes attr @ hit_attribute" in output
+    parse_crossgl(output)
+
+
 def test_codegen_vertex_fragment_roundtrip():
     output = generate_crossgl(VERTEX_PIXEL_HLSL)
     assert isinstance(output, str)

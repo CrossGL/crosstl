@@ -1307,5 +1307,63 @@ def test_numeric_literal_codegen_normalizes_crossgl_float_forms():
     assert "1f" not in generated_code
 
 
+def test_generic_struct_member_and_uniform_parameter_codegen_from_official_sample():
+    code = """
+    struct ImageProcessingOptions
+    {
+        float3 tintColor;
+        float blurRadius;
+        bool useLookupTable;
+        StructuredBuffer<float4> lookupTable;
+    }
+
+    [shader("compute")]
+    [numthreads(8, 8)]
+    void processImage(
+        uint3 threadID : SV_DispatchThreadID,
+        uniform Texture2D inputImage,
+        uniform RWTexture2D outputImage,
+        uniform ImageProcessingOptions options)
+    {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "StructuredBuffer<float4> lookupTable;" in generated_code
+    assert "uvec3 threadID @ SV_DispatchThreadID" in generated_code
+    assert "sampler2D inputImage" in generated_code
+    assert "RWTexture2D outputImage" in generated_code
+    assert "ImageProcessingOptions options" in generated_code
+
+
+def test_c_style_scalar_cast_codegen_from_official_select_expr_sample():
+    code = """
+    int test(int input)
+    {
+        return input > 1 ? -input : input;
+    }
+
+    RWStructuredBuffer<int> outputBuffer;
+
+    [numthreads(4, 1, 1)]
+    void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+    {
+        outputBuffer[dispatchThreadID.x] = test((int) dispatchThreadID.x);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "outputBuffer[dispatchThreadID.x] = test(int(dispatchThreadID.x));"
+        in generated_code
+    )
+
+
 if __name__ == "__main__":
     pytest.main()

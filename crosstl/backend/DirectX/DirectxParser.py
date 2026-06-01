@@ -8,6 +8,7 @@ from ..common_ast import (
     BreakNode,
     CastNode,
     ContinueNode,
+    InitializerListNode,
     PreprocessorNode,
     TextureSampleNode,
 )
@@ -1200,6 +1201,8 @@ class HLSLParser:
             expr = self.parse_expression()
             self.eat("RPAREN")
             return expr
+        if token_type == "LBRACE":
+            return self.parse_initializer_list()
         if token_type in [
             "FLOAT",
             "HALF",
@@ -1230,6 +1233,20 @@ class HLSLParser:
         raise SyntaxError(
             f"Unexpected token in primary expression: {self.current_token}"
         )
+
+    def parse_initializer_list(self):
+        self.eat("LBRACE")
+        elements = []
+        while self.current_token[0] != "RBRACE":
+            elements.append(self.parse_expression())
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                if self.current_token[0] == "RBRACE":
+                    break
+                continue
+            break
+        self.eat("RBRACE")
+        return InitializerListNode(elements)
 
     def parse_string_literal(self):
         value = self.current_token[1]

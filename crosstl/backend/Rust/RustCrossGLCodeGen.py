@@ -121,6 +121,15 @@ class RustToCrossGLConverter:
             "Vec2": "vec2",
             "Vec3": "vec3",
             "Vec4": "vec4",
+            "IVec2": "ivec2",
+            "IVec3": "ivec3",
+            "IVec4": "ivec4",
+            "UVec2": "uvec2",
+            "UVec3": "uvec3",
+            "UVec4": "uvec4",
+            "BVec2": "bvec2",
+            "BVec3": "bvec3",
+            "BVec4": "bvec4",
             # Rust matrix types to CrossGL
             "Mat2<f32>": "mat2",
             "Mat3<f32>": "mat3",
@@ -212,8 +221,10 @@ class RustToCrossGLConverter:
             "vertex_color": "Color",
             "instance_id": "InstanceID",
             "vertex_id": "VertexID",
+            "vertex_index": "VertexID",
             # Fragment shader semantics
             "fragment_position": "gl_Position",
+            "position": "gl_Position",
             "fragment_color": "gl_FragColor",
             "fragment_depth": "gl_FragDepth",
             "front_face": "gl_IsFrontFace",
@@ -224,6 +235,11 @@ class RustToCrossGLConverter:
             "global_invocation_id": "gl_GlobalInvocationID",
             "workgroup_id": "gl_WorkGroupID",
             "num_workgroups": "gl_NumWorkGroups",
+        }
+        self.spirv_stage_map = {
+            "vertex": "vertex",
+            "fragment": "fragment",
+            "compute": "compute",
         }
 
         self.function_map = {
@@ -738,7 +754,12 @@ class RustToCrossGLConverter:
             name = self.crossgl_identifier(param.name, forbidden)
             aliases[param.name] = name
             used_names.add(name)
-            declarations.append(self.format_typed_declarator(param.vtype, name))
+            semantic = self.get_semantic_from_attributes(
+                getattr(param, "attributes", [])
+            )
+            declarations.append(
+                f"{self.format_typed_declarator(param.vtype, name)}{semantic}"
+            )
             param_type = self.normalize_receiver_type(param.vtype, struct_name)
             param_types.append((name, param_type))
 
@@ -8772,6 +8793,11 @@ class RustToCrossGLConverter:
                 mapped = self.attribute_map.get(attr.name)
                 if mapped in ["vertex", "fragment", "compute"]:
                     return mapped
+                if attr.name == "spirv":
+                    for arg in attr.args:
+                        mapped = self.spirv_stage_map.get(arg)
+                        if mapped:
+                            return mapped
         return None
 
     def get_semantic_from_attributes(self, attributes):
@@ -8782,11 +8808,29 @@ class RustToCrossGLConverter:
             if isinstance(attr, AttributeNode):
                 if attr.name in self.semantic_map:
                     return f" @ {self.semantic_map[attr.name]}"
+                if attr.name == "spirv":
+                    for arg in attr.args:
+                        if arg in self.semantic_map:
+                            return f" @ {self.semantic_map[arg]}"
+
+                    binding_index = self.attribute_arg_value(attr.args, "binding")
+                    if binding_index is not None:
+                        return f" @ binding({binding_index})"
                 elif attr.name == "location" and attr.args:
                     return f" @ location({attr.args[0]})"
                 elif attr.name == "binding" and attr.args:
                     return f" @ binding({attr.args[0]})"
         return ""
+
+    def attribute_arg_value(self, args, key):
+        for index, arg in enumerate(args):
+            if arg != key:
+                continue
+            if index + 2 < len(args) and args[index + 1] == "=":
+                return args[index + 2]
+            if index + 1 < len(args):
+                return args[index + 1]
+        return None
 
     def visit_StructNode(self, node):
         code = f"struct {node.name} {{\n"

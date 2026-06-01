@@ -136,6 +136,37 @@ def test_translate_api_accepts_rust_source_preserves_stage_entry(tmp_path):
     assert "pub fn main() -> ()" not in rust_result
 
 
+def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
+    code = """
+    #![cfg_attr(target_arch = "spirv", no_std)]
+
+    use shared::glam::{Vec4, vec4};
+    use spirv_std::spirv;
+
+    #[spirv(vertex)]
+    pub fn main_vs(
+        #[spirv(vertex_index)] vert_id: i32,
+        #[spirv(position, invariant)] out_pos: &mut Vec4,
+    ) {
+        *out_pos = vec4(vert_id as f32, 0.0, 0.0, 1.0);
+    }
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(global_invocation_id)] id: UVec3,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] values: &mut [u32],
+    ) {}
+    """
+    result = parse_and_generate(code)
+
+    assert "vertex main_vs {" in result
+    assert "int vert_id @ VertexID" in result
+    assert "vec4 out_pos @ gl_Position" in result
+    assert "compute main_cs {" in result
+    assert "uvec3 id @ gl_GlobalInvocationID" in result
+    assert "uint values[] @ binding(0)" in result
+
+
 def test_rust_shader_stage_local_aliases_shadow_parameter_after_initializer(tmp_path):
     code = """
     #[vertex_shader]

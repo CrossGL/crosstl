@@ -3483,12 +3483,16 @@ class CudaToCrossGLConverter:
 
         if hasattr(node, "functions") and node.functions:
             for func in node.functions:
+                if getattr(func, "body", None) is None:
+                    continue
                 self.emit(f"// Function: {func.name}")
                 self.visit(func)
                 self.emit("")
 
         if hasattr(node, "kernels") and node.kernels:
             for kernel in node.kernels:
+                if getattr(kernel, "body", None) is None:
+                    continue
                 self.emit(f"// Kernel: {kernel.name}")
                 self.visit_kernel_as_compute_shader(kernel)
                 self.emit("")

@@ -64,6 +64,34 @@ class TestCudaParser:
         assert ast.functions[0].name == "add"
         assert "__device__" in ast.functions[0].qualifiers
 
+    def test_void_parameter_list_and_bodyless_prototypes_parsing(self):
+        code = """
+        void runTest(int argc, char **argv);
+        extern "C" bool computeGold(int *gpuData, const int len);
+
+        int main(void) {
+            const unsigned blocks = 512;
+            return 0;
+        }
+
+        void runTest(int argc, char **argv) {
+            return;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.functions[0].name == "runTest"
+        assert ast.functions[0].body is None
+        assert ast.functions[1].name == "computeGold"
+        assert ast.functions[1].body is None
+        assert ast.functions[2].name == "main"
+        assert ast.functions[2].params == []
+        assert ast.functions[2].body[0].vtype == "const unsigned int"
+        assert ast.functions[3].body is not None
+
     def test_shared_memory_parsing(self):
         code = """
         __global__ void kernel() {
@@ -183,6 +211,27 @@ class TestCudaParser:
         assert launch.shared_mem is None
         assert launch.stream is None
         assert launch.args == ["data", "2.0f"]
+
+    def test_template_identifier_c_style_cast_parsing(self):
+        code = """
+        template <class T>
+        __global__ void kernel(T* out, unsigned int num_threads) {
+            out[threadIdx.x] = (T)num_threads;
+            out = (T *)malloc(num_threads);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assignment = ast.kernels[0].body[0]
+        assert isinstance(assignment.right, CastNode)
+        assert assignment.right.target_type == "T"
+        assert assignment.right.expression == "num_threads"
+        allocation = ast.kernels[0].body[1]
+        assert isinstance(allocation.right, CastNode)
+        assert allocation.right.target_type == "T *"
 
     def test_computed_kernel_launch_config_parsing(self):
         code = """

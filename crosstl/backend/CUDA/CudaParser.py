@@ -43,7 +43,7 @@ class CudaParser:
     """Parse CUDA tokens into the CUDA backend shader AST."""
 
     TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "UNSIGNED", "SIGNED", "RESTRICT"}
-    POSTFIX_TYPE_QUALIFIER_TOKENS = {"RESTRICT"}
+    POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "RESTRICT"}
     TYPE_REFERENCE_TOKENS = {"BITWISE_AND", "LOGICAL_AND"}
     CPP_NAMED_CASTS = {"static_cast", "reinterpret_cast", "const_cast", "dynamic_cast"}
     ATOMIC_FUNCTION_TOKENS = {
@@ -93,12 +93,11 @@ class CudaParser:
         "VOLATILE",
         "STATIC",
         "EXTERN",
+        "CONSTEXPR",
         "SHARED",
         "CONSTANT",
         "DEVICE",
         "MANAGED",
-        "UNSIGNED",
-        "SIGNED",
     }
     FUNCTION_SPECIFIER_TOKENS = {
         "GLOBAL",
@@ -107,6 +106,7 @@ class CudaParser:
         "INLINE",
         "STATIC",
         "EXTERN",
+        "CONSTEXPR",
         "FORCEINLINE",
         "NOINLINE",
     }
@@ -214,6 +214,13 @@ class CudaParser:
             index < len(self.tokens)
             and self.tokens[index][0] in self.FUNCTION_SPECIFIER_TOKENS
         ):
+            if (
+                self.tokens[index][0] == "EXTERN"
+                and index + 1 < len(self.tokens)
+                and self.tokens[index + 1][0] == "STRING"
+            ):
+                index += 2
+                continue
             index += 1
 
         while (
@@ -281,6 +288,13 @@ class CudaParser:
             saved_index < len(self.tokens)
             and self.tokens[saved_index][0] in self.FUNCTION_SPECIFIER_TOKENS
         ):
+            if (
+                self.tokens[saved_index][0] == "EXTERN"
+                and saved_index + 1 < len(self.tokens)
+                and self.tokens[saved_index + 1][0] == "STRING"
+            ):
+                saved_index += 2
+                continue
             saved_index += 1
 
         while (
@@ -332,20 +346,30 @@ class CudaParser:
         return False
 
     def skip_type_at_index(self, index):
+        saw_integral_sign = False
         while (
             index < len(self.tokens)
             and self.tokens[index][0] in self.TYPE_QUALIFIER_TOKENS
         ):
+            if self.tokens[index][0] in {"SIGNED", "UNSIGNED"}:
+                saw_integral_sign = True
             index += 1
 
-        if index >= len(self.tokens) or self.tokens[index][0] not in self.TYPE_TOKENS:
+        if index >= len(self.tokens):
             return None
 
-        type_token = self.tokens[index][0]
-        type_value = self.tokens[index][1]
+        if self.is_implicit_int_type_at_index(index, saw_integral_sign):
+            type_token = "INT"
+            type_value = "int"
+        elif self.tokens[index][0] in self.TYPE_TOKENS:
+            type_token = self.tokens[index][0]
+            type_value = self.tokens[index][1]
+            index += 1
+            index = self.skip_long_long_suffix_at_index(index, type_token)
+        else:
+            return None
+
         has_qualified_suffix = False
-        index += 1
-        index = self.skip_long_long_suffix_at_index(index, type_token)
 
         while (
             index + 1 < len(self.tokens)
@@ -377,6 +401,27 @@ class CudaParser:
             index = self.skip_postfix_type_qualifiers_at_index(index)
 
         return self.skip_array_suffix_at_index(index)
+
+    def is_implicit_int_type_at_index(self, index, saw_integral_sign):
+        if not saw_integral_sign or index >= len(self.tokens):
+            return False
+
+        token_type = self.tokens[index][0]
+        if token_type in {"MULTIPLY", *self.TYPE_REFERENCE_TOKENS}:
+            return True
+
+        if token_type != "IDENTIFIER":
+            return False
+
+        next_type = self.tokens[index + 1][0] if index + 1 < len(self.tokens) else "EOF"
+        return next_type in {
+            "SEMICOLON",
+            "ASSIGN",
+            "LBRACKET",
+            "LPAREN",
+            "LBRACE",
+            "COMMA",
+        }
 
     def skip_long_long_suffix_at_index(self, index, type_token):
         if (
@@ -550,12 +595,21 @@ class CudaParser:
         while self.current_token[0] in self.FUNCTION_SPECIFIER_TOKENS:
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
+            if qualifiers[-1] == "extern" and self.current_token[0] == "STRING":
+                qualifiers.append(self.current_token[1])
+                self.eat("STRING")
 
         return_type = self.parse_type()
         name = self.consume_function_name()
         self.user_function_names.add(name)
         params = self.parse_parameters()
-        body = self.parse_block()
+        body = None
+        if self.current_token[0] == "LBRACE":
+            body = self.parse_block()
+        elif self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+        else:
+            self.eat("LBRACE")
 
         if "__global__" in qualifiers:
             return KernelNode(return_type, name, params, body)
@@ -565,6 +619,15 @@ class CudaParser:
     def parse_parameters(self):
         self.eat("LPAREN")
         params = []
+
+        if (
+            self.current_token[0] == "VOID"
+            and self.current_index + 1 < len(self.tokens)
+            and self.tokens[self.current_index + 1][0] == "RPAREN"
+        ):
+            self.eat("VOID")
+            self.eat("RPAREN")
+            return params
 
         if self.current_token[0] != "RPAREN":
             params.append(self.parse_parameter())
@@ -584,12 +647,17 @@ class CudaParser:
 
     def parse_type(self):
         type_parts = []
+        saw_integral_sign = False
 
         while self.current_token[0] in self.TYPE_QUALIFIER_TOKENS:
+            if self.current_token[0] in {"SIGNED", "UNSIGNED"}:
+                saw_integral_sign = True
             type_parts.append(self.current_token[1])
             self.eat(self.current_token[0])
 
-        if self.current_token[0] in self.TYPE_TOKENS:
+        if self.is_implicit_int_current_type(saw_integral_sign):
+            type_parts.append("int")
+        elif self.current_token[0] in self.TYPE_TOKENS:
             type_parts.append(self.parse_type_name())
 
         self.parse_postfix_type_qualifiers(type_parts)
@@ -616,12 +684,17 @@ class CudaParser:
 
     def parse_type_without_array_suffix(self):
         type_parts = []
+        saw_integral_sign = False
 
         while self.current_token[0] in self.TYPE_QUALIFIER_TOKENS:
+            if self.current_token[0] in {"SIGNED", "UNSIGNED"}:
+                saw_integral_sign = True
             type_parts.append(self.current_token[1])
             self.eat(self.current_token[0])
 
-        if self.current_token[0] in self.TYPE_TOKENS:
+        if self.is_implicit_int_current_type(saw_integral_sign):
+            type_parts.append("int")
+        elif self.current_token[0] in self.TYPE_TOKENS:
             type_parts.append(self.parse_type_name())
 
         self.parse_postfix_type_qualifiers(type_parts)
@@ -636,6 +709,9 @@ class CudaParser:
             self.parse_postfix_type_qualifiers(type_parts)
 
         return " ".join(type_parts)
+
+    def is_implicit_int_current_type(self, saw_integral_sign):
+        return self.is_implicit_int_type_at_index(self.current_index, saw_integral_sign)
 
     def parse_postfix_type_qualifiers(self, type_parts):
         while self.current_token[0] in self.POSTFIX_TYPE_QUALIFIER_TOKENS:
@@ -2004,6 +2080,7 @@ class CudaParser:
             if self.current_token[0] not in self.TYPE_TOKENS or (
                 self.current_token[0] == "IDENTIFIER"
                 and not self.is_identifier_type_name(self.current_token[1])
+                and not self.is_identifier_cast_target_at_current_index()
             ):
                 return False
 
@@ -2024,6 +2101,52 @@ class CudaParser:
         finally:
             self.current_index = saved_index
             self.current_token = self.tokens[self.current_index]
+
+    def is_identifier_cast_target_at_current_index(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+
+        close_index = self.current_index + 1
+        while close_index < len(self.tokens) and self.tokens[close_index][0] in {
+            "MULTIPLY",
+            *self.TYPE_REFERENCE_TOKENS,
+            *self.POSTFIX_TYPE_QUALIFIER_TOKENS,
+        }:
+            close_index += 1
+
+        if close_index >= len(self.tokens) or self.tokens[close_index][0] != "RPAREN":
+            return False
+
+        operand_index = close_index + 1
+        if operand_index >= len(self.tokens):
+            return False
+
+        return self.tokens[operand_index][0] in {
+            "IDENTIFIER",
+            "NUMBER",
+            "STRING",
+            "CHAR_LIT",
+            "TRUE",
+            "FALSE",
+            "NULL",
+            "NULLPTR",
+            "LPAREN",
+            "LBRACKET",
+            "PLUS",
+            "MINUS",
+            "LOGICAL_NOT",
+            "BITWISE_NOT",
+            "MULTIPLY",
+            "BITWISE_AND",
+            "INCREMENT",
+            "DECREMENT",
+            *self.ATOMIC_FUNCTION_TOKENS,
+            "THREADIDX",
+            "BLOCKIDX",
+            "GRIDDIM",
+            "BLOCKDIM",
+            "WARPSIZE",
+        }
 
     def expression_to_text(self, expr):
         if isinstance(expr, str):

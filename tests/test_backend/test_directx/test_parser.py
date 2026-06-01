@@ -4,6 +4,7 @@ import pytest
 
 from crosstl.backend.common_ast import (
     FunctionCallNode,
+    InitializerListNode,
     MemberAccessNode,
     TextureSampleNode,
 )
@@ -212,6 +213,39 @@ def iter_ast_nodes(node):
 
 def test_parse_vertex_pixel_shader():
     assert_parses(VERTEX_PIXEL_HLSL)
+
+
+def test_parse_brace_initializer_declarations():
+    ast = parse_code(textwrap.dedent("""
+            struct MyPayload {
+                int val;
+            };
+
+            struct RayDesc {
+                float3 Origin;
+                float TMin;
+                float3 Direction;
+                float TMax;
+            };
+
+            void RayGen() {
+                float3 origin = float3(0.0, 0.0, 0.0);
+                float3 rayDir = float3(0.0, 0.0, 1.0);
+                RayDesc myRay = { origin, 0.0f, rayDir, 10000.0f };
+                MyPayload payload = { 0 };
+            }
+            """))
+
+    raygen = next(function for function in ast.functions if function.name == "RayGen")
+    my_ray = next(stmt for stmt in raygen.body if getattr(stmt, "name", "") == "myRay")
+    payload = next(
+        stmt for stmt in raygen.body if getattr(stmt, "name", "") == "payload"
+    )
+
+    assert isinstance(my_ray.value, InitializerListNode)
+    assert len(my_ray.value.elements) == 4
+    assert isinstance(payload.value, InitializerListNode)
+    assert payload.value.elements == [0]
 
 
 def test_parse_control_flow_and_operators():

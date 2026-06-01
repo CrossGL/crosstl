@@ -62,6 +62,26 @@ class TestCudaCodeGen:
         assert "return (a + b);" in result
         assert "out[0] = add(1.0f, 2.0f);" in result
 
+    def test_bodyless_prototypes_are_not_emitted(self):
+        code = """
+        void declared(int value);
+
+        int main(void) {
+            return 0;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Function: declared" not in result
+        assert "declared(" not in result
+        assert "i32 main() {" in result
+
     def test_multiple_kernels_conversion(self):
         code = """
         __global__ void kernel1(float* data) {

@@ -509,6 +509,7 @@ def test_numeric_literals_tokenization():
         let octal_suffix = 0o77usize;
         let grouped_float = 1_000.5f32;
         let exponent_suffix = 1.0e-3f32;
+        let separated_suffix = 1_f32;
     }
     """
     try:
@@ -530,6 +531,7 @@ def test_numeric_literals_tokenization():
         assert (
             "1.0e-3f32" in numbers
         ), "Suffixed exponent literal not tokenized correctly"
+        assert "1_f32" in numbers, "Separated suffix literal not tokenized correctly"
     except SyntaxError:
         pytest.fail("Numeric literals tokenization not implemented.")
 

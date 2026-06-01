@@ -269,6 +269,24 @@ def test_translate_api_rejects_binary_spv_source_with_clear_error(tmp_path):
         crosstl.translate(str(shader_path), backend="rust", format_output=False)
 
 
+def test_translate_api_rejects_spirv_assembly_with_clear_error(tmp_path):
+    import crosstl
+
+    shader_path = tmp_path / "fragment.spvasm"
+    shader_path.write_text(
+        """
+        ; Minimal syntax from Khronos SPIRV-Tools test/diff/diff_files/basic_src.spvasm.
+        OpCapability Shader
+        OpMemoryModel Logical GLSL450
+        OpEntryPoint Vertex %22 "main"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SyntaxError, match="SPIR-V assembly input is not supported"):
+        crosstl.translate(str(shader_path), backend="cgl", format_output=False)
+
+
 def test_vulkan_layout_blocks_emit_crossgl_resources():
     tokens = tokenize_code(LAYOUT_SHADER)
     ast = parse_code(tokens)

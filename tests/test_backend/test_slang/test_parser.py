@@ -10,6 +10,7 @@ from crosstl.backend.slang.SlangAst import (
     BreakNode,
     CallNode,
     CaseNode,
+    CastNode,
     ContinueNode,
     DiscardNode,
     DoWhileNode,
@@ -1211,6 +1212,77 @@ def test_numeric_literal_parsing():
         "0xffu",
         "123u",
     ]
+
+
+def test_generic_struct_member_and_uniform_parameters_from_official_sample():
+    code = """
+    static const uint THREADGROUP_SIZE_X = 8;
+    static const uint THREADGROUP_SIZE_Y = THREADGROUP_SIZE_X;
+
+    struct ImageProcessingOptions
+    {
+        float3 tintColor;
+        float blurRadius;
+        bool useLookupTable;
+        StructuredBuffer<float4> lookupTable;
+    }
+
+    [shader("compute")]
+    [numthreads(THREADGROUP_SIZE_X, THREADGROUP_SIZE_Y)]
+    void processImage(
+        uint3 threadID : SV_DispatchThreadID,
+        uniform Texture2D inputImage,
+        uniform RWTexture2D outputImage,
+        uniform ImageProcessingOptions options)
+    {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    options = ast.structs[0]
+    process_image = find_function(ast, "processImage")
+
+    assert options.members[-1].vtype == "StructuredBuffer<float4>"
+    assert options.members[-1].name == "lookupTable"
+    params = [
+        (param.qualifiers, param.vtype, param.name) for param in process_image.params
+    ]
+    assert params == [
+        ([], "uint3", "threadID"),
+        (["uniform"], "Texture2D", "inputImage"),
+        (["uniform"], "RWTexture2D", "outputImage"),
+        (["uniform"], "ImageProcessingOptions", "options"),
+    ]
+
+
+def test_c_style_scalar_cast_from_official_select_expr_sample():
+    code = """
+    int test(int input)
+    {
+        return input > 1 ? -input : input;
+    }
+
+    RWStructuredBuffer<int> outputBuffer;
+
+    [numthreads(4, 1, 1)]
+    void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+    {
+        outputBuffer[dispatchThreadID.x] = test((int) dispatchThreadID.x);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    compute_main = find_function(ast, "computeMain")
+    assignment = compute_main.body[0]
+    call = assignment.right
+    cast = call.args[0]
+
+    assert isinstance(cast, CastNode)
+    assert cast.target_type == "int"
+    assert isinstance(cast.expression, MemberAccessNode)
+    assert cast.expression.member == "x"
 
 
 if __name__ == "__main__":

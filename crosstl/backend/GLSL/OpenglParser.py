@@ -514,6 +514,7 @@ class GLSLParser:
         self.eat("STRUCT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        self.skip_newlines()
         self.eat("LBRACE")
 
         members = []
@@ -551,6 +552,7 @@ class GLSLParser:
             )
 
         self.eat("RBRACE")
+        self.skip_newlines()
 
         variables = []
         if self.current_token[0] == "IDENTIFIER":
@@ -722,6 +724,20 @@ class GLSLParser:
                 statements.append(stmt)
         return statements
 
+    def parse_statement_or_block(self):
+        self.skip_newlines()
+        if self.current_token[0] == "LBRACE":
+            self.eat("LBRACE")
+            body = self.parse_block()
+            self.eat("RBRACE")
+            return body
+        stmt = self.parse_statement()
+        if stmt is None:
+            return []
+        if isinstance(stmt, list):
+            return stmt
+        return [stmt]
+
     def parse_statement(self):
         self.skip_newlines()
         if self.current_token[0] in ("RBRACE", "EOF"):
@@ -793,33 +809,25 @@ class GLSLParser:
         self.eat("LPAREN")
         condition = self.parse_expression()
         self.eat("RPAREN")
-        self.skip_newlines()
-        self.eat("LBRACE")
-        if_body = self.parse_block()
-        self.eat("RBRACE")
+        if_body = self.parse_statement_or_block()
         self.skip_newlines()
 
         else_body = None
         else_if_chain = []
-        while self.current_token[0] == "ELSE" and self.peek(1)[0] == "IF":
+        while self.current_token[0] == "ELSE" and self.peek_non_newline()[0] == "IF":
             self.eat("ELSE")
+            self.skip_newlines()
             self.eat("IF")
             self.eat("LPAREN")
             else_if_condition = self.parse_expression()
             self.eat("RPAREN")
-            self.skip_newlines()
-            self.eat("LBRACE")
-            else_if_body = self.parse_block()
-            self.eat("RBRACE")
+            else_if_body = self.parse_statement_or_block()
             else_if_chain.append((else_if_condition, else_if_body))
             self.skip_newlines()
 
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
-            self.skip_newlines()
-            self.eat("LBRACE")
-            else_body = self.parse_block()
-            self.eat("RBRACE")
+            else_body = self.parse_statement_or_block()
 
         node = IfNode(condition, if_body, else_body)
         if else_if_chain:
@@ -867,10 +875,7 @@ class GLSLParser:
                 update = AssignmentNode(update, right, op)
         self.eat("RPAREN")
 
-        self.skip_newlines()
-        self.eat("LBRACE")
-        body = self.parse_block()
-        self.eat("RBRACE")
+        body = self.parse_statement_or_block()
 
         return ForNode(init, condition, update, body)
 
@@ -879,10 +884,7 @@ class GLSLParser:
         self.eat("LPAREN")
         condition = self.parse_expression()
         self.eat("RPAREN")
-        self.skip_newlines()
-        self.eat("LBRACE")
-        body = self.parse_block()
-        self.eat("RBRACE")
+        body = self.parse_statement_or_block()
         return WhileNode(condition, body)
 
     def parse_do_while_loop(self):

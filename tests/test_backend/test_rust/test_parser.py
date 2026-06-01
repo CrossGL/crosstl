@@ -530,6 +530,42 @@ def test_cfg_attributes_preserved_on_use_and_function_items():
     assert function.attributes[0].args == ["target_os", "=", '"unknown"']
 
 
+def test_inner_and_nested_spirv_attributes_parse_from_rust_gpu_style_source():
+    code = """
+    #![cfg_attr(target_arch = "spirv", no_std)]
+    #![deny(warnings)]
+
+    use core::f32::consts::PI;
+    use spirv_std::spirv;
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] values: &mut [u32],
+    ) {
+        let scale = PI as f32;
+        values[0] = values[0] + scale as u32;
+    }
+    """
+    ast = parse_code(code)
+
+    assert [use.path for use in ast.use_statements] == [
+        "core::f32::consts::PI",
+        "spirv_std::spirv",
+    ]
+    function = ast.functions[0]
+    assert function.name == "main_cs"
+    assert function.attributes[0].name == "spirv"
+    assert function.params[0].attributes[0].args == [
+        "storage_buffer",
+        "descriptor_set",
+        "=",
+        "0",
+        "binding",
+        "=",
+        "0",
+    ]
+
+
 def test_restricted_visibility_parsing():
     code = """
     #[inline]

@@ -211,6 +211,8 @@ class MojoToCrossGLConverter:
 
         if hasattr(ast, "functions"):
             functions = [f for f in ast.functions if isinstance(f, FunctionNode)]
+            for struct_node in [f for f in ast.functions if isinstance(f, StructNode)]:
+                functions.extend(getattr(struct_node, "methods", []))
             for class_node in [f for f in ast.functions if isinstance(f, ClassNode)]:
                 functions.extend(getattr(class_node, "methods", []))
             for func in functions:
@@ -260,6 +262,9 @@ class MojoToCrossGLConverter:
         for node in getattr(ast, "functions", []):
             if isinstance(node, FunctionNode):
                 record(node)
+            elif isinstance(node, StructNode):
+                for method in getattr(node, "methods", []):
+                    record(method)
             elif isinstance(node, ClassNode):
                 for method in getattr(node, "methods", []):
                     record(method)
@@ -433,6 +438,8 @@ class MojoToCrossGLConverter:
                     code += self.generate_range_for_loop(stmt, indent)
                 elif isinstance(stmt, WhileNode):
                     code += self.generate_while_loop(stmt, indent)
+                elif isinstance(stmt, WithNode):
+                    code += self.generate_with_block(stmt, indent)
                 elif isinstance(stmt, IfNode):
                     code += self.generate_if_statement(stmt, indent)
                 elif isinstance(stmt, SwitchNode):
@@ -487,6 +494,16 @@ class MojoToCrossGLConverter:
 
         code = f"for ({init}; {condition}; {update}) {{\n"
         if hasattr(node, "body") and node.body:
+            code += self.generate_function_body(node.body, indent + 1)
+        code += indent_str + "}\n"
+        return code
+
+    def generate_with_block(self, node, indent):
+        indent_str = "    " * indent
+        context = self.generate_expression(node.context_expr)
+        alias = f" as {node.alias}" if node.alias else ""
+        code = f"{{ // with {context}{alias}\n"
+        if getattr(node, "body", None):
             code += self.generate_function_body(node.body, indent + 1)
         code += indent_str + "}\n"
         return code
@@ -673,6 +690,9 @@ class MojoToCrossGLConverter:
                 return expr.name
         elif isinstance(expr, VariableDeclarationNode):
             return self.generate_variable_declaration(expr)
+        elif isinstance(expr, TupleNode):
+            elements = ", ".join(self.generate_expression(e) for e in expr.elements)
+            return f"({elements})"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, BinaryOpNode):

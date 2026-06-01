@@ -12,6 +12,7 @@ from crosstl.backend.Mojo.MojoAst import (
     ConstantBufferNode,
     ContinueNode,
     ForNode,
+    FunctionCallNode,
     FunctionNode,
     IfNode,
     MemberAccessNode,
@@ -20,10 +21,12 @@ from crosstl.backend.Mojo.MojoAst import (
     ReturnNode,
     SwitchNode,
     TernaryOpNode,
+    TupleNode,
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
     WhileNode,
+    WithNode,
 )
 from crosstl.backend.Mojo.MojoLexer import MojoLexer
 from crosstl.backend.Mojo.MojoParser import MojoParser
@@ -917,6 +920,80 @@ def test_function_with_parameters_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Function with parameters parsing not implemented.")
+
+
+def test_function_parameters_allow_trailing_comma():
+    code = """
+    def add_10(
+        output: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+        a: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    ):
+        output[0] = a[0] + 10.0
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "add_10")
+
+    assert [param.name for param in function.params] == ["output", "a"]
+    assert function.params[0].vtype == "UnsafePointer[Scalar[dtype], MutAnyOrigin]"
+
+
+def test_comptime_declarations_and_raises_function_parse():
+    code = """
+    comptime SIZE = 4
+    comptime dtype = DType.float32
+    comptime THREADS_PER_BLOCK = (3, 3)
+
+    def main() raises:
+        comptime BLOCK_SIZE = 16
+        var value = BLOCK_SIZE
+        with DeviceContext() as ctx:
+            value = value + 1
+        comptime if value > 0:
+            value = value + SIZE
+        else:
+            raise Error("bad value", value)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+
+    assert [node.name for node in ast.global_variables] == [
+        "SIZE",
+        "dtype",
+        "THREADS_PER_BLOCK",
+    ]
+    assert all(getattr(node, "is_comptime", False) for node in ast.global_variables)
+    assert isinstance(ast.global_variables[2].initial_value, TupleNode)
+    assert getattr(function.body[0], "is_comptime", False)
+    assert isinstance(function.body[2], WithNode)
+    assert function.body[2].alias == "ctx"
+    assert isinstance(function.body[3], IfNode)
+    assert isinstance(function.body[3].else_body[0], FunctionCallNode)
+    assert function.body[3].else_body[0].name == "raise"
+
+
+def test_nested_decorator_and_generic_function_signature_parse():
+    code = """
+    @compiler.register("vector_addition")
+    struct VectorAddition:
+        value: Int
+
+    @staticmethod
+    def execute[
+        target: StaticString,
+    ](
+        ctx: DeviceContext,
+    ) raises:
+        @parameter
+        def kernel(length: Int):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = ast.structs[0]
+    function = find_function(ast, "execute")
+
+    assert [attr.name for attr in struct_node.attributes] == ["compiler.register"]
+    assert [attr.name for attr in function.attributes] == ["staticmethod"]
+    assert [attr.name for attr in function.body[0].attributes] == ["parameter"]
 
 
 def test_variable_declarations_parsing():

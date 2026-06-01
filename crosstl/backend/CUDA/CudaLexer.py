@@ -58,6 +58,7 @@ TOKENS = tuple(
         ("TYPENAME", r"\btypename\b"),
         ("EXTERN", r"\bextern\b"),
         ("STATIC", r"\bstatic\b"),
+        ("CONSTEXPR", r"\bconstexpr\b"),
         ("INLINE", r"\binline\b"),
         ("CONST", r"\bconst\b"),
         ("VOLATILE", r"\bvolatile\b"),
@@ -241,6 +242,7 @@ KEYWORDS = {
     "typename": "TYPENAME",
     "extern": "EXTERN",
     "static": "STATIC",
+    "constexpr": "CONSTEXPR",
     "inline": "INLINE",
     "const": "CONST",
     "volatile": "VOLATILE",
@@ -318,6 +320,7 @@ class TokenType(Enum):
     TYPENAME = auto()
     EXTERN = auto()
     STATIC = auto()
+    CONSTEXPR = auto()
     INLINE = auto()
     CONST = auto()
     VOLATILE = auto()

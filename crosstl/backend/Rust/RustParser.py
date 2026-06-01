@@ -77,7 +77,32 @@ class RustParser:
         "OK",
         "ERR",
     }
-    PATH_SEGMENT_TOKENS = NAME_TOKENS | {"CRATE", "SELF", "SUPER"}
+    PRIMITIVE_PATH_SEGMENT_TOKENS = {
+        "F32",
+        "F64",
+        "I32",
+        "I64",
+        "U32",
+        "U64",
+        "I8",
+        "U8",
+        "I16",
+        "U16",
+        "BOOL",
+        "STR",
+        "CHAR",
+        "USIZE",
+        "ISIZE",
+    }
+    PATH_SEGMENT_TOKENS = (
+        NAME_TOKENS
+        | PRIMITIVE_PATH_SEGMENT_TOKENS
+        | {
+            "CRATE",
+            "SELF",
+            "SUPER",
+        }
+    )
     ASSIGNMENT_TOKENS = {
         "EQUALS",
         "PLUS_EQUALS",
@@ -566,6 +591,11 @@ class RustParser:
         attrs = []
         while self.current_token[0] == "POUND":
             self.eat("POUND")
+            if self.current_token[0] == "EXCLAMATION":
+                self.eat("EXCLAMATION")
+                self.skip_attribute()
+                continue
+
             self.eat("LBRACKET")
 
             attr_name = self.current_token[1]
@@ -573,18 +603,51 @@ class RustParser:
 
             attr_args = []
             if self.current_token[0] == "LPAREN":
-                self.eat("LPAREN")
-                while self.current_token[0] != "RPAREN":
-                    attr_args.append(self.current_token[1])
-                    self.eat(self.current_token[0])
-                    if self.current_token[0] == "COMMA":
-                        self.eat("COMMA")
-                self.eat("RPAREN")
+                attr_args = self.parse_attribute_arguments()
 
             self.eat("RBRACKET")
             attrs.append(AttributeNode(attr_name, attr_args))
 
         return attrs
+
+    def skip_attribute(self):
+        self.eat("LBRACKET")
+        depth = 1
+        while depth > 0:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated attribute")
+            if self.current_token[0] == "LBRACKET":
+                depth += 1
+            elif self.current_token[0] == "RBRACKET":
+                depth -= 1
+            self.eat(self.current_token[0])
+
+    def parse_attribute_arguments(self):
+        args = []
+        self.eat("LPAREN")
+        depth = 1
+
+        while depth > 0:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated attribute arguments")
+
+            token_type, token_value = self.current_token
+            if token_type == "LPAREN":
+                args.append(token_value)
+                depth += 1
+                self.eat("LPAREN")
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth > 0:
+                    args.append(token_value)
+                self.eat("RPAREN")
+            elif token_type == "COMMA":
+                self.eat("COMMA")
+            else:
+                args.append(token_value)
+                self.eat(token_type)
+
+        return args
 
     def parse_struct(self, attributes=None, visibility=None):
         self.eat("STRUCT")
@@ -2398,6 +2461,14 @@ class RustParser:
             "OK",
             "ERR",
         ]:
+            name = self.current_token[1]
+            self.eat(self.current_token[0])
+
+            if self.current_token[0] == "DOUBLE_COLON":
+                return self.finish_path_or_call(name)
+
+            return name
+        elif self.current_token[0] in self.PRIMITIVE_PATH_SEGMENT_TOKENS:
             name = self.current_token[1]
             self.eat(self.current_token[0])
 

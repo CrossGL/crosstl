@@ -536,6 +536,9 @@ class SlangToCrossGLConverter:
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             return f"{left} {expr.operator} {right}"
+        elif isinstance(expr, CastNode):
+            value = self.generate_expression(expr.expression, is_main)
+            return f"{self.map_type(expr.target_type)}({value})"
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand, is_main)
             if isinstance(expr.operand, (AssignmentNode, BinaryOpNode)):

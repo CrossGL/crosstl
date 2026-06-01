@@ -107,6 +107,32 @@ class TestHipCodeGen:
         assert "return (a + b);" in result
         assert "out[0] = add(1.0f, 2.0f);" in result
 
+    def test_cpp_qualifiers_convert_without_leaking_to_types(self):
+        code = """
+        __device__ void init_array(float * const a) {
+            return;
+        }
+
+        int main(void) {
+            constexpr unsigned int size = 1;
+            const unsigned blocks = 512;
+            return 0;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "void init_array(ptr<f32> a)" in result
+        assert "i32 main()" in result
+        assert "var size: u32 = 1;" in result
+        assert "var blocks: u32 = 512;" in result
+        assert "constexpr" not in result
+
     def test_multiple_kernels_conversion(self):
         code = """
         __global__ void kernel1() {

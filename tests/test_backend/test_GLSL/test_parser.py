@@ -98,6 +98,26 @@ def test_parse_main_with_void_parameter_list():
     assert main.params == []
 
 
+def test_parse_struct_with_brace_on_next_line():
+    code = textwrap.dedent("""
+        #version 450
+        struct Particle
+        {
+            vec4 pos;
+            vec4 vel;
+        };
+
+        void main()
+        {
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+
+    assert ast.structs[0].name == "Particle"
+    assert [member.name for member in ast.structs[0].members] == ["pos", "vel"]
+
+
 def test_parse_interface_block_with_newline_brace_and_instance():
     code = textwrap.dedent("""
         #version 450
@@ -136,6 +156,31 @@ def test_parse_control_flow_with_brace_on_next_line():
     parse_ok(code, "fragment")
 
 
+def test_parse_single_statement_control_bodies():
+    code = textwrap.dedent("""
+        #version 450
+
+        void main()
+        {
+            int value = 0;
+            if (value == 0)
+                return;
+            else if (value == 1)
+                value = 2;
+            else
+                value = 3;
+
+            for (int i = 0; i < 4; i++)
+                value += i;
+
+            while (value < 8)
+                value++;
+        }
+        """)
+
+    parse_ok(code, "compute")
+
+
 def test_parse_structs_and_arrays():
     code = textwrap.dedent("""
         #version 450 core
@@ -156,6 +201,19 @@ def test_parse_structs_and_arrays():
         }
     """)
     parse_ok(code, "vertex")
+
+
+def test_parse_float_suffix_literals():
+    code = textwrap.dedent("""
+        #version 450
+        void main(void)
+        {
+            float normalLength = 0.1f;
+            vec3 pos = vec3(1.0f, 0.0f, 0.0f) / 3.0f;
+        }
+        """)
+
+    parse_ok(code, "geometry")
 
 
 def test_parse_const_array_initializers():

@@ -86,6 +86,54 @@ class TestHipParser:
         assert loop.init.name == "i"
         assert isinstance(loop.body[0], FunctionCallNode)
 
+    def test_cpp_stream_expression_can_continue_after_newline(self):
+        code = """
+        void host() {
+            constexpr size_t elements_to_print = 10;
+            std::cout << "First " << elements_to_print << " elements: "
+                      << format_range(begin, end) << std::endl;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert isinstance(body[1], BinaryOpNode)
+        assert body[1].op == "<<"
+
+    def test_templated_kernel_launch_can_start_on_next_line(self):
+        code = """
+        template <int width>
+        __global__ void matrix_transpose_kernel(float* out, float* input) {
+        }
+
+        void host(float* out, float* input) {
+            matrix_transpose_kernel<16>
+                <<<grid_dim, block_dim, 0, hipStreamDefault>>>(out, input);
+        }
+        """
+        ast = self.parse_code(code)
+
+        launch = ast.statements[1].body[0]
+        assert isinstance(launch, KernelLaunchNode)
+        assert launch.kernel_name == "matrix_transpose_kernel<16>"
+
+    def test_else_can_follow_block_on_next_line(self):
+        code = """
+        void host(unsigned int errors) {
+            if (errors) {
+                return;
+            }
+            else {
+                report_success();
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        branch = ast.statements[0].body[0]
+        assert isinstance(branch, IfNode)
+        assert branch.else_body
+
     def test_hip_flat_builtin_alias_parsing(self):
         code = """
         __global__ void kernel(float* out) {
@@ -161,6 +209,49 @@ class TestHipParser:
         assert ast.statements[2].params[0]["type"] == "float[4]"
         assert ast.statements[2].body[0].vtype == "float[2]"
         assert isinstance(ast.statements[2].body[0].value, InitializerListNode)
+
+    def test_cpp_function_declarator_spacing_and_qualifiers(self):
+        code = """
+        template <typename T>
+        __global__
+        __launch_bounds__(512, 4)
+        void
+        vector_square(T *C_d, size_t N) {
+            C_d[0] = C_d[0];
+        }
+
+        __device__ void init_array(float * const a, const unsigned int arraySize) {
+            return;
+        }
+
+        __host__ __device__ constexpr int round_up(int number, int multiple) {
+            return number;
+        }
+
+        int main(void) {
+            constexpr unsigned int size = 1;
+            const unsigned blocks = 512;
+            return 0;
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+        init_array = ast.statements[1]
+        round_up = ast.statements[2]
+        main = ast.statements[3]
+
+        assert kernel.name == "vector_square"
+        assert kernel.attributes == ["__launch_bounds__(512, 4)"]
+        assert kernel.params[0]["type"] == "T *"
+        assert init_array.params[0]["type"] == "float * const"
+        assert init_array.params[1]["type"] == "const unsigned int"
+        assert round_up.name == "round_up"
+        assert "constexpr" in round_up.qualifiers
+        assert main.params == []
+        assert main.body[0].vtype == "unsigned int"
+        assert "constexpr" in main.body[0].qualifiers
+        assert main.body[1].vtype == "const unsigned int"
 
     def test_user_defined_atomic_name_is_not_parsed_as_builtin_atomic(self):
         code = """

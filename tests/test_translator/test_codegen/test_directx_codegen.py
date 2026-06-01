@@ -6053,6 +6053,29 @@ def test_directx_ray_tracing_intrinsics_validate_stage_and_arity():
 
 
 def test_directx_ray_tracing_intrinsics_validate_payload_arguments():
+    reverse_imported_trace_ray_code = """
+    shader ReverseImportedTraceRayPayload {
+        accelerationStructure scene @binding(0);
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray = {vec3(0.0), 0.0, vec3(0.0, 0.0, 1.0), 1000.0};
+                RayPayload payload = {vec3(0.0)};
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(reverse_imported_trace_ray_code), "ray_generation"
+    )
+    assert "RaytracingAccelerationStructure scene : register(t0);" in generated
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payload);" in generated
+
     valid_trace_ray_code = """
     shader ValidTraceRayPayload {
         struct RayPayload {

@@ -75,6 +75,28 @@ class VariableDeclarationNode(VariableNode):
         return f"VariableDeclarationNode({keyword} {self.name}: {self.vtype})"
 
 
+class TupleNode(ASTNode):
+    """Node representing a Mojo tuple expression."""
+
+    def __init__(self, elements):
+        self.elements = elements
+
+    def __repr__(self):
+        return f"TupleNode(elements={self.elements})"
+
+
+class WithNode(ASTNode):
+    """Node representing a Mojo with/as block."""
+
+    def __init__(self, context_expr, alias, body):
+        self.context_expr = context_expr
+        self.alias = alias
+        self.body = body
+
+    def __repr__(self):
+        return f"WithNode(alias={self.alias}, body={len(self.body)})"
+
+
 class ImportNode(ASTNode):
     """Node representing an import statement"""
 

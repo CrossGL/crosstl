@@ -8,6 +8,20 @@ from .preprocessor import VulkanPreprocessor
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI", "PREPROCESSOR"}
 
+SPIRV_ASSEMBLY_PATTERN = re.compile(
+    r"(?m)^\s*(?:"
+    r"OpCapability\s+\w+\b"
+    r"|OpMemoryModel\s+\w+\s+\w+\b"
+    r"|OpEntryPoint\s+\w+\s+%[A-Za-z0-9_]+\b"
+    r"|%[A-Za-z0-9_]+\s*=\s*Op[A-Za-z0-9_]+\b"
+    r")"
+)
+
+SPIRV_ASSEMBLY_ERROR = (
+    "SPIR-V assembly input is not supported by the Vulkan backend parser; "
+    "provide Vulkan GLSL-style source instead."
+)
+
 TOKENS = tuple(
     [
         ("COMMENT_SINGLE", r"//.*"),
@@ -309,9 +323,15 @@ class VulkanLexer:
                 max_expansion_depth=max_expansion_depth,
             )
             code = preprocessor.preprocess(code, file_path=file_path)
+        if self._looks_like_spirv_assembly(code):
+            raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
+
+    def _looks_like_spirv_assembly(self, code: str) -> bool:
+        """Return whether ``code`` starts using SPIR-V assembly instructions."""
+        return bool(SPIRV_ASSEMBLY_PATTERN.search(code))
 
     def tokenize(self) -> List[Tuple[str, str]]:
         """Return the full token stream as ``(token_type, text)`` tuples."""

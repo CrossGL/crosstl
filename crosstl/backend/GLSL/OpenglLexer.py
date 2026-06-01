@@ -13,7 +13,7 @@ DECIMAL_FLOAT = r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?"
 DECIMAL_EXP = r"\d+[eE][+-]?\d+"
 DECIMAL_INT = r"\d+"
 NUMBER_PATTERN = (
-    rf"(?:{HEX_NUMBER}|{DECIMAL_FLOAT}|{DECIMAL_EXP}|{DECIMAL_INT})(?:[uU])?"
+    rf"(?:{HEX_NUMBER}|{DECIMAL_FLOAT}|{DECIMAL_EXP}|{DECIMAL_INT})(?:[fFuU])?"
 )
 
 # Order matters: longer tokens first

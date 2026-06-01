@@ -718,6 +718,8 @@ class HLSLCodeGen:
             "feedbackTexture2DArray": (
                 "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIN_MIP>"
             ),
+            "accelerationStructure": "RaytracingAccelerationStructure",
+            "accelerationStructureEXT": "RaytracingAccelerationStructure",
             "iimage1D": "RWTexture1D<int>",
             "iimage1DArray": "RWTexture1DArray<int>",
             "iimage2D": "RWTexture2D<int>",

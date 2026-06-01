@@ -81,6 +81,21 @@ def test_struct_generic_member_codegen():
     assert "InlineArray[SIMD[DType.float32, 4], 2] samples;" in generated_code
 
 
+def test_struct_method_codegen_preserves_method_body():
+    code = """
+    struct VectorAddition:
+        @staticmethod
+        def execute(ctx: DeviceContext) raises:
+            raise Error("No known target")
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "struct VectorAddition" in generated_code
+    assert "void execute(DeviceContext ctx)" in generated_code
+    assert 'raise(Error("No known target"));' in generated_code
+
+
 def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     code = """
     struct Resources {

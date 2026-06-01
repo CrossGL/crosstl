@@ -5,6 +5,7 @@ from ..common_ast import (
     BreakNode,
     CastNode,
     ContinueNode,
+    InitializerListNode,
     TextureSampleNode,
 )
 from .DirectxAst import *
@@ -1110,7 +1111,30 @@ class HLSLToCrossGLConverter:
                 rendered.append(f"@ {attr_name}")
         return " ".join(rendered)
 
-    def format_parameter(self, parameter):
+    def infer_ray_parameter_semantic(self, function_qualifier, parameter, index):
+        if getattr(parameter, "semantic", None):
+            return parameter.semantic
+
+        qualifier = str(function_qualifier or "").lower()
+        if qualifier == "ray_miss" and index == 0:
+            return "payload"
+        if qualifier in {"ray_closest_hit", "ray_any_hit"}:
+            if (
+                str(getattr(parameter, "vtype", ""))
+                == "BuiltInTriangleIntersectionAttributes"
+            ):
+                return "hit_attribute"
+            if index == 0:
+                return "payload"
+            if index == 1:
+                return "hit_attribute"
+        if qualifier == "ray_callable" and index == 0:
+            return "callable_data"
+        return None
+
+    def format_parameter(
+        self, parameter, function_qualifier=None, parameter_index=None
+    ):
         prefixes = []
         attributes = self.format_inline_parameter_attributes(parameter)
         if attributes:
@@ -1124,7 +1148,11 @@ class HLSLToCrossGLConverter:
             f"{self.map_variable_type(parameter)} {parameter.name}"
             f"{self.format_array_suffixes(parameter)}"
         )
-        semantic = self.map_semantic(parameter.semantic)
+        semantic = self.map_semantic(
+            self.infer_ray_parameter_semantic(
+                function_qualifier, parameter, parameter_index
+            )
+        )
         if semantic:
             parameter_text += f" {semantic}"
         prefixes.append(parameter_text)
@@ -1960,7 +1988,12 @@ class HLSLToCrossGLConverter:
             if stage_name:
                 code += f"    // {stage_name} Shader\n"
                 code += f"    {stage_name} {{\n"
-                code += self.generate_function(func, skip_attribute_names={"shader"})
+                entry_name = "main" if stage_name.startswith("ray_") else None
+                code += self.generate_function(
+                    func,
+                    skip_attribute_names={"shader"},
+                    entry_name=entry_name,
+                )
                 code += "    }\n\n"
             else:
                 code += self.generate_function(func)
@@ -1983,7 +2016,9 @@ class HLSLToCrossGLConverter:
                 code += "    }\n"
         return code
 
-    def generate_function(self, func, indent=1, skip_attribute_names=None):
+    def generate_function(
+        self, func, indent=1, skip_attribute_names=None, entry_name=None
+    ):
         """Render one HLSL function node as a CrossGL function block."""
         code = self.format_attributes(
             getattr(func, "attributes", []), indent, skip_attribute_names
@@ -1995,11 +2030,17 @@ class HLSLToCrossGLConverter:
         self.current_resource_array_dims = dict(self.global_resource_array_dims)
         for param in func.params:
             self.record_variable_type(param)
-        params = ", ".join(self.format_parameter(p) for p in func.params)
+        qualifier = getattr(func, "qualifier", None)
+        params = ", ".join(
+            self.format_parameter(p, qualifier, index)
+            for index, p in enumerate(func.params)
+        )
         semantic = self.map_semantic(func.semantic)
         semantic = f" {semantic}" if semantic else ""
+        function_name = entry_name or func.name
         code += (
-            f"{self.map_type(func.return_type)} {func.name}({params}){semantic} {{\n"
+            f"{self.map_type(func.return_type)} "
+            f"{function_name}({params}){semantic} {{\n"
         )
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    " * indent + "}\n\n"
@@ -2526,6 +2567,11 @@ class HLSLToCrossGLConverter:
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             return f"{self.map_type(expr.type_name)}({args})"
+        elif isinstance(expr, InitializerListNode):
+            elements = ", ".join(
+                self.generate_expression(element, is_main) for element in expr.elements
+            )
+            return f"{{{elements}}}"
         elif isinstance(expr, bool):
             return "true" if expr else "false"
         elif isinstance(expr, float):
