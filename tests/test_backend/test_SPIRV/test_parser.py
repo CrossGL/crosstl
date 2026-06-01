@@ -1077,6 +1077,24 @@ def test_compute_local_size_layout_parsing():
     assert layout.variable_name is None
 
 
+def test_fragment_early_tests_layout_parsing():
+    code = """
+    layout(early_fragment_tests) in;
+    void main() {
+        gl_FragColor = vec4(1.0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert isinstance(layout, LayoutNode)
+    assert layout.qualifiers == [("early_fragment_tests", None)]
+    assert layout.layout_type == "IN"
+    assert layout.data_type is None
+    assert layout.variable_name is None
+
+
 def test_standalone_postfix_update_parsing():
     code = """
     void main() {

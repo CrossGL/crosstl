@@ -1332,6 +1332,8 @@ class RustParser:
             return False
         if current in {">", ">>", "]", ")", ",", "::", "<", "[", "(", ":"}:
             return False
+        if previous.isdigit() and current == "D":
+            return False
         if previous in {":", "+", "=", "->", "=>"}:
             return True
         if current in {"+", "=", "->", "=>"}:

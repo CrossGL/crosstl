@@ -189,6 +189,23 @@ def test_rust_gpu_image_macro_types_drive_resource_parameters():
     assert "sampler2D direct_tex @ binding(2)" in result
 
 
+def test_rust_gpu_sampled_image_generic_type_drives_resource_parameter():
+    code = """
+    use spirv_std::{spirv, Image};
+    use spirv_std::image::SampledImage;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(descriptor_set = 0, binding = 0)] tex: &SampledImage<Image!(2D, type=f32, sampled)>,
+    ) {}
+    """
+    result = parse_and_generate(code)
+
+    assert "fragment main_fs {" in result
+    assert "sampler2D tex @ binding(0)" in result
+    assert "void main(SampledImage" not in result
+
+
 def test_rust_gpu_builtin_spirv_aliases_drive_parameter_semantics():
     code = """
     use spirv_std::spirv;

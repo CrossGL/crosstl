@@ -8503,6 +8503,9 @@ class RustToCrossGLConverter:
         if not args:
             return None
 
+        if base_name == "SampledImage":
+            return self.map_sampled_image_generic_type(args[0])
+
         sampled_texture_map = {
             "Texture1D": "sampler1D",
             "Texture1DArray": "sampler1DArray",
@@ -8555,6 +8558,39 @@ class RustToCrossGLConverter:
         if element_type.startswith("i"):
             return f"iimage{suffix}"
         return f"image{suffix}"
+
+    def map_sampled_image_generic_type(self, image_type):
+        image_config = self.parse_image_macro_type(image_type)
+        if image_config is not None:
+            suffix = self.image_macro_dimension_suffix(image_config)
+            if suffix is None:
+                return None
+
+            prefix = self.image_macro_sampler_prefix(image_config)
+            if image_config["depth"] is True:
+                return f"{prefix}{suffix}Shadow"
+            return f"{prefix}{suffix}"
+
+        mapped_image_type = self.map_type(image_type)
+        sampler_type = self.sampled_image_type_from_mapped_image(mapped_image_type)
+        if sampler_type is not None:
+            return sampler_type
+
+        return None
+
+    def sampled_image_type_from_mapped_image(self, mapped_image_type):
+        if not isinstance(mapped_image_type, str):
+            return None
+
+        if mapped_image_type.startswith("sampler"):
+            return mapped_image_type
+        if mapped_image_type.startswith("uimage"):
+            return f"usampler{mapped_image_type[len('uimage') :]}"
+        if mapped_image_type.startswith("iimage"):
+            return f"isampler{mapped_image_type[len('iimage') :]}"
+        if mapped_image_type.startswith("image"):
+            return f"sampler{mapped_image_type[len('image') :]}"
+        return None
 
     def map_image_macro_type(self, rust_type):
         image_config = self.parse_image_macro_type(rust_type)

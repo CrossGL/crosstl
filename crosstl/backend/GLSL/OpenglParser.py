@@ -259,6 +259,7 @@ class GLSLParser:
             layout = None
             if self.current_token[0] == "LAYOUT":
                 layout = self.parse_layout_qualifier()
+                self.skip_newlines()
 
             qualifiers = self.parse_qualifiers()
 

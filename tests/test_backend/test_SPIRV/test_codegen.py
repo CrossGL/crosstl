@@ -465,6 +465,24 @@ def test_vulkan_compute_local_size_layout_codegen():
     assert "fragment {" not in generated_code
 
 
+def test_vulkan_fragment_early_tests_layout_codegen():
+    code = """
+    layout(early_fragment_tests) in;
+    void main() {
+        gl_FragColor = vec4(1.0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fragment {" in generated_code
+    assert "layout(early_fragment_tests) in;" in generated_code
+    assert generated_code.index("layout(early_fragment_tests) in;") < (
+        generated_code.index("void main()")
+    )
+
+
 def test_vulkan_specialization_constant_layout_codegen():
     code = """
     layout(constant_id = 0) const uint a = 1;

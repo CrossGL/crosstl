@@ -296,6 +296,29 @@ def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
     assert "cbuffer Uniforms" not in crossgl
 
 
+def test_codegen_vulkan_subpass_inputs_are_resources():
+    code = textwrap.dedent("""
+        #version 450
+        layout(input_attachment_index = 0, set = 0, binding = 0)
+        uniform subpassInput colorInput;
+        layout(input_attachment_index = 1, set = 0, binding = 1)
+        uniform usubpassInputMS idInput;
+        layout(location = 0) out vec4 outColor;
+
+        void main() {
+            outColor = subpassLoad(colorInput) + vec4(subpassLoad(idInput, 0));
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "subpassInput colorInput @binding(0) @input_attachment_index(0);" in crossgl
+    assert "usubpassInputMS idInput @binding(1) @input_attachment_index(1);" in crossgl
+    assert "subpassLoad(colorInput)" in crossgl
+    assert "subpassLoad(idInput, 0)" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+
+
 def test_codegen_comma_separated_for_updates():
     code = textwrap.dedent("""
         #version 460

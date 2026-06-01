@@ -673,6 +673,31 @@ def test_parse_subroutine_declaration():
     parse_ok(code, "fragment")
 
 
+def test_parse_vulkan_subpass_input_uniforms():
+    code = textwrap.dedent("""
+        #version 450
+        layout(input_attachment_index = 0, set = 0, binding = 0)
+        uniform subpassInput colorInput;
+        layout(input_attachment_index = 1, set = 0, binding = 1)
+        uniform isubpassInputMS idInput;
+        layout(location = 0) out vec4 outColor;
+
+        void main() {
+            outColor = subpassLoad(colorInput) + vec4(subpassLoad(idInput, 0));
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+
+    color_input, id_input = ast.uniforms
+    assert color_input.vtype == "subpassInput"
+    assert color_input.layout["input_attachment_index"] == "0"
+    assert color_input.layout["binding"] == "0"
+    assert id_input.vtype == "isubpassInputMS"
+    assert id_input.layout["input_attachment_index"] == "1"
+    assert id_input.layout["binding"] == "1"
+
+
 def test_parse_swizzle_and_constructors():
     code = textwrap.dedent("""
         #version 450 core

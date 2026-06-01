@@ -497,6 +497,26 @@ def test_parse_cbuffer_preserves_buffer_and_member_bindings():
     assert cbuffer.members[1].register is None
 
 
+def test_parse_tbuffer_preserves_texture_buffer_metadata():
+    ast = parse_code("""
+    tbuffer LookupData : register(t3, space2) {
+        float4 values[4] : packoffset(c0);
+        float scale : packoffset(c4.x);
+    };
+    """)
+
+    tbuffer = ast.cbuffers[0]
+
+    assert tbuffer.name == "LookupData"
+    assert tbuffer.buffer_kind == "tbuffer"
+    assert tbuffer.is_tbuffer is True
+    assert tbuffer.register == "t3, space2"
+    assert [member.name for member in tbuffer.members] == ["values", "scale"]
+    assert tbuffer.members[0].array_sizes == [4]
+    assert tbuffer.members[0].packoffset == "c0"
+    assert tbuffer.members[1].packoffset == "c4.x"
+
+
 def test_parse_cxx11_namespaced_attribute_on_cbuffer():
     ast = parse_code("""
     [[vk::push_constant]]

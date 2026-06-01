@@ -2688,6 +2688,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ast, target_stage
         )
 
+    def is_hlsl_tbuffer_node(self, node):
+        return any(
+            str(getattr(attr, "name", "")).lower() == "tbuffer"
+            for attr in getattr(node, "attributes", []) or []
+        )
+
     def collect_cbuffer_member_types(self, cbuffers):
         member_types = {}
         for cbuffer in cbuffers or []:
@@ -2773,45 +2779,53 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_cbuffer_registers = {}
         buffer_registers = {}
         for node in cbuffers:
+            register_prefix = "t" if self.is_hlsl_tbuffer_node(node) else "b"
             space = self.explicit_resource_register_space(node)
             binding = self.explicit_resource_binding_index(
-                node, {"binding", "buffer"}, ("b",)
+                node, {"binding", "buffer"}, (register_prefix,)
             )
             if binding is None:
                 continue
             self.reserve_resource_register_range(
                 used_cbuffer_registers,
-                "b",
+                register_prefix,
                 binding,
                 1,
                 node.name,
                 space,
             )
         for node in cbuffers:
+            is_tbuffer = self.is_hlsl_tbuffer_node(node)
+            buffer_keyword = "tbuffer" if is_tbuffer else "cbuffer"
+            register_prefix = "t" if is_tbuffer else "b"
             space = self.explicit_resource_register_space(node)
             binding = self.explicit_resource_binding_index(
-                node, {"binding", "buffer"}, ("b",)
+                node, {"binding", "buffer"}, (register_prefix,)
             )
             if binding is None:
+                cursor_key = (register_prefix, space)
                 binding = self.next_available_resource_register(
                     used_cbuffer_registers,
-                    "b",
-                    buffer_registers,
+                    register_prefix,
+                    {space: buffer_registers.get(cursor_key, 0)},
                     space,
                     1,
                 )
             self.reserve_resource_register_range(
                 used_cbuffer_registers,
-                "b",
+                register_prefix,
                 binding,
                 1,
                 node.name,
                 space,
             )
-            buffer_registers[space] = max(buffer_registers.get(space, 0), binding + 1)
-            register = self.resource_register_suffix("b", binding, node)
+            cursor_key = (register_prefix, space)
+            buffer_registers[cursor_key] = max(
+                buffer_registers.get(cursor_key, 0), binding + 1
+            )
+            register = self.resource_register_suffix(register_prefix, binding, node)
             if isinstance(node, StructNode):
-                code += f"cbuffer {node.name}{register} {{\n"
+                code += f"{buffer_keyword} {node.name}{register} {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
@@ -2839,7 +2853,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             elif hasattr(node, "name") and hasattr(
                 node, "members"
             ):  # Generic cbuffer handling
-                code += f"cbuffer {node.name}{register} {{\n"
+                code += f"{buffer_keyword} {node.name}{register} {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
                         element_type = getattr(

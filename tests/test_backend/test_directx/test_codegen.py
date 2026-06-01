@@ -959,6 +959,29 @@ def test_codegen_cbuffer_member_layout_metadata_passthrough():
     assert roughness_offset.member == "x"
 
 
+def test_codegen_hlsl_tbuffer_roundtrips_with_texture_register():
+    hlsl = textwrap.dedent("""
+        tbuffer LookupData : register(t3, space2) {
+            float4 values[4] : packoffset(c0);
+            float scale : packoffset(c4.x);
+        };
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ tbuffer" in output
+    assert "@ register(t3, space2)" in output
+    assert "cbuffer LookupData" in output
+    assert "vec4 values[4];" in output
+    assert "@ packoffset(c4.x)" in output
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+
+    assert "tbuffer LookupData : register(t3, space2)" in regenerated_hlsl
+    assert "float4 values[4];" in regenerated_hlsl
+    assert "float scale;" in regenerated_hlsl
+
+
 def test_codegen_waveops_include_helper_lanes_attribute_passthrough():
     hlsl = textwrap.dedent("""
         [WaveOpsIncludeHelperLanes]

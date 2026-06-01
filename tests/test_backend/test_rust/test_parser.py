@@ -632,6 +632,32 @@ def test_rust_gpu_image_macro_type_parsing():
     ]
 
 
+def test_rust_gpu_sampled_image_generic_type_parsing():
+    code = """
+    use spirv_std::{spirv, Image};
+    use spirv_std::image::SampledImage;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(descriptor_set = 0, binding = 0)] tex: &SampledImage<Image!(2D, type=f32, sampled)>,
+    ) {}
+    """
+    ast = parse_code(code)
+
+    function = ast.functions[0]
+    assert function.params[0].vtype == (
+        "&SampledImage<Image!(2D, type = f32, sampled)>"
+    )
+    assert function.params[0].attributes[0].args == [
+        "descriptor_set",
+        "=",
+        "0",
+        "binding",
+        "=",
+        "0",
+    ]
+
+
 def test_rust_gpu_builtin_spirv_parameter_attributes_parse():
     code = """
     use spirv_std::spirv;

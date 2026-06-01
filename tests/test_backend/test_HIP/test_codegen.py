@@ -58,6 +58,27 @@ class TestHipCodeGen:
         assert "__managed__" not in result
         assert "__shared__" not in result
 
+    def test_cpp17_if_initializer_conversion(self):
+        code = """
+        int main() {
+            if(auto err = hipDeviceSynchronize(); err != hipSuccess)
+                return 1;
+            return 0;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var err: auto = hipSuccess;" in result
+        assert "if ((err != hipSuccess)) {" in result
+        assert "return 1;" in result
+        assert "return 0;" in result
+
     def test_launch_bounds_after_return_type_conversion(self):
         code = """
         __global__ void __launch_bounds__(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)

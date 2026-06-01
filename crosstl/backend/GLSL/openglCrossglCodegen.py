@@ -71,6 +71,7 @@ class GLSLToCrossGLConverter:
         "location",
         "component",
         "index",
+        "input_attachment_index",
         "stream",
         "xfb_buffer",
         "xfb_offset",
@@ -374,6 +375,12 @@ class GLSLToCrossGLConverter:
             "imageBuffer": "imageBuffer",
             "image2DMS": "image2DMS",
             "image2DMSArray": "image2DMSArray",
+            "subpassInput": "subpassInput",
+            "subpassInputMS": "subpassInputMS",
+            "isubpassInput": "isubpassInput",
+            "isubpassInputMS": "isubpassInputMS",
+            "usubpassInput": "usubpassInput",
+            "usubpassInputMS": "usubpassInputMS",
             "iimage1D": "iimage1D",
             "iimage2D": "iimage2D",
             "iimage3D": "iimage3D",
@@ -479,6 +486,9 @@ class GLSLToCrossGLConverter:
         return name == "accelerationStructureEXT" or name.startswith(
             (
                 "texture",
+                "subpassInput",
+                "isubpassInput",
+                "usubpassInput",
                 "sampler",
                 "isampler",
                 "usampler",
@@ -754,6 +764,12 @@ class GLSLToCrossGLConverter:
         binding = layout.get("binding")
         if binding is not None:
             attributes.append(f"@binding({self.layout_value_to_string(binding)})")
+        input_attachment_index = layout.get("input_attachment_index")
+        if input_attachment_index is not None:
+            attributes.append(
+                "@input_attachment_index("
+                f"{self.layout_value_to_string(input_attachment_index)})"
+            )
 
         if self._is_image_resource_type(var_type):
             supported_formats = self.supported_image_formats()

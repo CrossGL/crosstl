@@ -2006,7 +2006,10 @@ class HLSLToCrossGLConverter:
         code = ""
         for node in ast.cbuffers:
             if isinstance(node, StructNode):
-                code += self.format_attributes(getattr(node, "attributes", []), 1)
+                attributes = list(getattr(node, "attributes", []) or [])
+                if getattr(node, "is_tbuffer", False):
+                    attributes = [AttributeNode("tbuffer")] + attributes
+                code += self.format_attributes(attributes, 1)
                 code += self.format_binding_attributes(node, 1)
                 code += f"    cbuffer {node.name} {{\n"
                 for member in node.members:

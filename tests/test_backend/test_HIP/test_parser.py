@@ -688,6 +688,29 @@ class TestHipParser:
         assert isinstance(body[2].right, FunctionCallNode)
         assert body[2].right.name == "hipDeviceSynchronize"
 
+    def test_cpp17_if_initializer_parsing(self):
+        code = """
+        int main() {
+            if(auto err = hipDeviceSynchronize(); err != hipSuccess)
+                return 1;
+            return 0;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert isinstance(body[0], VariableNode)
+        assert body[0].vtype == "auto"
+        assert body[0].name == "err"
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "hipDeviceSynchronize"
+        assert isinstance(body[1], IfNode)
+        assert body[1].condition.left == "err"
+        assert body[1].condition.op == "!="
+        assert body[1].condition.right == "hipSuccess"
+        assert isinstance(body[1].if_body, ReturnNode)
+        assert body[2].value == "0"
+
     def test_std_chrono_benchmark_expressions_parsing(self):
         code = """
         void bench() {

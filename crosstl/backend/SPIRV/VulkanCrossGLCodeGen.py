@@ -161,6 +161,11 @@ class VulkanToCrossGLConverter:
             for node in getattr(ast, "global_variables", [])
             if isinstance(node, LayoutNode) and self.is_compute_layout(node)
         ]
+        fragment_execution_layouts = [
+            node
+            for node in getattr(ast, "global_variables", [])
+            if isinstance(node, LayoutNode) and self.is_fragment_execution_layout(node)
+        ]
         top_level_nodes = []
         top_level_nodes.extend(getattr(ast, "structs", []))
         top_level_nodes.extend(getattr(ast, "global_variables", []))
@@ -168,7 +173,9 @@ class VulkanToCrossGLConverter:
 
         for node in top_level_nodes:
             if isinstance(node, LayoutNode):
-                if self.is_compute_layout(node):
+                if self.is_compute_layout(node) or self.is_fragment_execution_layout(
+                    node
+                ):
                     continue
                 code += self.generate_layout(node)
             elif isinstance(node, StructNode):
@@ -203,6 +210,8 @@ class VulkanToCrossGLConverter:
                     else:
                         code += "    // Fragment Shader\n"
                         code += "    fragment {\n"
+                        for layout in fragment_execution_layouts:
+                            code += self.generate_fragment_execution_layout(layout)
                         code += self.generate_function(node)
                         code += "    }\n\n"
                 else:
@@ -221,7 +230,27 @@ class VulkanToCrossGLConverter:
             for name, _ in node.qualifiers
         )
 
+    def is_fragment_execution_layout(self, node):
+        if not isinstance(node, LayoutNode):
+            return False
+        if (node.layout_type or "").lower() != "in":
+            return False
+        if getattr(node, "data_type", None) or getattr(node, "variable_name", None):
+            return False
+        qualifier_names = {str(name).lower() for name, _ in node.qualifiers}
+        return bool(qualifier_names & self.fragment_execution_layout_qualifiers())
+
+    def fragment_execution_layout_qualifiers(self):
+        return {"early_fragment_tests"}
+
     def generate_compute_layout(self, node):
+        qualifiers = ", ".join(
+            f"{name} = {value}" if value is not None else name
+            for name, value in node.qualifiers
+        )
+        return f"        layout({qualifiers}) in;\n"
+
+    def generate_fragment_execution_layout(self, node):
         qualifiers = ", ".join(
             f"{name} = {value}" if value is not None else name
             for name, value in node.qualifiers

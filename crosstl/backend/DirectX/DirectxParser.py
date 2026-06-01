@@ -182,7 +182,7 @@ class HLSLParser:
                 continue
 
             attributes = self.parse_attribute_list()
-            if self.current_token[0] == "CBUFFER":
+            if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
                 cbuffers.append(self.parse_cbuffer(attributes=attributes))
                 continue
 
@@ -588,7 +588,8 @@ class HLSLParser:
         return TypeAliasNode(alias_type, name)
 
     def parse_cbuffer(self, attributes=None):
-        self.eat("CBUFFER")
+        buffer_kind = self.current_token[1]
+        self.eat(self.current_token[0])
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
@@ -616,6 +617,8 @@ class HLSLParser:
 
         cbuffer_node = StructNode(name, members)
         cbuffer_node.is_cbuffer = True
+        cbuffer_node.buffer_kind = buffer_kind
+        cbuffer_node.is_tbuffer = buffer_kind == "tbuffer"
         cbuffer_node.register = cbuffer_register
         cbuffer_node.packoffset = cbuffer_packoffset
         cbuffer_node.attributes = attributes or []

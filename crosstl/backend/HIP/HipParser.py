@@ -1063,7 +1063,29 @@ class HipParser:
     def parse_if_statement(self):
         self.consume("IF")
         self.consume("LPAREN")
-        condition = self.parse_expression()
+
+        condition_or_init = None
+        if not self.match("SEMICOLON"):
+            if self.is_variable_declaration():
+                init_declarations = self.parse_variable_declaration_list(
+                    consume_semicolon=False
+                )
+                condition_or_init = (
+                    init_declarations
+                    if len(init_declarations) > 1
+                    else init_declarations[0]
+                )
+            else:
+                condition_or_init = self.parse_expression()
+
+        init = None
+        if self.match("SEMICOLON"):
+            self.advance()
+            init = condition_or_init
+            condition = self.parse_expression()
+        else:
+            condition = condition_or_init
+
         self.consume("RPAREN")
 
         if_body = None
@@ -1083,7 +1105,10 @@ class HipParser:
             else:
                 else_body = self.parse_statement()
 
-        return IfNode(condition, if_body, else_body)
+        statement = IfNode(condition, if_body, else_body)
+        if init is not None:
+            return [*init, statement] if isinstance(init, list) else [init, statement]
+        return statement
 
     def parse_for_statement(self):
         self.consume("FOR")
