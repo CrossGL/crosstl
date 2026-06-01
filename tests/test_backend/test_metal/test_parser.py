@@ -179,6 +179,27 @@ def test_parse_imageblock_member_array_after_attribute_from_apple_sample():
     assert members[1].array_sizes[0].name == "kNumLayers"
 
 
+def test_parse_argument_buffer_array_of_device_pointers_from_apple_sample():
+    code = """
+    struct FragmentShaderArguments {
+        array<texture2d<float>, AAPLNumTextureArguments> exampleTextures
+            [[id(AAPLArgumentBufferIDExampleTextures)]];
+        array<device float *, AAPLNumBufferArguments> exampleBuffers
+            [[id(AAPLArgumentBufferIDExampleBuffers)]];
+        array<uint32_t, AAPLNumBufferArguments> exampleConstants
+            [[id(AAPLArgumentBufferIDExampleConstants)]];
+    };
+    """
+    ast = parse_ok(code)
+    members = ast.structs[0].members
+
+    assert members[0].vtype == "array<texture2d<float>,AAPLNumTextureArguments>"
+    assert members[1].vtype == "array<device float*,AAPLNumBufferArguments>"
+    assert members[1].attributes[0].name == "id"
+    assert members[1].attributes[0].args == ["AAPLArgumentBufferIDExampleBuffers"]
+    assert members[2].vtype == "array<uint32_t,AAPLNumBufferArguments>"
+
+
 def test_parse_ternary_and_bitwise_expressions():
     code = """
     void main() {

@@ -543,6 +543,9 @@ class MojoParser:
             if self.current_token[0] == "RPAREN":
                 break
 
+            if self.consume_parameter_separator_marker():
+                continue
+
             attributes = self.parse_attributes()
             self.skip_layout_tokens()
             convention = self.parse_parameter_convention()
@@ -594,6 +597,20 @@ class MojoParser:
                 )
 
         return params
+
+    def consume_parameter_separator_marker(self):
+        if self.current_token[0] not in {"MULTIPLY", "DIVIDE"}:
+            return False
+
+        next_token = self.peek_token()[0]
+        if next_token not in {"COMMA", "RPAREN"}:
+            return False
+
+        self.eat(self.current_token[0])
+        self.skip_layout_tokens()
+        if self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+        return True
 
     def parse_parameter_convention(self):
         token_type, token_value = self.current_token

@@ -106,6 +106,33 @@ def test_method_self_parameter_convention_without_type_parses():
     ]
 
 
+def test_function_parameter_separator_markers_parse_from_official_docs():
+    code = """
+    def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:
+        var product = a1 * a2
+        if double:
+            product *= 2
+        return product
+
+    def positional_only_args(a1: Int, a2: Int, /, b1: Int) -> Int:
+        return a1 + a2 + b1
+    """
+    ast = parse_code(tokenize_code(code))
+    kw_only = find_function(ast, "kw_only_args")
+    positional_only = find_function(ast, "positional_only_args")
+
+    assert [(param.name, param.vtype) for param in kw_only.params] == [
+        ("a1", "Int"),
+        ("a2", "Int"),
+        ("double", "Bool"),
+    ]
+    assert [(param.name, param.vtype) for param in positional_only.params] == [
+        ("a1", "Int"),
+        ("a2", "Int"),
+        ("b1", "Int"),
+    ]
+
+
 def test_struct_parsing():
     code = """
     struct VSInput:

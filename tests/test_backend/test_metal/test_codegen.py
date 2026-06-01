@@ -1262,6 +1262,30 @@ def test_codegen_function_constants_and_argument_buffers():
     assert "@function_constant(0)" in result
 
 
+def test_codegen_argument_buffer_array_of_device_pointers_from_apple_sample():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct FragmentShaderArguments {
+        array<texture2d<float>, AAPLNumTextureArguments> exampleTextures
+            [[id(AAPLArgumentBufferIDExampleTextures)]];
+        array<device float *, AAPLNumBufferArguments> exampleBuffers
+            [[id(AAPLArgumentBufferIDExampleBuffers)]];
+        array<uint32_t, AAPLNumBufferArguments> exampleConstants
+            [[id(AAPLArgumentBufferIDExampleConstants)]];
+    };
+    """
+    crossgl = convert(code)
+
+    assert "sampler2D[AAPLNumTextureArguments] exampleTextures" in crossgl
+    assert "device float*[AAPLNumBufferArguments] exampleBuffers" in crossgl
+    assert "@id(AAPLArgumentBufferIDExampleBuffers)" in crossgl
+    assert "uint[AAPLNumBufferArguments] exampleConstants" in crossgl
+    assert "devicefloat" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_argument_buffer_reference_array_parameter_roundtrips():
     code = """
     #include <metal_stdlib>

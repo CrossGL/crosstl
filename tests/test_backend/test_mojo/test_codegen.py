@@ -113,6 +113,23 @@ def test_function_parameter_convention_codegen_drops_mojo_conventions():
     assert "self" not in generated_code
 
 
+def test_function_parameter_separator_markers_codegen_drops_markers():
+    code = """
+    def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:
+        return a1 + a2
+
+    def positional_only_args(a1: Int, a2: Int, /, b1: Int) -> Int:
+        return a1 + a2 + b1
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int kw_only_args(int a1, int a2, bool double)" in generated_code
+    assert "int positional_only_args(int a1, int a2, int b1)" in generated_code
+    assert "*, double" not in generated_code
+    assert "/, b1" not in generated_code
+
+
 def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     code = """
     struct Resources {

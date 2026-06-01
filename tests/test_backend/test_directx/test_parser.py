@@ -426,6 +426,39 @@ def test_parse_resource_arrays_and_register_space():
     assert_parses(code)
 
 
+def test_parse_sampler_state_initializer_blocks_from_microsoft_docs():
+    code = """
+    SamplerState MeshTextureSampler
+    {
+        Filter = MIN_MAG_MIP_LINEAR;
+        AddressU = Wrap;
+        AddressV = Wrap;
+    };
+
+    SamplerComparisonState ShadowSampler
+    {
+        Filter = COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+        AddressU = Clamp;
+        ComparisonFunc = LESS;
+    };
+    """
+    ast = parse_code(code)
+    mesh_sampler, shadow_sampler = ast.global_variables
+
+    assert mesh_sampler.vtype == "SamplerState"
+    assert mesh_sampler.sampler_state == [
+        ("Filter", "MIN_MAG_MIP_LINEAR"),
+        ("AddressU", "Wrap"),
+        ("AddressV", "Wrap"),
+    ]
+    assert shadow_sampler.vtype == "SamplerComparisonState"
+    assert shadow_sampler.sampler_state == [
+        ("Filter", "COMPARISON_MIN_MAG_LINEAR_MIP_POINT"),
+        ("AddressU", "Clamp"),
+        ("ComparisonFunc", "LESS"),
+    ]
+
+
 def test_parse_rasterizer_ordered_resources_and_register_space():
     code = """
     RasterizerOrderedTexture2D<uint> counters : register(u0, space1);

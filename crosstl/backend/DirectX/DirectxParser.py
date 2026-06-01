@@ -1068,6 +1068,10 @@ class HLSLParser:
             self.eat("EQUALS")
             value = self.parse_expression()
 
+        sampler_state = None
+        if self.is_sampler_state_type(vtype) and self.current_token[0] == "LBRACE":
+            sampler_state = self.parse_sampler_state_block()
+
         if consume_semicolon:
             self.eat("SEMICOLON")
 
@@ -1083,7 +1087,28 @@ class HLSLParser:
         var.array_sizes = array_sizes
         var.register = register
         var.packoffset = packoffset
+        if sampler_state is not None:
+            var.sampler_state = sampler_state
         return var
+
+    def is_sampler_state_type(self, vtype):
+        return str(vtype).split("<", 1)[0] in {
+            "SamplerState",
+            "SamplerComparisonState",
+        }
+
+    def parse_sampler_state_block(self):
+        self.eat("LBRACE")
+        state = []
+        while self.current_token[0] != "RBRACE":
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            self.eat("EQUALS")
+            value = self.parse_expression()
+            self.eat("SEMICOLON")
+            state.append((name, value))
+        self.eat("RBRACE")
+        return state
 
     def parse_if_statement(self):
         self.eat("IF")

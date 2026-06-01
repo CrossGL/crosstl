@@ -256,6 +256,20 @@ TEXTURE_SAMPLE_HLSL = textwrap.dedent("""
     }
     """).strip()
 
+SAMPLER_STATE_BLOCK_HLSL = textwrap.dedent("""
+    Texture2D tex : register(t0);
+    SamplerState MeshTextureSampler
+    {
+        Filter = MIN_MAG_MIP_LINEAR;
+        AddressU = Wrap;
+        AddressV = Wrap;
+    };
+
+    float4 PSMain(float2 uv : TEXCOORD0) : SV_Target0 {
+        return tex.Sample(MeshTextureSampler, uv);
+    }
+    """).strip()
+
 REGISTER_BINDINGS_HLSL = textwrap.dedent("""
     cbuffer FrameData : register(b0, space1) {
         float4x4 viewProj : packoffset(c0);
@@ -501,6 +515,15 @@ def test_codegen_clip_intrinsic_imports_to_parseable_crossgl():
     """)
 
     assert "clip(color.a < 0.1 ? -1 : 1);" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_sampler_state_initializer_block_imports_to_crossgl():
+    crossgl = generate_crossgl(SAMPLER_STATE_BLOCK_HLSL)
+
+    assert "sampler MeshTextureSampler" in crossgl
+    assert "Filter = MIN_MAG_MIP_LINEAR" not in crossgl
+    assert "texture(tex, MeshTextureSampler, uv)" in crossgl
     parse_crossgl(crossgl)
 
 

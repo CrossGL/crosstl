@@ -731,7 +731,7 @@ class MetalParser:
                 else:
                     inner.append(self.current_token[1])
                     self.eat(self.current_token[0])
-            base_type = f"{base_type}<{''.join(inner)}>"
+            base_type = f"{base_type}<{self.format_generic_type_tokens(inner)}>"
 
         pointer_suffix = ""
         while (
@@ -757,6 +757,31 @@ class MetalParser:
             self.eat(self.current_token[0])
 
         return base_type + pointer_suffix, qualifiers
+
+    def format_generic_type_tokens(self, tokens):
+        text = ""
+        previous = ""
+        compact_before = {">", ",", "]", ")", "*", "&", "::"}
+        compact_after = {"<", ",", "[", "(", "::"}
+        for token in tokens:
+            token = str(token)
+            if (
+                text
+                and token not in compact_before
+                and previous not in compact_after
+                and self.generic_type_token_needs_space(previous, token)
+            ):
+                text += " "
+            text += token
+            previous = token
+        return text
+
+    def generic_type_token_needs_space(self, previous, current):
+        if not previous or not current:
+            return False
+        return (
+            previous[-1].isalnum() or previous[-1] == "_" or previous[-1] == ">"
+        ) and (current[0].isalnum() or current[0] == "_")
 
     def parse_alignas_specifiers(self):
         specs = []
