@@ -145,10 +145,6 @@ AST_CATEGORY_ROOTS = (
     ("pattern", "PatternNode"),
 )
 
-AST_CONSTRUCTOR_METADATA_PARAMETERS = frozenset(
-    {"self", "source_location", "annotations", "kwargs"}
-)
-
 
 class LanguageSpecExtractionError(RuntimeError):
     """Raised when bounded source introspection cannot extract a known shape."""
@@ -309,49 +305,18 @@ def _sorted_mapping(
     ]
 
 
-def _class_field_entry(
-    field: str, constructor_fields: set[str], aliases: dict[str, str]
-):
-    parameter = aliases.get(field, field if field in constructor_fields else None)
-    return {
-        "name": field,
-        "source": "parameter" if parameter is not None else "derived",
-        "parameter": parameter,
-        "annotation": None,
-        "required": field in constructor_fields,
-        "default": None,
-        "optional": field not in constructor_fields,
-        "initializer": parameter,
-    }
-
-
 def _ast_snapshot(ast_spec: dict[str, Any]) -> dict[str, Any]:
     classes = [
         {"name": node["name"], "bases": node["bases"]} for node in ast_spec["nodes"]
     ]
     class_fields = []
     for node in ast_spec["nodes"]:
-        constructor_fields = set(node["constructor_fields"])
-        aliases = dict(node["field_aliases"])
         class_fields.append(
             {
                 "class": node["name"],
-                "constructorDefined": True,
-                "constructorParameters": [
-                    {
-                        "name": name,
-                        "kind": "positional-or-keyword",
-                        "annotation": None,
-                        "required": True,
-                        "default": None,
-                        "optional": False,
-                    }
-                    for name in node["constructor_fields"]
-                ],
-                "fields": [
-                    _class_field_entry(field, constructor_fields, aliases)
-                    for field in node["public_fields"]
-                ],
+                "constructorDefined": node["constructor_defined"],
+                "constructorParameters": node["constructor_parameters"],
+                "fields": node["fields"],
             }
         )
 
@@ -671,65 +636,86 @@ def _parser_spec() -> dict[str, Any]:
     }
 
 
-def _constructor_fields(cls: type) -> list[str]:
-    try:
-        signature = inspect.signature(cls.__init__)
-    except (TypeError, ValueError):
-        return []
+def _source_segment(source_text: str, node: py_ast.AST | None) -> str | None:
+    if node is None:
+        return None
+    return py_ast.get_source_segment(source_text, node)
 
-    fields = []
-    for name, parameter in signature.parameters.items():
-        if name in AST_CONSTRUCTOR_METADATA_PARAMETERS:
+
+def _annotation_is_optional(text: str | None) -> bool:
+    if text is None:
+        return False
+    return (
+        "Optional[" in text
+        or "None" in text
+        or text.endswith(" | None")
+        or " | None | " in text
+    )
+
+
+def _parameter_entry(
+    arg: py_ast.arg, kind: str, default_node: py_ast.AST | None, source_text: str
+) -> dict[str, Any]:
+    annotation = _source_segment(source_text, arg.annotation)
+    return {
+        "name": arg.arg,
+        "kind": kind,
+        "annotation": annotation,
+        "required": default_node is None,
+        "default": _source_segment(source_text, default_node),
+        "optional": default_node is not None or _annotation_is_optional(annotation),
+    }
+
+
+def _constructor_parameters(
+    function: py_ast.FunctionDef, source_text: str
+) -> list[dict[str, Any]]:
+    parameters = []
+    positional = list(function.args.posonlyargs) + list(function.args.args)
+    defaults: list[py_ast.AST | None] = [None] * (
+        len(positional) - len(function.args.defaults)
+    )
+    defaults.extend(function.args.defaults)
+    for arg, default_node in zip(positional, defaults):
+        if arg.arg == "self":
             continue
-        if parameter.kind in (
-            inspect.Parameter.VAR_POSITIONAL,
-            inspect.Parameter.VAR_KEYWORD,
-        ):
-            continue
-        fields.append(name)
-    return fields
-
-
-def _extract_constructor_assignment_metadata(
-    cls: type,
-) -> tuple[list[str], dict[str, str]]:
-    """Extract public fields and simple aliases assigned by an AST constructor."""
-    return _extract_constructor_assignment_metadata_for_class(cls, set())
-
-
-def _extract_constructor_assignment_metadata_for_class(
-    cls: type, seen: set[type]
-) -> tuple[list[str], dict[str, str]]:
-    if cls in seen:
-        return [], {}
-    seen.add(cls)
-
-    own_public_fields, own_aliases, parsed = _extract_own_constructor_metadata(cls)
-
-    public_fields = set(own_public_fields)
-    aliases = {}
-    for base in _called_base_initializers(cls, parsed):
-        base_public_fields, base_aliases = (
-            _extract_constructor_assignment_metadata_for_class(base, seen)
+        kind = (
+            "positional-only"
+            if arg in function.args.posonlyargs
+            else "positional-or-keyword"
         )
-        public_fields.update(base_public_fields)
-        aliases.update(base_aliases)
+        parameters.append(_parameter_entry(arg, kind, default_node, source_text))
 
-    aliases.update(own_aliases)
-    for field in own_public_fields:
-        if field not in own_aliases:
-            aliases.pop(field, None)
+    for arg, default_node in zip(function.args.kwonlyargs, function.args.kw_defaults):
+        parameters.append(
+            _parameter_entry(arg, "keyword-only", default_node, source_text)
+        )
 
-    return sorted(public_fields), dict(sorted(aliases.items()))
+    if function.args.vararg is not None:
+        entry = _parameter_entry(
+            function.args.vararg, "var-positional", None, source_text
+        )
+        entry["required"] = False
+        entry["optional"] = True
+        parameters.append(entry)
+
+    if function.args.kwarg is not None:
+        entry = _parameter_entry(function.args.kwarg, "var-keyword", None, source_text)
+        entry["required"] = False
+        entry["optional"] = True
+        parameters.append(entry)
+
+    return parameters
 
 
-def _extract_own_constructor_metadata(
-    cls: type,
-) -> tuple[list[str], dict[str, str], py_ast.Module | None]:
+def _own_constructor_source(cls: type) -> tuple[py_ast.FunctionDef, str] | None:
+    if "__init__" not in cls.__dict__:
+        return None
+
     try:
         source = textwrap.dedent(inspect.getsource(cls.__init__))
     except (OSError, TypeError):
-        return [], {}, None
+        return None
 
     try:
         parsed = py_ast.parse(source)
@@ -738,76 +724,143 @@ def _extract_own_constructor_metadata(
             f"could not parse {cls.__name__}.__init__ source"
         ) from exc
 
-    public_fields = set()
-    aliases = {}
-    for node in py_ast.walk(parsed):
-        if not isinstance(node, py_ast.Assign):
-            continue
-
-        for target in node.targets:
-            if not (
-                isinstance(target, py_ast.Attribute)
-                and isinstance(target.value, py_ast.Name)
-                and target.value.id == "self"
-            ):
-                continue
-
-            public_fields.add(target.attr)
-            source_name = _assignment_source_name(node.value)
-            if source_name is not None and source_name != target.attr:
-                aliases[target.attr] = source_name
-
-    return sorted(public_fields), dict(sorted(aliases.items())), parsed
+    for item in parsed.body:
+        if isinstance(item, py_ast.FunctionDef) and item.name == "__init__":
+            return item, source
+    return None
 
 
-def _called_base_initializers(cls: type, parsed: py_ast.Module | None) -> list[type]:
-    """Return AST node base classes whose __init__ is called by cls.__init__."""
-    if parsed is None:
-        return []
-
-    base_by_name = {
-        base.__name__: base
-        for base in cls.__mro__[1:]
-        if getattr(base, "__module__", None) == ast_module.__name__
-    }
-    called_bases = []
-    for node in py_ast.walk(parsed):
-        if not isinstance(node, py_ast.Call):
-            continue
-
-        func = node.func
-        if not (isinstance(func, py_ast.Attribute) and func.attr == "__init__"):
-            continue
-
-        base = None
-        if (
-            isinstance(func.value, py_ast.Call)
-            and isinstance(func.value.func, py_ast.Name)
-            and func.value.func.id == "super"
-        ):
-            if cls.__mro__[1:] and getattr(cls.__mro__[1], "__module__", None) == (
-                ast_module.__name__
-            ):
-                base = cls.__mro__[1]
-        elif isinstance(func.value, py_ast.Name):
-            base = base_by_name.get(func.value.id)
-
-        if base is not None and base not in called_bases:
-            called_bases.append(base)
-
-    return called_bases
-
-
-def _assignment_source_name(node: py_ast.AST) -> str | None:
-    if isinstance(node, py_ast.Name):
-        return node.id
-    if (
-        isinstance(node, py_ast.Attribute)
-        and isinstance(node.value, py_ast.Name)
-        and node.value.id == "self"
-    ):
+def _self_attribute_name(node: py_ast.AST) -> str | None:
+    if not isinstance(node, py_ast.Attribute):
+        return None
+    value = node.value
+    if isinstance(value, py_ast.Name) and value.id == "self":
         return node.attr
     return None
+
+
+def _referenced_parameter(
+    value: py_ast.AST | None, parameter_names: set[str]
+) -> str | None:
+    if isinstance(value, py_ast.Name) and value.id in parameter_names:
+        return value.id
+    if isinstance(value, py_ast.BoolOp):
+        for item in value.values:
+            name = _referenced_parameter(item, parameter_names)
+            if name is not None:
+                return name
+    return None
+
+
+def _field_source(value: py_ast.AST | None, parameter_name: str | None) -> str:
+    if parameter_name is not None:
+        if isinstance(value, py_ast.Name):
+            return "parameter"
+        return "parameter-derived"
+    if isinstance(value, py_ast.Constant):
+        return "constant"
+    return "derived"
+
+
+def _field_annotation(
+    parameter_name: str | None,
+    parameter_by_name: dict[str, dict[str, Any]],
+    annotation: py_ast.AST | None,
+    source_text: str,
+) -> str | None:
+    explicit = _source_segment(source_text, annotation)
+    if explicit is not None:
+        return explicit
+    if parameter_name is not None:
+        return parameter_by_name[parameter_name]["annotation"]
+    return None
+
+
+def _field_default(
+    parameter_name: str | None,
+    parameter_by_name: dict[str, dict[str, Any]],
+    value: py_ast.AST | None,
+    source_text: str,
+) -> str | None:
+    if parameter_name is not None:
+        return parameter_by_name[parameter_name]["default"]
+    if isinstance(value, py_ast.Constant):
+        return _source_segment(source_text, value)
+    return None
+
+
+def _assignment_field_entries(
+    statement: py_ast.AST,
+    parameter_by_name: dict[str, dict[str, Any]],
+    source_text: str,
+) -> list[dict[str, Any]]:
+    entries = []
+    parameter_names = set(parameter_by_name)
+    if isinstance(statement, py_ast.Assign):
+        targets = statement.targets
+        value = statement.value
+        annotation = None
+    elif isinstance(statement, py_ast.AnnAssign):
+        targets = [statement.target]
+        value = statement.value
+        annotation = statement.annotation
+    else:
+        return entries
+
+    for target in targets:
+        name = _self_attribute_name(target)
+        if name is None:
+            continue
+        parameter_name = _referenced_parameter(value, parameter_names)
+        entries.append(
+            {
+                "name": name,
+                "source": _field_source(value, parameter_name),
+                "parameter": parameter_name,
+                "annotation": _field_annotation(
+                    parameter_name, parameter_by_name, annotation, source_text
+                ),
+                "required": (
+                    bool(parameter_by_name[parameter_name]["required"])
+                    if parameter_name is not None
+                    else False
+                ),
+                "default": _field_default(
+                    parameter_name, parameter_by_name, value, source_text
+                ),
+                "optional": (
+                    bool(parameter_by_name[parameter_name]["optional"])
+                    if parameter_name is not None
+                    else True
+                ),
+                "initializer": _source_segment(source_text, value),
+            }
+        )
+    return entries
+
+
+def _class_field_inventory(
+    cls: type,
+) -> tuple[bool, list[dict[str, Any]], list[dict[str, Any]]]:
+    constructor = _own_constructor_source(cls)
+    if constructor is None:
+        return False, [], []
+
+    init, source_text = constructor
+    parameters = _constructor_parameters(init, source_text)
+    parameter_by_name = {parameter["name"]: parameter for parameter in parameters}
+    fields_by_name = {}
+    for statement in py_ast.walk(init):
+        for entry in _assignment_field_entries(
+            statement, parameter_by_name, source_text
+        ):
+            fields_by_name[entry["name"]] = entry
+
+    return (
+        True,
+        parameters,
+        [fields_by_name[name] for name in sorted(fields_by_name.keys())],
+    )
 
 
 def _ast_node_categories(cls: type) -> list[str]:
@@ -828,15 +881,6 @@ def _ast_spec() -> dict[str, Any]:
         if getattr(cls, "__module__", None) != ast_module.__name__:
             continue
 
-        if issubclass(cls, enum.Enum):
-            enums[public_name] = [
-                {"name": item.name, "value": item.value} for item in cls
-            ]
-            continue
-
-        if not issubclass(cls, ast_module.ASTNode):
-            continue
-
         if public_name != cls.__name__:
             aliases[public_name] = cls.__name__
             continue
@@ -845,16 +889,39 @@ def _ast_spec() -> dict[str, Any]:
             base.__name__
             for base in cls.__bases__
             if getattr(base, "__module__", None) == ast_module.__name__
+            or base is enum.Enum
         ]
-        public_fields, field_aliases = _extract_constructor_assignment_metadata(cls)
+
+        if issubclass(cls, enum.Enum):
+            enums[public_name] = [
+                {"name": item.name, "value": item.value} for item in cls
+            ]
+            nodes.append(
+                {
+                    "name": public_name,
+                    "bases": bases,
+                    "categories": [],
+                    "constructor_defined": False,
+                    "constructor_parameters": [],
+                    "fields": [],
+                }
+            )
+            continue
+
+        if not issubclass(cls, ast_module.ASTNode):
+            continue
+
+        constructor_defined, constructor_parameters, fields = _class_field_inventory(
+            cls
+        )
         nodes.append(
             {
                 "name": public_name,
                 "bases": bases,
                 "categories": _ast_node_categories(cls),
-                "constructor_fields": _constructor_fields(cls),
-                "public_fields": public_fields,
-                "field_aliases": field_aliases,
+                "constructor_defined": constructor_defined,
+                "constructor_parameters": constructor_parameters,
+                "fields": fields,
             }
         )
 

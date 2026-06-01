@@ -54,6 +54,8 @@ def test_language_spec_covers_frontend_basics():
 
     ast_nodes = {node["name"]: node for node in spec["ast"]["classes"]}
     assert ast_nodes["ShaderNode"]["bases"] == ["ASTNode"]
+    assert ast_nodes["ShaderStage"]["bases"] == ["Enum"]
+    assert ast_nodes["ExecutionModel"]["bases"] == ["Enum"]
     assert {"name": "VERTEX", "value": "vertex"} in spec["ast"]["enums"]["ShaderStage"]
 
     validation_metadata = spec["validation"]["metadata"]
@@ -72,6 +74,47 @@ def test_language_spec_covers_frontend_basics():
 def test_language_spec_reports_ast_runtime_fields_and_aliases():
     spec = language_spec.extract_language_spec()
     class_fields = {node["class"]: node for node in spec["ast"]["classFields"]}
+
+    primitive_type = class_fields["PrimitiveType"]
+    primitive_parameters = {
+        parameter["name"]: parameter
+        for parameter in primitive_type["constructorParameters"]
+    }
+    assert primitive_parameters["name"] == {
+        "name": "name",
+        "kind": "positional-or-keyword",
+        "annotation": "str",
+        "required": True,
+        "default": None,
+        "optional": False,
+    }
+    assert primitive_parameters["size_bits"] == {
+        "name": "size_bits",
+        "kind": "positional-or-keyword",
+        "annotation": "Optional[int]",
+        "required": False,
+        "default": "None",
+        "optional": True,
+    }
+    assert primitive_parameters["kwargs"] == {
+        "name": "kwargs",
+        "kind": "var-keyword",
+        "annotation": None,
+        "required": False,
+        "default": None,
+        "optional": True,
+    }
+    primitive_fields = {field["name"]: field for field in primitive_type["fields"]}
+    assert primitive_fields["size_bits"] == {
+        "name": "size_bits",
+        "source": "parameter",
+        "parameter": "size_bits",
+        "annotation": "Optional[int]",
+        "required": False,
+        "default": "None",
+        "optional": True,
+        "initializer": "size_bits",
+    }
 
     variable_node = class_fields["VariableNode"]
     variable_fields = {field["name"]: field for field in variable_node["fields"]}
@@ -112,20 +155,32 @@ def test_language_spec_reports_ast_runtime_fields_and_aliases():
     assert "set" in texture_fields
     assert texture_fields["set"]["parameter"] == "set_"
 
-    array_node_fields = {field["name"] for field in class_fields["ArrayNode"]["fields"]}
+    array_node_fields = {
+        field["name"]: field for field in class_fields["ArrayNode"]["fields"]
+    }
     assert {
-        "attributes",
         "element_type",
-        "initial_value",
-        "is_mutable",
-        "name",
-        "qualifiers",
-        "semantic",
         "size",
-        "var_type",
-        "visibility",
         "vtype",
-    }.issubset(array_node_fields)
+    } == set(array_node_fields)
+    assert array_node_fields["size"]["default"] == "None"
+    assert array_node_fields["vtype"]["source"] == "derived"
+
+
+def test_language_spec_reports_enum_classes_with_value_inventory():
+    spec = language_spec.extract_language_spec()
+    classes = {node["name"]: node for node in spec["ast"]["classes"]}
+    class_fields = {node["class"]: node for node in spec["ast"]["classFields"]}
+
+    for enum_name, values in spec["ast"]["enums"].items():
+        assert classes[enum_name]["bases"] == ["Enum"]
+        assert class_fields[enum_name] == {
+            "class": enum_name,
+            "constructorDefined": False,
+            "constructorParameters": [],
+            "fields": [],
+        }
+        assert values
 
 
 def test_language_spec_uses_frontend_objects_as_authority(monkeypatch):
