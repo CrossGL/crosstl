@@ -222,7 +222,9 @@ class HLSLParser:
                 continue
 
             if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
+                synthetic_start = len(self.synthetic_structs)
                 cbuffers.append(self.parse_cbuffer(attributes=attributes))
+                structs.extend(self.synthetic_structs[synthetic_start:])
                 continue
 
             if not self.looks_like_external_declaration():
@@ -269,12 +271,19 @@ class HLSLParser:
     def is_effect_technique_block(self):
         return self.current_token[0] == "IDENTIFIER" and str(
             self.current_token[1]
-        ).lower() in {"technique", "technique10"}
+        ).lower() in {"technique", "technique10", "technique11"}
 
     def parse_effect_technique_block(self):
         self.eat("IDENTIFIER")
-        while self.current_token[0] not in {"LBRACE", "SEMICOLON", "EOF"}:
+        while self.current_token[0] not in {
+            "LBRACE",
+            "LESS_THAN",
+            "SEMICOLON",
+            "EOF",
+        }:
             self.eat(self.current_token[0])
+
+        self.skip_effect_declaration_suffixes()
 
         if self.current_token[0] == "LBRACE":
             self.skip_balanced_brace_block()
@@ -632,6 +641,15 @@ class HLSLParser:
             self.eat("RBRACKET")
         return sizes
 
+    def format_array_suffixes_for_type(self, sizes):
+        suffixes = []
+        for size in sizes:
+            if size is None:
+                suffixes.append("[]")
+            else:
+                suffixes.append(f"[{size}]")
+        return "".join(suffixes)
+
     def parse_semantic_or_register(self):
         semantic = None
         register = None
@@ -933,6 +951,15 @@ class HLSLParser:
                 members.append(self.parse_cbuffer(attributes=[]))
                 continue
             qualifiers = self.parse_qualifiers()
+            if self.current_token[0] == "STRUCT":
+                declarations = self.parse_nested_struct_member(
+                    name,
+                    qualifiers=qualifiers,
+                    attributes=[],
+                    allow_semantic=True,
+                )
+                members.extend(self.ensure_statement_list(declarations))
+                continue
             declarations = self.parse_variable_declaration(
                 qualifiers=qualifiers,
                 attributes=[],
@@ -1445,6 +1472,8 @@ class HLSLParser:
         if allow_semantic:
             semantic, register, packoffset = self.parse_semantic_or_register()
 
+        self.skip_effect_declaration_suffixes()
+
         value = None
         if self.current_token[0] == "EQUALS":
             self.eat("EQUALS")
@@ -1803,6 +1832,9 @@ class HLSLParser:
         if self.current_token[0] == "LPAREN" and self.looks_like_cast():
             self.eat("LPAREN")
             target_type = self.parse_type()
+            target_type += self.format_array_suffixes_for_type(
+                self.parse_array_suffixes()
+            )
             self.eat("RPAREN")
             operand = self.parse_unary_expression()
             return CastNode(target_type, operand)
@@ -1827,6 +1859,9 @@ class HLSLParser:
             return False
 
         idx = self.skip_type_name_at(self.current_index + 1)
+        if idx is None:
+            return False
+        idx = self.skip_array_suffixes_at(idx)
         if idx is None or idx >= len(self.tokens) or self.tokens[idx][0] != "RPAREN":
             return False
 
@@ -1980,6 +2015,8 @@ class HLSLParser:
             type_name = self.parse_type()
             args = self.parse_call_arguments()
             return VectorConstructorNode(type_name, args)
+        if self.is_effect_compile_expression_start():
+            return self.parse_effect_compile_expression()
         if self.is_identifier_token(token_type):
             self.eat(token_type)
             return value
@@ -2034,6 +2071,19 @@ class HLSLParser:
         raise SyntaxError(
             f"Unexpected token in primary expression: {self.current_token}"
         )
+
+    def is_effect_compile_expression_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and str(self.current_token[1]).lower() == "compile"
+            and self.peek()[0] == "IDENTIFIER"
+        )
+
+    def parse_effect_compile_expression(self):
+        self.eat("IDENTIFIER")
+        profile = self.parse_identifier()
+        entry = self.parse_postfix_expression()
+        return FunctionCallNode("compile", [profile, entry])
 
     def parse_initializer_list(self):
         self.eat("LBRACE")

@@ -387,6 +387,13 @@ class VulkanParser:
                     }
                 )
 
+        self.spirv_register_struct_type_names(types, names)
+        structs = self.spirv_assembly_structs(
+            names,
+            member_names,
+            types,
+            constants,
+        )
         entry_interface_ids = {
             interface_id
             for entry_point in entry_points
@@ -408,12 +415,12 @@ class VulkanParser:
             )
             + global_variables
         )
-        if not global_variables:
+        if not global_variables and not structs:
             raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
 
         return ShaderNode(
             functions=[],
-            structs=[],
+            structs=structs,
             global_variables=global_variables,
             spirv_assembly=True,
             spirv_entry_points=entry_points,
@@ -625,6 +632,40 @@ class VulkanParser:
             )
 
         return layouts
+
+    def spirv_register_struct_type_names(self, types, names):
+        for type_id, type_info in types.items():
+            if type_info.get("kind") == "struct":
+                type_info["name"] = names.get(
+                    type_id
+                ) or self.spirv_fallback_identifier(type_id, "struct")
+
+    def spirv_assembly_structs(self, names, member_names, types, constants):
+        structs = []
+        for type_id, type_info in types.items():
+            if type_info.get("kind") != "struct":
+                continue
+
+            members = []
+            for member_index, member_type_id in enumerate(
+                type_info.get("member_types", [])
+            ):
+                data_type, array_suffix = self.spirv_type_name_and_suffix(
+                    member_type_id, types, constants, names=names
+                )
+                if data_type is None:
+                    continue
+
+                member_key = str(member_index)
+                member_name = member_names.get(type_id, {}).get(
+                    member_key, f"member{member_key}"
+                )
+                members.append(VariableNode(data_type, f"{member_name}{array_suffix}"))
+
+            if members:
+                structs.append(StructNode(type_info["name"], members))
+
+        return structs
 
     def spirv_spec_constant_id(self, decorations):
         for decoration, operands in decorations:
@@ -860,14 +901,14 @@ class VulkanParser:
                 return self.SPIRV_BUILTIN_VARIABLE_NAMES.get(value, value)
         return fallback_name
 
-    def spirv_type_name_and_suffix(self, type_id, types, constants):
+    def spirv_type_name_and_suffix(self, type_id, types, constants, names=None):
         type_info = types.get(type_id)
         if type_info is None:
             return None, ""
 
         if type_info.get("kind") == "array":
             base_type, suffix = self.spirv_type_name_and_suffix(
-                type_info.get("element_type"), types, constants
+                type_info.get("element_type"), types, constants, names=names
             )
             if base_type is None:
                 return None, ""
@@ -877,11 +918,21 @@ class VulkanParser:
 
         if type_info.get("kind") == "runtime_array":
             base_type, suffix = self.spirv_type_name_and_suffix(
-                type_info.get("element_type"), types, constants
+                type_info.get("element_type"), types, constants, names=names
             )
             if base_type is None:
                 return None, ""
             return base_type, f"[]{suffix}"
+
+        if type_info.get("kind") == "pointer":
+            if names and names.get(type_id):
+                return names[type_id], ""
+            base_type, suffix = self.spirv_type_name_and_suffix(
+                type_info.get("type_id"), types, constants, names=names
+            )
+            if base_type is None:
+                return self.spirv_fallback_identifier(type_id, "ptr"), ""
+            return f"{base_type}*", suffix
 
         return type_info.get("name"), ""
 

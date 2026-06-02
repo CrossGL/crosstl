@@ -20,6 +20,7 @@ from crosstl.backend.SPIRV.VulkanAst import (
     MemberAccessNode,
     MethodCallNode,
     ReturnNode,
+    StructNode,
     SwitchNode,
     UnaryOpNode,
     UniformNode,
@@ -682,6 +683,20 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_FORWARD_POINTER_STRUCT_ASSEMBLY = """
+; Reduced from Khronos SPIRV-Tools test/diff/diff_files/OpTypeForwardPointer_basic_src.spvasm.
+OpCapability Kernel
+OpCapability Addresses
+OpCapability Linkage
+OpMemoryModel Logical OpenCL
+OpName %structptr "structptr"
+OpTypeForwardPointer %structptr UniformConstant
+%uint = OpTypeInt 32 0
+%structt1 = OpTypeStruct %structptr %uint
+%structt2 = OpTypeStruct %uint %structptr
+%structptr = OpTypePointer UniformConstant %structt1
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
@@ -913,6 +928,24 @@ def test_spirv_assembly_flat_location_interface_parse():
     assert layout.qualifiers == [("location", "0")]
     assert layout.declaration_qualifiers == ["flat"]
     assert layout.spirv_decorations == [("Flat", []), ("Location", ["0"])]
+
+
+def test_spirv_assembly_forward_pointer_structs_parse():
+    tokens = tokenize_code(SPIRV_TOOLS_FORWARD_POINTER_STRUCT_ASSEMBLY)
+    ast = parse_code(tokens)
+
+    assert ast.spirv_assembly is True
+    assert ast.global_variables == []
+    assert [struct.name for struct in ast.structs] == ["structt1", "structt2"]
+    assert all(isinstance(struct, StructNode) for struct in ast.structs)
+    assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+        ("structptr", "member0"),
+        ("uint", "member1"),
+    ]
+    assert [(member.vtype, member.name) for member in ast.structs[1].members] == [
+        ("uint", "member0"),
+        ("structptr", "member1"),
+    ]
 
 
 def test_spirv_assembly_without_location_interface_is_rejected():

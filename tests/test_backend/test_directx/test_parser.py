@@ -659,6 +659,12 @@ def test_skip_deprecated_effect_annotations_and_state_blocks_from_dxc_rewriter()
         Filter = MIN_MAG_MIP_LINEAR;
     };
 
+    float3 annotatedColor : Ambient
+    <
+        string SasUiLabel = "Ambient";
+        string SasUiControl = "ColorPicker";
+    > = { 0.2f, 0.2f, 0.2f };
+
     float4 main() : SV_Target {
         Texture2D localTex { state=foo; };
         int foobar {blah=foo;};
@@ -676,6 +682,26 @@ def test_skip_deprecated_effect_annotations_and_state_blocks_from_dxc_rewriter()
     technique10 T10 {
         pass {}
     }
+
+    technique11 T11 {
+        pass {}
+    }
+
+    technique PostProcess
+    <
+        string Parameter0 = "BloomScale";
+        float4 Parameter0Def = float4(1.5f, 0, 0, 0);
+        int Parameter0Size = 1;
+        string Parameter0Desc = " (float)";
+    >
+    {
+        pass p0
+        {
+            VertexShader = null;
+            PixelShader = compile ps_2_0 main();
+            ZEnable = false;
+        }
+    }
     """
 
     ast = parse_code(code)
@@ -685,11 +711,13 @@ def test_skip_deprecated_effect_annotations_and_state_blocks_from_dxc_rewriter()
         "tex2",
         "texa",
         "samLinear",
+        "annotatedColor",
     ]
     assert ast.global_variables[0].register == "t1"
     assert ast.global_variables[1].register == "t2"
     assert ast.global_variables[2].array_sizes == [3]
     assert ast.global_variables[3].register == "s7"
+    assert isinstance(ast.global_variables[4].value, InitializerListNode)
     assert [statement.name for statement in ast.functions[0].body[:2]] == [
         "localTex",
         "foobar",
@@ -1910,6 +1938,76 @@ def test_parse_unsigned_vector_cast_from_directx_graphics_samples():
     assert index.target_type == "unsigned int2"
     assert isinstance(index.expression, FunctionCallNode)
     assert index.expression.name == "DispatchRaysIndex"
+
+
+def test_parse_array_type_casts_from_directx_sdk_samples():
+    ast = parse_code("""
+    void main(int4 packedIndices, float4 packedWeights) {
+        int indexArray[4] = (int[4])packedIndices;
+        float blendWeightsArray[4] = (float[4])packedWeights;
+    }
+    """)
+
+    index_array, blend_weights = ast.functions[0].body
+
+    assert index_array.array_sizes == [4]
+    assert isinstance(index_array.value, CastNode)
+    assert index_array.value.target_type == "int[4]"
+    assert index_array.value.expression == "packedIndices"
+
+    assert blend_weights.array_sizes == [4]
+    assert isinstance(blend_weights.value, CastNode)
+    assert blend_weights.value.target_type == "float[4]"
+    assert blend_weights.value.expression == "packedWeights"
+
+
+def test_parse_legacy_effect_compile_array_initializer_from_directx_sdk_samples():
+    ast = parse_code("""
+    VertexShader vsArray20[2] =
+    {
+        compile vs_2_0 VertSkinning(1),
+        compile vs_2_0 VertSkinning(2)
+    };
+    """)
+
+    shader_array = ast.global_variables[0]
+
+    assert shader_array.vtype == "VertexShader"
+    assert shader_array.array_sizes == [2]
+    assert isinstance(shader_array.value, InitializerListNode)
+    assert [element.name for element in shader_array.value.elements] == [
+        "compile",
+        "compile",
+    ]
+    assert shader_array.value.elements[0].args[0] == "vs_2_0"
+    assert isinstance(shader_array.value.elements[0].args[1], FunctionCallNode)
+    assert shader_array.value.elements[0].args[1].name == "VertSkinning"
+
+
+def test_parse_inline_struct_array_member_in_cbuffer_from_directx_sdk_samples():
+    ast = parse_code("""
+    cbuffer cbPerLight : register(b1) {
+        struct LightDataStruct {
+            matrix m_mLightViewProj;
+            float4 m_vLightPos;
+        } g_LightData[g_iNumLights] : packoffset(c4);
+    };
+    """)
+
+    light_struct = ast.structs[0]
+    cbuffer = ast.cbuffers[0]
+    light_data = cbuffer.members[0]
+
+    assert light_struct.name == "LightDataStruct"
+    assert [member.name for member in light_struct.members] == [
+        "m_mLightViewProj",
+        "m_vLightPos",
+    ]
+    assert cbuffer.name == "cbPerLight"
+    assert light_data.vtype == "LightDataStruct"
+    assert light_data.name == "g_LightData"
+    assert light_data.array_sizes == ["g_iNumLights"]
+    assert light_data.packoffset == "c4"
 
 
 def test_parse_parenthesized_vector_values_from_directx_graphics_samples():

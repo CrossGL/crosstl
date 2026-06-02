@@ -898,6 +898,11 @@ class MetalParser:
             self.eat("SEMICOLON")
             return AssignmentNode(var_node, VectorConstructorNode(vtype, args))
 
+        if self.current_token[0] == "LBRACE":
+            value = self.parse_initializer_list()
+            self.eat("SEMICOLON")
+            return AssignmentNode(var_node, value)
+
         self.eat("SEMICOLON")
         return var_node
 
@@ -1529,6 +1534,15 @@ class MetalParser:
             self.eat("SEMICOLON")
             return node
 
+        if self.current_token[0] == "LBRACE":
+            node = AssignmentNode(var_node, self.parse_initializer_list())
+            if self.current_token[0] == "COMMA":
+                return self.parse_remaining_variable_declarations(
+                    vtype, qualifiers, [node]
+                )
+            self.eat("SEMICOLON")
+            return node
+
         expr = self.parse_expression()
         self.eat("SEMICOLON")
         return expr
@@ -1566,6 +1580,8 @@ class MetalParser:
                 nodes.append(
                     AssignmentNode(var_node, VectorConstructorNode(vtype, args))
                 )
+            elif self.current_token[0] == "LBRACE":
+                nodes.append(AssignmentNode(var_node, self.parse_initializer_list()))
             else:
                 nodes.append(var_node)
 

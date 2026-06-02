@@ -2250,6 +2250,44 @@ class TestCudaParser:
         assert body[4].vtype == "Table"
         assert body[5].name == "consume"
 
+    def test_public_cuda_function_pointer_using_alias_parsing(self):
+        code = """
+        using matmul_fn_ptr = void(*)(float* p,
+                                      int ps,
+                                      const float* k,
+                                      int ks,
+                                      const float* q,
+                                      int qs,
+                                      int T,
+                                      int hs,
+                                      float alpha);
+
+        __global__ void trimul_global(float* out) {
+            out[threadIdx.x] = 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        alias = ast.typedefs[0]
+        assert isinstance(alias, TypeAliasNode)
+        assert alias.name == "matmul_fn_ptr"
+        assert alias.alias_type == "void (*)"
+        assert [(param.vtype, param.name) for param in alias.params] == [
+            ("float *", "p"),
+            ("int", "ps"),
+            ("const float *", "k"),
+            ("int", "ks"),
+            ("const float *", "q"),
+            ("int", "qs"),
+            ("int", "T"),
+            ("int", "hs"),
+            ("float", "alpha"),
+        ]
+        assert ast.kernels[0].name == "trimul_global"
+
     def test_cub_dependent_shared_temp_storage_parsing(self):
         code = """
         using WarpReduce = cub::WarpReduce<int>;

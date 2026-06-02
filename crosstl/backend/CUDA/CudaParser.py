@@ -1332,9 +1332,34 @@ class CudaParser:
 
         self.eat("ASSIGN")
         alias_type = self.parse_type()
+        if self.is_unnamed_function_pointer_alias_declarator():
+            return self.parse_using_function_pointer_alias_declarator(name, alias_type)
+
         self.eat("SEMICOLON")
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
+
+    def is_unnamed_function_pointer_alias_declarator(self):
+        return (
+            self.current_index + 2 < len(self.tokens)
+            and self.current_token[0] == "LPAREN"
+            and self.tokens[self.current_index + 1][0]
+            in {"MULTIPLY", *self.TYPE_REFERENCE_TOKENS}
+            and self.tokens[self.current_index + 2][0] == "RPAREN"
+        )
+
+    def parse_using_function_pointer_alias_declarator(self, name, return_type):
+        self.eat("LPAREN")
+        pointer_prefix = self.parse_declarator_prefix("")
+        self.eat("RPAREN")
+        params = self.parse_parameters() if self.current_token[0] == "LPAREN" else []
+        self.eat("SEMICOLON")
+
+        alias_type = f"{return_type} ({pointer_prefix})".strip()
+        alias = TypeAliasNode(alias_type, name)
+        alias.params = params
+        self.type_aliases.add(name)
+        return alias
 
     def is_namespace_alias_start(self):
         return (

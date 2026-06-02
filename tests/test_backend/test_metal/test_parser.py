@@ -10,6 +10,7 @@ from crosstl.backend.common_ast import (
     ForNode,
     FunctionCallNode,
     IfNode,
+    InitializerListNode,
     MemberAccessNode,
     MethodCallNode,
     RangeForNode,
@@ -986,6 +987,31 @@ def test_parse_braced_uchar_vector_constructor_from_llama_cpp():
 
     assert len(braced_constructors) == 2
     assert len(scalar_constructors) == 4
+
+
+def test_parse_direct_list_declaration_initializers_from_book_of_shaders_metal():
+    code = """
+    constant float3 colorA { 0.000f, 0.129f, 0.647f };
+    constant float3 colorB { 0.980f, 0.275f, 0.090f };
+
+    fragment float4 fragment_main() {
+        float3 color { colorA.x, colorB.y, 1.0f };
+        float2 st { 0.0f, 1.0f }, offset { 1.0f, 0.0f };
+        return float4(color + float3(st.x, offset.y, 0.0f), 1.0f);
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [node.left.name for node in ast.global_variables] == ["colorA", "colorB"]
+    assert all(
+        isinstance(node.right, InitializerListNode) for node in ast.global_variables
+    )
+    assert [len(node.right.elements) for node in ast.global_variables] == [3, 3]
+
+    body = ast.functions[0].body
+    assert isinstance(body[0].right, InitializerListNode)
+    assert [node.left.name for node in body[1:3]] == ["st", "offset"]
+    assert all(isinstance(node.right, InitializerListNode) for node in body[1:3])
 
 
 def test_parse_standalone_scoped_block_from_llama_cpp():
