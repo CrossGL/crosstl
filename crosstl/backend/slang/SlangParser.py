@@ -307,8 +307,11 @@ class SlangParser:
         for attribute in attributes:
             if str(attribute.get("name", "")).lower() == "numthreads":
                 arguments = attribute.get("arguments", [])
-                if len(arguments) >= 3:
-                    return tuple(arguments[:3])
+                if arguments:
+                    normalized_arguments = list(arguments[:3])
+                    while len(normalized_arguments) < 3:
+                        normalized_arguments.append("1")
+                    return tuple(normalized_arguments)
         return None
 
     def get_shader_attribute(self, attributes):

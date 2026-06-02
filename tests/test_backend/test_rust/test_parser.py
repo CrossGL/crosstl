@@ -602,6 +602,43 @@ def test_inner_and_nested_spirv_attributes_parse_from_rust_gpu_style_source():
     ]
 
 
+def test_rust_gpu_spirv_entry_point_name_attribute_parsing():
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(compute(threads(256), entry_point_name = "find_matches_and_compute_f4"))]
+    pub fn shader_body() {}
+
+    #[spirv(vertex(entry_point_name = "renamed_vs"))]
+    pub fn vertex_body() {}
+    """
+    ast = parse_code(code)
+
+    compute = ast.functions[0]
+    assert compute.attributes[0].args == [
+        "compute",
+        "(",
+        "threads",
+        "(",
+        "256",
+        ")",
+        "entry_point_name",
+        "=",
+        '"find_matches_and_compute_f4"',
+        ")",
+    ]
+
+    vertex = ast.functions[1]
+    assert vertex.attributes[0].args == [
+        "vertex",
+        "(",
+        "entry_point_name",
+        "=",
+        '"renamed_vs"',
+        ")",
+    ]
+
+
 def test_rust_gpu_image_macro_type_parsing():
     code = """
     use spirv_std::{spirv, Image};

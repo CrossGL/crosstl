@@ -1858,7 +1858,8 @@ class RustToCrossGLConverter:
             extra_forbidden=local_binding_names,
         )
         return_type = self.map_type(func.return_type)
-        stage_name = self.crossgl_identifier(func.name)
+        entry_point_name = self.get_entry_point_name_from_attributes(func.attributes)
+        stage_name = self.crossgl_identifier(entry_point_name or func.name)
         stage_header = (
             shader_type if stage_name == "main" else f"{shader_type} {stage_name}"
         )
@@ -9061,6 +9062,33 @@ class RustToCrossGLConverter:
                         if mapped:
                             return mapped
         return None
+
+    def get_entry_point_name_from_attributes(self, attributes):
+        if not attributes:
+            return None
+
+        for attr in attributes:
+            if not isinstance(attr, AttributeNode) or attr.name != "spirv":
+                continue
+
+            entry_point_name = self.attribute_arg_value(attr.args, "entry_point_name")
+            if entry_point_name is not None:
+                return self.unquote_attribute_string(entry_point_name)
+
+        return None
+
+    def unquote_attribute_string(self, value):
+        if not isinstance(value, str):
+            return value
+
+        raw_string = RUST_RAW_STRING_RE.match(value)
+        if raw_string:
+            return raw_string.group(2)
+
+        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+            return value[1:-1]
+
+        return value
 
     def get_semantic_from_attributes(self, attributes):
         if not attributes:

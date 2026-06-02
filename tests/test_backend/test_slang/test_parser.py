@@ -1560,6 +1560,11 @@ def test_generic_struct_member_and_uniform_parameters_from_official_sample():
 
     assert options.members[-1].vtype == "StructuredBuffer<float4>"
     assert options.members[-1].name == "lookupTable"
+    assert process_image.numthreads == (
+        "THREADGROUP_SIZE_X",
+        "THREADGROUP_SIZE_Y",
+        "1",
+    )
     params = [
         (param.qualifiers, param.vtype, param.name) for param in process_image.params
     ]

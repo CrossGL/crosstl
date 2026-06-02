@@ -238,6 +238,8 @@ class TestHipCodeGen:
         int main(void) {
             constexpr unsigned int size = 1;
             const unsigned blocks = 512;
+            long long int cycles = 0;
+            unsigned long long int ticks = 1;
             return 0;
         }
         """
@@ -253,6 +255,8 @@ class TestHipCodeGen:
         assert "i32 main()" in result
         assert "var size: u32 = 1;" in result
         assert "var blocks: u32 = 512;" in result
+        assert "var cycles: i64 = 0;" in result
+        assert "var ticks: u64 = 1;" in result
         assert "constexpr" not in result
 
     def test_multiple_kernels_conversion(self):
@@ -1507,6 +1511,29 @@ class TestHipCodeGen:
             in result
         )
         assert "// Arguments: data, 2.0f" in result
+
+    def test_braced_dim3_kernel_launch_conversion(self):
+        code = """
+        __global__ void kernel() {
+        }
+
+        void host() {
+            kernel<<<dim3{1, 1, 1}, dim3{32, 1, 1}>>>();
+            auto block = dim3{64, 1, 1};
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// Kernel launch: kernel<<<vec3<u32>(1, 1, 1), " "vec3<u32>(32, 1, 1)>>>()"
+        ) in result
+        assert "var block: auto = vec3<u32>(64, 1, 1);" in result
 
     def test_computed_kernel_launch_config_conversion(self):
         code = """

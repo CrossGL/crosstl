@@ -1550,6 +1550,10 @@ def test_generic_struct_member_and_uniform_parameter_codegen_from_official_sampl
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
+    assert (
+        "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;"
+        in generated_code
+    )
     assert "StructuredBuffer<float4> lookupTable;" in generated_code
     assert "uvec3 threadID @ SV_DispatchThreadID" in generated_code
     assert "sampler2D inputImage" in generated_code

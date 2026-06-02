@@ -50,6 +50,14 @@ class VulkanParser:
         "Component": "component",
         "Index": "index",
     }
+    SPIRV_DECLARATION_DECORATION_QUALIFIERS = {
+        "Centroid": "centroid",
+        "Flat": "flat",
+        "Invariant": "invariant",
+        "NoPerspective": "noperspective",
+        "Patch": "patch",
+        "Sample": "sample",
+    }
     SPIRV_VECTOR_TYPES = {
         ("float", "2"): "vec2",
         ("float", "3"): "vec3",
@@ -489,6 +497,9 @@ class VulkanParser:
             qualifiers = self.spirv_layout_qualifiers(variable_decorations)
             if not self.spirv_has_interface_qualifier(qualifiers):
                 continue
+            declaration_qualifiers = self.spirv_declaration_qualifiers(
+                variable_decorations
+            )
 
             data_type, array_suffix = self.spirv_type_name_and_suffix(
                 pointer_type.get("type_id"), types, constants
@@ -507,6 +518,7 @@ class VulkanParser:
                     layout_type=layout_type,
                     data_type=data_type,
                     variable_name=variable_name,
+                    declaration_qualifiers=declaration_qualifiers,
                     spirv_id=variable["id"],
                     spirv_decorations=variable_decorations,
                     spirv_storage_class=storage_class,
@@ -706,6 +718,9 @@ class VulkanParser:
             qualifiers = self.spirv_layout_qualifiers(member_layout_decorations)
             if not self.spirv_has_interface_qualifier(qualifiers):
                 continue
+            declaration_qualifiers = self.spirv_declaration_qualifiers(
+                member_layout_decorations
+            )
 
             data_type, array_suffix = self.spirv_type_name_and_suffix(
                 member_type_id, types, constants
@@ -727,6 +742,7 @@ class VulkanParser:
                     layout_type=self.SPIRV_INTERFACE_STORAGE_CLASSES[storage_class],
                     data_type=data_type,
                     variable_name=variable_name,
+                    declaration_qualifiers=declaration_qualifiers,
                     spirv_id=f"{variable['id']}.{member_key}",
                     spirv_decorations=member_layout_decorations,
                     spirv_storage_class=storage_class,
@@ -741,6 +757,14 @@ class VulkanParser:
             qualifier_name = self.SPIRV_INTERFACE_DECORATIONS.get(decoration)
             if qualifier_name and operands:
                 qualifiers.append((qualifier_name, operands[0]))
+        return qualifiers
+
+    def spirv_declaration_qualifiers(self, decorations):
+        qualifiers = []
+        for decoration, _operands in decorations:
+            qualifier = self.SPIRV_DECLARATION_DECORATION_QUALIFIERS.get(decoration)
+            if qualifier:
+                qualifiers.append(qualifier)
         return qualifiers
 
     def spirv_has_interface_qualifier(self, qualifiers):

@@ -273,6 +273,26 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_FLAT_LOCATION_ASSEMBLY = """
+; Reduced from Khronos SPIRV-Tools test/val/val_image_test.cpp CommonTypes.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_flat_u32
+OpExecutionMode %main OriginUpperLeft
+OpName %input_flat_u32 "input_flat_u32"
+OpDecorate %input_flat_u32 Flat
+OpDecorate %input_flat_u32 Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%u32 = OpTypeInt 32 0
+%ptr_input_u32 = OpTypePointer Input %u32
+%input_flat_u32 = OpVariable %ptr_input_u32 Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -594,6 +614,16 @@ def test_spirv_assembly_uniform_constant_resources_codegen():
     assert "Texture2D combinedTex @set(0) @binding(0);" in generated_code
     assert "sampler linearSampler @set(0) @binding(1);" in generated_code
     assert "%combined" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_flat_location_interface_codegen():
+    tokens = tokenize_code(SPIRV_TOOLS_FLAT_LOCATION_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint input_flat_u32 @input @location(0) @flat;" in generated_code
+    assert "%input_flat_u32" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

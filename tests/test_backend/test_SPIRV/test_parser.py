@@ -245,6 +245,26 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_FLAT_LOCATION_ASSEMBLY = """
+; Reduced from Khronos SPIRV-Tools test/val/val_image_test.cpp CommonTypes.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_flat_u32
+OpExecutionMode %main OriginUpperLeft
+OpName %input_flat_u32 "input_flat_u32"
+OpDecorate %input_flat_u32 Flat
+OpDecorate %input_flat_u32 Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%u32 = OpTypeInt 32 0
+%ptr_input_u32 = OpTypePointer Input %u32
+%input_flat_u32 = OpVariable %ptr_input_u32 Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
@@ -412,6 +432,20 @@ def test_spirv_assembly_uniform_constant_resources_parse():
     assert linear_sampler.variable_name == "linearSampler"
     assert linear_sampler.qualifiers == [("set", "0"), ("binding", "1")]
     assert linear_sampler.spirv_storage_class == "UniformConstant"
+
+
+def test_spirv_assembly_flat_location_interface_parse():
+    tokens = tokenize_code(SPIRV_TOOLS_FLAT_LOCATION_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert layout.layout_type == "IN"
+    assert layout.data_type == "uint"
+    assert layout.variable_name == "input_flat_u32"
+    assert layout.qualifiers == [("location", "0")]
+    assert layout.declaration_qualifiers == ["flat"]
+    assert layout.spirv_decorations == [("Flat", []), ("Location", ["0"])]
 
 
 def test_spirv_assembly_without_location_interface_is_rejected():

@@ -248,6 +248,21 @@ class TestHipParser:
         assert ast.statements[2].body[0].vtype == "float[2]"
         assert isinstance(ast.statements[2].body[0].value, InitializerListNode)
 
+    def test_long_long_int_declarations_parsing(self):
+        code = """
+        void kernel() {
+            long long int start = 0;
+            unsigned long long int ticks = 1;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert body[0].vtype == "long long"
+        assert body[0].name == "start"
+        assert body[1].vtype == "unsigned long long"
+        assert body[1].name == "ticks"
+
     def test_cpp_function_declarator_spacing_and_qualifiers(self):
         code = """
         template <typename T>
@@ -506,6 +521,36 @@ class TestHipParser:
         assert launch.shared_mem is None
         assert launch.stream is None
         assert launch.args == ["data", "2.0f"]
+
+    def test_braced_dim3_kernel_launch_parsing(self):
+        code = """
+        __global__ void kernel() {
+        }
+
+        void host() {
+            kernel<<<dim3{1, 1, 1}, dim3{32, 1, 1}>>>();
+            auto block = dim3{64, 1, 1};
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        host = next(
+            statement for statement in ast.statements if statement.name == "host"
+        )
+        launch = host.body[0]
+        assert isinstance(launch, KernelLaunchNode)
+        assert isinstance(launch.blocks, FunctionCallNode)
+        assert launch.blocks.name == "dim3"
+        assert launch.blocks.args == ["1", "1", "1"]
+        assert isinstance(launch.threads, FunctionCallNode)
+        assert launch.threads.name == "dim3"
+        assert launch.threads.args == ["32", "1", "1"]
+        assert isinstance(host.body[1].value, FunctionCallNode)
+        assert host.body[1].value.name == "dim3"
+        assert host.body[1].value.args == ["64", "1", "1"]
 
     def test_computed_kernel_launch_config_parsing(self):
         code = """

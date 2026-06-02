@@ -228,6 +228,24 @@ def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
     assert "uint values[] @ binding(0)" in result
 
 
+def test_rust_gpu_spirv_entry_point_name_drives_stage_name():
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(compute(threads(256), entry_point_name = "find_matches_and_compute_f4"))]
+    pub fn shader_body() {}
+
+    #[spirv(vertex(entry_point_name = "renamed_vs"))]
+    pub fn vertex_body() {}
+    """
+    result = parse_and_generate(code)
+
+    assert "compute find_matches_and_compute_f4 {" in result
+    assert "vertex renamed_vs {" in result
+    assert "compute shader_body {" not in result
+    assert "vertex vertex_body {" not in result
+
+
 def test_rust_gpu_image_macro_types_drive_resource_parameters():
     code = """
     use spirv_std::{spirv, Image};

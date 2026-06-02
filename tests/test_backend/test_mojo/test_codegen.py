@@ -813,6 +813,9 @@ def test_comptime_assert_statement_codegen():
     def outer_product_acc(res: TileTensor, size: Int):
         comptime assert(type_of(res).flat_rank == 2)
         comptime assert(size > 0, "bad size")
+        comptime assert (
+            dtype.is_floating_point()
+        ), "dtype must be a floating-point type"
     """
 
     tokens = tokenize_code(code)
@@ -821,6 +824,10 @@ def test_comptime_assert_statement_codegen():
 
     assert "assert((type_of(res).flat_rank == 2));" in generated_code
     assert 'assert((size > 0), "bad size");' in generated_code
+    assert (
+        'assert(dtype.is_floating_point(), "dtype must be a floating-point type");'
+        in generated_code
+    )
 
 
 def test_alias_declaration_codegen_matches_comptime_declarations():

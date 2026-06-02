@@ -1082,6 +1082,8 @@ class HipParser:
         if token_type == "LONG" and self.match("LONG"):
             type_name += " long"
             self.advance()
+        if token_type == "LONG" and self.match("INT"):
+            self.advance()
 
         while self.match("SCOPE"):
             self.consume("SCOPE")
@@ -1728,6 +1730,9 @@ class HipParser:
                     args = self.parse_argument_list()
                 self.consume("RPAREN")
                 expr = self.parse_function_call_node(expr, args)
+            elif self.match("LBRACE"):
+                initializer = self.parse_initializer_list()
+                expr = self.parse_function_call_node(expr, initializer.elements)
             elif self.match("KERNEL_LAUNCH_START"):
                 expr = self.parse_kernel_launch(expr)
             elif self.match("INCREMENT", "DECREMENT"):
@@ -2640,6 +2645,8 @@ class HipParser:
             index += 1
             if type_token == "LONG" and index < len(self.tokens):
                 if self.tokens[index].type == "LONG":
+                    index += 1
+                if index < len(self.tokens) and self.tokens[index].type == "INT":
                     index += 1
         else:
             return None

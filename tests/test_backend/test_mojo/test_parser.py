@@ -1227,12 +1227,16 @@ def test_comptime_assert_statement_parse():
     def outer_product_acc(res: TileTensor, size: Int):
         comptime assert(type_of(res).flat_rank == 2)
         comptime assert(size > 0, "bad size")
+        comptime assert (
+            dtype.is_floating_point()
+        ), "dtype must be a floating-point type"
     """
 
     ast = parse_code(tokenize_code(code))
     function = find_function(ast, "outer_product_acc")
     rank_assert = function.body[0]
     size_assert = function.body[1]
+    dtype_assert = function.body[2]
 
     assert isinstance(rank_assert, FunctionCallNode)
     assert getattr(rank_assert, "is_comptime", False)
@@ -1243,6 +1247,13 @@ def test_comptime_assert_statement_parse():
     assert isinstance(size_assert, FunctionCallNode)
     assert getattr(size_assert, "is_comptime", False)
     assert size_assert.args[1] == '"bad size"'
+
+    assert isinstance(dtype_assert, FunctionCallNode)
+    assert getattr(dtype_assert, "is_comptime", False)
+    assert dtype_assert.name == "assert"
+    assert isinstance(dtype_assert.args[0], MethodCallNode)
+    assert dtype_assert.args[0].method == "is_floating_point"
+    assert dtype_assert.args[1] == '"dtype must be a floating-point type"'
 
 
 def test_keyword_style_comptime_assert_statement_parse():
