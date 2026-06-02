@@ -885,6 +885,20 @@ def test_codegen_ignores_function_body_pragma_from_llama_cpp():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_comma_assignment_statement_from_llama_cpp():
+    code = """
+    void dequantize(device const float* values) {
+        float dl = 0.0f;
+        float ml = 0.0f;
+        dl = values[0], ml = values[1];
+    }
+    """
+    crossgl = convert(code)
+
+    assert "dl = values[0] , ml = values[1];" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_preserves_binding_attributes():
     code = """
     #include <metal_stdlib>

@@ -4,6 +4,7 @@ import pytest
 
 from crosstl.backend.common_ast import (
     AssignmentNode,
+    BinaryOpNode,
     CastNode,
     DiscardNode,
     ForNode,
@@ -823,6 +824,25 @@ def test_parse_function_body_pragma_from_llama_cpp():
 
     assert [func.name for func in ast.functions] == ["quantize_q4_0"]
     assert len(ast.functions[0].body) == 2
+
+
+def test_parse_comma_assignment_statement_from_llama_cpp():
+    code = """
+    void dequantize(device const float* values) {
+        float dl = 0.0f;
+        float ml = 0.0f;
+        dl = values[0], ml = values[1];
+    }
+    """
+    ast = parse_ok(code)
+    statement = ast.functions[0].body[2]
+
+    assert isinstance(statement, BinaryOpNode)
+    assert statement.op == ","
+    assert isinstance(statement.left, AssignmentNode)
+    assert isinstance(statement.right, AssignmentNode)
+    assert statement.left.left.name == "dl"
+    assert statement.right.left.name == "ml"
 
 
 def test_parse_preprocessor_define():

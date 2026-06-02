@@ -228,6 +228,7 @@ class HipParser:
         if linkage_end is not None:
             index = linkage_end
 
+        index = self.skip_newlines_at_pos(index)
         function_qualifiers = {
             *self.FUNCTION_SPECIFIER_TOKENS,
             "__DEVICE__",
@@ -244,15 +245,19 @@ class HipParser:
                 index = self.skip_launch_bounds_at_pos(index)
             else:
                 index += 1
+            index = self.skip_newlines_at_pos(index)
 
+        index = self.skip_newlines_at_pos(index)
         index = self.skip_type_at_pos(index)
         if index is None:
             return None
 
+        index = self.skip_newlines_at_pos(index)
         while (
             index < len(self.tokens) and self.tokens[index].type == "__LAUNCH_BOUNDS__"
         ):
             index = self.skip_launch_bounds_at_pos(index)
+            index = self.skip_newlines_at_pos(index)
 
         if (
             index + 1 < len(self.tokens)
@@ -325,6 +330,11 @@ class HipParser:
         while self.match("NEWLINE"):
             self.advance()
 
+    def skip_newlines_at_pos(self, index):
+        while index < len(self.tokens) and self.tokens[index].type == "NEWLINE":
+            index += 1
+        return index
+
     def is_builtin_type_token(self, token=None):
         token = token or self.current_token
         if not token:
@@ -389,6 +399,12 @@ class HipParser:
             "__NOINLINE__",
             "__LAUNCH_BOUNDS__",
         ):
+            if self.function_name_index_at(self.pos) is None:
+                declarations = self.parse_variable_declaration_list()
+                if self.match("SEMICOLON"):
+                    self.advance()
+                return declarations if len(declarations) > 1 else declarations[0]
+
             return self.parse_function_with_qualifier()
 
         if self.match("STRUCT"):

@@ -197,6 +197,34 @@ def test_translate_api_accepts_rust_source_preserves_stage_entry(tmp_path):
     assert "pub fn main() -> ()" not in rust_result
 
 
+def test_rust_gpu_ray_query_parenthesized_statement_macro_codegen():
+    code = """
+    use glam::Vec3;
+    use spirv_std::ray_tracing::{AccelerationStructure, RayFlags, RayQuery};
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main(#[spirv(descriptor_set = 0, binding = 0)] accel: &AccelerationStructure) {
+        unsafe {
+            spirv_std::ray_query!(let mut handle);
+            handle.initialize(accel, RayFlags::NONE, 0, Vec3::ZERO, 0.0, Vec3::ZERO, 0.0);
+            let origin: glam::Vec3 = handle.get_world_ray_origin();
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "fragment {" in result
+    assert "AccelerationStructure accel @ binding(0)" in result
+    assert "spirv_std::ray_query!(let mut handle);" in result
+    assert (
+        "handle.initialize(accel, RayFlags::NONE, 0, Vec3::ZERO, 0.0, Vec3::ZERO, 0.0);"
+        in result
+    )
+    assert "vec3 origin = handle.get_world_ray_origin();" in result
+
+
 def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
     code = """
     #![cfg_attr(target_arch = "spirv", no_std)]

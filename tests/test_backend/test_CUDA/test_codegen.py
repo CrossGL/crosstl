@@ -154,6 +154,22 @@ class TestCudaCodeGen:
         assert "// CUDA to CrossGL conversion" in result
         assert "// Function: add" in result
 
+    def test_public_cuda_samples_device_global_variables_conversion(self):
+        code = """
+        __device__ int g_uids = 0;
+        __device__ double grid_dot_result = 0.0;
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var g_uids: i32 = 0;" in result
+        assert "var grid_dot_result: f64 = 0.0;" in result
+
     def test_device_function_body_emitted_when_kernel_calls_it(self):
         code = """
         __device__ float add(float a, float b) {

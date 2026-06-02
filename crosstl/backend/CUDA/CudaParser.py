@@ -306,10 +306,17 @@ class CudaParser:
                         typedefs.append(item)
                     else:
                         global_variables.append(item)
-            elif (
-                self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]
-                or self.peek_function()
-            ):
+            elif self.peek_function():
+                func = self.parse_function()
+                if isinstance(func, KernelNode):
+                    kernels.append(func)
+                else:
+                    functions.append(func)
+            elif self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]:
+                if self.current_token[0] == "DEVICE" and self.peek_variable():
+                    global_variables.append(self.parse_global_variable())
+                    continue
+
                 func = self.parse_function()
                 if isinstance(func, KernelNode):
                     kernels.append(func)
@@ -625,11 +632,13 @@ class CudaParser:
                     items.append(aliases)
             elif self.current_token[0] == "STRUCT":
                 items.append(self.parse_struct())
-            elif (
-                self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]
-                or self.peek_function()
-            ):
+            elif self.peek_function():
                 items.append(self.parse_function())
+            elif self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]:
+                if self.current_token[0] == "DEVICE" and self.peek_variable():
+                    items.append(self.parse_global_variable())
+                else:
+                    items.append(self.parse_function())
             elif (
                 self.current_token[0] in ["CONSTANT", "SHARED"] or self.peek_variable()
             ):

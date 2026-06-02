@@ -183,6 +183,36 @@ def test_braced_macro_invocation_parsing():
     assert "OpStore" in macro_call.args[0]
 
 
+def test_rust_gpu_ray_query_parenthesized_statement_macro_parsing():
+    code = """
+    use glam::Vec3;
+    use spirv_std::ray_tracing::{AccelerationStructure, RayFlags, RayQuery};
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main(#[spirv(descriptor_set = 0, binding = 0)] accel: &AccelerationStructure) {
+        unsafe {
+            spirv_std::ray_query!(let mut handle);
+            handle.initialize(accel, RayFlags::NONE, 0, Vec3::ZERO, 0.0, Vec3::ZERO, 0.0);
+            let origin: glam::Vec3 = handle.get_world_ray_origin();
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    unsafe_block = ast.functions[0].body[0]
+    macro_call = unsafe_block.block.statements[0]
+    origin = unsafe_block.block.statements[2]
+
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    assert isinstance(macro_call, FunctionCallNode)
+    assert macro_call.name == "spirv_std::ray_query!"
+    assert macro_call.args == ["let mut handle"]
+    assert macro_call.macro_delimiter == "LPAREN"
+    assert origin.name == "origin"
+    assert origin.vtype == "glam::Vec3"
+
+
 def test_underscore_parameter_name_parsing():
     code = """
     pub fn fallback(_value: u32) -> u32 {

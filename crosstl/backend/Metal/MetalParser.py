@@ -1198,14 +1198,14 @@ class MetalParser:
         while self.current_token[0] == "IF":
             self.eat("IF")
             self.eat("LPAREN")
-            condition = self.parse_expression()
+            condition = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
             body = self.parse_statement_body()
             if_chain.append((condition, body))
         while self.current_token[0] == "ELSE_IF":
             self.eat("ELSE_IF")
             self.eat("LPAREN")
-            condition = self.parse_expression()
+            condition = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
             body = self.parse_statement_body()
             else_if_chain.append((condition, body))
@@ -1228,15 +1228,12 @@ class MetalParser:
 
         condition = None
         if self.current_token[0] != "SEMICOLON":
-            condition = self.parse_expression()
+            condition = self.parse_expression(allow_comma=True)
         self.eat("SEMICOLON")
 
         update = None
         if self.current_token[0] != "RPAREN":
-            update = self.parse_expression()
-            while self.current_token[0] == "COMMA":
-                self.eat("COMMA")
-                update = BinaryOpNode(update, ",", self.parse_expression())
+            update = self.parse_expression(allow_comma=True)
         self.eat("RPAREN")
 
         body = self.parse_statement_body()
@@ -1256,21 +1253,21 @@ class MetalParser:
                 init_value = self.parse_expression()
                 return AssignmentNode(var_node, init_value)
             return var_node
-        return self.parse_expression()
+        return self.parse_expression(allow_comma=True)
 
     def parse_return_statement(self):
         self.eat("RETURN")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return ReturnNode(None)
-        value = self.parse_expression()
+        value = self.parse_expression(allow_comma=True)
         self.eat("SEMICOLON")
         return ReturnNode(value)
 
     def parse_while_statement(self):
         self.eat("WHILE")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        condition = self.parse_expression(allow_comma=True)
         self.eat("RPAREN")
         body = self.parse_block()
         return WhileNode(condition, body)
@@ -1280,18 +1277,29 @@ class MetalParser:
         body = self.parse_block()
         self.eat("WHILE")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        condition = self.parse_expression(allow_comma=True)
         self.eat("RPAREN")
         self.eat("SEMICOLON")
         return DoWhileNode(body, condition)
 
     def parse_expression_statement(self):
-        expr = self.parse_expression()
+        expr = self.parse_expression(allow_comma=True)
         self.eat("SEMICOLON")
         return expr
 
-    def parse_expression(self):
+    def parse_expression(self, allow_comma=False):
+        if allow_comma:
+            return self.parse_comma_expression()
         return self.parse_assignment()
+
+    def parse_comma_expression(self):
+        left = self.parse_assignment()
+        while self.current_token[0] == "COMMA":
+            op = self.current_token[1]
+            self.eat("COMMA")
+            right = self.parse_assignment()
+            left = BinaryOpNode(left, op, right)
+        return left
 
     def parse_assignment(self):
         left = self.parse_conditional()
@@ -1635,7 +1643,7 @@ class MetalParser:
             return value
         if self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
-            expr = self.parse_expression()
+            expr = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
             return expr
         if self.current_token[0] == "LBRACE":

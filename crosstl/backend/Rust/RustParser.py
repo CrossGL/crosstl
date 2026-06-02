@@ -2475,16 +2475,10 @@ class RustParser:
 
     def parse_macro_invocation(self, macro_name):
         if self.current_token[0] == "LPAREN":
-            self.eat("LPAREN")
-            args = []
-            while self.current_token[0] != "RPAREN":
-                args.append(self.parse_expression())
-                if self.current_token[0] == "COMMA":
-                    self.eat("COMMA")
-                else:
-                    break
-            self.eat("RPAREN")
-            return FunctionCallNode(macro_name, args)
+            body = self.collect_delimited_macro_body()
+            node = FunctionCallNode(f"{macro_name}!", [body] if body else [])
+            node.macro_delimiter = "LPAREN"
+            return node
 
         if self.current_token[0] in {"LBRACE", "LBRACKET"}:
             delimiter = self.current_token[0]
@@ -2497,7 +2491,11 @@ class RustParser:
 
     def collect_delimited_macro_body(self):
         opening_token = self.current_token[0]
-        closing_token = {"LBRACE": "RBRACE", "LBRACKET": "RBRACKET"}[opening_token]
+        closing_token = {
+            "LBRACE": "RBRACE",
+            "LBRACKET": "RBRACKET",
+            "LPAREN": "RPAREN",
+        }[opening_token]
         self.eat(opening_token)
 
         opening_tokens = {"LBRACE", "LBRACKET", "LPAREN"}

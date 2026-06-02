@@ -6,6 +6,7 @@ import pytest
 from crosstl.backend.GLSL.OpenglAst import (
     BinaryOpNode,
     InitializerListNode,
+    ReturnNode,
     StructNode,
     VariableNode,
 )
@@ -220,6 +221,43 @@ def test_parse_local_struct_with_mixed_array_declarators_from_khronos_webgl():
         ("s1", True, 1),
         ("s2", False, 0),
     ]
+
+
+def test_parse_array_of_arrays_return_type_from_glslang_spv_aofa():
+    code = textwrap.dedent("""
+        #version 430
+
+        in float infloat;
+        out float outfloat;
+
+        float[4][7] foo(float a[5][7])
+        {
+            float r[7];
+            r = a[2];
+            return float[4][7](a[0], a[1], r, a[3]);
+        }
+
+        void main()
+        {
+            float u[][7];
+            u[2][2] = infloat;
+            outfloat = foo(u)[1][2];
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    foo = next(function for function in ast.functions if function.name == "foo")
+    return_stmt = next(stmt for stmt in foo.body if isinstance(stmt, ReturnNode))
+
+    assert foo.return_type == "float[4][7]"
+    assert foo.params[0].vtype == "float"
+    assert [
+        size.value if size is not None else None for size in foo.params[0].array_sizes
+    ] == [
+        "5",
+        "7",
+    ]
+    assert isinstance(return_stmt.value, InitializerListNode)
 
 
 def test_parse_control_flow_with_brace_on_next_line():

@@ -273,6 +273,35 @@ def test_codegen_texture_intrinsics_use_canonical_crossgl_resources():
     assert "textureGather(tex, uv)" in glsl
 
 
+def test_codegen_array_of_arrays_return_type_from_glslang_spv_aofa():
+    code = textwrap.dedent("""
+        #version 430
+
+        in float infloat;
+        out float outfloat;
+
+        float[4][7] foo(float a[5][7])
+        {
+            float r[7];
+            r = a[2];
+            return float[4][7](a[0], a[1], r, a[3]);
+        }
+
+        void main()
+        {
+            float u[][7];
+            u[2][2] = infloat;
+            outfloat = foo(u)[1][2];
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float[4][7] foo(float a[5][7])" in crossgl
+    assert "return { a[0], a[1], r, a[3] };" in crossgl
+    assert "float u[][7];" in crossgl
+
+
 def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
     code = textwrap.dedent("""
         #version 450

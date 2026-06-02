@@ -162,6 +162,37 @@ class TestHipParser:
         assert right_value.builtin_name == "warpSize"
         assert right_value.component is None
 
+    def test_public_rocm_examples_device_global_variables_parse_as_globals(self):
+        code = """
+        __device__ auto load_callback_dev = load_callback;
+        __device__ __constant__ constexpr float c0 = 299792458.0f;
+
+        __device__ float add(float a, float b) {
+            return a + b;
+        }
+        """
+        ast = self.parse_code(code)
+
+        callback = ast.statements[0]
+        constant = ast.statements[1]
+        function = ast.statements[2]
+
+        assert isinstance(callback, VariableNode)
+        assert callback.name == "load_callback_dev"
+        assert callback.vtype == "auto"
+        assert callback.qualifiers == ["__device__"]
+        assert callback.value == "load_callback"
+
+        assert isinstance(constant, VariableNode)
+        assert constant.name == "c0"
+        assert constant.vtype == "float"
+        assert constant.qualifiers == ["__device__", "__constant__", "constexpr"]
+        assert constant.value == "299792458.0f"
+
+        assert isinstance(function, FunctionNode)
+        assert function.name == "add"
+        assert "__device__" in function.qualifiers
+
     def test_dynamic_shared_memory_parsing_marks_extern_unsized_array(self):
         code = """
         __global__ void kernel() {

@@ -320,17 +320,26 @@ class GLSLParser:
             ):
                 type_name = self.parse_type()
                 self.skip_newlines()
+                type_array_sizes = []
+                if self.current_token[0] == "LBRACKET":
+                    type_array_sizes = self.parse_array_suffixes()
+                    self.skip_newlines()
 
                 if (
                     self.current_token[0] == "IDENTIFIER"
                     and self.peek(1)[0] == "LPAREN"
                 ):
-                    function = self.parse_function(type_name)
+                    function = self.parse_function(
+                        self.type_name_with_array_suffixes(type_name, type_array_sizes)
+                    )
                     functions.append(function)
                     continue
 
                 declarations = self.parse_variable_declarations(
-                    type_name, qualifiers=qualifiers, layout=layout
+                    type_name,
+                    qualifiers=qualifiers,
+                    layout=layout,
+                    type_array_sizes=type_array_sizes,
                 )
 
                 for var in declarations:
@@ -502,6 +511,39 @@ class GLSLParser:
             .replace("< ", "<")
             .replace(" >", ">")
         )
+
+    def format_type_array_suffixes(self, array_sizes):
+        return "".join(
+            f"[{self.format_type_array_size(size)}]" if size is not None else "[]"
+            for size in array_sizes
+        )
+
+    def format_type_array_size(self, size):
+        if isinstance(size, NumberNode):
+            return size.value
+        if isinstance(size, VariableNode) and not size.vtype:
+            return size.name
+        if isinstance(size, BinaryOpNode):
+            left = self.format_type_array_size(size.left)
+            right = self.format_type_array_size(size.right)
+            return f"{left} {size.op} {right}"
+        if isinstance(size, UnaryOpNode):
+            return f"{size.op}{self.format_type_array_size(size.operand)}"
+        if isinstance(size, TernaryOpNode):
+            condition = self.format_type_array_size(size.condition)
+            true_expr = self.format_type_array_size(size.true_expr)
+            false_expr = self.format_type_array_size(size.false_expr)
+            return f"{condition} ? {true_expr} : {false_expr}"
+        if isinstance(size, FunctionCallNode):
+            name = self.format_type_array_size(size.name)
+            args = ", ".join(self.format_type_array_size(arg) for arg in size.args)
+            return f"{name}({args})"
+        return str(size)
+
+    def type_name_with_array_suffixes(self, type_name, array_sizes):
+        if not array_sizes:
+            return type_name
+        return f"{type_name}{self.format_type_array_suffixes(array_sizes)}"
 
     def is_name_token(self):
         return self.current_token[0] in NAME_TOKENS
@@ -1221,11 +1263,12 @@ class GLSLParser:
         expr = self.parse_primary()
         while True:
             if self.is_array_constructor_suffix(expr):
-                self.eat("LBRACKET")
-                if self.current_token[0] != "RBRACKET":
-                    self.parse_expression()
-                self.eat("RBRACKET")
-                self.skip_newlines()
+                while self.current_token[0] == "LBRACKET":
+                    self.eat("LBRACKET")
+                    if self.current_token[0] != "RBRACKET":
+                        self.parse_expression()
+                    self.eat("RBRACKET")
+                    self.skip_newlines()
                 args = self.parse_call_arguments()
                 expr = InitializerListNode(args)
                 continue
@@ -1256,26 +1299,32 @@ class GLSLParser:
         if not isinstance(expr, VariableNode) or self.current_token[0] != "LBRACKET":
             return False
 
-        depth = 0
         idx = self.index
+        saw_suffix = False
         while idx < len(self.tokens):
-            token_type = self.tokens[idx][0]
-            if token_type == "LBRACKET":
-                depth += 1
-            elif token_type == "RBRACKET":
-                depth -= 1
-                if depth == 0:
-                    next_idx = idx + 1
-                    while (
-                        next_idx < len(self.tokens)
-                        and self.tokens[next_idx][0] == "NEWLINE"
-                    ):
-                        next_idx += 1
-                    if next_idx < len(self.tokens):
-                        return self.tokens[next_idx][0] == "LPAREN"
-                    return False
+            while idx < len(self.tokens) and self.tokens[idx][0] == "NEWLINE":
+                idx += 1
+            if idx >= len(self.tokens) or self.tokens[idx][0] != "LBRACKET":
+                break
+
+            saw_suffix = True
+            depth = 0
+            while idx < len(self.tokens):
+                token_type = self.tokens[idx][0]
+                if token_type == "LBRACKET":
+                    depth += 1
+                elif token_type == "RBRACKET":
+                    depth -= 1
+                    if depth == 0:
+                        idx += 1
+                        break
+                idx += 1
+            else:
+                return False
+
+        while idx < len(self.tokens) and self.tokens[idx][0] == "NEWLINE":
             idx += 1
-        return False
+        return saw_suffix and idx < len(self.tokens) and self.tokens[idx][0] == "LPAREN"
 
     def parse_call_arguments(self):
         self.eat("LPAREN")

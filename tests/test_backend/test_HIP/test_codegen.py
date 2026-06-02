@@ -58,6 +58,22 @@ class TestHipCodeGen:
         assert "__managed__" not in result
         assert "__shared__" not in result
 
+    def test_public_rocm_examples_device_global_variables_conversion(self):
+        code = """
+        __device__ auto load_callback_dev = load_callback;
+        __device__ __constant__ constexpr float c0 = 299792458.0f;
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var load_callback_dev: auto = load_callback;" in result
+        assert "@group(0) @binding(0) var<uniform> c0: f32 = 299792458.0f;" in result
+
     def test_inline_assembly_conversion(self):
         code = r"""
         __global__ void asmKernel(float* out, float in) {

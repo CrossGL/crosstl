@@ -102,6 +102,35 @@ class TestCudaParser:
         assert ast.functions[0].name == "add"
         assert "__device__" in ast.functions[0].qualifiers
 
+    def test_public_cuda_samples_device_global_variables_parse_as_globals(self):
+        code = """
+        __device__ int g_uids = 0;
+        __device__ double grid_dot_result = 0.0;
+        __device__ cufftCallbackLoadC myOwnCallbackPtr = ComplexPointwiseMulAndScale;
+
+        __device__ float add(float a, float b) {
+            return a + b;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [var.name for var in ast.global_variables] == [
+            "g_uids",
+            "grid_dot_result",
+            "myOwnCallbackPtr",
+        ]
+        assert [var.vtype for var in ast.global_variables] == [
+            "int",
+            "double",
+            "cufftCallbackLoadC",
+        ]
+        assert all(var.qualifiers == ["__device__"] for var in ast.global_variables)
+        assert len(ast.functions) == 1
+        assert ast.functions[0].name == "add"
+
     def test_void_parameter_list_and_bodyless_prototypes_parsing(self):
         code = """
         void runTest(int argc, char **argv);
