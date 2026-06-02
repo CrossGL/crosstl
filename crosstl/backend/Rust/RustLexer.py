@@ -97,10 +97,10 @@ TOKENS = tuple(
             r'br(?P<byte_raw_hashes>#*)"(?:.|\n)*?"(?P=byte_raw_hashes)',
         ),
         ("RAW_STRING", r'r(?P<raw_hashes>#*)"(?:.|\n)*?"(?P=raw_hashes)'),
-        ("BYTE_STRING", r'b"([^"\\]|\\.)*"'),
+        ("BYTE_STRING", r'b"([^"\\]|\\(.|\n))*"'),
         ("BYTE_CHAR", r"b'(\\x[0-9a-fA-F]{2}|[^'\\]|\\.)'"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-        ("STRING", r'"([^"\\]|\\.)*"'),
+        ("STRING", r'"([^"\\]|\\(.|\n))*"'),
         ("CHAR_LIT", r"'([^'\\]|\\.)'"),
         ("LIFETIME", r"'[a-zA-Z_][a-zA-Z0-9_]*"),
         # Punctuation

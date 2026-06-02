@@ -434,6 +434,15 @@ def test_string_literals_tokenization():
         pytest.fail("String literals tokenization not implemented.")
 
 
+def test_escaped_newline_string_continuation_tokenization():
+    code = 'fn main() { let message = "hello \\\n    world"; }'
+
+    tokens = tokenize_code(code)
+    string_literals = [token[1] for token in tokens if token[0] == "STRING"]
+
+    assert '"hello \\\n    world"' in string_literals
+
+
 def test_byte_literals_tokenization():
     code = r"""
     fn main() {
@@ -465,6 +474,15 @@ def test_byte_literals_tokenization():
         ), "Hash raw byte string not tokenized correctly"
     except SyntaxError:
         pytest.fail("Byte literals tokenization not implemented.")
+
+
+def test_escaped_newline_byte_string_continuation_tokenization():
+    code = 'fn main() { let message = b"hello \\\n    world"; }'
+
+    tokens = tokenize_code(code)
+    byte_strings = [token[1] for token in tokens if token[0] == "BYTE_STRING"]
+
+    assert 'b"hello \\\n    world"' in byte_strings
 
 
 def test_option_result_keyword_tokenization():

@@ -57,6 +57,8 @@ class HipParser:
     """Parse HIP tokens into the HIP backend AST."""
 
     FUNCTION_SPECIFIER_TOKENS = {"STATIC", "INLINE", "EXTERN", "CONSTEXPR"}
+    IDENTIFIER_FUNCTION_SPECIFIER_VALUES = {"ROCWMMA_KERNEL"}
+    KERNEL_FUNCTION_SPECIFIER_VALUES = {"__global__", "ROCWMMA_KERNEL"}
     DECLARATION_QUALIFIER_TOKENS = {
         "__SHARED__",
         "__CONSTANT__",
@@ -266,8 +268,9 @@ class HipParser:
             "__NOINLINE__",
             "__LAUNCH_BOUNDS__",
         }
-        while (
-            index < len(self.tokens) and self.tokens[index].type in function_qualifiers
+        while index < len(self.tokens) and (
+            self.tokens[index].type in function_qualifiers
+            or self.is_identifier_function_specifier_token(self.tokens[index])
         ):
             if self.tokens[index].type == "__LAUNCH_BOUNDS__":
                 index = self.skip_launch_bounds_at_pos(index)
@@ -329,6 +332,14 @@ class HipParser:
         if not self.current_token:
             return False
         return self.current_token.type in token_types
+
+    def is_identifier_function_specifier_token(self, token=None):
+        token = token or self.current_token
+        return bool(
+            token
+            and token.type == "IDENTIFIER"
+            and token.value in self.IDENTIFIER_FUNCTION_SPECIFIER_VALUES
+        )
 
     def is_function_name_token(self, token=None):
         token = token or self.current_token
@@ -488,13 +499,16 @@ class HipParser:
                 return self.parse_class()
             return self.parse_enum()
 
-        if self.match(
-            "__DEVICE__",
-            "__HOST__",
-            "__GLOBAL__",
-            "__FORCEINLINE__",
-            "__NOINLINE__",
-            "__LAUNCH_BOUNDS__",
+        if (
+            self.match(
+                "__DEVICE__",
+                "__HOST__",
+                "__GLOBAL__",
+                "__FORCEINLINE__",
+                "__NOINLINE__",
+                "__LAUNCH_BOUNDS__",
+            )
+            or self.is_identifier_function_specifier_token()
         ):
             if self.function_name_index_at(self.pos) is None:
                 declarations = self.parse_variable_declaration_list()
@@ -575,7 +589,10 @@ class HipParser:
         self.parse_template_suffix()
         self.skip_newlines()
 
-        if self.match("__DEVICE__", "__HOST__", "__GLOBAL__", "__LAUNCH_BOUNDS__"):
+        if (
+            self.match("__DEVICE__", "__HOST__", "__GLOBAL__", "__LAUNCH_BOUNDS__")
+            or self.is_identifier_function_specifier_token()
+        ):
             if self.function_name_index_at(self.pos) is None:
                 declarations = self.parse_variable_declaration_list()
                 return declarations if len(declarations) > 1 else declarations[0]
@@ -601,13 +618,16 @@ class HipParser:
     def parse_explicit_template_instantiation(self):
         qualifiers = ["template"]
 
-        while self.match(
-            *self.FUNCTION_SPECIFIER_TOKENS,
-            "__DEVICE__",
-            "__HOST__",
-            "__GLOBAL__",
-            "__FORCEINLINE__",
-            "__NOINLINE__",
+        while (
+            self.match(
+                *self.FUNCTION_SPECIFIER_TOKENS,
+                "__DEVICE__",
+                "__HOST__",
+                "__GLOBAL__",
+                "__FORCEINLINE__",
+                "__NOINLINE__",
+            )
+            or self.is_identifier_function_specifier_token()
         ):
             qualifiers.append(self.current_token.value)
             self.advance()
@@ -623,7 +643,9 @@ class HipParser:
         params = self.parse_parameter_list()
         self.consume("RPAREN")
         self.skip_newlines()
+        return_type = self.parse_trailing_return_type(return_type)
         self.skip_post_function_qualifiers()
+        return_type = self.parse_trailing_return_type(return_type)
 
         if self.match("SEMICOLON"):
             self.advance()
@@ -930,15 +952,18 @@ class HipParser:
 
         while True:
             self.skip_newlines()
-            if not self.match(
-                *self.FUNCTION_SPECIFIER_TOKENS,
-                "__DEVICE__",
-                "__HOST__",
-                "__GLOBAL__",
-                "__FORCEINLINE__",
-                "__NOINLINE__",
-                "__LAUNCH_BOUNDS__",
-                "CONSTEXPR",
+            if (
+                not self.match(
+                    *self.FUNCTION_SPECIFIER_TOKENS,
+                    "__DEVICE__",
+                    "__HOST__",
+                    "__GLOBAL__",
+                    "__FORCEINLINE__",
+                    "__NOINLINE__",
+                    "__LAUNCH_BOUNDS__",
+                    "CONSTEXPR",
+                )
+                and not self.is_identifier_function_specifier_token()
             ):
                 break
             if self.match("__LAUNCH_BOUNDS__"):
@@ -961,7 +986,9 @@ class HipParser:
         params = self.parse_parameter_list()
         self.consume("RPAREN")
         self.skip_newlines()
+        return_type = self.parse_trailing_return_type(return_type)
         self.skip_post_function_qualifiers()
+        return_type = self.parse_trailing_return_type(return_type)
 
         body = None
         if self.match("LBRACE"):
@@ -971,7 +998,7 @@ class HipParser:
 
         function = FunctionNode(return_type, name, params, body, qualifiers, attributes)
 
-        if "__global__" in qualifiers:
+        if any(item in self.KERNEL_FUNCTION_SPECIFIER_VALUES for item in qualifiers):
             return KernelNode(return_type, name, params, body, attributes)
 
         return function
@@ -1020,7 +1047,9 @@ class HipParser:
         params = self.parse_parameter_list()
         self.consume("RPAREN")
         self.skip_newlines()
+        return_type = self.parse_trailing_return_type(return_type)
         self.skip_post_function_qualifiers()
+        return_type = self.parse_trailing_return_type(return_type)
 
         body = None
         if self.match("LBRACE"):
@@ -1079,6 +1108,14 @@ class HipParser:
             self.advance()
 
         return FunctionNode("", name, params, body, [])
+
+    def parse_trailing_return_type(self, return_type):
+        self.skip_newlines()
+        if not self.match("ARROW"):
+            return return_type
+        self.advance()
+        self.skip_newlines()
+        return self.parse_type()
 
     def skip_post_function_qualifiers(self):
         while True:
@@ -3430,6 +3467,13 @@ class HipParser:
             type_start,
             allow_unknown_identifier_pointers=True,
         )
+        if (
+            type_end is not None
+            and type_end + 1 < len(self.tokens)
+            and self.tokens[type_end].type == "RPAREN"
+            and self.tokens[type_end + 1].type in {"COMMA", "RPAREN", "SEMICOLON"}
+        ):
+            return False
         return (
             type_end is not None
             and type_end < len(self.tokens)

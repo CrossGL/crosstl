@@ -1233,6 +1233,28 @@ class TestHipParser:
         assert launch.stream == "0"
         assert launch.args == ["packedArgs"]
 
+    def test_hip_launch_kernel_parenthesized_kernel_name_from_corpus(self):
+        code = """
+        void host(hipStream_t stream) {
+            hipLaunchKernelGGL((NormKernel1), dim3(1), dim3(128), 0, stream, 1);
+        }
+        """
+
+        ast = self.parse_code(code)
+
+        launch = ast.statements[0].body[0]
+        assert isinstance(launch, KernelLaunchNode)
+        assert launch.kernel_name == "NormKernel1"
+        assert isinstance(launch.blocks, FunctionCallNode)
+        assert launch.blocks.name == "dim3"
+        assert launch.blocks.args == ["1"]
+        assert isinstance(launch.threads, FunctionCallNode)
+        assert launch.threads.name == "dim3"
+        assert launch.threads.args == ["128"]
+        assert launch.shared_mem == "0"
+        assert launch.stream == "stream"
+        assert launch.args == ["1"]
+
     def test_hip_launch_kernel_api_parsing(self):
         code = """
         void host(float* data, int n, int stream) {
@@ -2315,6 +2337,46 @@ class TestHipParser:
         assert reduction_kernel.name == "reduction_kernel"
         assert reduction_kernel.attributes == ["__launch_bounds__(BlockSize)"]
         assert reduction_kernel.params[0]["type"] == "float *"
+
+    def test_rocwmma_kernel_macro_with_launch_bounds_from_corpus(self):
+        code = """
+        ROCWMMA_KERNEL void __launch_bounds__(256) gemm(float* out) {
+            out[threadIdx.x] = 0.0f;
+        }
+        """
+
+        ast = self.parse_code(code)
+        kernel = ast.statements[0]
+
+        assert isinstance(kernel, KernelNode)
+        assert kernel.name == "gemm"
+        assert kernel.attributes == ["__launch_bounds__(256)"]
+        assert kernel.params[0]["type"] == "float *"
+
+    def test_trailing_return_type_functions_from_rocm_corpus(self):
+        code = """
+        __device__ auto device_value(unsigned long long dim) -> float {
+            return 0.0f;
+        }
+
+        auto host_value() -> unsigned long long {
+            return 1ull;
+        }
+        """
+
+        ast = self.parse_code(code)
+        device_value = ast.statements[0]
+        host_value = ast.statements[1]
+
+        assert isinstance(device_value, FunctionNode)
+        assert device_value.return_type == "float"
+        assert "__device__" in device_value.qualifiers
+        assert device_value.params[0]["type"] == "unsigned long long"
+        assert isinstance(device_value.body[0], ReturnNode)
+
+        assert isinstance(host_value, FunctionNode)
+        assert host_value.return_type == "unsigned long long"
+        assert isinstance(host_value.body[0], ReturnNode)
 
     def test_c_linkage_kernel_parsing(self):
         code = """
