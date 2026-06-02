@@ -400,6 +400,17 @@ def test_comments_tokenization():
         pytest.fail("Comments tokenization not implemented.")
 
 
+def test_raw_identifier_tokenization_normalizes_keyword_names():
+    code = "pub fn r#type(r#match: u32) -> u32 { r#match }"
+    tokens = tokenize_code(code)
+
+    assert ("IDENTIFIER", "type") in tokens
+    assert ("IDENTIFIER", "match") in tokens
+    assert ("POUND", "#") not in tokens
+    assert ("TYPE", "type") not in tokens
+    assert ("MATCH", "match") not in tokens
+
+
 def test_string_literals_tokenization():
     code = """
     fn main() {

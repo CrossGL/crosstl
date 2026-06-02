@@ -99,6 +99,7 @@ TOKENS = tuple(
         ("RAW_STRING", r'r(?P<raw_hashes>#*)"(?:.|\n)*?"(?P=raw_hashes)'),
         ("BYTE_STRING", r'b"([^"\\]|\\(.|\n))*"'),
         ("BYTE_CHAR", r"b'(\\x[0-9a-fA-F]{2}|[^'\\]|\\.)'"),
+        ("RAW_IDENTIFIER", r"r#[a-zA-Z_][a-zA-Z0-9_]*"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         ("STRING", r'"([^"\\]|\\(.|\n))*"'),
         ("CHAR_LIT", r"'([^'\\]|\\.)'"),
@@ -402,7 +403,10 @@ class RustLexer:
                 )
             new_pos, token_type, text = token
 
-            if token_type == "IDENTIFIER" and text in self.reserved_keywords:
+            if token_type == "RAW_IDENTIFIER":
+                token_type = "IDENTIFIER"
+                text = text[2:]
+            elif token_type == "IDENTIFIER" and text in self.reserved_keywords:
                 token_type = self.reserved_keywords[text]
 
             if token_type not in SKIP_TOKENS:

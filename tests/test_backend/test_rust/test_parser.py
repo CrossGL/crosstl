@@ -104,6 +104,15 @@ def test_underscore_prefixed_identifier_parsing():
     assert [param.name for param in ast.functions[0].params] == ["_", "_value"]
 
 
+def test_raw_identifier_parsing_normalizes_keyword_names():
+    ast = parse_code("pub fn r#type(r#match: u32) -> u32 { r#match }")
+    function = ast.functions[0]
+
+    assert function.name == "type"
+    assert [param.name for param in function.params] == ["match"]
+    assert function.body[0] == "match"
+
+
 def test_enum_parsing():
     code = """
     #[repr(u32)]
