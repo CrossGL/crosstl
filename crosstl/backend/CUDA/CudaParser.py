@@ -16,6 +16,7 @@ from .CudaAst import (
     DeleteNode,
     DesignatedInitializerNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -294,13 +295,15 @@ class CudaParser:
                     typedefs.append(aliases)
             elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
+            elif self.current_token[0] == "ENUM":
+                structs.append(self.parse_enum())
             elif self.is_linkage_block_start():
                 for item in self.parse_linkage_block():
                     if isinstance(item, KernelNode):
                         kernels.append(item)
                     elif isinstance(item, FunctionNode):
                         functions.append(item)
-                    elif isinstance(item, StructNode):
+                    elif isinstance(item, (StructNode, EnumNode)):
                         structs.append(item)
                     elif isinstance(item, TypeAliasNode):
                         typedefs.append(item)
@@ -632,6 +635,8 @@ class CudaParser:
                     items.append(aliases)
             elif self.current_token[0] == "STRUCT":
                 items.append(self.parse_struct())
+            elif self.current_token[0] == "ENUM":
+                items.append(self.parse_enum())
             elif self.peek_function():
                 items.append(self.parse_function())
             elif self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]:
@@ -800,6 +805,60 @@ class CudaParser:
         self.eat("SEMICOLON")
 
         return StructNode(name, members, attributes=attributes)
+
+    def parse_enum(self):
+        self.eat("ENUM")
+        is_scoped = False
+
+        if self.current_token[0] in {"CLASS", "STRUCT"}:
+            is_scoped = True
+            self.eat(self.current_token[0])
+
+        name = None
+        if self.current_token[0] == "IDENTIFIER":
+            name = self.eat("IDENTIFIER")[1]
+            self.type_aliases.add(name)
+            self.struct_names.add(name)
+
+        underlying_type = None
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            underlying_type = self.parse_type()
+
+        self.eat("LBRACE")
+        members = self.parse_enum_members()
+        self.eat("RBRACE")
+
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+        enum_node = EnumNode(name, members)
+        enum_node.underlying_type = underlying_type
+        enum_node.is_scoped = is_scoped
+        return enum_node
+
+    def parse_enum_members(self):
+        members = []
+
+        while self.current_token[0] not in {"RBRACE", "EOF"}:
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+
+            member_name = self.current_token[1]
+            self.eat(self.current_token[0])
+
+            member_value = None
+            if self.current_token[0] == "ASSIGN":
+                self.eat("ASSIGN")
+                member_value = self.parse_expression()
+
+            members.append((member_name, member_value))
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+
+        return members
 
     def parse_struct_members(self):
         members = []

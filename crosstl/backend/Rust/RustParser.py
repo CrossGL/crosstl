@@ -598,8 +598,7 @@ class RustParser:
 
             self.eat("LBRACKET")
 
-            attr_name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            attr_name = self.parse_attribute_path()
 
             attr_args = []
             if self.current_token[0] == "LPAREN":
@@ -609,6 +608,24 @@ class RustParser:
             attrs.append(AttributeNode(attr_name, attr_args))
 
         return attrs
+
+    def parse_attribute_path(self):
+        if self.current_token[0] not in self.PATH_SEGMENT_TOKENS:
+            raise SyntaxError(f"Expected attribute path, got {self.current_token[0]}")
+
+        path = [self.current_token[1]]
+        self.eat(self.current_token[0])
+
+        while self.current_token[0] == "DOUBLE_COLON":
+            self.eat("DOUBLE_COLON")
+            if self.current_token[0] not in self.PATH_SEGMENT_TOKENS:
+                raise SyntaxError(
+                    f"Expected attribute path segment, got {self.current_token[0]}"
+                )
+            path.append(self.current_token[1])
+            self.eat(self.current_token[0])
+
+        return "::".join(path)
 
     def skip_attribute(self):
         self.eat("LBRACKET")

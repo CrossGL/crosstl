@@ -225,6 +225,26 @@ def test_rust_gpu_ray_query_parenthesized_statement_macro_codegen():
     assert "vec3 origin = handle.get_world_ray_origin();" in result
 
 
+def test_rust_gpu_path_qualified_attribute_codegen():
+    code = r"""
+    #[spirv_std_macros::gpu_only]
+    #[doc(alias = "OpEmitVertex")]
+    #[inline]
+    pub unsafe fn emit_vertex() {
+        unsafe {
+            asm! {
+                "OpEmitVertex",
+            }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void emit_vertex()" in result
+    assert 'asm!("OpEmitVertex",);' in result
+
+
 def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
     code = """
     #![cfg_attr(target_arch = "spirv", no_std)]

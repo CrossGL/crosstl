@@ -9,6 +9,7 @@ from crosstl.backend.HIP.HipAst import (
     DeleteNode,
     DesignatedInitializerNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -192,6 +193,33 @@ class TestHipParser:
         assert isinstance(function, FunctionNode)
         assert function.name == "add"
         assert "__device__" in function.qualifiers
+
+    def test_public_rocm_bandwidth_enum_class_parse_as_top_level_declaration(self):
+        code = """
+        enum class MemoryMode : unsigned int
+        {
+            PAGED,
+            PINNED
+        };
+
+        void run_bandwidth_host_device(const MemoryMode memory_mode) {
+            if (memory_mode == MemoryMode::PAGED) {
+                return;
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        enum = ast.statements[0]
+        function = ast.statements[1]
+
+        assert isinstance(enum, EnumNode)
+        assert enum.name == "MemoryMode"
+        assert enum.members == [("PAGED", None), ("PINNED", None)]
+        assert enum.underlying_type == "unsigned int"
+        assert enum.is_scoped is True
+        assert function.params[0]["type"] == "const MemoryMode"
+        assert function.params[0]["name"] == "memory_mode"
 
     def test_dynamic_shared_memory_parsing_marks_extern_unsized_array(self):
         code = """

@@ -4,6 +4,7 @@ from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
     CastNode,
+    EnumNode,
     FunctionCallNode,
     FunctionNode,
     HipDevicePropertyNode,
@@ -3958,6 +3959,9 @@ class HipToCrossGLConverter:
             elif isinstance(stmt, StructNode):
                 self.visit(stmt)
                 self.emit("")
+            elif isinstance(stmt, EnumNode):
+                self.visit(stmt)
+                self.emit("")
             elif isinstance(stmt, VariableNode):
                 self.visit(stmt)
                 self.emit("")
@@ -5737,19 +5741,30 @@ class HipToCrossGLConverter:
         return function_mapping.get(func_name, func_name)
 
     def visit_EnumNode(self, node):
-        self.emit(f"enum {node.name} {{")
+        name = node.name or ""
+        underlying = getattr(node, "underlying_type", None)
+        suffix = (
+            f" : {self.convert_hip_type_to_crossgl(underlying)}" if underlying else ""
+        )
+        self.emit(f"enum {name}{suffix} {{")
         self.indent_level += 1
 
-        if hasattr(node, "variants") and node.variants:
-            for i, variant in enumerate(node.variants):
-                if hasattr(variant, "value") and variant.value:
-                    value = self.visit(variant.value)
-                    self.emit(f"{variant.name} = {value},")
-                else:
-                    self.emit(f"{variant.name},")
+        members = getattr(node, "members", None) or getattr(node, "variants", [])
+        for member in members:
+            if isinstance(member, tuple):
+                member_name, member_value = member
+            else:
+                member_name = getattr(member, "name", str(member))
+                member_value = getattr(member, "value", None)
+
+            if member_value is not None:
+                value = self.visit(member_value)
+                self.emit(f"{member_name} = {value},")
+            else:
+                self.emit(f"{member_name},")
 
         self.indent_level -= 1
-        self.emit("}")
+        self.emit("};")
 
     # Legacy method for backwards compatibility
     def convert(self, node):

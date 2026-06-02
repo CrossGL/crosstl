@@ -11,6 +11,7 @@ from crosstl.backend.CUDA.CudaAst import (
     DeleteNode,
     DesignatedInitializerNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     InitializerListNode,
@@ -130,6 +131,36 @@ class TestCudaParser:
         assert all(var.qualifiers == ["__device__"] for var in ast.global_variables)
         assert len(ast.functions) == 1
         assert ast.functions[0].name == "add"
+
+    def test_enum_class_declarations_parse_before_functions(self):
+        code = """
+        enum class MemoryMode : unsigned int
+        {
+            PAGED,
+            PINNED
+        };
+
+        void run_copy(const MemoryMode memory_mode) {
+            if (memory_mode == MemoryMode::PAGED) {
+                return;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        enum = ast.structs[0]
+        function = ast.functions[0]
+
+        assert isinstance(enum, EnumNode)
+        assert enum.name == "MemoryMode"
+        assert enum.members == [("PAGED", None), ("PINNED", None)]
+        assert enum.underlying_type == "unsigned int"
+        assert enum.is_scoped is True
+        assert function.params[0].vtype == "const MemoryMode"
+        assert function.params[0].name == "memory_mode"
 
     def test_void_parameter_list_and_bodyless_prototypes_parsing(self):
         code = """

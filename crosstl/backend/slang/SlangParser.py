@@ -16,6 +16,8 @@ class SlangParser:
         "out",
         "inout",
         "public",
+        "internal",
+        "private",
         "__global",
         "__extern_cpp",
     }
@@ -101,6 +103,8 @@ class SlangParser:
             if self.current_token[0] == "EOF":
                 break
 
+            declaration_token = self.peek_declaration_token_type()
+
             if self.current_token[0] == "IMPORT":
                 imports.append(self.parse_import())
             elif self.current_token[0] == "INCLUDE":
@@ -111,13 +115,13 @@ class SlangParser:
                 implementing_modules.append(self.parse_implementing_declaration())
             elif self.current_token[0] == "EXPORT":
                 exports.append(self.parse_export(attributes=pending_attributes))
-            elif self.current_token[0] == "INTERFACE":
+            elif declaration_token == "INTERFACE":
                 interfaces.append(self.parse_interface())
-            elif self.current_token[0] == "STRUCT":
+            elif declaration_token == "STRUCT":
                 structs.append(self.parse_struct())
-            elif self.current_token[0] == "EXTENSION":
+            elif declaration_token == "EXTENSION":
                 extensions.append(self.parse_extension())
-            elif self.current_token[0] == "CBUFFER":
+            elif declaration_token == "CBUFFER":
                 cbuffers.append(self.parse_cbuffer(attributes=pending_attributes))
             elif self.current_token[0] == "TYPEDEF":
                 typedefs.append(self.parse_typedef())
@@ -174,6 +178,12 @@ class SlangParser:
         return token_type in self.QUALIFIER_TOKENS or (
             token_type == "IDENTIFIER" and token_value in self.IDENTIFIER_QUALIFIERS
         )
+
+    def peek_declaration_token_type(self):
+        current_pos = self.skip_declaration_prefix_tokens(self.pos)
+        if current_pos >= len(self.tokens):
+            return "EOF"
+        return self.tokens[current_pos][0]
 
     def parse_qualifiers(self):
         qualifiers = []
@@ -394,6 +404,7 @@ class SlangParser:
 
     def parse_cbuffer(self, attributes=None):
         attributes = attributes or []
+        qualifiers = self.parse_qualifiers()
         self.eat("CBUFFER")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -413,6 +424,7 @@ class SlangParser:
         node = StructNode(name, members)
         node.register = register_name
         node.attributes = attributes
+        node.qualifiers = qualifiers
         return node
 
     def parse_global_variable(self, attributes=None):
@@ -481,11 +493,12 @@ class SlangParser:
 
     def parse_export(self, attributes=None):
         self.eat("EXPORT")
-        if self.current_token[0] == "INTERFACE":
+        declaration_token = self.peek_declaration_token_type()
+        if declaration_token == "INTERFACE":
             exported_item = self.parse_interface()
-        elif self.current_token[0] == "STRUCT":
+        elif declaration_token == "STRUCT":
             exported_item = self.parse_struct()
-        elif self.current_token[0] == "EXTENSION":
+        elif declaration_token == "EXTENSION":
             exported_item = self.parse_extension()
         elif self.is_function():
             exported_item = self.parse_function(attributes=attributes)
@@ -498,6 +511,7 @@ class SlangParser:
         return ExportNode(exported_item)
 
     def parse_interface(self):
+        qualifiers = self.parse_qualifiers()
         self.eat("INTERFACE")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -521,9 +535,12 @@ class SlangParser:
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-        return InterfaceNode(name, methods, generic_parameters=generic_parameters)
+        node = InterfaceNode(name, methods, generic_parameters=generic_parameters)
+        node.qualifiers = qualifiers
+        return node
 
     def parse_struct(self):
+        qualifiers = self.parse_qualifiers()
         self.eat("STRUCT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -549,10 +566,12 @@ class SlangParser:
         node.methods = methods
         node.generic_parameters = generic_parameters
         node.conformances = conformances
+        node.qualifiers = qualifiers
         return node
 
     def parse_struct_field_members(self):
         members = []
+        qualifiers = self.parse_qualifiers()
         vtype = self.parse_type_name()
         while True:
             var_name = self.current_token[1]
@@ -567,6 +586,7 @@ class SlangParser:
                 VariableNode(
                     vtype,
                     var_name,
+                    qualifiers=qualifiers,
                     array_sizes=array_sizes,
                     semantic=semantic,
                 )
@@ -578,6 +598,7 @@ class SlangParser:
         return members
 
     def parse_extension(self):
+        qualifiers = self.parse_qualifiers()
         self.eat("EXTENSION")
         extended_type = self.parse_type_name()
         conformances = self.parse_conformance_clause()
@@ -597,7 +618,9 @@ class SlangParser:
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-        return ExtensionNode(extended_type, methods, conformances=conformances)
+        node = ExtensionNode(extended_type, methods, conformances=conformances)
+        node.qualifiers = qualifiers
+        return node
 
     def parse_conformance_clause(self):
         conformances = []

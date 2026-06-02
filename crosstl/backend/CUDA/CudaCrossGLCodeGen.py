@@ -4,6 +4,7 @@ from .CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
     CastNode,
+    EnumNode,
     FunctionCallNode,
     InitializerListNode,
     MemberAccessNode,
@@ -3548,6 +3549,32 @@ class CudaToCrossGLConverter:
                 node.name, member.vtype, member.name
             )
             self.emit(f"{member_type} {member.name};")
+
+        self.indent_level -= 1
+        self.emit("};")
+
+    def visit_EnumNode(self, node):
+        name = node.name or ""
+        underlying = getattr(node, "underlying_type", None)
+        suffix = (
+            f" : {self.convert_cuda_type_to_crossgl(underlying)}" if underlying else ""
+        )
+        self.emit(f"enum {name}{suffix} {{")
+        self.indent_level += 1
+
+        members = getattr(node, "members", None) or getattr(node, "variants", [])
+        for member in members:
+            if isinstance(member, tuple):
+                member_name, member_value = member
+            else:
+                member_name = getattr(member, "name", str(member))
+                member_value = getattr(member, "value", None)
+
+            if member_value is not None:
+                value = self.visit(member_value)
+                self.emit(f"{member_name} = {value},")
+            else:
+                self.emit(f"{member_name},")
 
         self.indent_level -= 1
         self.emit("};")

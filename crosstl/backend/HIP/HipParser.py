@@ -15,6 +15,7 @@ from .HipAst import (
     DeleteNode,
     DesignatedInitializerNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -410,6 +411,9 @@ class HipParser:
         if self.match("STRUCT"):
             return self.parse_struct()
 
+        if self.match("ENUM"):
+            return self.parse_enum()
+
         if self.match("CLASS"):
             return self.parse_class()
 
@@ -469,6 +473,8 @@ class HipParser:
             return self.parse_function_with_qualifier()
         if self.match("STRUCT"):
             return self.parse_struct()
+        if self.match("ENUM"):
+            return self.parse_enum()
         if self.match("CLASS"):
             return self.parse_class()
         if self.is_function_declaration():
@@ -773,6 +779,68 @@ class HipParser:
             self.advance()
 
         return StructNode(name, members)
+
+    def parse_enum(self):
+        self.consume("ENUM")
+        is_scoped = False
+        self.skip_newlines()
+
+        if self.match("CLASS", "STRUCT"):
+            is_scoped = True
+            self.advance()
+            self.skip_newlines()
+
+        name = None
+        if self.match("IDENTIFIER"):
+            name = self.current_token.value
+            self.advance()
+            self.type_aliases.add(name)
+
+        underlying_type = None
+        self.skip_newlines()
+        if self.match("COLON"):
+            self.advance()
+            self.skip_newlines()
+            underlying_type = self.parse_type()
+
+        self.skip_newlines()
+        self.consume("LBRACE")
+        members = self.parse_enum_members()
+        self.consume("RBRACE")
+
+        if self.match("SEMICOLON"):
+            self.advance()
+
+        enum_node = EnumNode(name, members)
+        enum_node.underlying_type = underlying_type
+        enum_node.is_scoped = is_scoped
+        return enum_node
+
+    def parse_enum_members(self):
+        members = []
+
+        while self.current_token and not self.match("RBRACE"):
+            if self.match("NEWLINE", "COMMA"):
+                self.advance()
+                continue
+
+            member_name = self.current_token.value
+            self.advance()
+
+            member_value = None
+            self.skip_newlines()
+            if self.match("ASSIGN"):
+                self.advance()
+                self.skip_newlines()
+                member_value = self.parse_expression()
+
+            members.append((member_name, member_value))
+            self.skip_newlines()
+
+            if self.match("COMMA"):
+                self.advance()
+
+        return members
 
     def parse_struct_members(self):
         members = []

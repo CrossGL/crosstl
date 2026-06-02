@@ -13,6 +13,7 @@ from crosstl.backend.common_ast import (
     MemberAccessNode,
     MethodCallNode,
     TextureSampleNode,
+    VectorConstructorNode,
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
@@ -843,6 +844,32 @@ def test_parse_comma_assignment_statement_from_llama_cpp():
     assert isinstance(statement.right, AssignmentNode)
     assert statement.left.left.name == "dl"
     assert statement.right.left.name == "ml"
+
+
+def test_parse_braced_uchar_vector_constructor_from_llama_cpp():
+    code = """
+    static inline uchar2 get_scale_min_k4_just2(int j, int k, device const uchar * q) {
+        return j < 4 ? uchar2{uchar(q[j+0+k] & 63), uchar(q[j+4+k] & 63)}
+                     : uchar2{uchar((q[j+4+k] & 0xF) | ((q[j-4+k] & 0xc0) >> 2)),
+                              uchar((q[j+4+k] >> 4) | ((q[j-0+k] & 0xc0) >> 2))};
+    }
+    """
+    ast = parse_ok(code)
+    braced_constructors = [
+        node
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, FunctionCallNode)
+        and node.name == "uchar2"
+        and getattr(node, "is_braced_constructor", False)
+    ]
+    scalar_constructors = [
+        node
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, VectorConstructorNode) and node.type_name == "uchar"
+    ]
+
+    assert len(braced_constructors) == 2
+    assert len(scalar_constructors) == 4
 
 
 def test_parse_preprocessor_define():

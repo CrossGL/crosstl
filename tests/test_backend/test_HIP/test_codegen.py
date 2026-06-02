@@ -74,6 +74,35 @@ class TestHipCodeGen:
         assert "var load_callback_dev: auto = load_callback;" in result
         assert "@group(0) @binding(0) var<uniform> c0: f32 = 299792458.0f;" in result
 
+    def test_public_rocm_bandwidth_enum_class_conversion(self):
+        code = """
+        enum class MemoryMode : unsigned int
+        {
+            PAGED,
+            PINNED
+        };
+
+        void run_bandwidth_host_device(const MemoryMode memory_mode) {
+            if (memory_mode == MemoryMode::PAGED) {
+                return;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "enum MemoryMode : u32 {" in result
+        assert "PAGED," in result
+        assert "PINNED," in result
+        assert "run_bandwidth_host_device(MemoryMode memory_mode)" in result
+        assert "MemoryMode::PAGED" in result
+        assert "EnumNode" not in result
+
     def test_inline_assembly_conversion(self):
         code = r"""
         __global__ void asmKernel(float* out, float in) {

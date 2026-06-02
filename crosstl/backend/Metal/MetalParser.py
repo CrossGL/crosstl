@@ -97,6 +97,13 @@ STAGE_TOKENS = {
 UNARY_KEYWORDS = {"SIZEOF", "ALIGNOF"}
 MACRO_QUALIFIERS = {"METAL_FUNC"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
+CONSTRUCTOR_TYPE_TOKENS = TYPE_TOKENS - {
+    "VOID",
+    "IDENTIFIER",
+    "METAL",
+    "ENUM",
+    "TYPEDEF",
+}
 STAGE_ATTRIBUTE_NAMES = {
     "vertex",
     "fragment",
@@ -1648,23 +1655,16 @@ class MetalParser:
             return expr
         if self.current_token[0] == "LBRACE":
             return self.parse_initializer_list()
-        if self.current_token[0] in [
-            "VECTOR",
-            "MATRIX",
-            "SIMD_MATRIX",
-            "PACKED_VECTOR",
-            "SIMD_VECTOR",
-            "FLOAT",
-            "HALF",
-            "DOUBLE",
-            "INT",
-            "UINT",
-            "BOOL",
-        ]:
+        if self.current_token[0] in CONSTRUCTOR_TYPE_TOKENS:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
             if self.current_token[0] == "LPAREN":
                 return self.parse_vector_constructor(type_name)
+            if self.current_token[0] == "LBRACE":
+                initializer = self.parse_initializer_list()
+                node = FunctionCallNode(type_name, [initializer])
+                node.is_braced_constructor = True
+                return node
             raise SyntaxError(f"Unexpected type in expression: {type_name}")
         if self.current_token[0] in ["IDENTIFIER", "METAL"]:
             name = self.parse_scoped_identifier()

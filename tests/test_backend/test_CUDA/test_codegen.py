@@ -170,6 +170,35 @@ class TestCudaCodeGen:
         assert "var g_uids: i32 = 0;" in result
         assert "var grid_dot_result: f64 = 0.0;" in result
 
+    def test_enum_class_declaration_conversion(self):
+        code = """
+        enum class MemoryMode : unsigned int
+        {
+            PAGED,
+            PINNED
+        };
+
+        void run_copy(const MemoryMode memory_mode) {
+            if (memory_mode == MemoryMode::PAGED) {
+                return;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "enum MemoryMode : u32 {" in result
+        assert "PAGED," in result
+        assert "PINNED," in result
+        assert "run_copy(MemoryMode memory_mode)" in result
+        assert "MemoryMode::PAGED" in result
+        assert "EnumNode" not in result
+
     def test_device_function_body_emitted_when_kernel_calls_it(self):
         code = """
         __device__ float add(float a, float b) {

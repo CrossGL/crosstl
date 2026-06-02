@@ -95,6 +95,27 @@ def test_struct_comma_member_declarators_codegen():
     assert "screenWidth, screenHeight" not in generated_code
 
 
+def test_visibility_qualified_struct_codegen_from_mlp_training_adam_sample():
+    code = """
+    public struct AdamState
+    {
+        internal NFloat mean;
+        internal NFloat variance;
+        internal int iteration;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct AdamState" in generated_code
+    assert "NFloat mean;" in generated_code
+    assert "NFloat variance;" in generated_code
+    assert "int iteration;" in generated_code
+    assert "public" not in generated_code
+    assert "internal" not in generated_code
+
+
 def test_struct_methods_do_not_break_field_codegen():
     code = """
     struct Primitive {

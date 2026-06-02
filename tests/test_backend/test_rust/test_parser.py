@@ -183,6 +183,38 @@ def test_braced_macro_invocation_parsing():
     assert "OpStore" in macro_call.args[0]
 
 
+def test_rust_gpu_path_qualified_attribute_parsing():
+    code = r"""
+    #[spirv_std_macros::gpu_only]
+    #[doc(alias = "OpEmitVertex")]
+    #[inline]
+    pub unsafe fn emit_vertex() {
+        unsafe {
+            asm! {
+                "OpEmitVertex",
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+    unsafe_block = function.body[0]
+    macro_call = unsafe_block.block.returns_value
+
+    assert [attr.name for attr in function.attributes] == [
+        "spirv_std_macros::gpu_only",
+        "doc",
+        "inline",
+    ]
+    assert function.name == "emit_vertex"
+    assert function.visibility == "pub"
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    assert isinstance(macro_call, FunctionCallNode)
+    assert macro_call.name == "asm!"
+    assert macro_call.macro_delimiter == "LBRACE"
+
+
 def test_rust_gpu_ray_query_parenthesized_statement_macro_parsing():
     code = """
     use glam::Vec3;

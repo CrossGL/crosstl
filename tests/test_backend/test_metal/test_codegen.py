@@ -899,6 +899,24 @@ def test_codegen_comma_assignment_statement_from_llama_cpp():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_braced_uchar_vector_constructor_from_llama_cpp():
+    code = """
+    static inline uchar2 get_scale_min_k4_just2(int j, int k, device const uchar * q) {
+        return j < 4 ? uchar2{uchar(q[j+0+k] & 63), uchar(q[j+4+k] & 63)}
+                     : uchar2{uchar((q[j+4+k] & 0xF) | ((q[j-4+k] & 0xc0) >> 2)),
+                              uchar((q[j+4+k] >> 4) | ((q[j-0+k] & 0xc0) >> 2))};
+    }
+    """
+    crossgl = convert(code)
+    normalized = normalize(crossgl)
+
+    assert "u8vec2 get_scale_min_k4_just2" in crossgl
+    assert "u8vec2(uint8(q[j + 0 + k] & 63), uint8(q[j + 4 + k] & 63))" in crossgl
+    assert "uchar2{" not in crossgl
+    assert "return j < 4 ?" in normalized
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_preserves_binding_attributes():
     code = """
     #include <metal_stdlib>

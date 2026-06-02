@@ -146,6 +146,30 @@ def test_struct_comma_member_declarators_from_ray_tracing_example():
     ]
 
 
+def test_visibility_qualified_struct_from_mlp_training_adam_sample():
+    code = """
+    public struct AdamState
+    {
+        internal NFloat mean;
+        internal NFloat variance;
+        internal int iteration;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert struct.name == "AdamState"
+    assert struct.qualifiers == ["public"]
+    assert [
+        (member.qualifiers, member.vtype, member.name) for member in struct.members
+    ] == [
+        (["internal"], "NFloat", "mean"),
+        (["internal"], "NFloat", "variance"),
+        (["internal"], "int", "iteration"),
+    ]
+
+
 def test_struct_method_body_parsing_from_official_example():
     code = """
     struct Primitive {

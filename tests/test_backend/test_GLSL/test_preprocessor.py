@@ -2,6 +2,7 @@ import pytest
 
 from crosstl import translate
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
+from crosstl.backend.GLSL.OpenglParser import GLSLParser
 
 
 def test_preprocessor_conditional_expansion():
@@ -54,6 +55,50 @@ def test_translate_resolves_quoted_include_from_source_file_dir(tmp_path):
 
     assert "INCLUDED_SCALE" in cgl
     assert "INCLUDED_SCALE" in directx
+
+
+def test_preprocessor_resolves_vulkan_samples_shared_glsl_include(tmp_path):
+    shader_root = tmp_path / "shaders"
+    include_dir = shader_root / "includes" / "glsl"
+    include_dir.mkdir(parents=True)
+    (include_dir / "lighting.h").write_text("""
+        struct Light
+        {
+            vec4 direction;
+            vec4 color;
+        };
+
+        vec3 apply_directional_light(Light light, vec3 normal)
+        {
+            vec3 world_to_light = -light.direction.xyz;
+            float ndotl = clamp(dot(normal, world_to_light), 0.0, 1.0);
+            return ndotl * light.color.rgb;
+        }
+        """)
+
+    shader_file = shader_root / "constant_data" / "ubo.frag"
+    shader_file.parent.mkdir()
+    shader_file.write_text("""
+        #version 320 es
+        precision highp float;
+
+        layout(location = 0) out vec4 o_color;
+
+        #include "lighting.h"
+
+        void main(void)
+        {
+            Light light;
+            vec3 color = apply_directional_light(light, vec3(0.0));
+            o_color = vec4(color, 1.0);
+        }
+        """)
+
+    tokens = GLSLLexer.from_file(str(shader_file)).tokenize()
+    ast = GLSLParser(tokens, "fragment").parse()
+
+    assert any(function.name == "apply_directional_light" for function in ast.functions)
+    assert any(struct.name == "Light" for struct in ast.structs)
 
 
 def test_preprocessor_version_must_be_first():
