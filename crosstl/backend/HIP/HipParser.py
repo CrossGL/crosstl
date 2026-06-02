@@ -159,7 +159,7 @@ class HipParser:
         "noexcept",
         "__noexcept",
     }
-    TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec"}
+    TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas"}
     ATOMIC_FUNCTION_NAMES = {
         "atomicAdd",
         "hipAtomicAdd",
@@ -1583,6 +1583,8 @@ class HipParser:
         type_prefixes = []
         saw_integral_sign = False
 
+        self.parse_type_attribute_prefixes()
+
         while self.match(*self.TYPE_QUALIFIER_TOKENS):
             if self.current_token.type in {"SIGNED", "UNSIGNED"}:
                 saw_integral_sign = True
@@ -1596,11 +1598,15 @@ class HipParser:
                 base_type = "int"
             else:
                 base_type = self.parse_type()
+            qualifiers.extend(self.parse_declaration_qualifiers())
             return " ".join([*type_prefixes, base_type]).strip()
 
         self.pos = saved_pos
         self.current_token = saved_token
-        return self.parse_type()
+        self.parse_type_attribute_prefixes()
+        base_type = self.parse_type()
+        qualifiers.extend(self.parse_declaration_qualifiers())
+        return base_type
 
     def parse_variable_declarator(self, base_type, qualifiers, allow_prefix):
         var_type = base_type
@@ -3675,8 +3681,14 @@ class HipParser:
         }:
             index += 1
 
+        index = self.skip_type_attribute_prefixes_at_pos(index)
         index = self.skip_type_at_pos(index)
         if index is not None:
+            while (
+                index < len(self.tokens)
+                and self.tokens[index].type in self.DECLARATION_QUALIFIER_TOKENS
+            ):
+                index += 1
             index = self.skip_newlines_at_pos(index)
             structured_binding_end = self.skip_structured_binding_declarator_at_pos(
                 index
@@ -3699,6 +3711,18 @@ class HipParser:
                     return True
 
         return False
+
+    def skip_type_attribute_prefixes_at_pos(self, index):
+        while (
+            index < len(self.tokens)
+            and self.tokens[index].type == "IDENTIFIER"
+            and self.tokens[index].value in self.TYPE_ATTRIBUTE_IDENTIFIERS
+        ):
+            index += 1
+            if index < len(self.tokens) and self.tokens[index].type == "LPAREN":
+                index = self.skip_balanced_tokens_at_pos(index, "LPAREN", "RPAREN")
+            index = self.skip_newlines_at_pos(index)
+        return index
 
     def skip_type_at_pos(self, index, allow_unknown_identifier_pointers=False):
         saw_integral_sign = False

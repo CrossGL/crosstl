@@ -251,6 +251,38 @@ class TestHipParser:
         assert local_sum.vtype == "double[BLOCKSIZE]"
         assert local_sum.qualifiers == ["__shared__"]
 
+    def test_shared_memory_declaration_with_alignas_parses(self):
+        code = """
+        __global__ void aligned_shared() {
+            __shared__ alignas(16) float tile[32];
+        }
+        """
+        ast = self.parse_code(code)
+
+        tile = ast.statements[0].body[0]
+
+        assert isinstance(tile, VariableNode)
+        assert tile.name == "tile"
+        assert tile.vtype == "float[32]"
+        assert tile.qualifiers == ["__shared__"]
+
+    def test_extern_shared_memory_declaration_with_post_type_qualifier_parses(self):
+        code = """
+        __global__ void dynamic_shared() {
+            extern double __shared__ sdata[];
+        }
+        """
+        ast = self.parse_code(code)
+
+        sdata = ast.statements[0].body[0]
+
+        assert isinstance(sdata, VariableNode)
+        assert sdata.name == "sdata"
+        assert sdata.vtype == "double[]"
+        assert sdata.qualifiers == ["extern", "__shared__"]
+        assert sdata.is_extern_shared_memory is True
+        assert sdata.is_dynamic_shared_memory is True
+
     def test_public_rocm_bit_extract_fixed_width_pointer_declarations_parse(self):
         code = """
         __global__ void bit_extract_kernel(
