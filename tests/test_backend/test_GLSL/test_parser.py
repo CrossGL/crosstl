@@ -565,6 +565,37 @@ def test_parse_vulkan_extension_types_suffixes_and_qualifiers():
     assert in_color.is_array is True
 
 
+def test_parse_buffer_as_contextual_identifier_from_glsl_canvas():
+    code = textwrap.dedent("""
+        #version 300 es
+        precision mediump float;
+
+        layout(std430, binding = 0) buffer Storage
+        {
+            vec4 values[];
+        } storage;
+
+        uniform sampler2D u_buffer0;
+        in vec2 v_texcoord;
+        out vec4 outColor;
+
+        void main() {
+            vec4 buffer = texture(u_buffer0, v_texcoord);
+            outColor = vec4(buffer.r + storage.values[0].r);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    storage_block = next(struct for struct in ast.structs if struct.name == "Storage")
+    main = next(function for function in ast.functions if function.name == "main")
+    buffer_decl = next(stmt for stmt in main.body if isinstance(stmt, VariableNode))
+
+    assert storage_block.interface_qualifiers == ["buffer"]
+    assert ast.global_variables[0].name == "storage"
+    assert buffer_decl.name == "buffer"
+    assert buffer_decl.vtype == "vec4"
+
+
 def test_parse_empty_statement_after_control_block():
     code = textwrap.dedent("""
         #version 450

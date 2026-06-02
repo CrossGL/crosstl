@@ -182,6 +182,10 @@ class SlangParser:
                 extensions.append(self.parse_extension())
             elif declaration_token == "CBUFFER":
                 cbuffers.append(self.parse_cbuffer(attributes=pending_attributes))
+            elif self.is_glsl_uniform_block_declaration_start():
+                cbuffers.append(
+                    self.parse_glsl_uniform_block(attributes=pending_attributes)
+                )
             elif declaration_token == "ENUM":
                 enums.append(self.parse_enum())
             elif declaration_token in {"TYPEDEF", "TYPEALIAS"}:
@@ -311,11 +315,16 @@ class SlangParser:
             self.eat(self.current_token[0])
 
     def skip_declaration_prefix_tokens(self, current_pos, include_generic=False):
-        while current_pos < len(self.tokens) and (
-            self.is_qualifier_token_at(current_pos)
-            or (include_generic and self.tokens[current_pos][0] == "GENERIC")
-        ):
-            current_pos += 1
+        while current_pos < len(self.tokens):
+            if self.is_layout_qualifier_at(current_pos):
+                current_pos = self.skip_layout_qualifier_tokens(current_pos)
+                continue
+            if self.is_qualifier_token_at(current_pos):
+                current_pos += 1
+            elif include_generic and self.tokens[current_pos][0] == "GENERIC":
+                current_pos += 1
+            else:
+                break
             if (
                 include_generic
                 and current_pos < len(self.tokens)
@@ -330,6 +339,33 @@ class SlangParser:
             token_type == "IDENTIFIER" and token_value in self.IDENTIFIER_QUALIFIERS
         )
 
+    def is_layout_qualifier_at(self, index):
+        return (
+            index + 1 < len(self.tokens)
+            and self.tokens[index] == ("IDENTIFIER", "layout")
+            and self.tokens[index + 1][0] == "LPAREN"
+        )
+
+    def skip_layout_qualifier_tokens(self, current_pos):
+        current_pos += 1
+        if current_pos >= len(self.tokens) or self.tokens[current_pos][0] != "LPAREN":
+            return current_pos
+
+        depth = 0
+        while current_pos < len(self.tokens):
+            token_type = self.tokens[current_pos][0]
+            if token_type == "EOF":
+                raise SyntaxError("Unterminated layout qualifier")
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return current_pos + 1
+            current_pos += 1
+
+        raise SyntaxError("Unterminated layout qualifier")
+
     def peek_declaration_token_type(self):
         current_pos = self.skip_declaration_prefix_tokens(self.pos)
         if current_pos >= len(self.tokens):
@@ -338,10 +374,44 @@ class SlangParser:
 
     def parse_qualifiers(self):
         qualifiers = []
-        while self.is_qualifier_token_at(self.pos):
-            qualifiers.append(self.current_token[1])
-            self.eat(self.current_token[0])
+        while self.is_layout_qualifier_at(self.pos) or self.is_qualifier_token_at(
+            self.pos
+        ):
+            if self.is_layout_qualifier_at(self.pos):
+                qualifiers.append(self.parse_layout_qualifier())
+            else:
+                qualifiers.append(self.current_token[1])
+                self.eat(self.current_token[0])
         return qualifiers
+
+    def parse_layout_qualifier(self):
+        qualifier = [self.current_token[1]]
+        self.eat("IDENTIFIER")
+        qualifier.extend(self.parse_balanced_parenthesized_tokens("layout qualifier"))
+        return "".join(qualifier)
+
+    def parse_balanced_parenthesized_tokens(self, context):
+        parts = []
+        self.eat("LPAREN")
+        parts.append("(")
+        depth = 1
+        while depth:
+            token_type, token_value = self.current_token
+            if token_type == "EOF":
+                raise SyntaxError(f"Unterminated {context}")
+            if token_type == "LPAREN":
+                depth += 1
+                parts.append("(")
+                self.eat("LPAREN")
+                continue
+            if token_type == "RPAREN":
+                depth -= 1
+                parts.append(")")
+                self.eat("RPAREN")
+                continue
+            parts.append(str(token_value))
+            self.eat(token_type)
+        return parts
 
     def is_geometry_input_primitive_qualifier_at(self, index):
         return self.is_parameter_role_qualifier_at(
@@ -389,14 +459,18 @@ class SlangParser:
     def parse_declaration_prefixes(self):
         qualifiers = []
         is_generic = False
-        while self.current_token[0] == "GENERIC" or self.is_qualifier_token_at(
-            self.pos
+        while (
+            self.current_token[0] == "GENERIC"
+            or self.is_layout_qualifier_at(self.pos)
+            or self.is_qualifier_token_at(self.pos)
         ):
             if self.current_token[0] == "GENERIC":
                 is_generic = True
                 self.eat("GENERIC")
                 if self.current_token[0] == "LESS_THAN":
                     self.parse_generic_type_suffix()
+            elif self.is_layout_qualifier_at(self.pos):
+                qualifiers.append(self.parse_layout_qualifier())
             else:
                 qualifiers.append(self.current_token[1])
                 self.eat(self.current_token[0])
@@ -764,6 +838,65 @@ class SlangParser:
         node.register = register_name
         node.attributes = attributes
         node.qualifiers = qualifiers
+        return node
+
+    def is_glsl_uniform_block_declaration_start(self):
+        current_pos = self.pos
+        saw_uniform = False
+        while current_pos < len(self.tokens):
+            if self.is_layout_qualifier_at(current_pos):
+                current_pos = self.skip_layout_qualifier_tokens(current_pos)
+                continue
+            token_type, token_value = self.tokens[current_pos]
+            if token_type == "IDENTIFIER" and token_value == "uniform":
+                saw_uniform = True
+                current_pos += 1
+                continue
+            if self.is_qualifier_token_at(current_pos):
+                current_pos += 1
+                continue
+            break
+
+        if not saw_uniform or current_pos + 1 >= len(self.tokens):
+            return False
+        if self.tokens[current_pos][0] not in self.TYPE_NAME_TOKENS:
+            return False
+        return self.tokens[current_pos + 1][0] == "LBRACE"
+
+    def parse_glsl_uniform_block(self, attributes=None):
+        attributes = attributes or []
+        qualifiers = self.parse_qualifiers()
+        name = self.parse_type_name()
+        self.eat("LBRACE")
+        members = []
+        while self.current_token[0] != "RBRACE":
+            members.extend(self.parse_struct_field_members())
+        self.eat("RBRACE")
+
+        instances = []
+        while self.current_token[0] == "IDENTIFIER":
+            instance_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            instances.append(
+                VariableNode(
+                    name,
+                    instance_name,
+                    qualifiers=qualifiers,
+                    array_sizes=self.parse_array_suffixes(),
+                    attributes=attributes,
+                )
+            )
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+        node = StructNode(name, members)
+        node.qualifiers = qualifiers
+        node.attributes = attributes
+        node.instances = instances
         return node
 
     def parse_global_variable(self, attributes=None):

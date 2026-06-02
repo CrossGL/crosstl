@@ -136,6 +136,8 @@ class RustParser:
         while self.current_token[0] != "EOF":
             if self.is_macro_rules_definition():
                 self.skip_macro_rules_definition()
+            elif self.is_top_level_macro_invocation():
+                self.skip_top_level_macro_invocation()
             elif self.current_token[0] == "USE":
                 u = self.parse_use_statement()
                 use_statements.append(u)
@@ -315,6 +317,45 @@ class RustParser:
 
         if self.current_token[0] in {"LBRACE", "LPAREN", "LBRACKET"}:
             self.skip_balanced_delimiters()
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+    def is_top_level_macro_invocation(self):
+        idx = self.current_index
+        if (
+            idx >= len(self.tokens)
+            or self.tokens[idx][0] not in self.PATH_SEGMENT_TOKENS
+        ):
+            return False
+
+        idx += 1
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "EXCLAMATION":
+                next_type = (
+                    self.tokens[idx + 1][0] if idx + 1 < len(self.tokens) else "EOF"
+                )
+                return next_type in {"LBRACE", "LPAREN", "LBRACKET"}
+            if token_type != "DOUBLE_COLON":
+                return False
+            idx += 1
+            if (
+                idx >= len(self.tokens)
+                or self.tokens[idx][0] not in self.PATH_SEGMENT_TOKENS
+            ):
+                return False
+            idx += 1
+
+        return False
+
+    def skip_top_level_macro_invocation(self):
+        self.eat(self.current_token[0])
+        while self.current_token[0] == "DOUBLE_COLON":
+            self.eat("DOUBLE_COLON")
+            self.eat(self.current_token[0])
+
+        self.eat("EXCLAMATION")
+        self.skip_balanced_delimiters()
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
@@ -659,6 +700,9 @@ class RustParser:
             attr_args = []
             if self.current_token[0] == "LPAREN":
                 attr_args = self.parse_attribute_arguments()
+            elif self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                attr_args = self.parse_attribute_value()
 
             self.eat("RBRACKET")
             attrs.append(AttributeNode(attr_name, attr_args))
@@ -719,6 +763,25 @@ class RustParser:
             else:
                 args.append(token_value)
                 self.eat(token_type)
+
+        return args
+
+    def parse_attribute_value(self):
+        args = []
+        depth = 0
+
+        while not (depth == 0 and self.current_token[0] == "RBRACKET"):
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated attribute value")
+
+            token_type, token_value = self.current_token
+            if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
+                depth += 1
+            elif token_type in {"RPAREN", "RBRACKET", "RBRACE"}:
+                depth -= 1
+
+            args.append(token_value)
+            self.eat(token_type)
 
         return args
 

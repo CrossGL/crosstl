@@ -226,6 +226,32 @@ def test_macro_rules_definition_is_skipped():
     assert ast.functions[0].name == "main"
 
 
+def test_top_level_macro_invocations_are_skipped_from_rust_gpu_spirv_std():
+    code = r"""
+    bitflags::bitflags! {
+        pub struct Semantics: u32 {
+            const NONE = 0;
+            const ACQUIRE = 0x2;
+        }
+    }
+
+    impl_scalar! {
+        impl UnsignedInteger for u8;
+        impl UnsignedInteger for u16;
+    }
+
+    fn main() {
+        return;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert len(ast.functions) == 1
+    assert ast.functions[0].name == "main"
+    assert ast.structs == []
+
+
 def test_rust_gpu_path_qualified_attribute_parsing():
     code = r"""
     #[spirv_std_macros::gpu_only]
@@ -256,6 +282,28 @@ def test_rust_gpu_path_qualified_attribute_parsing():
     assert isinstance(macro_call, FunctionCallNode)
     assert macro_call.name == "asm!"
     assert macro_call.macro_delimiter == "LBRACE"
+
+
+def test_key_value_attribute_parsing_from_rust_gpu_spirv_std():
+    code = r"""
+    #[lang = "eh_personality"]
+    fn rust_eh_personality() {}
+
+    #[path = "generated.rs"]
+    pub fn include_generated() {}
+    """
+
+    ast = parse_code(code)
+
+    lang_fn, path_fn = ast.functions
+    assert lang_fn.name == "rust_eh_personality"
+    assert lang_fn.attributes[0].name == "lang"
+    assert lang_fn.attributes[0].args == ['"eh_personality"']
+
+    assert path_fn.name == "include_generated"
+    assert path_fn.visibility == "pub"
+    assert path_fn.attributes[0].name == "path"
+    assert path_fn.attributes[0].args == ['"generated.rs"']
 
 
 def test_rust_gpu_ray_query_parenthesized_statement_macro_parsing():

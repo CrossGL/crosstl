@@ -194,6 +194,44 @@ class TestHipParser:
         assert function.name == "add"
         assert "__device__" in function.qualifiers
 
+    def test_public_hpc_training_const_static_declarations_parse(self):
+        code = """
+        const static int BLOCKSIZE = 1024;
+        const static int GRIDSIZE = 1024, N = 128e07;
+
+        __global__ void reduction(double* output) {
+            const static int LOCAL_SIZE = 256;
+            __shared__ double local_sum[BLOCKSIZE];
+            output[0] = LOCAL_SIZE;
+        }
+        """
+        ast = self.parse_code(code)
+
+        blocksize = ast.statements[0]
+        gridsize = ast.statements[1]
+        n_value = ast.statements[2]
+        kernel = ast.statements[3]
+        local_size = kernel.body[0]
+        local_sum = kernel.body[1]
+
+        assert isinstance(blocksize, VariableNode)
+        assert blocksize.vtype == "const int"
+        assert blocksize.qualifiers == ["static"]
+        assert blocksize.name == "BLOCKSIZE"
+
+        assert gridsize.vtype == "const int"
+        assert gridsize.qualifiers == ["static"]
+        assert gridsize.name == "GRIDSIZE"
+        assert n_value.vtype == "const int"
+        assert n_value.qualifiers == ["static"]
+        assert n_value.name == "N"
+
+        assert isinstance(kernel, KernelNode)
+        assert local_size.vtype == "const int"
+        assert local_size.qualifiers == ["static"]
+        assert local_sum.vtype == "double[BLOCKSIZE]"
+        assert local_sum.qualifiers == ["__shared__"]
+
     def test_public_rocm_bit_extract_fixed_width_pointer_declarations_parse(self):
         code = """
         __global__ void bit_extract_kernel(

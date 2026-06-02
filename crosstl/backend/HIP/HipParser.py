@@ -57,6 +57,15 @@ class HipParser:
     """Parse HIP tokens into the HIP backend AST."""
 
     FUNCTION_SPECIFIER_TOKENS = {"STATIC", "INLINE", "EXTERN", "CONSTEXPR"}
+    DECLARATION_QUALIFIER_TOKENS = {
+        "__SHARED__",
+        "__CONSTANT__",
+        "__MANAGED__",
+        "__DEVICE__",
+        "STATIC",
+        "EXTERN",
+        "CONSTEXPR",
+    }
     TYPE_PREFIX_TOKENS = {"TYPENAME"}
     TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "UNSIGNED", "SIGNED", "__RESTRICT__"}
     POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "__RESTRICT__"}
@@ -1380,21 +1389,8 @@ class HipParser:
             return None
 
     def parse_variable_declaration(self, consume_semicolon=True):
-        qualifiers = []
-
-        while self.match(
-            "__SHARED__",
-            "__CONSTANT__",
-            "__MANAGED__",
-            "__DEVICE__",
-            "STATIC",
-            "EXTERN",
-            "CONSTEXPR",
-        ):
-            qualifiers.append(self.current_token.value)
-            self.advance()
-
-        var_type = self.parse_type()
+        qualifiers = self.parse_declaration_qualifiers()
+        var_type = self.parse_variable_declaration_type(qualifiers)
         self.skip_newlines()
         name = self.consume_declarator_name()
         var_type += self.parse_array_suffix()
@@ -1425,21 +1421,8 @@ class HipParser:
         )
 
     def parse_variable_declaration_list(self, consume_semicolon=True):
-        qualifiers = []
-
-        while self.match(
-            "__SHARED__",
-            "__CONSTANT__",
-            "__MANAGED__",
-            "__DEVICE__",
-            "STATIC",
-            "EXTERN",
-            "CONSTEXPR",
-        ):
-            qualifiers.append(self.current_token.value)
-            self.advance()
-
-        first_type = self.parse_type()
+        qualifiers = self.parse_declaration_qualifiers()
+        first_type = self.parse_variable_declaration_type(qualifiers)
         base_type = self.strip_declarator_markers(first_type)
         declarations = [
             self.parse_variable_declarator(first_type, qualifiers, allow_prefix=False)
@@ -1456,6 +1439,40 @@ class HipParser:
             self.consume("SEMICOLON")
 
         return declarations
+
+    def parse_declaration_qualifiers(self):
+        qualifiers = []
+
+        while self.match(*self.DECLARATION_QUALIFIER_TOKENS):
+            qualifiers.append(self.current_token.value)
+            self.advance()
+
+        return qualifiers
+
+    def parse_variable_declaration_type(self, qualifiers):
+        saved_pos = self.pos
+        saved_token = self.current_token
+        type_prefixes = []
+        saw_integral_sign = False
+
+        while self.match(*self.TYPE_QUALIFIER_TOKENS):
+            if self.current_token.type in {"SIGNED", "UNSIGNED"}:
+                saw_integral_sign = True
+            type_prefixes.append(self.current_token.value)
+            self.advance()
+
+        interleaved_qualifiers = self.parse_declaration_qualifiers()
+        if interleaved_qualifiers:
+            qualifiers.extend(interleaved_qualifiers)
+            if self.is_implicit_int_current_type(saw_integral_sign):
+                base_type = "int"
+            else:
+                base_type = self.parse_type()
+            return " ".join([*type_prefixes, base_type]).strip()
+
+        self.pos = saved_pos
+        self.current_token = saved_token
+        return self.parse_type()
 
     def parse_variable_declarator(self, base_type, qualifiers, allow_prefix):
         var_type = base_type

@@ -110,6 +110,52 @@ def test_module_include_declarations_do_not_parse_as_globals():
     assert ast.global_vars == []
 
 
+def test_glsl_layout_qualifiers_and_uniform_blocks_from_libretro_shader():
+    code = """
+    layout(push_constant) uniform Push
+    {
+        vec4 SourceSize;
+        float exc;
+    } params;
+
+    layout(std140, set = 0, binding = 0) uniform UBO
+    {
+        mat4 MVP;
+    } global;
+
+    layout(location = 0) in vec4 Position;
+    layout(location = 0) out vec2 vTexCoord;
+    layout(set = 0, binding = 2) uniform sampler2D Source;
+
+    void main()
+    {
+        vTexCoord = Position.xy;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert [buffer.name for buffer in ast.cbuffers] == ["Push", "UBO"]
+    assert ast.cbuffers[0].qualifiers == ["layout(push_constant)", "uniform"]
+    assert [(member.vtype, member.name) for member in ast.cbuffers[0].members] == [
+        ("vec4", "SourceSize"),
+        ("float", "exc"),
+    ]
+    assert [
+        (instance.vtype, instance.name) for instance in ast.cbuffers[0].instances
+    ] == [("Push", "params")]
+    assert ast.cbuffers[1].qualifiers == ["layout(std140,set=0,binding=0)", "uniform"]
+    assert [
+        (variable.vtype, variable.name, variable.qualifiers)
+        for variable in ast.global_vars
+    ] == [
+        ("vec4", "Position", ["layout(location=0)", "in"]),
+        ("vec2", "vTexCoord", ["layout(location=0)", "out"]),
+        ("sampler2D", "Source", ["layout(set=0,binding=2)", "uniform"]),
+    ]
+
+
 def test_struct_array_member_declarator_parsing():
     code = """
     struct Cluster {
