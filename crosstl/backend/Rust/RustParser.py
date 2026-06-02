@@ -529,11 +529,56 @@ class RustParser:
         return BreakNode(label, value)
 
     def parse_result_expression(self):
+        if self.current_token[0] in {"RETURN", "BREAK", "CONTINUE"}:
+            return self.parse_control_flow_expression()
         if self.current_token[0] in ["LIFETIME", "LOOP"]:
             return self.parse_loop_expression()
         if self.current_token[0] == "MATCH":
             return self.parse_match_expression()
         return self.parse_expression()
+
+    def parse_control_flow_expression(self):
+        if self.current_token[0] == "RETURN":
+            return self.parse_return_expression()
+        if self.current_token[0] == "BREAK":
+            return self.parse_break_expression()
+        return self.parse_continue_expression()
+
+    def parse_return_expression(self):
+        self.eat("RETURN")
+        value = None
+        if not self.is_control_flow_expression_boundary():
+            value = self.parse_result_expression()
+        return ReturnNode(value)
+
+    def parse_break_expression(self):
+        self.eat("BREAK")
+        label = None
+        value = None
+
+        if self.current_token[0] == "LIFETIME":
+            label = self.parse_control_label()
+
+        if not self.is_control_flow_expression_boundary():
+            value = self.parse_result_expression()
+
+        return BreakNode(label, value)
+
+    def parse_continue_expression(self):
+        self.eat("CONTINUE")
+        label = self.parse_optional_control_label()
+        return ContinueNode(label)
+
+    def is_control_flow_expression_boundary(self):
+        return self.current_token[0] in {
+            "COMMA",
+            "EOF",
+            "FAT_ARROW",
+            "RBRACE",
+            "RBRACKET",
+            "RPAREN",
+            "SEMICOLON",
+        }
 
     def parse_return_statement(self):
         self.eat("RETURN")
@@ -2356,6 +2401,8 @@ class RustParser:
         return LoopNode(body, label)
 
     def parse_expression(self):
+        if self.current_token[0] in {"RETURN", "BREAK", "CONTINUE"}:
+            return self.parse_control_flow_expression()
         if self.current_token[0] == "LESS_THAN":
             return self.parse_qualified_path_expression()
         return self.parse_assignment_expression()
@@ -3074,7 +3121,15 @@ class RustParser:
                 self.parse_attributes()
                 continue
 
-            if self.current_token[0] in ["IF", "MATCH", "LOOP", "LIFETIME"]:
+            if self.current_token[0] in [
+                "IF",
+                "MATCH",
+                "LOOP",
+                "LIFETIME",
+                "RETURN",
+                "BREAK",
+                "CONTINUE",
+            ]:
                 final_expression = self.try_parse_block_final_expression()
                 if final_expression is not None:
                     expression = final_expression

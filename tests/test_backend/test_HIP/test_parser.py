@@ -89,6 +89,25 @@ class TestHipParser:
         assert loop.init.name == "i"
         assert isinstance(loop.body[0], FunctionCallNode)
 
+    def test_for_header_expressions_can_continue_after_newlines(self):
+        code = """
+        __global__ void strided(float* out, unsigned int size) {
+            for (unsigned int i = hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x;
+                              i < size;
+                              i += hipGridDim_x * hipBlockDim_x) {
+                out[i] = i;
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        loop = ast.statements[0].body[0]
+        assert isinstance(loop, ForNode)
+        assert isinstance(loop.condition, BinaryOpNode)
+        assert loop.condition.op == "<"
+        assert isinstance(loop.update, AssignmentNode)
+        assert loop.update.operator == "+="
+
     def test_cpp_stream_expression_can_continue_after_newline(self):
         code = """
         void host() {

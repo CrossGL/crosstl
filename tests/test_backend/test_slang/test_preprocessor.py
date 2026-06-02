@@ -54,6 +54,17 @@ def test_preprocessor_function_like_macro_expansion():
     assert "2.0" in values
 
 
+def test_preprocessor_self_member_macro_from_slang_shaders_does_not_recurse():
+    values = token_values("""
+        #define HSM_PHOSPHOR_PERSISTENCE_RED global.HSM_PHOSPHOR_PERSISTENCE_RED / 100
+        float value = HSM_PHOSPHOR_PERSISTENCE_RED;
+    """)
+
+    assert values.count("HSM_PHOSPHOR_PERSISTENCE_RED") == 1
+    assert "global" in values
+    assert "100" in values
+
+
 def test_preprocessor_unknown_directive_is_filtered():
     values = token_values("""
         #pragma once

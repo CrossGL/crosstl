@@ -200,7 +200,12 @@ class SlangParser:
                 self.skip_namespace_declaration()
             elif self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS:
                 if self.is_function():
-                    functions.append(self.parse_function(attributes=pending_attributes))
+                    functions.append(
+                        self.parse_function(
+                            attributes=pending_attributes,
+                            allow_signature=True,
+                        )
+                    )
                 else:
                     self.append_parsed_statement(
                         global_variables,
@@ -1893,9 +1898,12 @@ class SlangParser:
         return DiscardNode()
 
     def parse_expression_statement(self):
-        expr = self.parse_expression()
+        expressions = [self.parse_expression()]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            expressions.append(self.parse_expression())
         self.eat("SEMICOLON")
-        return expr
+        return expressions if len(expressions) > 1 else expressions[0]
 
     def parse_expression(self):
         return self.parse_assignment()

@@ -1,6 +1,6 @@
 """Preprocessor support for Metal source imports."""
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor
 
@@ -34,10 +34,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         line_num: int,
         in_expression: bool,
         file_path: Optional[str] = None,
+        disabled_macros: Optional[Set[str]] = None,
     ) -> str:
         if not in_expression and self._has_incomplete_function_macro_call(text):
             return text
-        return super()._expand_macros(text, line_num, in_expression, file_path)
+        return super()._expand_macros(
+            text, line_num, in_expression, file_path, disabled_macros
+        )
 
     def _join_multiline_function_macro_call(self, lines: List[str], start: int):
         return lines[start], 1

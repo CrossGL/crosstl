@@ -1189,6 +1189,36 @@ def test_unnamed_signature_parameters_and_void_parameter_list_parse():
     assert reset_method.params == []
 
 
+def test_top_level_function_prototypes_from_slang_shaders_parse():
+    code = """
+    SceneResult Scene_GetDistance(vec3 vPos);
+    float nnedi3_core(vec4 samples[8]);
+    float map(vec3);
+
+    float map(vec3 p)
+    {
+        return p.x;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert [function.name for function in ast.functions] == [
+        "Scene_GetDistance",
+        "nnedi3_core",
+        "map",
+        "map",
+    ]
+    assert ast.functions[0].is_declaration
+    assert ast.functions[1].is_declaration
+    assert ast.functions[1].params[0].vtype == "vec4"
+    assert ast.functions[1].params[0].array_sizes == ["8"]
+    assert ast.functions[2].is_declaration
+    assert ast.functions[2].params[0].name == ""
+    assert not ast.functions[3].is_declaration
+
+
 def test_nested_enum_class_in_generic_struct_parses():
     code = """
     struct GenericContainer<T>
@@ -2852,6 +2882,34 @@ def test_glsl_precision_qualifiers_from_corpus_parse():
     assert shade.params[1].vtype == "vec3"
     assert shade.body[0].left.qualifiers == ["highp"]
     assert shade.body[0].left.vtype == "vec4"
+
+
+def test_comma_separated_expression_statement_from_slang_shaders():
+    code = """
+    float4 shade(float wf1)
+    {
+        float4 w1 = float4(1.0);
+        float4 w2 = float4(2.0);
+        if (wf1 > 1.0)
+        {
+            wf1 = 1.0 / wf1;
+            w1 *= wf1, w2 *= wf1;
+        }
+        return w1 + w2;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    shade = find_function(ast, "shade")
+    if_body = shade.body[2].if_body
+
+    assert isinstance(if_body[1], AssignmentNode)
+    assert if_body[1].left.name == "w1"
+    assert if_body[1].operator == "*="
+    assert isinstance(if_body[2], AssignmentNode)
+    assert if_body[2].left.name == "w2"
+    assert if_body[2].operator == "*="
 
 
 if __name__ == "__main__":

@@ -1879,6 +1879,30 @@ class TestCudaParser:
         assert allocation.right.placement_args == ["s_buffer"]
         assert allocation.right.args == ["1024", "s_data"]
 
+    def test_cuda_parameter_pack_reference_from_llm_metal_corpus(self):
+        code = """
+        template<class Kernel, class... KernelArgs>
+        float benchmark_kernel(int repeats, Kernel kernel, KernelArgs&&... kernel_args) {
+            kernel(std::forward<KernelArgs>(kernel_args)...);
+            return 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [(param.vtype, param.name) for param in ast.functions[0].params] == [
+            ("int", "repeats"),
+            ("Kernel", "kernel"),
+            ("KernelArgs && ...", "kernel_args"),
+        ]
+        call = ast.functions[0].body[0]
+        assert isinstance(call, FunctionCallNode)
+        assert call.name == "kernel"
+        assert isinstance(call.args[0], UnaryOpNode)
+        assert call.args[0].op == "post..."
+
     def test_public_cuda_samples_dependent_qualified_typename_parsing(self):
         code = """
         template <typename T>

@@ -3,7 +3,7 @@
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 
 @dataclass
@@ -361,7 +361,9 @@ class HLSLPreprocessor:
         line_num: int,
         in_expression: bool,
         file_path: Optional[str] = None,
+        disabled_macros: Optional[Set[str]] = None,
     ) -> str:
+        disabled_macros = disabled_macros or set()
         result = ""
         i = 0
         depth = 0
@@ -399,7 +401,7 @@ class HLSLPreprocessor:
                     i += consumed_def
                     continue
 
-                macro = self.macros.get(ident)
+                macro = None if ident in disabled_macros else self.macros.get(ident)
                 if macro is None:
                     result += "0" if in_expression else ident
                     continue
@@ -413,7 +415,11 @@ class HLSLPreprocessor:
                         i = j + consumed_args
                         replaced = self._expand_function_macro(macro, args)
                         result += self._expand_macros(
-                            replaced, line_num, in_expression, file_path
+                            replaced,
+                            line_num,
+                            in_expression,
+                            file_path,
+                            disabled_macros | {ident},
                         )
                         continue
                     result += ident
@@ -421,7 +427,11 @@ class HLSLPreprocessor:
 
                 replaced = macro.replacement if macro.replacement is not None else ""
                 result += self._expand_macros(
-                    replaced, line_num, in_expression, file_path
+                    replaced,
+                    line_num,
+                    in_expression,
+                    file_path,
+                    disabled_macros | {ident},
                 )
                 continue
 

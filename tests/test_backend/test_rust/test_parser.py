@@ -306,6 +306,38 @@ def test_key_value_attribute_parsing_from_rust_gpu_spirv_std():
     assert path_fn.attributes[0].args == ['"generated.rs"']
 
 
+def test_control_flow_expressions_in_match_arm_results():
+    code = """
+    fn main() {
+        'outer: loop {
+            let value = match next() {
+                0 => return Err(error),
+                1 => continue 'outer,
+                _ => break 'outer 7,
+            };
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    outer_loop = ast.functions[0].body[0]
+    value_binding = outer_loop.body[0]
+    match_value = value_binding.value
+
+    return_arm, continue_arm, break_arm = (arm.body for arm in match_value.arms)
+
+    assert isinstance(return_arm, ReturnNode)
+    assert isinstance(return_arm.value, FunctionCallNode)
+    assert return_arm.value.name == "Err"
+
+    assert isinstance(continue_arm, ContinueNode)
+    assert continue_arm.label == "'outer"
+
+    assert isinstance(break_arm, BreakNode)
+    assert break_arm.label == "'outer"
+    assert break_arm.value == "7"
+
+
 def test_rust_gpu_ray_query_parenthesized_statement_macro_parsing():
     code = """
     use glam::Vec3;

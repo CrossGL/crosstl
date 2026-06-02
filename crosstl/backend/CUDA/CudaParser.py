@@ -1887,6 +1887,11 @@ class CudaParser:
         param_type = self.parse_declarator_prefix(param_type)
         if self.is_function_pointer_parameter_declarator():
             return self.parse_function_pointer_parameter(param_type)
+
+        if self.is_ellipsis_at_current_index():
+            self.consume_ellipsis()
+            param_type = f"{param_type} ...".strip()
+
         if self.current_token[0] in {"COMMA", "RPAREN"}:
             self.skip_parameter_default()
             return VariableNode(param_type, "")
@@ -3018,7 +3023,10 @@ class CudaParser:
         left = self.parse_primary_expression()
 
         while True:
-            if self.current_token[0] == "DOT":
+            if self.is_ellipsis_at_current_index():
+                self.consume_ellipsis()
+                left = UnaryOpNode("post...", left)
+            elif self.current_token[0] == "DOT":
                 self.eat("DOT")
                 member = self.parse_member_name()
                 left = MemberAccessNode(left, member, False)
@@ -3960,6 +3968,8 @@ class CudaParser:
             right = self.expression_to_text(expr.right)
             return f"({left} {expr.op} {right})"
         if isinstance(expr, UnaryOpNode):
+            if expr.op.startswith("post"):
+                return f"{self.expression_to_text(expr.operand)}{expr.op[4:]}"
             return f"{expr.op}{self.expression_to_text(expr.operand)}"
         return str(expr)
 

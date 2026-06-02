@@ -1995,11 +1995,13 @@ class HipParser:
             else:
                 init = self.parse_expression()
         self.consume("SEMICOLON")
+        self.skip_newlines()
 
         condition = None
         if not self.match("SEMICOLON"):
             condition = self.parse_expression()
         self.consume("SEMICOLON")
+        self.skip_newlines()
 
         update = None
         if not self.match("RPAREN"):

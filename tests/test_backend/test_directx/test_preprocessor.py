@@ -13,6 +13,16 @@ def test_object_like_macro_expansion():
     assert "3.14" in output
 
 
+def test_self_referential_object_macro_member_access_does_not_recurse():
+    code = """
+    #define PERSISTENCE global.PERSISTENCE / 100
+    float value = PERSISTENCE;
+    """
+    output = HLSLPreprocessor().preprocess(code)
+
+    assert "float value = global.PERSISTENCE / 100;" in output
+
+
 def test_macro_definition_strips_trailing_comment_before_expansion():
     code = """
     #define FLT_MIN 1.175494351e-38F // min positive value

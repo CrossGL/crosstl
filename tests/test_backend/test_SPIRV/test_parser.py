@@ -445,6 +445,33 @@ def test_parse_restrict_buffer_reference_local_declaration_from_glsl_samples():
     assert declaration.left.name == "positions"
 
 
+def test_parse_groupshared_hlsl_declarations_from_vulkan_samples():
+    code = """
+    struct DummyPayLoad {
+        uint dummyData;
+    };
+
+    groupshared float4 sharedData[1024];
+    groupshared DummyPayLoad dummyPayLoad;
+
+    void main() {
+        DispatchMesh(3, 1, 1, dummyPayLoad);
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    shared_data = ast.global_variables[0]
+    payload = ast.global_variables[1]
+    dispatch = ast.functions[0].body[0]
+    assert shared_data.vtype == "groupshared float4"
+    assert shared_data.name == "sharedData[1024]"
+    assert payload.vtype == "groupshared DummyPayLoad"
+    assert payload.name == "dummyPayLoad"
+    assert isinstance(dispatch, FunctionCallNode)
+    assert dispatch.name == "DispatchMesh"
+
+
 def test_parse_empty_statement_after_block_from_glsl_samples():
     code = """
     void main() {

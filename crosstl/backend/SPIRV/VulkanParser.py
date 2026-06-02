@@ -46,6 +46,7 @@ class VulkanParser:
     }
     DECLARATION_QUALIFIERS = LAYOUT_DECLARATION_QUALIFIERS | {
         "const",
+        "groupshared",
         "in",
         "inout",
         "out",
