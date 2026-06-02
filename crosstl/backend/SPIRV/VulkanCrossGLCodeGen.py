@@ -208,33 +208,40 @@ class VulkanToCrossGLConverter:
             elif isinstance(node, AssignmentNode):
                 code += f"    {self.generate_assignment(node)};\n"
             elif isinstance(node, FunctionNode):
-                # Determine if this is a vertex or fragment shader based on the function name
-                if node.name == "main":
-                    is_vertex_shader = False
-                    for stmt in node.body:
-                        if self.is_position_assignment(stmt):
-                            is_vertex_shader = True
-                            break
+                shader_stage = self.function_shader_stage(node)
+                if shader_stage is not None or node.name == "main":
+                    if shader_stage is None:
+                        shader_stage = self.infer_main_shader_stage(
+                            node, compute_layouts
+                        )
 
-                    if compute_layouts:
+                    if shader_stage == "compute":
                         code += "    // Compute Shader\n"
                         code += "    compute {\n"
-                        for layout in compute_layouts:
+                        stage_compute_layouts = (
+                            compute_layouts + self.spirv_compute_execution_layouts(node)
+                        )
+                        for layout in stage_compute_layouts:
                             code += self.generate_compute_layout(layout)
                         code += self.generate_function(node)
                         code += "    }\n\n"
-                    elif is_vertex_shader:
+                    elif shader_stage == "vertex":
                         code += "    // Vertex Shader\n"
                         code += "    vertex {\n"
                         code += self.generate_function(node)
                         code += "    }\n\n"
-                    else:
+                    elif shader_stage == "fragment":
                         code += "    // Fragment Shader\n"
                         code += "    fragment {\n"
-                        for layout in fragment_execution_layouts:
+                        for layout in (
+                            fragment_execution_layouts
+                            + self.spirv_fragment_execution_layouts(node)
+                        ):
                             code += self.generate_fragment_execution_layout(layout)
                         code += self.generate_function(node)
                         code += "    }\n\n"
+                    else:
+                        code += self.generate_function(node)
                 else:
                     code += self.generate_function(node)
 
@@ -250,6 +257,55 @@ class VulkanToCrossGLConverter:
             name in {"local_size_x", "local_size_y", "local_size_z"}
             for name, _ in node.qualifiers
         )
+
+    def function_shader_stage(self, node):
+        return self.spirv_execution_model_stage(
+            getattr(node, "spirv_execution_model", None)
+        )
+
+    def spirv_execution_model_stage(self, execution_model):
+        return {
+            "Vertex": "vertex",
+            "Fragment": "fragment",
+            "GLCompute": "compute",
+        }.get(execution_model)
+
+    def infer_main_shader_stage(self, node, compute_layouts):
+        if compute_layouts:
+            return "compute"
+        for stmt in node.body:
+            if self.is_position_assignment(stmt):
+                return "vertex"
+        return "fragment"
+
+    def spirv_compute_execution_layouts(self, node):
+        layouts = []
+        for mode in getattr(node, "spirv_execution_modes", []) or []:
+            if mode.get("mode") != "LocalSize":
+                continue
+            operands = mode.get("operands", [])
+            if len(operands) < 3:
+                continue
+            layouts.append(
+                LayoutNode(
+                    [
+                        ("local_size_x", operands[0]),
+                        ("local_size_y", operands[1]),
+                        ("local_size_z", operands[2]),
+                    ],
+                    layout_type="in",
+                )
+            )
+        return layouts
+
+    def spirv_fragment_execution_layouts(self, node):
+        layouts = []
+        for mode in getattr(node, "spirv_execution_modes", []) or []:
+            if mode.get("mode") == "EarlyFragmentTests":
+                layouts.append(
+                    LayoutNode([("early_fragment_tests", None)], layout_type="in")
+                )
+        return layouts
 
     def is_fragment_execution_layout(self, node):
         if not isinstance(node, LayoutNode):

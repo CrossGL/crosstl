@@ -1132,6 +1132,38 @@ def test_spirv_assembly_function_only_module_is_preserved():
     assert ast.functions[0].spirv_raw_instructions[-1]["opcode"] == "OpFunctionEnd"
 
 
+def test_spirv_assembly_execution_mode_metadata_is_preserved():
+    code = """
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint GLCompute %main "main"
+    OpExecutionMode %main LocalSize 8 4 1
+    %void = OpTypeVoid
+    %fn = OpTypeFunction %void
+    %main = OpFunction %void None %fn
+    %label = OpLabel
+    OpReturn
+    OpFunctionEnd
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = ast.functions[0]
+
+    assert ast.spirv_execution_modes == {
+        "%main": [
+            {
+                "opcode": "OpExecutionMode",
+                "mode": "LocalSize",
+                "operands": ["8", "4", "1"],
+            }
+        ]
+    }
+    assert function.spirv_execution_model == "GLCompute"
+    assert function.spirv_entry_point == ast.spirv_entry_points[0]
+    assert function.spirv_execution_modes == ast.spirv_execution_modes["%main"]
+
+
 def test_spirv_assembly_function_parameters_parse():
     code = """
     OpCapability Shader

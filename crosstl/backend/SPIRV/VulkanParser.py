@@ -351,6 +351,7 @@ class VulkanParser:
         spec_constant_ids = []
         variables = []
         entry_points = []
+        execution_modes = {}
 
         for result_id, opcode, operands, _line_number in instructions:
             if opcode == "OpName" and len(operands) >= 2:
@@ -373,6 +374,17 @@ class VulkanParser:
                         "id": operands[1],
                         "name": operands[2],
                         "interface_ids": operands[3:],
+                    }
+                )
+            elif (
+                opcode in {"OpExecutionMode", "OpExecutionModeId"}
+                and len(operands) >= 2
+            ):
+                execution_modes.setdefault(operands[0], []).append(
+                    {
+                        "opcode": opcode,
+                        "mode": operands[1],
+                        "operands": operands[2:],
                     }
                 )
             elif result_id and opcode == "OpTypeVoid":
@@ -527,7 +539,7 @@ class VulkanParser:
             + global_variables
         )
         functions = self.spirv_assembly_functions(
-            instructions, names, types, entry_points
+            instructions, names, types, entry_points, execution_modes
         )
         if not global_variables and not structs and not functions:
             raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
@@ -538,6 +550,7 @@ class VulkanParser:
             global_variables=global_variables,
             spirv_assembly=True,
             spirv_entry_points=entry_points,
+            spirv_execution_modes=execution_modes,
             spirv_names=names,
             spirv_decorations=decorations,
             spirv_member_decorations=member_decorations,
@@ -545,9 +558,13 @@ class VulkanParser:
             spirv_types=types,
         )
 
-    def spirv_assembly_functions(self, instructions, names, types, entry_points):
+    def spirv_assembly_functions(
+        self, instructions, names, types, entry_points, execution_modes
+    ):
         functions = []
-        entry_point_names = {entry["id"]: entry["name"] for entry in entry_points}
+        entry_points_by_id = {}
+        for entry in entry_points:
+            entry_points_by_id.setdefault(entry["id"], []).append(entry)
         entry_instruction = None
         raw_instructions = []
         for result_id, opcode, operands, line_number in instructions:
@@ -602,17 +619,26 @@ class VulkanParser:
                 self.spirv_type_name(return_type_id, types) or return_type_id or "void",
                 names.get(
                     function_id,
-                    entry_point_names.get(
-                        function_id, function_id.lstrip("%") if function_id else ""
-                    ),
+                    self.spirv_function_name_fallback(function_id, entry_points_by_id),
                 ),
                 params,
                 body=[],
             )
+            function_entry_points = entry_points_by_id.get(function_id, [])
             node.spirv_id = function_id
             node.spirv_return_type_id = return_type_id
             node.spirv_function_control = function_control
             node.spirv_function_type_id = function_type_id
+            node.spirv_entry_points = function_entry_points
+            node.spirv_entry_point = (
+                function_entry_points[0] if function_entry_points else None
+            )
+            node.spirv_execution_model = (
+                function_entry_points[0]["execution_model"]
+                if function_entry_points
+                else None
+            )
+            node.spirv_execution_modes = execution_modes.get(function_id, [])
             node.spirv_instructions = list(raw_instructions)
             node.spirv_raw_instructions = [
                 {
@@ -629,6 +655,13 @@ class VulkanParser:
             entry_instruction = None
             raw_instructions = []
         return functions
+
+    def spirv_function_name_fallback(self, function_id, entry_points_by_id):
+        if function_id in entry_points_by_id:
+            return entry_points_by_id[function_id][0].get("name")
+        if function_id:
+            return function_id.lstrip("%")
+        return ""
 
     def parse_spirv_assembly_instructions(self, code):
         instructions = []

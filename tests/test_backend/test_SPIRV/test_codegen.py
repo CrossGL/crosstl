@@ -873,6 +873,32 @@ def test_vulkan_compute_local_size_layout_codegen():
     assert "fragment {" not in generated_code
 
 
+def test_spirv_assembly_compute_entry_point_uses_execution_metadata():
+    code = """
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint GLCompute %main "main"
+    OpExecutionMode %main LocalSize 8 4 1
+    %void = OpTypeVoid
+    %fn = OpTypeFunction %void
+    %main = OpFunction %void None %fn
+    %label = OpLabel
+    OpReturn
+    OpFunctionEnd
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "compute {" in generated_code
+    assert (
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;"
+        in generated_code
+    )
+    assert "void main()" in generated_code
+    assert "fragment {" not in generated_code
+
+
 def test_vulkan_fragment_early_tests_layout_codegen():
     code = """
     layout(early_fragment_tests) in;
