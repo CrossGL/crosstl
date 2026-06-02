@@ -20,6 +20,7 @@ from crosstl.backend.Mojo.MojoAst import (
     MethodCallNode,
     RangeForNode,
     ReturnNode,
+    StructNode,
     SwitchNode,
     TernaryOpNode,
     TupleNode,
@@ -63,6 +64,13 @@ def find_class(ast, name: str):
         if isinstance(node, ClassNode) and node.name == name:
             return node
     raise AssertionError(f"Class {name} not found")
+
+
+def find_struct(ast, name: str):
+    for node in ast.structs:
+        if isinstance(node, StructNode) and node.name == name:
+            return node
+    raise AssertionError(f"Struct {name} not found")
 
 
 def find_constant_buffer(ast, name: str):
@@ -163,6 +171,40 @@ def test_struct_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_struct_base_list_parsing_from_modular_corpus():
+    code = """
+    @fieldwise_init
+    struct NullWriter(Writer):
+        var array: InlineArray[Byte, 1024]
+
+        def write_string(mut self, string: StringSlice):
+            pass
+
+    struct Complex(
+        Boolable,
+        Equatable,
+        Writable,
+    ):
+        var re: Float64
+        var im: Float64
+    """
+    ast = parse_code(tokenize_code(code))
+    null_writer = find_struct(ast, "NullWriter")
+    complex_struct = find_struct(ast, "Complex")
+
+    assert [attr.name for attr in null_writer.attributes] == ["fieldwise_init"]
+    assert null_writer.base_classes == ["Writer"]
+    assert [(member.vtype, member.name) for member in null_writer.members] == [
+        ("InlineArray[Byte, 1024]", "array")
+    ]
+    assert [method.name for method in null_writer.methods] == ["write_string"]
+    assert complex_struct.base_classes == ["Boolable", "Equatable", "Writable"]
+    assert [(member.vtype, member.name) for member in complex_struct.members] == [
+        ("Float64", "re"),
+        ("Float64", "im"),
+    ]
 
 
 def test_parenthesized_import_items_and_floor_divide_parsing():

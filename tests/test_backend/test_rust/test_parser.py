@@ -4324,6 +4324,54 @@ def test_trait_default_method_body_parsing():
         pytest.fail(f"Trait default method body parsing failed: {e}")
 
 
+def test_for_loop_reference_binding_patterns():
+    code = """
+    fn scan_refs(values: &[i32], pairs: &[(&i32, &i32)]) {
+        for &value in values {
+            use_value(value);
+        }
+
+        for (index, (&left, &mut right)) in pairs.iter().enumerate() {
+            use_pair(index, left, right);
+        }
+
+        for &(ref name, tag) in pairs {
+            use_pair(name, tag);
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    body = ast.functions[0].body
+
+    value_loop = body[0]
+    assert isinstance(value_loop, ForNode)
+    assert isinstance(value_loop.pattern, ReferenceNode)
+    assert value_loop.pattern.expression == "value"
+    assert value_loop.pattern.is_mutable is False
+
+    pair_loop = body[1]
+    assert isinstance(pair_loop, ForNode)
+    assert isinstance(pair_loop.pattern, TupleNode)
+    assert pair_loop.pattern.elements[0] == "index"
+
+    pair_pattern = pair_loop.pattern.elements[1]
+    assert isinstance(pair_pattern, TupleNode)
+    assert isinstance(pair_pattern.elements[0], ReferenceNode)
+    assert pair_pattern.elements[0].expression == "left"
+    assert pair_pattern.elements[0].is_mutable is False
+    assert isinstance(pair_pattern.elements[1], ReferenceNode)
+    assert pair_pattern.elements[1].expression == "right"
+    assert pair_pattern.elements[1].is_mutable is True
+
+    ref_loop = body[2]
+    assert isinstance(ref_loop, ForNode)
+    assert isinstance(ref_loop.pattern, ReferenceNode)
+    ref_pair_pattern = ref_loop.pattern.expression
+    assert isinstance(ref_pair_pattern, TupleNode)
+    assert ref_pair_pattern.elements == ["name", "tag"]
+
+
 def test_error_handling():
     invalid_codes = [
         "fn incomplete(",

@@ -1842,6 +1842,9 @@ class RustParser:
         return LetNode(name, value, var_type, is_mutable, else_body)
 
     def parse_let_pattern(self):
+        if self.current_token[0] in {"REF", "MUT"}:
+            return self.parse_match_binding_modifier_pattern()
+
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -1850,6 +1853,14 @@ class RustParser:
         if self.current_token[0] == "UNDERSCORE":
             self.eat("UNDERSCORE")
             return "_"
+
+        if self.current_token[0] == "AMPERSAND":
+            self.eat("AMPERSAND")
+            is_mutable = False
+            if self.current_token[0] == "MUT":
+                self.eat("MUT")
+                is_mutable = True
+            return ReferenceNode(self.parse_let_pattern(), is_mutable)
 
         if self.current_token[0] == "LPAREN":
             self.eat("LPAREN")

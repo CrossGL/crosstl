@@ -238,6 +238,10 @@ class MojoParser:
         self.eat("STRUCT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        base_classes = []
+
+        if self.current_token[0] == "LPAREN":
+            base_classes = self.parse_base_class_list()
 
         members = []
         methods = []
@@ -260,7 +264,7 @@ class MojoParser:
             while (
                 self.current_token[0] != "EOF"
                 and self.current_token[0] != "DEDENT"
-                and self.current_token[0] not in ["FN", "DEF", "STRUCT", "CLASS"]
+                and self.current_token[0] not in ["STRUCT", "CLASS"]
             ):
                 self.skip_newlines()
                 if self.current_token[0] in ["DEDENT", "EOF"]:
@@ -275,7 +279,31 @@ class MojoParser:
 
         node = StructNode(name, members, attributes=initial_attributes)
         node.methods = methods
+        node.base_classes = base_classes
         return node
+
+    def parse_base_class_list(self):
+        base_classes = []
+        self.eat("LPAREN")
+        self.skip_layout_tokens()
+
+        while self.current_token[0] != "RPAREN":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated base class list")
+            base_classes.append(self.parse_type())
+            self.skip_layout_tokens()
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                self.skip_layout_tokens()
+                continue
+            if self.current_token[0] != "RPAREN":
+                raise SyntaxError(
+                    f"Expected COMMA or RPAREN, got {self.current_token[0]}"
+                )
+
+        self.eat("RPAREN")
+        return base_classes
 
     def parse_struct_member(self):
         self.skip_newlines()

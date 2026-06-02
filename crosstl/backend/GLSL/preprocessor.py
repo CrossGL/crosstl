@@ -123,6 +123,10 @@ class GLSLPreprocessor:
             if os.path.isdir(candidate):
                 include_paths.append(candidate)
 
+            common_dir = os.path.join(current_dir, "common")
+            if os.path.isdir(common_dir):
+                include_paths.append(common_dir)
+
             parent_dir = os.path.dirname(current_dir)
             if parent_dir == current_dir:
                 break

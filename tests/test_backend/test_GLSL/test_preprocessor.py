@@ -122,6 +122,37 @@ def test_preprocessor_resolves_vulkan_samples_shared_glsl_include(tmp_path):
     assert any(struct.name == "Light" for struct in ast.structs)
 
 
+def test_preprocessor_resolves_project_common_shader_include(tmp_path):
+    shader_root = tmp_path / "vk_mini_samples"
+    common_shader_dir = shader_root / "common" / "common_shaders"
+    common_shader_dir.mkdir(parents=True)
+    (common_shader_dir / "palette.h").write_text("""
+        vec3 palette(float t)
+        {
+            return vec3(t);
+        }
+        """)
+
+    shader_file = (
+        shader_root / "samples" / "compute_only" / "shaders" / "main.comp.glsl"
+    )
+    shader_file.parent.mkdir(parents=True)
+    shader_file.write_text("""
+        #version 450
+        #include "common_shaders/palette.h"
+
+        void main()
+        {
+            vec3 color = palette(1.0);
+        }
+        """)
+
+    tokens = GLSLLexer.from_file(str(shader_file)).tokenize()
+    ast = GLSLParser(tokens, "compute").parse()
+
+    assert any(function.name == "palette" for function in ast.functions)
+
+
 def test_preprocessor_uses_glsl_profile_macros_and_ignores_commented_directives(
     tmp_path,
 ):

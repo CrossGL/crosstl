@@ -243,6 +243,8 @@ class HLSLParser:
                 )
 
             name = self.parse_identifier()
+            if self.current_token_is_double_colon():
+                name = self.parse_scoped_name(name)
 
             if self.current_token[0] == "LPAREN":
                 func = self.parse_function(return_type, name, qualifiers, attributes)

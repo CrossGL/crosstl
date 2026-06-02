@@ -2774,5 +2774,44 @@ def test_interpolation_modifiers_from_vulkan_samples_parse_as_qualifiers():
     assert main.params[1].vtype == "float3"
 
 
+def test_flat_interpolation_outputs_from_libretro_shaders_parse_as_qualifiers():
+    code = """
+    layout(location = 1) flat out float delta;
+    layout(location = 2) out flat vec2 noise_div;
+
+    struct VSOutput
+    {
+        flat out float4 Color : COLOR0;
+    };
+
+    [shader("fragment")]
+    float4 main(flat in float deltaInput : COLOR1,
+                out flat float outputWeight : COLOR2)
+    {
+        outputWeight = deltaInput;
+        return float4(outputWeight, 0.0, 0.0, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    delta = ast.global_vars[0]
+    noise_div = ast.global_vars[1]
+    output = ast.structs[0]
+    main = find_function(ast, "main")
+
+    assert delta.qualifiers == ["layout(location=1)", "flat", "out"]
+    assert delta.vtype == "float"
+    assert delta.name == "delta"
+    assert noise_div.qualifiers == ["layout(location=2)", "out", "flat"]
+    assert noise_div.vtype == "vec2"
+    assert output.members[0].qualifiers == ["flat", "out"]
+    assert output.members[0].vtype == "float4"
+    assert main.params[0].qualifiers == ["flat", "in"]
+    assert main.params[0].vtype == "float"
+    assert main.params[1].qualifiers == ["out", "flat"]
+    assert main.params[1].vtype == "float"
+
+
 if __name__ == "__main__":
     pytest.main()

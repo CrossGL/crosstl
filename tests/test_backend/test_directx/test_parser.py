@@ -275,6 +275,31 @@ def test_parse_vulkan_samples_relaxed_instruction_class_method_shader():
     assert any(getattr(stmt, "name", "") == "a" for stmt in main.body)
 
 
+def test_parse_class_qualified_method_definition_from_sdk_samples():
+    ast = parse_code(textwrap.dedent("""
+            interface iBaseLight {
+                float3 IlluminateAmbient(float3 normal);
+            };
+
+            class cAmbientLight : iBaseLight {
+                float3 m_vLightColor;
+                bool m_bEnable;
+                float3 IlluminateAmbient(float3 normal);
+            };
+
+            float3 cAmbientLight::IlluminateAmbient(float3 normal) {
+                return m_vLightColor * m_bEnable;
+            }
+            """))
+
+    assert [function.name for function in ast.functions] == [
+        "cAmbientLight::IlluminateAmbient"
+    ]
+    method = ast.functions[0]
+    assert method.return_type == "float3"
+    assert [param.name for param in method.params] == ["normal"]
+
+
 def test_parse_global_static_const_array_initializer():
     ast = parse_code("static const float Weights[2] = { 0.25f, 0.75f };")
 
