@@ -232,6 +232,23 @@ def test_struct_init_method_parsing_from_shader_toy_sample():
     assert isinstance(constructor.body[0], AssignmentNode)
 
 
+def test_ray_payload_access_semantics_from_ray_tracing_sample():
+    code = """
+    [raypayload] struct RayPayload
+    {
+        float4 color : read(caller) : write(caller, closesthit, miss);
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    payload = ast.structs[0]
+    color = payload.members[0]
+
+    assert color.name == "color"
+    assert color.semantic == "read(caller):write(caller,closesthit,miss)"
+
+
 def test_if_parsing():
     code = """
     [shader("vertex")]

@@ -1145,6 +1145,8 @@ class MetalToCrossGLConverter:
                     stmt.statements, indent + 1, is_main
                 )
                 code += "    " * indent + "}\n"
+            elif isinstance(stmt, RangeForNode):
+                code += self.generate_range_for_loop(stmt, indent, is_main)
             elif isinstance(stmt, ForNode):
                 code += self.generate_for_loop(stmt, indent, is_main)
             elif isinstance(stmt, WhileNode):
@@ -1196,6 +1198,14 @@ class MetalToCrossGLConverter:
         update = self.generate_expression(node.update, is_main)
 
         code = f"for ({init}; {condition}; {update}) {{\n"
+        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += "    " * indent + "}\n"
+        return code
+
+    def generate_range_for_loop(self, node, indent, is_main):
+        iterable = self.generate_expression(node.iterable, is_main)
+
+        code = f"for {node.name} in {iterable} {{\n"
         code += self.generate_function_body(node.body, indent + 1, is_main)
         code += "    " * indent + "}\n"
         return code

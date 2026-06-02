@@ -702,6 +702,20 @@ def test_codegen_nested_unbraced_for_loops_from_public_msl_example():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_range_for_loop_from_mlx_random():
+    code = """
+    void mix_values() {
+        for (auto r : rotations[0]) {
+            value += r;
+        }
+    }
+    """
+    crossgl = convert(code)
+
+    assert "for r in rotations[0] {" in crossgl
+    assert "value += r;" in crossgl
+
+
 def test_codegen_ternary_expression():
     code = """
     void main() {

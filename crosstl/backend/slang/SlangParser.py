@@ -461,6 +461,38 @@ class SlangParser:
         self.eat("RPAREN")
         return "".join(register_parts)
 
+    def parse_semantic_annotations(self):
+        annotations = []
+        while self.current_token[0] == "COLON":
+            self.eat("COLON")
+            annotations.append(self.parse_semantic_annotation())
+        if not annotations:
+            return None
+        return ":".join(annotations)
+
+    def parse_semantic_annotation(self):
+        if self.current_token[0] not in {"IDENTIFIER", "SHADER"}:
+            raise SyntaxError(f"Expected semantic name, got {self.current_token[0]}")
+
+        annotation = [str(self.current_token[1])]
+        self.eat(self.current_token[0])
+        if self.current_token[0] != "LPAREN":
+            return "".join(annotation)
+
+        depth = 0
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            annotation.append(str(token_value))
+            self.eat(token_type)
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return "".join(annotation)
+
+        raise SyntaxError("Unterminated semantic argument list")
+
     def parse_array_suffixes(self):
         sizes = []
         while self.current_token[0] == "LBRACKET":
@@ -691,9 +723,7 @@ class SlangParser:
             array_sizes = self.parse_array_suffixes()
             semantic = None
             if self.current_token[0] == "COLON":
-                self.eat("COLON")
-                semantic = self.current_token[1]
-                self.eat(self.current_token[0])
+                semantic = self.parse_semantic_annotations()
             value = None
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
@@ -887,9 +917,7 @@ class SlangParser:
             generic_constraints = self.parse_generic_constraints()
         semantic = None
         if self.current_token[0] == "COLON":
-            self.eat("COLON")
-            semantic = self.current_token[1]
-            self.eat(self.current_token[0])
+            semantic = self.parse_semantic_annotations()
         if self.current_token[0] == "WHERE":
             generic_constraints.extend(self.parse_generic_constraints())
         if self.current_token[0] == "SEMICOLON":
@@ -954,9 +982,7 @@ class SlangParser:
                 struct_def = f" {self.current_token[1]}"
                 self.eat("IDENTIFIER")
             if self.current_token[0] == "COLON":
-                self.eat("COLON")
-                semantic = self.current_token[1]
-                self.eat(self.current_token[0])
+                semantic = self.parse_semantic_annotations()
             params.append(
                 VariableNode(
                     vtype + struct_def,

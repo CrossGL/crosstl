@@ -147,6 +147,21 @@ def test_struct_methods_do_not_break_field_codegen():
     assert "FunctionNode(" not in generated_code
 
 
+def test_ray_payload_access_semantics_codegen_from_ray_tracing_sample():
+    code = """
+    [raypayload] struct RayPayload
+    {
+        float4 color : read(caller) : write(caller, closesthit, miss);
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 color @ read(caller):write(caller,closesthit,miss);" in generated_code
+
+
 def test_if_codegen():
     code = """
     [shader("vertex")]

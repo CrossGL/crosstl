@@ -267,6 +267,10 @@ class MetalParser:
                 alias = self.parse_using_statement()
                 if alias is not None:
                     typedefs.append(alias)
+            elif self.is_union_declaration_start():
+                union = self.parse_union()
+                if union is not None:
+                    structs.append(union)
             elif self.is_bare_macro_invocation():
                 self.skip_bare_macro_invocation()
             elif self.is_template_declaration_start():
@@ -375,6 +379,12 @@ class MetalParser:
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "template"
         )
+
+    def is_union_declaration_start(self):
+        return self.current_token == ("IDENTIFIER", "union") and self.peek(1)[0] in {
+            "IDENTIFIER",
+            "LBRACE",
+        }
 
     def parse_template_declaration(self):
         template_parameters = self.parse_template_prefix()
@@ -805,6 +815,19 @@ class MetalParser:
 
         if (
             self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "typename"
+            and self.peek(1)[0] in TYPE_TOKENS
+        ):
+            self.eat("IDENTIFIER")
+            if self.current_token[0] == "METAL" or (
+                self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "SCOPE"
+            ):
+                base_type = self.parse_scoped_identifier()
+            else:
+                base_type = self.current_token[1]
+                self.eat(self.current_token[0])
+        elif (
+            self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] in SIGNED_TYPE_PREFIXES
             and self.peek(1)[0] in TYPE_TOKENS
         ):
@@ -973,6 +996,19 @@ class MetalParser:
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
+            if self.template_argument_list_followed_by_call(
+                follow_token_types={"SCOPE"}
+            ):
+                template_args = self.parse_template_argument_suffix()
+                name += f"<{self.format_generic_type_tokens(template_args)}>"
+            while self.current_token[0] == "SCOPE":
+                self.eat("SCOPE")
+                if self.current_token[0] not in TYPE_TOKENS:
+                    raise SyntaxError(
+                        f"Expected identifier after '::', got {self.current_token[0]}"
+                    )
+                name += f"::{self.current_token[1]}"
+                self.eat(self.current_token[0])
         return name, self.parse_declarator_array_sizes()
 
     def parse_declarator_array_sizes(self):
@@ -1006,6 +1042,28 @@ class MetalParser:
         struct_node = StructNode(name, members)
         struct_node.alignas = alignas_specs
         return struct_node
+
+    def parse_union(self):
+        self.eat("IDENTIFIER")
+        name = self.current_token[1] if self.current_token[0] == "IDENTIFIER" else None
+        if name:
+            self.eat("IDENTIFIER")
+            self.known_types.add(name)
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return None
+        if not name:
+            raise SyntaxError("Expected union name")
+        self.eat("LBRACE")
+
+        members = self.parse_struct_members()
+
+        self.eat("RBRACE")
+        self.eat("SEMICOLON")
+
+        union_node = StructNode(name, members)
+        union_node.aggregate_kind = "union"
+        return union_node
 
     def parse_struct_members(self):
         members = []
@@ -1214,6 +1272,9 @@ class MetalParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
+        if self.is_for_loop_macro_prefix():
+            self.eat("IDENTIFIER")
+            return None
         if self.current_token[0] == "PREPROCESSOR":
             self.parse_preprocessor_directive()
             return None
@@ -1255,6 +1316,12 @@ class MetalParser:
             return self.parse_static_assert()
         else:
             return self.parse_expression_statement()
+
+    def is_for_loop_macro_prefix(self):
+        if self.current_token[0] != "IDENTIFIER" or self.peek(1)[0] != "FOR":
+            return False
+        name = self.current_token[1]
+        return bool(name) and name == name.upper()
 
     def parse_variable_declaration_or_assignment(self):
         alignas_specs = self.parse_alignas_specifiers()
@@ -1385,6 +1452,10 @@ class MetalParser:
     def parse_for_statement(self):
         self.eat("FOR")
         self.eat("LPAREN")
+
+        if self.is_range_for_statement():
+            return self.parse_range_for_statement()
+
         init = None
         if self.current_token[0] != "SEMICOLON":
             init = self.parse_for_init()
@@ -1403,6 +1474,35 @@ class MetalParser:
         body = self.parse_statement_body()
 
         return ForNode(init, condition, update, body)
+
+    def is_range_for_statement(self):
+        idx = self.pos
+        depth = 0
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "RPAREN" and depth == 0:
+                return False
+            if token_type == "SEMICOLON" and depth == 0:
+                return False
+            if token_type == "COLON" and depth == 0:
+                return True
+            if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
+                depth += 1
+            elif token_type in {"RPAREN", "RBRACKET", "RBRACE"} and depth > 0:
+                depth -= 1
+            idx += 1
+        return False
+
+    def parse_range_for_statement(self):
+        vtype, _qualifiers = self.parse_type_specifier()
+        name, _array_sizes = self.parse_declarator()
+        self.eat("COLON")
+        iterable = self.parse_expression(allow_comma=True)
+        self.eat("RPAREN")
+
+        body = self.parse_statement_body()
+
+        return RangeForNode(vtype, name, iterable, body)
 
     def parse_for_init(self):
         if self.is_declaration_start():

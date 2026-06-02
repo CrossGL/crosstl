@@ -1585,6 +1585,7 @@ class RustParser:
                     "MAT4",
                     "ASYNC",
                     "UNSAFE",
+                    "LPAREN",
                 ]
                 or (
                     self.current_token[0] == "CONST"

@@ -89,6 +89,10 @@ class HipParser:
         "HIPBLOCKDIM",
         "HIPGRIDDIM",
         "WARPSIZE",
+        "TEXTURE",
+        "SURFACE",
+        "HIPARRAY",
+        "HIPARRAYT",
     }
     FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
     LAMBDA_SPECIFIER_TOKENS = {
@@ -177,6 +181,7 @@ class HipParser:
         "ULONGLONG4",
     }
     RESOURCE_TYPE_TOKENS = {"TEXTURE", "SURFACE", "HIPARRAY", "HIPARRAYT"}
+    CONTEXTUAL_IDENTIFIER_TOKENS = RESOURCE_TYPE_TOKENS
     HIP_IDENTIFIER_TYPE_NAMES = {
         "int8_t",
         "uint8_t",
@@ -270,11 +275,7 @@ class HipParser:
             index = self.skip_launch_bounds_at_pos(index)
             index = self.skip_newlines_at_pos(index)
 
-        if (
-            index + 1 < len(self.tokens)
-            and self.is_function_name_token(self.tokens[index])
-            and self.tokens[index + 1].type == "LPAREN"
-        ):
+        if self.skip_function_name_at(index) is not None:
             return index
 
         return None
@@ -325,6 +326,36 @@ class HipParser:
         if not self.is_function_name_token():
             token_type = self.current_token.type if self.current_token else "EOF"
             self.error(f"Expected function name, got {token_type}")
+
+        name = self.current_token.value
+        self.advance()
+        while self.match("SCOPE"):
+            self.advance()
+            if self.match("TILDE"):
+                self.advance()
+                member = self.consume("IDENTIFIER").value
+                name += f"::~{member}"
+                continue
+            if not self.is_function_name_token():
+                token_type = self.current_token.type if self.current_token else "EOF"
+                self.error(f"Expected function name after scope, got {token_type}")
+            name += f"::{self.current_token.value}"
+            self.advance()
+        return name
+
+    def is_declarator_name_token(self):
+        return self.match("IDENTIFIER", *self.CONTEXTUAL_IDENTIFIER_TOKENS)
+
+    def is_declarator_name_token_at(self, index):
+        return index < len(self.tokens) and self.tokens[index].type in {
+            "IDENTIFIER",
+            *self.CONTEXTUAL_IDENTIFIER_TOKENS,
+        }
+
+    def consume_declarator_name(self):
+        if not self.is_declarator_name_token():
+            token_type = self.current_token.type if self.current_token else "EOF"
+            self.error(f"Expected declarator name, got {token_type}")
 
         name = self.current_token.value
         self.advance()
@@ -469,6 +500,8 @@ class HipParser:
         if self.block_depth > 0 and self.is_variable_declaration():
             declarations = self.parse_variable_declaration_list()
             return declarations if len(declarations) > 1 else declarations[0]
+        elif self.is_qualified_constructor_definition():
+            return self.parse_qualified_constructor_definition()
         elif self.is_function_declaration():
             return self.parse_simple_function()
         elif self.is_variable_declaration():
@@ -739,6 +772,7 @@ class HipParser:
         params = self.parse_parameter_list()
         self.consume("RPAREN")
         self.skip_newlines()
+        self.skip_post_function_qualifiers()
 
         body = None
         if self.match("LBRACE"):
@@ -797,6 +831,7 @@ class HipParser:
         params = self.parse_parameter_list()
         self.consume("RPAREN")
         self.skip_newlines()
+        self.skip_post_function_qualifiers()
 
         body = None
         if self.match("LBRACE"):
@@ -805,6 +840,125 @@ class HipParser:
             self.advance()
 
         return FunctionNode(return_type, name, params, body, qualifiers)
+
+    def is_qualified_constructor_definition(self):
+        index = self.skip_newlines_at_pos(self.pos)
+        if (
+            index + 4 < len(self.tokens)
+            and self.tokens[index].type == "IDENTIFIER"
+            and self.tokens[index + 1].type == "SCOPE"
+            and self.tokens[index + 2].type == "TILDE"
+            and self.tokens[index + 3].type == "IDENTIFIER"
+            and self.tokens[index].value == self.tokens[index + 3].value
+            and self.tokens[index + 4].type == "LPAREN"
+        ):
+            return True
+
+        return (
+            index + 3 < len(self.tokens)
+            and self.tokens[index].type == "IDENTIFIER"
+            and self.tokens[index + 1].type == "SCOPE"
+            and self.tokens[index + 2].type == "IDENTIFIER"
+            and self.tokens[index].value == self.tokens[index + 2].value
+            and self.tokens[index + 3].type == "LPAREN"
+        )
+
+    def parse_qualified_constructor_definition(self):
+        class_name = self.consume("IDENTIFIER").value
+        self.consume("SCOPE")
+        destructor = False
+        if self.match("TILDE"):
+            destructor = True
+            self.advance()
+        constructor_name = self.consume("IDENTIFIER").value
+        name = (
+            f"{class_name}::~{constructor_name}"
+            if destructor
+            else f"{class_name}::{constructor_name}"
+        )
+
+        self.consume("LPAREN")
+        params = self.parse_parameter_list()
+        self.consume("RPAREN")
+        self.skip_newlines()
+        self.skip_constructor_initializer_list()
+
+        body = None
+        if self.match("LBRACE"):
+            body = self.parse_block()
+        elif self.match("SEMICOLON"):
+            self.advance()
+
+        return FunctionNode("", name, params, body, [])
+
+    def skip_post_function_qualifiers(self):
+        while True:
+            self.skip_newlines()
+            if self.match("CONST", "VOLATILE"):
+                self.advance()
+                continue
+            if self.match("IDENTIFIER") and self.current_token.value in {
+                "noexcept",
+                "override",
+                "final",
+            }:
+                self.advance()
+                if self.match("LPAREN"):
+                    self.skip_balanced_parentheses()
+                continue
+            break
+
+    def skip_balanced_parentheses(self):
+        if not self.match("LPAREN"):
+            return
+
+        depth = 0
+        while self.current_token:
+            if self.match("LPAREN"):
+                depth += 1
+            elif self.match("RPAREN"):
+                depth -= 1
+                if depth == 0:
+                    self.advance()
+                    return
+            self.advance()
+
+    def skip_constructor_initializer_list(self):
+        self.skip_newlines()
+        if not self.match("COLON"):
+            return
+
+        self.advance()
+        paren_depth = 0
+        brace_depth = 0
+        bracket_depth = 0
+
+        while self.current_token:
+            if (
+                paren_depth == 0
+                and brace_depth == 0
+                and bracket_depth == 0
+                and self.match("LBRACE", "SEMICOLON")
+            ):
+                return
+
+            if self.match("LPAREN"):
+                paren_depth += 1
+            elif self.match("RPAREN"):
+                paren_depth = max(0, paren_depth - 1)
+            elif self.match("LBRACE"):
+                brace_depth += 1
+            elif self.match("RBRACE"):
+                if brace_depth == 0:
+                    return
+                brace_depth -= 1
+            elif self.match("LBRACKET"):
+                bracket_depth += 1
+            elif self.match("RBRACKET"):
+                bracket_depth = max(0, bracket_depth - 1)
+
+            self.advance()
+            self.skip_newlines()
 
     def parse_struct(self):
         self.consume("STRUCT")
@@ -986,7 +1140,7 @@ class HipParser:
     def parse_struct_member(self):
         try:
             member_type = self.parse_type()
-            name = self.consume("IDENTIFIER").value
+            name = self.consume_declarator_name()
             member_type += self.parse_array_suffix()
 
             if self.match("SEMICOLON"):
@@ -1016,7 +1170,7 @@ class HipParser:
             self.advance()
 
         var_type = self.parse_type()
-        name = self.consume("IDENTIFIER").value
+        name = self.consume_declarator_name()
         var_type += self.parse_array_suffix()
         self.skip_newlines()
 
@@ -1082,7 +1236,7 @@ class HipParser:
         if allow_prefix:
             var_type = self.parse_declarator_prefix(var_type)
 
-        name = self.consume("IDENTIFIER").value
+        name = self.consume_declarator_name()
         var_type += self.parse_array_suffix()
         self.skip_newlines()
         value = self.parse_variable_initializer(var_type)
@@ -1287,11 +1441,12 @@ class HipParser:
             param_type = self.parse_type()
 
             param_name = ""
-            if self.match("IDENTIFIER"):
+            if self.is_declarator_name_token():
                 param_name = self.current_token.value
                 self.advance()
 
             param_type += self.parse_array_suffix()
+            self.skip_default_parameter_value()
             params.append({"type": param_type, "name": param_name})
 
             self.skip_newlines()
@@ -1302,6 +1457,46 @@ class HipParser:
                 break
 
         return params
+
+    def skip_default_parameter_value(self):
+        self.skip_newlines()
+        if not self.match("ASSIGN"):
+            return
+
+        self.advance()
+        paren_depth = 0
+        brace_depth = 0
+        bracket_depth = 0
+
+        while self.current_token:
+            if (
+                paren_depth == 0
+                and brace_depth == 0
+                and bracket_depth == 0
+                and self.match("COMMA", "RPAREN")
+            ):
+                return
+
+            if self.match("LPAREN"):
+                paren_depth += 1
+            elif self.match("RPAREN"):
+                if paren_depth == 0:
+                    return
+                paren_depth -= 1
+            elif self.match("LBRACE"):
+                brace_depth += 1
+            elif self.match("RBRACE"):
+                if brace_depth == 0:
+                    return
+                brace_depth -= 1
+            elif self.match("LBRACKET"):
+                bracket_depth += 1
+            elif self.match("RBRACKET"):
+                if bracket_depth == 0:
+                    return
+                bracket_depth -= 1
+
+            self.advance()
 
     def parse_return_statement(self):
         self.consume("RETURN")
@@ -2217,7 +2412,7 @@ class HipParser:
         if self.match("LBRACKET") and self.is_lambda_expression_start():
             return self.parse_lambda_expression()
 
-        if self.match("IDENTIFIER"):
+        if self.match("IDENTIFIER", *self.CONTEXTUAL_IDENTIFIER_TOKENS):
             if self.current_token.value == "new":
                 return self.parse_new_expression()
 
@@ -2801,14 +2996,31 @@ class HipParser:
         )
         if index is not None:
             index = self.skip_newlines_at_pos(index)
-            if (
-                index + 1 < len(self.tokens)
-                and self.is_function_name_token(self.tokens[index])
-                and self.tokens[index + 1].type == "LPAREN"
-            ):
+            if self.skip_function_name_at(index) is not None:
                 return True
 
         return False
+
+    def skip_function_name_at(self, index):
+        if index >= len(self.tokens) or not self.is_function_name_token(
+            self.tokens[index]
+        ):
+            return None
+
+        index += 1
+        while index < len(self.tokens) and self.tokens[index].type == "SCOPE":
+            index += 1
+            if index < len(self.tokens) and self.tokens[index].type == "TILDE":
+                index += 1
+            if index >= len(self.tokens) or not self.is_function_name_token(
+                self.tokens[index]
+            ):
+                return None
+            index += 1
+
+        if index < len(self.tokens) and self.tokens[index].type == "LPAREN":
+            return index
+        return None
 
     def is_variable_declaration(self) -> bool:
         # Simple heuristic: type followed by identifier not followed by (
@@ -2829,7 +3041,7 @@ class HipParser:
 
         index = self.skip_type_at_pos(index)
         if index is not None:
-            if index < len(self.tokens) and self.tokens[index].type == "IDENTIFIER":
+            if self.is_declarator_name_token_at(index):
                 index += 1
                 while index < len(self.tokens) and self.tokens[index].type == "NEWLINE":
                     index += 1

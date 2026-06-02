@@ -259,6 +259,23 @@ def test_rust_gpu_compute_shader_is_multiple_of_method_codegen():
     assert "is_multiple_of" not in result
 
 
+def test_rust_gpu_final_parenthesized_binary_expression_codegen():
+    code = """
+    fn total_rayleigh(lambda: Vec3) -> Vec3 {
+        (8.0 * PI.powf(3.0)
+            * (REFRACTIVE_INDEX.powf(2.0) - 1.0).powf(2.0)
+            * (6.0 + 3.0 * DEPOLARIZATION_FACTOR))
+            / (3.0 * NUM_MOLECULES * pow(lambda, 4.0) * (6.0 - 7.0 * DEPOLARIZATION_FACTOR))
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "return ((((8.0 * pow(PI, 3.0))" in result
+    assert ") / (((3.0 * NUM_MOLECULES) * pow(lambda, 4.0))" in result
+    assert "pow(PI, 3.0));" not in result
+
+
 def test_rust_gpu_path_qualified_attribute_codegen():
     code = r"""
     #[spirv_std_macros::gpu_only]

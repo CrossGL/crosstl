@@ -12,6 +12,7 @@ from crosstl.backend.common_ast import (
     IfNode,
     MemberAccessNode,
     MethodCallNode,
+    RangeForNode,
     TextureSampleNode,
     VectorConstructorNode,
 )
@@ -1040,6 +1041,79 @@ def test_parse_member_template_disambiguator_from_mlx_arg_reduce():
 
     calls = [node for node in iter_ast_nodes(ast) if isinstance(node, MethodCallNode)]
     assert calls[0].method == "reduce_many<N_READS>"
+
+
+def test_parse_standalone_for_loop_macro_prefix_from_mlx_conv():
+    code = """
+    void load_tile(device float* out) {
+        MLX_MTL_PRAGMA_UNROLL
+        for (int cc = 0; cc < 4; ++cc) {
+            out[cc] = float(cc);
+        }
+    }
+    """
+    ast = parse_ok(code)
+
+    loops = [node for node in iter_ast_nodes(ast) if isinstance(node, ForNode)]
+    assert len(loops) == 1
+
+
+def test_parse_template_qualified_static_member_declaration_from_mlx_conv():
+    code = """
+    constant constexpr const float WinogradTransforms<6, 3, 8>::wt_transform[8][8];
+    """
+    ast = parse_ok(code)
+
+    variable = ast.global_variables[0]
+    assert variable.name == "WinogradTransforms<6,3,8>::wt_transform"
+    assert len(variable.array_sizes) == 2
+
+
+def test_parse_typename_qualified_threadgroup_type_from_mlx_gemv():
+    code = """
+    void load_tile() {
+        threadgroup typename gemv_kernel::acc_type tgp_memory[4];
+    }
+    """
+    ast = parse_ok(code)
+
+    variable = ast.functions[0].body[0]
+    assert variable.vtype == "gemv_kernel::acc_type"
+    assert variable.name == "tgp_memory"
+    assert variable.qualifiers == ["threadgroup"]
+
+
+def test_parse_union_declaration_from_mlx_random():
+    code = """
+    union rbits {
+        uint2 val;
+        uchar4 bytes[2];
+    };
+
+    rbits make_bits() {
+        rbits v;
+        for (auto r : rotations[0]) {
+            v.val.x += r;
+        }
+        return v;
+    }
+    """
+    ast = parse_ok(code)
+
+    union = ast.structs[0]
+    assert union.name == "rbits"
+    assert getattr(union, "aggregate_kind", None) == "union"
+    assert [(member.vtype, member.name) for member in union.members] == [
+        ("uint2", "val"),
+        ("uchar4", "bytes"),
+    ]
+    assert union.members[1].array_sizes == ["2"]
+    assert ast.functions[0].return_type == "rbits"
+    assert ast.functions[0].body[0].vtype == "rbits"
+    loop = ast.functions[0].body[1]
+    assert isinstance(loop, RangeForNode)
+    assert loop.vtype == "auto"
+    assert loop.name == "r"
 
 
 def test_parse_preprocessor_define():

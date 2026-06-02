@@ -247,6 +247,88 @@ class TestCudaParser:
         assert ast.functions[2].body[0].vtype == "const unsigned int"
         assert ast.functions[3].body is not None
 
+    def test_public_cuda_samples_composite_scalar_type_parsing(self):
+        code = """
+        void host() {
+            unsigned long int counter = 0;
+            long double avgElapsedClocks = 0;
+            short int lanes = 32;
+            avgElapsedClocks += (long double)(counter);
+            counter += sizeof(unsigned long int);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert body[0].vtype == "unsigned long int"
+        assert body[1].vtype == "long double"
+        assert body[2].vtype == "short int"
+        assert isinstance(body[3].right, CastNode)
+        assert body[3].right.target_type == "long double"
+        assert body[4].right.args == ["unsigned long int"]
+
+    def test_public_cuda_samples_global_declaration_lists_parsing(self):
+        code = """
+        __device__ static unsigned int numErrors = 0, errorFound = 0;
+        cudaEvent_t start, stop;
+        cudaArray *d_array, *d_tempArray;
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [(var.vtype, var.name, var.value) for var in ast.global_variables] == [
+            ("unsigned int", "numErrors", "0"),
+            ("unsigned int", "errorFound", "0"),
+            ("cudaEvent_t", "start", None),
+            ("cudaEvent_t", "stop", None),
+            ("cudaArray *", "d_array", None),
+            ("cudaArray *", "d_tempArray", None),
+        ]
+        assert ast.global_variables[0].qualifiers == ["__device__", "static"]
+        assert ast.global_variables[1].qualifiers == ["__device__", "static"]
+
+    def test_public_cuda_samples_comma_initializer_and_uint_pointer_lists(self):
+        code = """
+        void host(uint *src, int start, int end) {
+            uint *ikey, *ival, *okey, *oval;
+            int i, sum = 0;
+
+            for (sum = 0, i = start; i < end; i++) {
+                sink(src[i]);
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        params = ast.functions[0].params
+        assert params[0].vtype == "uint *"
+
+        body = ast.functions[0].body
+        assert [var.vtype for var in body[:4]] == [
+            "uint *",
+            "uint *",
+            "uint *",
+            "uint *",
+        ]
+        assert [var.name for var in body[:4]] == ["ikey", "ival", "okey", "oval"]
+        assert [var.name for var in body[4:6]] == ["i", "sum"]
+        assert body[5].value == "0"
+
+        loop = body[6]
+        assert isinstance(loop, ForNode)
+        assert isinstance(loop.init, list)
+        assert len(loop.init) == 2
+        assert loop.init[0].left == "sum"
+        assert loop.init[1].left == "i"
+
     def test_shared_memory_parsing(self):
         code = """
         __global__ void kernel() {

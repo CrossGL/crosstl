@@ -652,6 +652,39 @@ def test_parse_template_style_vector_matrix_types_and_constructors():
     assert func.body[-1].value.type_name == "vector<double, 4>"
 
 
+def test_parse_template_function_prefix_from_raytracing_sample():
+    ast = parse_code("""
+    template<typename T>
+    T InterpolateAttribute(T vertexAttribute[3], float2 barycentrics)
+    {
+        return vertexAttribute[0] +
+            barycentrics.x * (vertexAttribute[1] - vertexAttribute[0]) +
+            barycentrics.y * (vertexAttribute[2] - vertexAttribute[0]);
+    }
+    """)
+
+    function = ast.functions[0]
+    assert function.name == "InterpolateAttribute"
+    assert function.return_type == "T"
+    assert function.params[0].vtype == "T"
+    assert function.params[0].array_sizes == [3]
+
+
+def test_skip_top_level_raw_text_from_public_raytracing_samples():
+    ast = parse_code("""
+    ToDo fix or remove
+    Texture2D<float> g_inValue : register(t0);
+
+    On change, update triangle/vertex definitiions.
+    static const float GRASS_X[3][7] = {
+        {-0.329877, 0.329877, -0.212571, 0.212571, -0.173286, 0.173286, 0.000000 }
+    };
+    """)
+
+    names = [variable.name for variable in ast.global_variables]
+    assert names == ["g_inValue", "GRASS_X"]
+
+
 def test_parse_cbuffer_preserves_buffer_and_member_bindings():
     code = """
     cbuffer FrameData : register(b0, space1) {
@@ -1618,6 +1651,34 @@ def test_parse_legacy_special_float_literal_from_directx_graphics_samples():
     )
 
     assert math.isinf(infinity.value)
+
+
+def test_parse_unsigned_int_namespace_constants_from_directx_graphics_samples():
+    ast = parse_code("""
+    namespace FilterKernel
+    {
+        static const unsigned int Radius = 1;
+        static const unsigned int Width = 1 + 2 * Radius;
+        static const float Kernel1D[Width] = { 0.27901, 0.44198, 0.27901 };
+    }
+
+    Texture2D<float> g_inDepth : register(t1);
+    """)
+
+    radius = next(
+        variable
+        for variable in ast.global_variables
+        if getattr(variable, "name", "") == "Radius"
+    )
+    width = next(
+        variable
+        for variable in ast.global_variables
+        if getattr(variable, "name", "") == "Width"
+    )
+
+    assert radius.vtype == "unsigned int"
+    assert width.vtype == "unsigned int"
+    assert [variable.name for variable in ast.global_variables[-1:]] == ["g_inDepth"]
 
 
 @pytest.mark.parametrize(

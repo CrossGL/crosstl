@@ -1191,6 +1191,77 @@ class TestHipParser:
         assert ast.statements[1].return_type == "size_t"
         assert ast.statements[1].params[0]["type"] == "const std::vector<float> &"
 
+    def test_public_rocm_vulkan_qualified_constructor_parameters_parsing(self):
+        code = """
+        base_dispatch::base_dispatch(PFN_vkGetInstanceProcAddr loader)
+            : get_instance_proc_addr(loader), status(0)
+        {
+            this->get_instance_proc_addr = loader;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        constructor = ast.statements[0]
+        assert constructor.name == "base_dispatch::base_dispatch"
+        assert constructor.return_type == ""
+        assert constructor.params == [
+            {"type": "PFN_vkGetInstanceProcAddr", "name": "loader"}
+        ]
+
+    def test_default_parameter_values_are_skipped_in_parameter_lists(self):
+        code = """
+        VkInstance create_instance(const bool with_validation = true,
+                                   const int flags = make_flags(1, 2)) {
+            return instance;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        function = ast.statements[0]
+        assert function.params == [
+            {"type": "const bool", "name": "with_validation"},
+            {"type": "const int", "name": "flags"},
+        ]
+
+    def test_resource_keyword_can_be_contextual_variable_name(self):
+        code = """
+        VkSurfaceKHR create_surface() {
+            VkSurfaceKHR surface;
+            sink(&surface);
+            return surface;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        body = ast.statements[0].body
+        assert body[0].vtype == "VkSurfaceKHR"
+        assert body[0].name == "surface"
+        assert body[2].value == "surface"
+
+    def test_scoped_member_function_definition_with_trailing_const(self):
+        code = """
+        VkSurfaceFormatKHR graphics_context::find_surface_format() const {
+            return format;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        function = ast.statements[0]
+        assert function.return_type == "VkSurfaceFormatKHR"
+        assert function.name == "graphics_context::find_surface_format"
+
     def test_restrict_pointer_qualifier_parsing(self):
         code = """
         __global__ void kernel(const float* __restrict__ input,
@@ -2245,8 +2316,11 @@ class TestHipParser:
         code = """
         unsigned int helper() {
             unsigned int mask = 0xffu;
+            unsigned int max_extent = 0xFFFF'FFFF;
             unsigned int bits = 0b1010u;
+            unsigned int lanes = 0b1010'0101u;
             unsigned int oct = 0777u;
+            unsigned int count = 1'000u;
             float x = 1e-3f;
             float y = .5f;
             return mask | bits | oct;
@@ -2259,10 +2333,13 @@ class TestHipParser:
 
         body = ast.statements[0].body
         assert body[0].value == "0xffu"
-        assert body[1].value == "0b1010u"
-        assert body[2].value == "0777u"
-        assert body[3].value == "1e-3f"
-        assert body[4].value == ".5f"
+        assert body[1].value == "0xFFFF'FFFF"
+        assert body[2].value == "0b1010u"
+        assert body[3].value == "0b1010'0101u"
+        assert body[4].value == "0777u"
+        assert body[5].value == "1'000u"
+        assert body[6].value == "1e-3f"
+        assert body[7].value == ".5f"
 
     def test_boolean_null_and_character_literal_parsing(self):
         code = r"""

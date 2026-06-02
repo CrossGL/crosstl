@@ -131,6 +131,8 @@ QUALIFIER_TOKENS = {
 
 CONTEXTUAL_QUALIFIER_IDENTIFIERS = {"shared"}
 CONTEXTUAL_IDENTIFIER_TOKENS = {"SAMPLE"}
+COMPOSITE_TYPE_PREFIXES = {"signed", "unsigned"}
+COMPOSITE_TYPE_TOKENS = {"INT", "UINT", "DWORD"}
 
 ASSIGNMENT_TOKENS = {
     "EQUALS",
@@ -202,20 +204,23 @@ class HLSLParser:
                 typedefs.append(self.parse_typedef())
                 continue
 
+            if self.is_template_declaration_prefix():
+                self.parse_template_declaration_prefix()
+                continue
+
             attributes = self.parse_attribute_list()
             if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
                 cbuffers.append(self.parse_cbuffer(attributes=attributes))
                 continue
 
-            qualifiers = self.parse_qualifiers()
-
-            if not self.is_type_token(self.current_token[0]):
+            if not self.looks_like_external_declaration():
                 if self.current_token[0] == "SEMICOLON":
                     self.eat("SEMICOLON")
                 else:
                     self.eat(self.current_token[0])
                 continue
 
+            qualifiers = self.parse_qualifiers()
             return_type = self.parse_type()
             if not self.is_identifier_token(self.current_token[0]):
                 raise SyntaxError(
@@ -290,6 +295,31 @@ class HLSLParser:
 
     def current_token_is_double_colon(self):
         return self.current_token[0] == "COLON" and self.peek()[0] == "COLON"
+
+    def is_template_declaration_prefix(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "template"
+            and self.peek()[0] == "LESS_THAN"
+        )
+
+    def parse_template_declaration_prefix(self):
+        self.eat("IDENTIFIER")
+        self.eat("LESS_THAN")
+        depth = 1
+
+        while depth > 0 and self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("GREATER_THAN")
+                    return
+            self.eat(token_type)
+
+        raise SyntaxError("Unterminated template declaration prefix")
 
     def eat_keyword(self, token_type, value):
         if self.current_token[0] == token_type:
@@ -472,6 +502,13 @@ class HLSLParser:
         base = self.current_token[1]
         self.eat(self.current_token[0])
         type_name = base
+        if (
+            base in COMPOSITE_TYPE_PREFIXES
+            and self.current_token[0] in COMPOSITE_TYPE_TOKENS
+        ):
+            type_name = f"{type_name} {self.current_token[1]}"
+            self.eat(self.current_token[0])
+
         while self.current_token[0] == "COLON" and self.peek()[0] == "COLON":
             self.eat("COLON")
             self.eat("COLON")
@@ -1099,11 +1136,70 @@ class HLSLParser:
             return False
         return True
 
+    def looks_like_external_declaration(self):
+        idx = self.current_index
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
+
+        idx = self.skip_type_name_at(idx)
+        if idx is None or not self.is_identifier_token_at(idx):
+            return False
+
+        idx += 1
+        idx = self.skip_array_suffixes_at(idx)
+        if idx is None or idx >= len(self.tokens):
+            return False
+
+        token_type = self.tokens[idx][0]
+        if token_type in {"LPAREN", "SEMICOLON", "EQUALS", "LBRACE", "COLON"}:
+            return True
+
+        while token_type == "COMMA":
+            idx += 1
+            if not self.is_identifier_token_at(idx):
+                return False
+            idx += 1
+            idx = self.skip_array_suffixes_at(idx)
+            if idx is None or idx >= len(self.tokens):
+                return False
+            token_type = self.tokens[idx][0]
+            if token_type in {"EQUALS", "LBRACE", "SEMICOLON", "COLON"}:
+                return True
+
+        return False
+
+    def skip_array_suffixes_at(self, idx):
+        while idx < len(self.tokens) and self.tokens[idx][0] == "LBRACKET":
+            depth = 0
+            while idx < len(self.tokens):
+                token_type = self.tokens[idx][0]
+                if token_type == "LBRACKET":
+                    depth += 1
+                elif token_type == "RBRACKET":
+                    depth -= 1
+                    if depth == 0:
+                        idx += 1
+                        break
+                elif token_type == "EOF":
+                    return None
+                idx += 1
+            else:
+                return None
+        return idx
+
     def skip_type_name_at(self, idx):
         if idx >= len(self.tokens) or self.tokens[idx][0] not in TYPE_TOKENS:
             return None
 
+        base = self.tokens[idx][1]
         idx += 1
+        if (
+            base in COMPOSITE_TYPE_PREFIXES
+            and idx < len(self.tokens)
+            and self.tokens[idx][0] in COMPOSITE_TYPE_TOKENS
+        ):
+            idx += 1
+
         while (
             idx + 2 < len(self.tokens)
             and self.tokens[idx][0] == "COLON"

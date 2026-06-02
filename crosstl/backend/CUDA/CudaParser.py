@@ -178,6 +178,7 @@ class CudaParser:
     CUDA_IDENTIFIER_TYPE_NAMES = {
         "cudaTextureObject_t",
         "cudaSurfaceObject_t",
+        "uint",
         "half",
         "__half",
         "half2",
@@ -190,6 +191,10 @@ class CudaParser:
         "uint32_t",
         "int64_t",
         "uint64_t",
+    }
+    COMPOSITE_SCALAR_TYPE_SUFFIX_TOKENS = {
+        "LONG": {"LONG", "INT", "DOUBLE"},
+        "SHORT": {"INT"},
     }
 
     def __init__(self, tokens):
@@ -316,7 +321,7 @@ class CudaParser:
                     elif isinstance(item, TypeAliasNode):
                         typedefs.append(item)
                     else:
-                        global_variables.append(item)
+                        self.append_parsed_global_variable(global_variables, item)
             elif self.peek_function():
                 func = self.parse_function()
                 if isinstance(func, KernelNode):
@@ -325,7 +330,9 @@ class CudaParser:
                     functions.append(func)
             elif self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]:
                 if self.current_token[0] == "DEVICE" and self.peek_variable():
-                    global_variables.append(self.parse_global_variable())
+                    self.append_parsed_global_variable(
+                        global_variables, self.parse_global_variable()
+                    )
                     continue
 
                 func = self.parse_function()
@@ -336,7 +343,9 @@ class CudaParser:
             elif (
                 self.current_token[0] in ["CONSTANT", "SHARED"] or self.peek_variable()
             ):
-                global_variables.append(self.parse_global_variable())
+                self.append_parsed_global_variable(
+                    global_variables, self.parse_global_variable()
+                )
             else:
                 self.eat(self.current_token[0])
 
@@ -438,7 +447,7 @@ class CudaParser:
             type_token = self.tokens[index][0]
             type_value = self.tokens[index][1]
             index += 1
-            index = self.skip_long_long_suffix_at_index(index, type_token)
+            index = self.skip_composite_scalar_type_suffix_at_index(index, type_token)
         else:
             return None
 
@@ -496,11 +505,25 @@ class CudaParser:
             "COMMA",
         }
 
-    def skip_long_long_suffix_at_index(self, index, type_token):
-        if (
-            type_token == "LONG"
+    def skip_composite_scalar_type_suffix_at_index(self, index, type_token):
+        if type_token == "LONG":
+            saw_long_long = False
+            if index < len(self.tokens) and self.tokens[index][0] == "LONG":
+                index += 1
+                saw_long_long = True
+
+            if index < len(self.tokens) and self.tokens[index][0] == "INT":
+                return index + 1
+            if (
+                not saw_long_long
+                and index < len(self.tokens)
+                and self.tokens[index][0] == "DOUBLE"
+            ):
+                return index + 1
+        elif (
+            type_token == "SHORT"
             and index < len(self.tokens)
-            and self.tokens[index][0] == "LONG"
+            and self.tokens[index][0] == "INT"
         ):
             return index + 1
         return index
@@ -649,13 +672,15 @@ class CudaParser:
                 items.append(self.parse_function())
             elif self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]:
                 if self.current_token[0] == "DEVICE" and self.peek_variable():
-                    items.append(self.parse_global_variable())
+                    self.append_parsed_global_variable(
+                        items, self.parse_global_variable()
+                    )
                 else:
                     items.append(self.parse_function())
             elif (
                 self.current_token[0] in ["CONSTANT", "SHARED"] or self.peek_variable()
             ):
-                items.append(self.parse_global_variable())
+                self.append_parsed_global_variable(items, self.parse_global_variable())
             else:
                 self.eat(self.current_token[0])
 
@@ -1184,6 +1209,16 @@ class CudaParser:
         if token_type == "LONG" and self.current_token[0] == "LONG":
             type_name += f" {self.current_token[1]}"
             self.eat("LONG")
+            if self.current_token[0] == "INT":
+                type_name += f" {self.current_token[1]}"
+                self.eat("INT")
+        elif (
+            token_type in self.COMPOSITE_SCALAR_TYPE_SUFFIX_TOKENS
+            and self.current_token[0]
+            in self.COMPOSITE_SCALAR_TYPE_SUFFIX_TOKENS[token_type]
+        ):
+            type_name += f" {self.current_token[1]}"
+            self.eat(self.current_token[0])
 
         while self.current_token[0] == "SCOPE":
             self.eat("SCOPE")
@@ -1196,22 +1231,15 @@ class CudaParser:
         return type_name
 
     def parse_global_variable(self):
-        qualifiers = []
-
-        while self.current_token[0] in ["CONSTANT", "SHARED", "DEVICE", "MANAGED"]:
-            qualifiers.append(self.current_token[1])
-            self.eat(self.current_token[0])
-
-        var = self.parse_variable_declaration()
-        var.qualifiers = qualifiers
+        declarations = self.parse_variable_declaration_list()
         self.eat("SEMICOLON")
+        return declarations if len(declarations) > 1 else declarations[0]
 
-        if "__constant__" in qualifiers:
-            return ConstantMemoryNode(var.vtype, var.name, var.value)
-        elif "__shared__" in qualifiers:
-            return self.create_shared_memory_node(var.vtype, var.name, qualifiers)
+    def append_parsed_global_variable(self, target, variable):
+        if isinstance(variable, list):
+            target.extend(variable)
         else:
-            return var
+            target.append(variable)
 
     def parse_variable_declaration(self):
         qualifiers = []
@@ -1512,7 +1540,7 @@ class CudaParser:
                     else init_declarations[0]
                 )
             else:
-                init = self.parse_expression()
+                init = self.parse_for_update_expression()
         self.eat("SEMICOLON")
 
         condition = None
@@ -1560,7 +1588,7 @@ class CudaParser:
 
         type_token = self.tokens[index][0]
         index += 1
-        index = self.skip_long_long_suffix_at_index(index, type_token)
+        index = self.skip_composite_scalar_type_suffix_at_index(index, type_token)
         while (
             index + 1 < len(self.tokens)
             and self.tokens[index][0] == "SCOPE"
@@ -2157,8 +2185,7 @@ class CudaParser:
 
             token_type = self.current_token[0]
             self.eat(token_type)
-            if token_type == "LONG" and self.current_token[0] == "LONG":
-                self.eat("LONG")
+            self.consume_composite_scalar_type_suffix(token_type)
             while self.current_token[0] == "MULTIPLY":
                 self.eat("MULTIPLY")
 
@@ -2679,8 +2706,7 @@ class CudaParser:
 
             token_type = self.current_token[0]
             self.eat(token_type)
-            if token_type == "LONG" and self.current_token[0] == "LONG":
-                self.eat("LONG")
+            self.consume_composite_scalar_type_suffix(token_type)
             while self.current_token[0] == "MULTIPLY":
                 self.eat("MULTIPLY")
 
@@ -2694,6 +2720,20 @@ class CudaParser:
         finally:
             self.current_index = saved_index
             self.current_token = self.tokens[self.current_index]
+
+    def consume_composite_scalar_type_suffix(self, token_type):
+        if token_type == "LONG":
+            saw_long_long = False
+            if self.current_token[0] == "LONG":
+                self.eat("LONG")
+                saw_long_long = True
+
+            if self.current_token[0] == "INT":
+                self.eat("INT")
+            elif not saw_long_long and self.current_token[0] == "DOUBLE":
+                self.eat("DOUBLE")
+        elif token_type == "SHORT" and self.current_token[0] == "INT":
+            self.eat("INT")
 
     def is_identifier_cast_target_at_current_index(self):
         if self.current_token[0] != "IDENTIFIER":
