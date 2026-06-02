@@ -330,6 +330,7 @@ class HipParser:
 
         name = self.current_token.value
         self.advance()
+        name += self.consume_operator_function_suffix(name)
         if self.match("LT"):
             name += self.parse_template_suffix()
         while self.match("SCOPE"):
@@ -343,10 +344,26 @@ class HipParser:
                 token_type = self.current_token.type if self.current_token else "EOF"
                 self.error(f"Expected function name after scope, got {token_type}")
             name += f"::{self.current_token.value}"
+            member = self.current_token.value
             self.advance()
+            name += self.consume_operator_function_suffix(member)
             if self.match("LT"):
                 name += self.parse_template_suffix()
         return name
+
+    def consume_operator_function_suffix(self, name):
+        if (
+            name == "operator"
+            and self.match("LPAREN")
+            and self.peek()
+            and self.peek().type == "RPAREN"
+            and self.peek(2)
+            and self.peek(2).type == "LPAREN"
+        ):
+            self.advance()
+            self.consume("RPAREN")
+            return "()"
+        return ""
 
     def is_declarator_name_token(self):
         return self.match("IDENTIFIER", *self.CONTEXTUAL_IDENTIFIER_TOKENS)
@@ -520,6 +537,8 @@ class HipParser:
             return self.parse_throw_statement()
         if self.is_identifier_value("delete"):
             return self.parse_delete_statement()
+        if self.is_identifier_value("try"):
+            return self.parse_try_statement()
 
         if self.block_depth > 0 and self.is_variable_declaration():
             declarations = self.parse_variable_declaration_list()
@@ -672,6 +691,10 @@ class HipParser:
             return None
 
         name = self.consume("IDENTIFIER").value
+        if not self.match("ASSIGN"):
+            self.skip_until_semicolon()
+            return None
+
         self.consume("ASSIGN")
         self.skip_newlines()
         alias_type = self.parse_type()
@@ -742,6 +765,35 @@ class HipParser:
             self.advance()
 
         return FunctionCallNode("throw", args)
+
+    def parse_try_statement(self):
+        self.advance()
+        self.skip_newlines()
+
+        statements = []
+        if self.match("LBRACE"):
+            statements.extend(self.parse_block())
+        else:
+            stmt = self.parse_statement()
+            if stmt:
+                statements.extend(stmt if isinstance(stmt, list) else [stmt])
+
+        self.skip_newlines()
+        while self.is_identifier_value("catch"):
+            self.advance()
+            self.skip_newlines()
+            if self.match("LPAREN"):
+                self.skip_balanced_parentheses()
+            self.skip_newlines()
+            if self.match("LBRACE"):
+                statements.extend(self.parse_block())
+            else:
+                stmt = self.parse_statement()
+                if stmt:
+                    statements.extend(stmt if isinstance(stmt, list) else [stmt])
+            self.skip_newlines()
+
+        return statements
 
     def parse_preprocessor(self):
         self.consume("HASH")
@@ -1043,6 +1095,8 @@ class HipParser:
             name = self.current_token.value
             self.advance()
             self.type_aliases.add(name)
+            if self.match("LT"):
+                name += self.parse_template_suffix()
 
         self.skip_newlines()
         members = []
@@ -1190,6 +1244,8 @@ class HipParser:
 
         name = self.consume("IDENTIFIER").value
         self.type_aliases.add(name)
+        if self.match("LT"):
+            name += self.parse_template_suffix()
 
         members = []
         self.skip_newlines()
@@ -1763,6 +1819,10 @@ class HipParser:
 
     def parse_if_statement(self):
         self.consume("IF")
+        self.skip_newlines()
+        if self.match("CONSTEXPR"):
+            self.advance()
+            self.skip_newlines()
         self.consume("LPAREN")
 
         condition_or_init = None
@@ -3336,7 +3396,9 @@ class HipParser:
         ):
             return None
 
+        name = self.tokens[index].value
         index += 1
+        index = self.skip_operator_function_suffix_at(index, name)
         if index < len(self.tokens) and self.tokens[index].type == "LT":
             index = self.skip_template_at_pos(index)
             if index is None:
@@ -3350,7 +3412,9 @@ class HipParser:
                 self.tokens[index]
             ):
                 return None
+            name = self.tokens[index].value
             index += 1
+            index = self.skip_operator_function_suffix_at(index, name)
             if index < len(self.tokens) and self.tokens[index].type == "LT":
                 index = self.skip_template_at_pos(index)
                 if index is None:
@@ -3359,6 +3423,17 @@ class HipParser:
         if index < len(self.tokens) and self.tokens[index].type == "LPAREN":
             return index
         return None
+
+    def skip_operator_function_suffix_at(self, index, name):
+        if (
+            name == "operator"
+            and index + 2 < len(self.tokens)
+            and self.tokens[index].type == "LPAREN"
+            and self.tokens[index + 1].type == "RPAREN"
+            and self.tokens[index + 2].type == "LPAREN"
+        ):
+            return index + 2
+        return index
 
     def is_variable_declaration(self) -> bool:
         # Simple heuristic: type followed by identifier not followed by (

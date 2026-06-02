@@ -505,6 +505,65 @@ def test_parse_enum_and_typedef():
     parse_ok(code)
 
 
+def test_parse_typedef_enum_with_tag_and_alias_from_satin_constants():
+    code = """
+    typedef enum ComputeBufferIndex {
+        ComputeBufferUniforms = 0,
+        ComputeBufferCustom0 = 1,
+        ComputeBufferCustom1 = 2
+    } ComputeBufferIndex;
+
+    void main() {
+        ComputeBufferIndex index = ComputeBufferCustom0;
+    }
+    """
+    ast = parse_ok(code)
+
+    enum = ast.enums[0]
+    assert enum.name == "ComputeBufferIndex"
+    assert enum.typedef_tag == "ComputeBufferIndex"
+    assert enum.members[0][0] == "ComputeBufferUniforms"
+
+
+def test_parse_top_level_material_chunk_statement_from_satin():
+    code = """
+    const float2 baseColorTexcoord =
+        (uniforms.baseColorTexcoordTransform * float3(in.texcoord, 1.0)).xy;
+    pixel.material.baseColor = baseColorMap.sample(baseColorSampler, baseColorTexcoord).rgb;
+    pixel.material.baseColor *= uniforms.baseColor.rgb;
+    """
+
+    ast = parse_ok(code)
+
+    assert len(ast.global_variables) == 1
+    assert ast.global_variables[0].left.name == "baseColorTexcoord"
+
+
+def test_parse_stage_keyword_names_in_helpers_and_parameters():
+    code = """
+    float intersection(float a, float b) { return max(a, b); }
+
+    float fresnel(float3 eyeVector, float3 worldNormal, float amount = 3.0) {
+        return pow(1.0 + dot(eyeVector, worldNormal), amount);
+    }
+
+    typedef struct {
+        float time;
+    } SpriteUniforms;
+
+    vertex float4 spriteVertex(constant SpriteUniforms &compute [[buffer(1)]])
+    {
+        return float4(compute.time);
+    }
+    """
+    ast = parse_ok(code)
+
+    assert ast.functions[0].name == "intersection"
+    assert ast.functions[1].params[2].name == "amount"
+    assert ast.functions[1].params[2].default_value == "3.0"
+    assert ast.functions[2].params[0].name == "compute"
+
+
 def test_parse_sizeof_and_cast():
     code = """
     void main() {

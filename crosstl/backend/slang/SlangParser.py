@@ -1208,6 +1208,8 @@ class SlangParser:
             return []
         if self.current_token[0] == "LBRACE":
             return self.parse_block()
+        if self.current_token[0] in {"TYPEDEF", "TYPEALIAS"}:
+            return self.parse_typedef()
         if self.is_variable_declaration_start():
             return self.parse_variable_declaration_or_assignment()
         if self.current_token[0] == "IDENTIFIER" and self.tokens[self.pos + 1][0] in {

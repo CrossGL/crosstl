@@ -273,6 +273,8 @@ class MetalParser:
                     structs.append(union)
             elif self.is_bare_macro_invocation():
                 self.skip_bare_macro_invocation()
+            elif self.is_top_level_expression_statement_start():
+                self.parse_expression_statement()
             elif self.is_template_declaration_start():
                 function = self.parse_template_declaration()
                 if function is not None:
@@ -297,6 +299,8 @@ class MetalParser:
                 typedef = self.parse_typedef()
                 if isinstance(typedef, StructNode):
                     structs.append(typedef)
+                elif isinstance(typedef, EnumNode):
+                    enums.append(typedef)
                 elif typedef is not None:
                     typedefs.append(typedef)
             elif self.current_token[0] == "STATIC_ASSERT":
@@ -338,6 +342,9 @@ class MetalParser:
 
     def is_bare_macro_invocation(self):
         return self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "LPAREN"
+
+    def is_top_level_expression_statement_start(self):
+        return self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "DOT"
 
     def skip_bare_macro_invocation(self):
         self.eat("IDENTIFIER")
@@ -526,7 +533,7 @@ class MetalParser:
         ]:
             idx += 1
 
-        if idx >= len(self.tokens) or self.tokens[idx][0] != "IDENTIFIER":
+        if idx >= len(self.tokens) or not self.is_name_token_at(idx):
             return False
         idx += 1
 
@@ -619,6 +626,13 @@ class MetalParser:
         self.eat("IDENTIFIER")
         self.known_types.add(name)
         self.eat("LBRACE")
+        members = self.parse_enum_members()
+        self.eat("RBRACE")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+        return EnumNode(name, members)
+
+    def parse_enum_members(self):
         members = []
         while self.current_token[0] != "RBRACE":
             member_name = self.current_token[1]
@@ -636,15 +650,14 @@ class MetalParser:
                 raise SyntaxError(
                     f"Expected comma or closing brace in enum, got {self.current_token[0]}"
                 )
-        self.eat("RBRACE")
-        if self.current_token[0] == "SEMICOLON":
-            self.eat("SEMICOLON")
-        return EnumNode(name, members)
+        return members
 
     def parse_typedef(self):
         self.eat("TYPEDEF")
         if self.current_token[0] == "STRUCT":
             return self.parse_typedef_struct()
+        if self.current_token[0] == "ENUM":
+            return self.parse_typedef_enum()
         if (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "decltype"
@@ -661,6 +674,39 @@ class MetalParser:
         self.eat("SEMICOLON")
         self.known_types.add(alias_name)
         return TypeAliasNode(alias_type, alias_name)
+
+    def parse_typedef_enum(self):
+        self.eat("ENUM")
+        if self.current_token[0] == "CLASS":
+            self.eat("CLASS")
+        tag_name = None
+        if self.current_token[0] == "IDENTIFIER":
+            tag_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            self.known_types.add(tag_name)
+
+        if self.current_token[0] == "LBRACE":
+            self.eat("LBRACE")
+            members = self.parse_enum_members()
+            self.eat("RBRACE")
+            alias_name, _array_sizes = self.parse_declarator()
+            self.eat("SEMICOLON")
+            enum_name = alias_name or tag_name
+            if not enum_name:
+                raise SyntaxError("Expected typedef enum name")
+            self.known_types.add(enum_name)
+            enum = EnumNode(enum_name, members)
+            enum.typedef_tag = tag_name
+            return enum
+
+        if not tag_name:
+            raise SyntaxError("Expected typedef enum body or tag name")
+        alias_name, _array_sizes = self.parse_declarator()
+        self.eat("SEMICOLON")
+        if alias_name == tag_name:
+            return None
+        self.known_types.add(alias_name)
+        return TypeAliasNode(f"enum {tag_name}", alias_name)
 
     def parse_function_typedef_declarator(self, return_type):
         self.eat("LPAREN")
@@ -993,9 +1039,11 @@ class MetalParser:
 
     def parse_declarator(self):
         name = ""
-        if self.current_token[0] == "IDENTIFIER":
+        while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+            self.eat(self.current_token[0])
+        if self.is_current_name_token():
             name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            self.eat(self.current_token[0])
             if self.template_argument_list_followed_by_call(
                 follow_token_types={"SCOPE"}
             ):
@@ -1010,6 +1058,20 @@ class MetalParser:
                 name += f"::{self.current_token[1]}"
                 self.eat(self.current_token[0])
         return name, self.parse_declarator_array_sizes()
+
+    def is_name_token_at(self, idx):
+        return (
+            self.tokens[idx][0] == "IDENTIFIER"
+            or self.tokens[idx][0] in STAGE_TOKENS
+            or self.tokens[idx][0] == "COMPUTE"
+        )
+
+    def is_current_name_token(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            or self.current_token[0] in STAGE_TOKENS
+            or self.current_token[0] == "COMPUTE"
+        )
 
     def parse_declarator_array_sizes(self):
         array_sizes = []
@@ -1146,13 +1208,15 @@ class MetalParser:
 
         return_type, _return_qualifiers = self.parse_type_specifier()
 
-        if self.current_token[0] in STAGE_TOKENS:
+        if self.current_token[0] in STAGE_TOKENS and self.peek(1)[0] != "LPAREN":
             if qualifier is None:
                 qualifier = self.current_token[1]
             self.eat(self.current_token[0])
 
         name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        if not self.is_current_name_token():
+            raise SyntaxError(f"Expected function name, got {self.current_token[0]}")
+        self.eat(self.current_token[0])
 
         self.eat("LPAREN")
         params = self.parse_parameters()
@@ -1197,6 +1261,10 @@ class MetalParser:
             attributes = self.parse_attributes()
             vtype, qualifiers = self.parse_type_specifier()
             name, array_sizes = self.parse_declarator()
+            default_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_value = self.parse_expression()
             param_attributes = self.parse_attributes()
             attributes.extend(param_attributes)
 
@@ -1204,6 +1272,7 @@ class MetalParser:
                 vtype, name, qualifiers=qualifiers, attributes=attributes
             )
             var_node.array_sizes = array_sizes
+            var_node.default_value = default_value
             params.append(var_node)
 
             if self.current_token[0] == "COMMA":
@@ -2056,7 +2125,7 @@ class MetalParser:
                 node.is_braced_constructor = True
                 return node
             raise SyntaxError(f"Unexpected type in expression: {type_name}")
-        if self.current_token[0] in ["IDENTIFIER", "METAL"]:
+        if self.current_token[0] == "METAL" or self.is_current_name_token():
             name = self.parse_scoped_identifier()
             return VariableNode("", name)
         raise SyntaxError(f"Unexpected token in expression: {self.current_token[0]}")
@@ -2144,7 +2213,9 @@ class MetalParser:
             self.eat("METAL")
         else:
             parts.append(self.current_token[1])
-            self.eat("IDENTIFIER")
+            if not self.is_current_name_token():
+                raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
+            self.eat(self.current_token[0])
         while self.current_token[0] == "SCOPE":
             self.eat("SCOPE")
             if (

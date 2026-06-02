@@ -2300,6 +2300,120 @@ class TestHipParser:
         assert isinstance(function.body[0], ReturnNode)
         assert function.body[0].value == "1"
 
+    def test_public_rocm_if_constexpr_condition_parsing(self):
+        code = """
+        template <typename T>
+        int pick_type() {
+            if constexpr(std::is_same_v<T, float>) {
+                return 1;
+            }
+            else if constexpr(T::value) {
+                return 2;
+            }
+            return 0;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        branch = function.body[0]
+
+        assert isinstance(branch, IfNode)
+        assert branch.condition == "std::is_same_v<T, float>"
+        assert isinstance(branch.else_body, IfNode)
+        assert branch.else_body.condition == "T::value"
+
+    def test_public_rocm_scoped_using_declarations_are_skipped(self):
+        code = """
+        namespace client
+        {
+        namespace
+        {
+        using common::call_stack_t;
+        using std::begin, std::end;
+        using Alias = common::Thing;
+        }
+        }
+        """
+        ast = self.parse_code(code)
+
+        alias = ast.statements[0]
+
+        assert isinstance(alias, TypeAliasNode)
+        assert alias.name == "Alias"
+        assert alias.alias_type == "common::Thing"
+
+    def test_public_rocm_template_struct_specialization_parsing(self):
+        code = """
+        template <typename T>
+        struct DataTypeTraits;
+
+        template <>
+        struct DataTypeTraits<ck_tile::half_t>
+        {
+            using value_type = ck_tile::half_t;
+            static constexpr const char* name = "fp16";
+        };
+        """
+        ast = self.parse_code(code)
+
+        forward_decl = ast.statements[0]
+        specialization = ast.statements[1]
+
+        assert isinstance(forward_decl, StructNode)
+        assert forward_decl.name == "DataTypeTraits"
+        assert isinstance(specialization, StructNode)
+        assert specialization.name == "DataTypeTraits<ck_tile::half_t>"
+        assert specialization.members[-1].name == "name"
+        assert specialization.members[-1].qualifiers == ["static", "constexpr"]
+
+    def test_public_rocm_qualified_operator_call_definition_parsing(self):
+        code = """
+        struct TensorLayout;
+        struct SampleRunner {
+            bool operator()(const TensorLayout& layout);
+        };
+
+        template <typename InputType>
+        bool SampleRunner::operator()(const TensorLayout& layout)
+        {
+            const auto inputType = getDataTypeEnumFromType<InputType>();
+            return true;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[2]
+
+        assert isinstance(function, FunctionNode)
+        assert function.name == "SampleRunner::operator()"
+        assert function.params == [{"type": "const TensorLayout &", "name": "layout"}]
+        assert function.body[0].vtype == "const auto"
+        assert function.body[0].name == "inputType"
+        assert function.body[0].value.name == "getDataTypeEnumFromType<InputType>"
+
+    def test_public_rocm_try_block_with_const_local_declarations_parsing(self):
+        code = """
+        int main() {
+            try {
+                const auto value = make_value();
+                return value;
+            }
+            catch (...) {
+                return -1;
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+
+        assert isinstance(body[0], VariableNode)
+        assert body[0].vtype == "const auto"
+        assert body[0].name == "value"
+        assert isinstance(body[1], ReturnNode)
+        assert isinstance(body[2], ReturnNode)
+
     def test_explicit_template_instantiation_parsing(self):
         code = """
         template float moe_smoothquant_<

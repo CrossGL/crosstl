@@ -29,6 +29,7 @@ from crosstl.backend.slang.SlangAst import (
     ReturnNode,
     SwitchNode,
     TernaryOpNode,
+    TypedefNode,
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
@@ -864,6 +865,28 @@ def test_typealias_declarations_from_shader_toy_and_mlp_vec_samples():
     assert [(member.vtype, member.name) for member in struct.members] == [
         ("CoopVec<NFloat, N>", "data")
     ]
+
+
+def test_local_typealias_declaration_parses_in_function_body():
+    code = """
+    bool testVector(uint4 mask)
+    {
+        typealias GVec = vector<uint, 4>;
+        GVec value = GVec(0);
+        return true;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "testVector").body
+    typedef = body[0]
+
+    assert isinstance(typedef, TypedefNode)
+    assert typedef.original_type == "vector<uint, 4>"
+    assert typedef.new_type == "GVec"
+    assert isinstance(body[1], AssignmentNode)
+    assert body[1].left.vtype == "GVec"
 
 
 def test_qualified_type_paths_parse_in_typedefs_structs_and_locals():

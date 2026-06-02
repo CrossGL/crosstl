@@ -704,6 +704,169 @@ class TestCudaParser:
         assert ast.global_variables[0].qualifiers == ["__device__", "static"]
         assert ast.global_variables[1].qualifiers == ["__device__", "static"]
 
+    def test_public_cuda_samples_unknown_pointer_return_types_and_reference_params(
+        self,
+    ):
+        code = """
+        extern "C" Volume *VolumeFilter_runFilter(Volume *input,
+                                                  Volume *output,
+                                                  int numWeights) {
+            Volume *swap = 0;
+            return input;
+        }
+
+        Vertex *cudaImportVertexBuffer(void *sharedHandle,
+                                       cudaExternalMemory_t &externalMemory) {
+            Vertex *cudaDevVertptr = NULL;
+            return cudaDevVertptr;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        volume_filter = ast.functions[0]
+        import_buffer = ast.functions[1]
+
+        assert volume_filter.return_type == "Volume *"
+        assert volume_filter.name == "VolumeFilter_runFilter"
+        assert volume_filter.linkage == "C"
+        assert [(param.vtype, param.name) for param in volume_filter.params] == [
+            ("Volume *", "input"),
+            ("Volume *", "output"),
+            ("int", "numWeights"),
+        ]
+        assert volume_filter.body[0].vtype == "Volume *"
+        assert volume_filter.body[0].name == "swap"
+
+        assert import_buffer.return_type == "Vertex *"
+        assert import_buffer.params[1].vtype == "cudaExternalMemory_t &"
+        assert import_buffer.params[1].name == "externalMemory"
+        assert import_buffer.body[0].vtype == "Vertex *"
+        assert import_buffer.body[0].name == "cudaDevVertptr"
+
+    def test_public_cuda_samples_constructor_style_globals_are_not_functions(self):
+        code = """
+        int N = 1 << 22;
+        dim3 block(512);
+        dim3 grid;
+
+        float processWithStreams(int streams_used);
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [var.name for var in ast.global_variables] == ["N", "block", "grid"]
+        assert ast.global_variables[1].vtype == "dim3"
+        assert isinstance(ast.global_variables[1].value, FunctionCallNode)
+        assert ast.global_variables[1].value.name == "dim3"
+        assert ast.global_variables[1].value.args == ["512"]
+        assert [function.name for function in ast.functions] == ["processWithStreams"]
+
+    def test_public_cuda_samples_nested_struct_aggregates_and_friend_declarations(self):
+        code = """
+        struct BlockDXT1 {
+            Color16 col0;
+            Color16 col1;
+            union {
+                unsigned char row[4];
+                unsigned int indices;
+            };
+            void decompress(Color32 colors[16]) const;
+        };
+
+        class Segmentation {
+        private:
+            class Level {
+            public:
+                Level(uint totalNodes) : nodes_(totalNodes) {}
+            private:
+                friend class Pyramid;
+                vector<uint> nodes_;
+            };
+        };
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        block = ast.structs[0]
+        assert [member.name for member in block.members] == [
+            "col0",
+            "col1",
+            "row",
+            "indices",
+        ]
+        assert block.members[2].vtype == "unsigned char[4]"
+        assert block.members[3].vtype == "unsigned int"
+        assert ast.structs[1].name == "Segmentation"
+
+    def test_public_cuda_samples_function_pointer_locals_and_if_constexpr(self):
+        code = """
+        void host() {
+            void (*kernel)(float *, float *, int, int);
+            if constexpr (COMPUTE_MEAN_AND_RSTD) {
+                kernel = copy;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        pointer = ast.functions[0].body[0]
+        branch = ast.functions[0].body[1]
+
+        assert isinstance(pointer, VariableNode)
+        assert pointer.vtype == "void (*)"
+        assert pointer.name == "kernel"
+        assert [(param.vtype, param.name) for param in pointer.params] == [
+            ("float *", ""),
+            ("float *", ""),
+            ("int", ""),
+            ("int", ""),
+        ]
+        assert isinstance(branch, IfNode)
+        assert branch.is_constexpr is True
+
+    def test_public_cuda_samples_vulkan_callback_macros_and_try_catch(self):
+        code = """
+        struct App {
+            static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+                const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
+                void *pUserData) {
+                return VK_FALSE;
+            }
+        };
+
+        int main() {
+            vulkanImageCUDA app;
+            try {
+                app.run();
+            } catch (const std::exception &e) {
+                return EXIT_FAILURE;
+            }
+            return 0;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        main = ast.functions[0]
+        assert main.name == "main"
+        assert main.body[0].vtype == "vulkanImageCUDA"
+        assert isinstance(main.body[1], FunctionCallNode)
+        assert isinstance(main.body[1].name, MemberAccessNode)
+        assert main.body[1].name.member == "run"
+        assert isinstance(main.body[2], ReturnNode)
+
     def test_public_cuda_samples_comma_initializer_and_uint_pointer_lists(self):
         code = """
         void host(uint *src, int start, int end) {
@@ -3452,6 +3615,26 @@ class TestCudaParser:
         assert isinstance(switch, SwitchNode)
         assert len(switch.cases) == 1
         assert switch.default_case == []
+
+    def test_address_of_function_call_argument_is_not_function_pointer_declaration(
+        self,
+    ):
+        code = """
+        void bench() {
+            cudaEvent_t start;
+            cudaEventCreate(&start);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        call = ast.functions[0].body[1]
+        assert isinstance(call, FunctionCallNode)
+        assert call.name == "cudaEventCreate"
+        assert call.args[0].op == "&"
+        assert call.args[0].operand == "start"
 
     def test_switch_parsing_preserves_default_before_later_case_order(self):
         code = """
