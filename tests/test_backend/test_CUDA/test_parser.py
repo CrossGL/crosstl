@@ -879,6 +879,61 @@ class TestCudaParser:
         assert launch.stream == "stream"
         assert launch.args == ["data", "n"]
 
+    def test_grid_dim_kernel_launch_config_expressions_parsing(self):
+        code = """
+        void host(float* data) {
+            kernel<<<dim3(gridDim.x, gridDim.y, 1),
+                     dim3(blockDim.x, blockDim.y, 1)>>>(data);
+            kernel<<<gridDim.x + gridDim.y, blockDim.x * blockDim.y>>>(data);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        first_launch = ast.functions[0].body[0]
+        second_launch = ast.functions[0].body[1]
+        assert isinstance(first_launch, KernelLaunchNode)
+        assert isinstance(first_launch.blocks, FunctionCallNode)
+        assert first_launch.blocks.name == "dim3"
+        assert isinstance(first_launch.blocks.args[0], CudaBuiltinNode)
+        assert first_launch.blocks.args[0].builtin_name == "gridDim"
+        assert isinstance(first_launch.threads, FunctionCallNode)
+        assert first_launch.threads.name == "dim3"
+
+        assert isinstance(second_launch, KernelLaunchNode)
+        assert isinstance(second_launch.blocks, BinaryOpNode)
+        assert second_launch.blocks.op == "+"
+        assert isinstance(second_launch.threads, BinaryOpNode)
+        assert second_launch.threads.op == "*"
+
+    def test_dim3_declarations_can_shadow_builtin_launch_names(self):
+        code = """
+        void host(float* data) {
+            dim3 gridDim;
+            dim3 blockDim;
+            blockDim.x = 128;
+            gridDim.x = (1024 + blockDim.x - 1) / blockDim.x;
+            kernel<<<gridDim, blockDim>>>(data);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        grid_decl = ast.functions[0].body[0]
+        block_decl = ast.functions[0].body[1]
+        launch = ast.functions[0].body[4]
+        assert grid_decl.name == "gridDim"
+        assert block_decl.name == "blockDim"
+        assert isinstance(launch, KernelLaunchNode)
+        assert isinstance(launch.blocks, CudaBuiltinNode)
+        assert launch.blocks.builtin_name == "gridDim"
+        assert isinstance(launch.threads, CudaBuiltinNode)
+        assert launch.threads.builtin_name == "blockDim"
+
     def test_cuda_launch_kernel_api_parsing(self):
         code = """
         void host(float* data, int n, int stream) {
@@ -3108,6 +3163,44 @@ class TestCudaParser:
         assert ast.functions[3].return_type == "unsigned int"
         assert "static" in ast.functions[3].qualifiers
         assert "inline" in ast.functions[3].qualifiers
+
+    def test_cuda_vector_return_helpers_with_inline_spelling_parsing(self):
+        code = """
+        __host__ __device__ __inline__ uint2 encodeTextureObject(
+            cudaTextureObject_t tex, bool normalized
+        ) {
+            return uint2();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        helper = ast.functions[0]
+        assert helper.name == "encodeTextureObject"
+        assert helper.return_type == "uint2"
+        assert "__inline__" in helper.qualifiers
+        assert helper.params[0].vtype == "cudaTextureObject_t"
+        assert helper.params[1].vtype == "bool"
+
+    def test_cuda_overloaded_operator_function_parsing(self):
+        code = """
+        __forceinline__ __device__ float2 operator+(float2 a, float2 b) {
+            return make_float2(a.x + b.x, a.y + b.y);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        overload = ast.functions[0]
+        assert overload.name == "operator+"
+        assert overload.return_type == "float2"
+        assert overload.params[0].vtype == "float2"
+        assert overload.params[1].vtype == "float2"
+        assert isinstance(overload.body[0], ReturnNode)
 
     def test_control_flow_and_cast_expression_parsing(self):
         code = """

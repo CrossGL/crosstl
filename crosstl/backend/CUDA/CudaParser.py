@@ -85,6 +85,43 @@ class CudaParser:
         "atomicDec",
     }
     FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
+    OVERLOADABLE_OPERATOR_TOKENS = {
+        "PLUS",
+        "MINUS",
+        "MULTIPLY",
+        "DIVIDE",
+        "MODULO",
+        "BITWISE_AND",
+        "BITWISE_OR",
+        "BITWISE_XOR",
+        "BITWISE_NOT",
+        "LOGICAL_NOT",
+        "ASSIGN",
+        "LESS_THAN",
+        "GREATER_THAN",
+        "PLUS_EQUALS",
+        "MINUS_EQUALS",
+        "MULTIPLY_EQUALS",
+        "DIVIDE_EQUALS",
+        "MODULO_EQUALS",
+        "AND_EQUALS",
+        "OR_EQUALS",
+        "XOR_EQUALS",
+        "EQUAL",
+        "NOT_EQUAL",
+        "LESS_EQUAL",
+        "GREATER_EQUAL",
+        "LOGICAL_AND",
+        "LOGICAL_OR",
+        "SHIFT_LEFT",
+        "SHIFT_RIGHT",
+        "SHIFT_LEFT_EQUALS",
+        "SHIFT_RIGHT_EQUALS",
+        "INCREMENT",
+        "DECREMENT",
+        "LBRACKET",
+        "LPAREN",
+    }
     LAMBDA_SPECIFIER_TOKENS = {
         "DEVICE",
         "HOST",
@@ -298,11 +335,10 @@ class CudaParser:
         ):
             index = self.skip_function_attribute_at_index(index)
 
-        if index + 1 < len(self.tokens) and self.is_function_name_token(
-            self.tokens[index]
-        ):
+        name_end_index = self.function_name_end_index_at(index)
+        if name_end_index is not None:
             suffix_index = self.skip_optional_function_template_suffix_at_index(
-                index + 1
+                name_end_index
             )
             if (
                 suffix_index < len(self.tokens)
@@ -430,11 +466,10 @@ class CudaParser:
             saved_index = self.skip_function_attribute_at_index(saved_index)
 
         if saved_index is not None:
-            if saved_index < len(self.tokens) - 1 and self.is_function_name_token(
-                self.tokens[saved_index]
-            ):
+            name_end_index = self.function_name_end_index_at(saved_index)
+            if name_end_index is not None:
                 suffix_index = self.skip_optional_function_template_suffix_at_index(
-                    saved_index + 1
+                    name_end_index
                 )
                 return (
                     suffix_index < len(self.tokens)
@@ -500,7 +535,7 @@ class CudaParser:
             saved_index = self.skip_alignment_attributes_at_index(saved_index)
             if (
                 saved_index < len(self.tokens)
-                and self.tokens[saved_index][0] == "IDENTIFIER"
+                and self.tokens[saved_index][0] in self.NAME_COMPONENT_TOKENS
             ):
                 saved_index += 1
                 saved_index = self.skip_array_suffix_at_index(saved_index)
@@ -764,6 +799,43 @@ class CudaParser:
         token = token or self.current_token
         return bool(token and token[0] in self.FUNCTION_NAME_TOKENS)
 
+    def function_name_end_index_at(self, index):
+        if index >= len(self.tokens) or not self.is_function_name_token(
+            self.tokens[index]
+        ):
+            return None
+
+        token_type, token_value = self.tokens[index]
+        if token_type == "IDENTIFIER" and token_value == "operator":
+            return self.operator_function_name_end_index_at(index)
+
+        return index + 1
+
+    def operator_function_name_end_index_at(self, index):
+        index += 1
+        if index >= len(self.tokens):
+            return None
+
+        token_type = self.tokens[index][0]
+        if token_type == "LBRACKET":
+            return (
+                index + 2
+                if index + 1 < len(self.tokens)
+                and self.tokens[index + 1][0] == "RBRACKET"
+                else None
+            )
+        if token_type == "LPAREN":
+            return (
+                index + 2
+                if index + 1 < len(self.tokens)
+                and self.tokens[index + 1][0] == "RPAREN"
+                else None
+            )
+        if token_type in self.OVERLOADABLE_OPERATOR_TOKENS:
+            return index + 1
+
+        return None
+
     def is_identifier_type_name(self, name):
         return (
             name in self.type_aliases
@@ -776,9 +848,31 @@ class CudaParser:
             token_type = self.current_token[0] if self.current_token else "EOF"
             raise SyntaxError(f"Expected function name, got {token_type}")
 
+        if self.current_token == ("IDENTIFIER", "operator"):
+            return self.consume_operator_function_name()
+
         name = self.current_token[1]
         self.eat(self.current_token[0])
         return name
+
+    def consume_operator_function_name(self):
+        name = self.eat("IDENTIFIER")[1]
+        if self.current_token[0] == "LBRACKET":
+            self.eat("LBRACKET")
+            self.eat("RBRACKET")
+            return f"{name}[]"
+        if self.current_token[0] == "LPAREN":
+            self.eat("LPAREN")
+            self.eat("RPAREN")
+            return f"{name}()"
+        if self.current_token[0] not in self.OVERLOADABLE_OPERATOR_TOKENS:
+            raise SyntaxError(
+                f"Expected overloaded operator, got {self.current_token[0]}"
+            )
+
+        operator_value = self.current_token[1]
+        self.eat(self.current_token[0])
+        return f"{name}{operator_value}"
 
     def parse_preprocessor(self):
         directive_token = self.eat("PREPROCESSOR")
@@ -1553,7 +1647,7 @@ class CudaParser:
         vtype = self.parse_type()
         self.parse_interleaved_declaration_qualifiers(qualifiers)
         self.parse_alignment_attributes()
-        name = self.eat("IDENTIFIER")[1]
+        name = self.parse_name_component()
         vtype += self.parse_array_suffix()
 
         value = None
@@ -1626,7 +1720,7 @@ class CudaParser:
         declarator_qualifiers = list(qualifiers)
         self.parse_interleaved_declaration_qualifiers(declarator_qualifiers)
         self.parse_alignment_attributes()
-        name = self.eat("IDENTIFIER")[1]
+        name = self.parse_name_component()
         vtype += self.parse_array_suffix()
         value = self.parse_variable_initializer(vtype)
 
@@ -1827,7 +1921,7 @@ class CudaParser:
             saved_index = self.skip_alignment_attributes_at_index(saved_index)
             if (
                 saved_index < len(self.tokens)
-                and self.tokens[saved_index][0] == "IDENTIFIER"
+                and self.tokens[saved_index][0] in self.NAME_COMPONENT_TOKENS
             ):
                 saved_index += 1
                 if saved_index >= len(self.tokens):

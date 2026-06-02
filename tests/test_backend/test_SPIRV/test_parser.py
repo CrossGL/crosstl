@@ -163,6 +163,83 @@ def test_parse_layout_qualified_block_members_and_texture_descriptor():
     assert push_constants.variable_name == "registers"
 
 
+def test_parse_local_multi_declaration_from_vulkan_compute_samples():
+    code = """
+    void main() {
+        vec3 a, b = vec3(1.0), c;
+        a = b + c;
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    main = next(function for function in ast.functions if function.name == "main")
+    assert isinstance(main.body[0], VariableNode)
+    assert main.body[0].vtype == "vec3"
+    assert main.body[0].name == "a"
+    assert isinstance(main.body[1], AssignmentNode)
+    assert main.body[1].left.vtype == "vec3"
+    assert main.body[1].left.name == "b"
+    assert isinstance(main.body[2], VariableNode)
+    assert main.body[2].vtype == "vec3"
+    assert main.body[2].name == "c"
+
+
+def test_parse_numeric_literal_postfix_swizzle_from_vulkan_samples():
+    code = """
+    void main() {
+        vec3 value = 0u.xxx;
+        float scalar = 1.0.xxx.x;
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    main = next(function for function in ast.functions if function.name == "main")
+    vector_assignment = main.body[0]
+    scalar_assignment = main.body[1]
+    assert isinstance(vector_assignment.right, MemberAccessNode)
+    assert vector_assignment.right.object == "0"
+    assert vector_assignment.right.member == "xxx"
+    assert isinstance(scalar_assignment.right, MemberAccessNode)
+    assert scalar_assignment.right.member == "x"
+    assert isinstance(scalar_assignment.right.object, MemberAccessNode)
+
+
+def test_parse_parenthesized_expression_postfix_swizzle_from_vulkan_samples():
+    code = """
+    void main() {
+        vec3 eyes = (gl_Position).xyz;
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    main = next(function for function in ast.functions if function.name == "main")
+    assignment = main.body[0]
+    assert isinstance(assignment.right, MemberAccessNode)
+    assert assignment.right.member == "xyz"
+    assert isinstance(assignment.right.object, VariableNode)
+    assert assignment.right.object.name == "gl_Position"
+
+
+def test_parse_push_constant_in_mixed_layout_qualifiers():
+    code = """
+    layout(row_major, push_constant) uniform PushConstants {
+        mat4 model;
+    } pc;
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    layout = ast.global_variables[0]
+    assert isinstance(layout, LayoutNode)
+    assert layout.push_constant is True
+    assert layout.qualifiers == [("row_major", None)]
+    assert layout.block_name == "PushConstants"
+    assert layout.variable_name == "pc"
+
+
 def test_parse_unbraced_if_body_from_vulkan_compute_samples():
     code = """
     void main() {

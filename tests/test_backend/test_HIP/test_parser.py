@@ -269,6 +269,87 @@ class TestHipParser:
         assert body[1].name == "bandwidth_achieved"
         assert isinstance(body[1].value, BinaryOpNode)
 
+    def test_public_rocm_template_braced_construction_and_global_calls_parse(self):
+        code = """
+        void host(float ref, float error) {
+            auto block_sizes = std::vector<std::size_t>{0};
+            float norm_ref = ::sqrtf((float)ref);
+            float norm_error = ::sqrtf((float)error);
+            bool ok = norm_ref > 0.0f ||
+                      norm_error < 1.0f;
+            double range = double(rangeMax - rangeMin) +
+                           1.0;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert body[0].name == "block_sizes"
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "std::vector<std::size_t>"
+        assert isinstance(body[1].value, FunctionCallNode)
+        assert body[1].value.name == "::sqrtf"
+        assert isinstance(body[3].value, BinaryOpNode)
+        assert body[3].value.op == "||"
+        assert isinstance(body[4].value, BinaryOpNode)
+        assert body[4].value.op == "+"
+
+    def test_public_rocm_function_pointer_parameter_and_throw_parse(self):
+        code = """
+        template <typename T>
+        std::string toString(
+            T value,
+            std::ios_base& (*r)(std::ios_base&) = std::dec) {
+            throw std::string("failed");
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        assert function.name == "toString"
+        assert function.params[1]["name"] == "r"
+        assert function.params[1]["type"] == "std::ios_base & (*)"
+        assert isinstance(function.body[0], FunctionCallNode)
+        assert function.body[0].name == "throw"
+
+    def test_public_rocm_static_struct_instance_and_class_members_parse(self):
+        code = """
+        static struct sdkVersionStr
+        {
+            int major;
+            inline sdkVersionStr() {
+                major = 2;
+            }
+        } sdkVerStr;
+
+        class HIPCommandArgs : public SDKCmdArgsParser
+        {
+        public:
+            virtual ~HIPCommandArgs() {
+            }
+
+            HIPCommandArgs() {
+                deviceId = 0;
+            }
+
+            int parseCommandLine(int argc, char** argv) {
+                return 0;
+            }
+        };
+        """
+        ast = self.parse_code(code)
+
+        static_struct = ast.statements[0]
+        class_node = ast.statements[1]
+        assert isinstance(static_struct, StructNode)
+        assert static_struct.name == "sdkVersionStr"
+        assert isinstance(class_node, StructNode)
+        assert class_node.name == "HIPCommandArgs"
+        member_names = [member.name for member in class_node.members]
+        assert "~HIPCommandArgs" in member_names
+        assert "HIPCommandArgs" in member_names
+        assert "parseCommandLine" in member_names
+
     def test_public_rocm_runtime_compilation_adjacent_raw_kernel_string_parsing(self):
         code = r"""
         static constexpr auto saxpy_kernel{

@@ -952,13 +952,14 @@ class VulkanParser:
         self.eat("LPAREN")
         bindings = []
         push_constant = False
-        if self.current_token[0] == "PUSH_CONSTANT":
-            push_constant = True
-            self.eat("PUSH_CONSTANT")
-        if self.current_token[0] == "COMMA":
-            self.eat("COMMA")
-
         while self.current_token[0] != "RPAREN":
+            if self.current_token[0] == "PUSH_CONSTANT":
+                push_constant = True
+                self.eat("PUSH_CONSTANT")
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                continue
+
             binding_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
@@ -1439,6 +1440,7 @@ class VulkanParser:
         type_name="",
         terminators=None,
         consume_terminator=True,
+        expected_terminators=None,
     ):
         terminators = terminators or {"SEMICOLON"}
         name = self.current_token[1]
@@ -1458,7 +1460,11 @@ class VulkanParser:
             op_name = self.current_token[1]
             self.eat(self.current_token[0])
             value = self.parse_expression()
-            self.consume_terminator(terminators, consume_terminator)
+            self.consume_terminator(
+                terminators,
+                consume_terminator,
+                expected_terminators=expected_terminators,
+            )
             return AssignmentNode(target, value, op_name)
 
         elif self.current_token[0] in ("BINARY_AND", "BINARY_OR", "BINARY_XOR"):
@@ -1468,7 +1474,11 @@ class VulkanParser:
             )
             self.eat(op)
             right = self.parse_expression()
-            self.consume_terminator(terminators, consume_terminator)
+            self.consume_terminator(
+                terminators,
+                consume_terminator,
+                expected_terminators=expected_terminators,
+            )
             return BinaryOpNode(target, op_symbol, right)
 
         elif self.current_token[0] in (
@@ -1485,16 +1495,56 @@ class VulkanParser:
             op_name = self.current_token[1]
             self.eat(op)
             value = self.parse_expression()
-            self.consume_terminator(terminators, consume_terminator)
+            self.consume_terminator(
+                terminators,
+                consume_terminator,
+                expected_terminators=expected_terminators,
+            )
             return BinaryOpNode(target, op_name, value)
         else:
             raise SyntaxError(
                 f"Unexpected token after identifier {name}: {self.current_token[0]}"
             )
 
-    def consume_terminator(self, terminators, consume_terminator):
+    def parse_variable_declaration(
+        self,
+        type_name,
+        terminators=None,
+        consume_terminator=True,
+    ):
+        terminators = terminators or {"SEMICOLON"}
+        declarator_terminators = {*terminators, "COMMA"}
+        declarations = [
+            self.parse_variable(
+                type_name,
+                terminators=declarator_terminators,
+                consume_terminator=False,
+                expected_terminators=terminators,
+            )
+        ]
+
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            declarations.append(
+                self.parse_variable(
+                    type_name,
+                    terminators=declarator_terminators,
+                    consume_terminator=False,
+                    expected_terminators=terminators,
+                )
+            )
+
+        self.consume_terminator(terminators, consume_terminator)
+        return declarations if len(declarations) > 1 else declarations[0]
+
+    def consume_terminator(
+        self,
+        terminators,
+        consume_terminator,
+        expected_terminators=None,
+    ):
         if self.current_token[0] not in terminators:
-            expected = " or ".join(sorted(terminators))
+            expected = " or ".join(sorted(expected_terminators or terminators))
             raise SyntaxError(f"Expected {expected}, got {self.current_token[0]}")
         if consume_terminator:
             self.eat(self.current_token[0])
@@ -1636,7 +1686,7 @@ class VulkanParser:
             self.eat("NUMBER")
             if value[-1:] in {"u", "U", "f", "F"}:
                 value = value[:-1]
-            return value
+            return self.parse_postfix_suffixes(value)
         elif self.current_token[0] == "STRING":
             value = self.current_token[1]
             self.eat("STRING")
@@ -1645,7 +1695,7 @@ class VulkanParser:
             self.eat("LPAREN")
             expr = self.parse_expression()
             self.eat("RPAREN")
-            return expr
+            return self.parse_postfix_suffixes(expr)
         else:
             raise SyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"
@@ -1721,6 +1771,12 @@ class VulkanParser:
             self.eat(self.current_token[0])
             type_name += self.parse_array_suffixes_as_text()
         if self.current_token[0] == "IDENTIFIER":
+            if type_name and "COMMA" not in terminators:
+                return self.parse_variable_declaration(
+                    type_name,
+                    terminators=terminators,
+                    consume_terminator=consume_terminator,
+                )
             return self.parse_variable(
                 type_name,
                 terminators=terminators,

@@ -436,6 +436,23 @@ class HipParser:
         if self.match("TEMPLATE"):
             return self.parse_template_prefixed_declaration()
 
+        if (
+            self.match("STATIC")
+            and self.peek()
+            and self.peek().type
+            in {
+                "STRUCT",
+                "CLASS",
+                "ENUM",
+            }
+        ):
+            self.advance()
+            if self.match("STRUCT"):
+                return self.parse_struct()
+            if self.match("CLASS"):
+                return self.parse_class()
+            return self.parse_enum()
+
         if self.match(
             "__DEVICE__",
             "__HOST__",
@@ -494,6 +511,8 @@ class HipParser:
             return self.parse_asm_statement()
         if self.match("LBRACE"):
             return self.parse_block()
+        if self.is_identifier_value("throw"):
+            return self.parse_throw_statement()
         if self.is_identifier_value("delete"):
             return self.parse_delete_statement()
 
@@ -667,6 +686,18 @@ class HipParser:
         if self.match("SEMICOLON"):
             self.advance()
         return DeleteNode(expression, is_array)
+
+    def parse_throw_statement(self):
+        self.advance()
+        args = []
+
+        if not self.match("SEMICOLON"):
+            args.append(self.parse_expression())
+
+        if self.match("SEMICOLON"):
+            self.advance()
+
+        return FunctionCallNode("throw", args)
 
     def parse_preprocessor(self):
         self.consume("HASH")
@@ -976,6 +1007,10 @@ class HipParser:
             members = self.parse_struct_members()
             self.consume("RBRACE")
 
+        if self.is_declarator_name_token():
+            self.skip_until_semicolon()
+            return StructNode(name, members)
+
         if self.match("SEMICOLON"):
             self.advance()
 
@@ -1113,6 +1148,9 @@ class HipParser:
         self.type_aliases.add(name)
 
         members = []
+        self.skip_newlines()
+        self.skip_class_inheritance_clause()
+        self.skip_newlines()
         if self.match("LBRACE"):
             self.consume("LBRACE")
             while self.current_token and not self.match("RBRACE"):
@@ -1126,6 +1164,39 @@ class HipParser:
                         self.advance()
                     continue
 
+                if self.match("STRUCT"):
+                    members.append(self.parse_struct())
+                    continue
+                if self.match("CLASS"):
+                    members.append(self.parse_class())
+                    continue
+                if self.match("ENUM"):
+                    members.append(self.parse_enum())
+                    continue
+
+                member_qualifiers = []
+                while self.match("VIRTUAL"):
+                    member_qualifiers.append(self.current_token.value)
+                    self.advance()
+                    self.skip_newlines()
+
+                if self.is_class_constructor_declaration(name):
+                    members.append(
+                        self.parse_class_constructor(name, member_qualifiers)
+                    )
+                    continue
+                if self.is_function_declaration():
+                    member_function = self.parse_simple_function()
+                    member_function.qualifiers = [
+                        *member_qualifiers,
+                        *member_function.qualifiers,
+                    ]
+                    members.append(member_function)
+                    continue
+                if member_qualifiers:
+                    self.skip_unsupported_struct_member()
+                    continue
+
                 member = self.parse_struct_member()
                 if member:
                     members.append(member)
@@ -1136,6 +1207,55 @@ class HipParser:
             self.advance()
 
         return StructNode(name, members)  # Treat class as struct for simplicity
+
+    def skip_class_inheritance_clause(self):
+        if not self.match("COLON"):
+            return
+
+        while self.current_token and not self.match("LBRACE", "SEMICOLON"):
+            self.advance()
+
+    def is_class_constructor_declaration(self, class_name):
+        if self.match("TILDE"):
+            return (
+                self.peek() is not None
+                and self.peek().type == "IDENTIFIER"
+                and self.peek().value == class_name
+                and self.peek(2) is not None
+                and self.peek(2).type == "LPAREN"
+            )
+
+        return (
+            self.match("IDENTIFIER")
+            and self.current_token.value == class_name
+            and self.peek() is not None
+            and self.peek().type == "LPAREN"
+        )
+
+    def parse_class_constructor(self, class_name, qualifiers=None):
+        qualifiers = qualifiers or []
+        destructor = False
+        if self.match("TILDE"):
+            destructor = True
+            self.advance()
+
+        self.consume("IDENTIFIER")
+        function_name = f"~{class_name}" if destructor else class_name
+
+        self.consume("LPAREN")
+        params = self.parse_parameter_list()
+        self.consume("RPAREN")
+        self.skip_newlines()
+        self.skip_post_function_qualifiers()
+        self.skip_constructor_initializer_list()
+
+        body = None
+        if self.match("LBRACE"):
+            body = self.parse_block()
+        elif self.match("SEMICOLON"):
+            self.advance()
+
+        return FunctionNode("", function_name, params, body, list(qualifiers))
 
     def parse_struct_member(self):
         try:
@@ -1415,7 +1535,7 @@ class HipParser:
 
         while self.match("SCOPE"):
             self.consume("SCOPE")
-            member = self.consume("IDENTIFIER").value
+            member = self.consume_qualified_name_member()
             type_name += f"::{member}"
 
         if self.match("LT"):
@@ -1441,7 +1561,11 @@ class HipParser:
             param_type = self.parse_type()
 
             param_name = ""
-            if self.is_declarator_name_token():
+            function_pointer_name = self.parse_function_pointer_parameter_declarator()
+            if function_pointer_name is not None:
+                param_type += " (*)"
+                param_name = function_pointer_name
+            elif self.is_declarator_name_token():
                 param_name = self.current_token.value
                 self.advance()
 
@@ -1457,6 +1581,29 @@ class HipParser:
                 break
 
         return params
+
+    def parse_function_pointer_parameter_declarator(self):
+        if not (
+            self.match("LPAREN")
+            and self.peek()
+            and self.peek().type in {"ASTERISK", "STAR"}
+        ):
+            return None
+
+        self.consume("LPAREN")
+        self.advance()
+
+        name = ""
+        if self.is_declarator_name_token():
+            name = self.current_token.value
+            self.advance()
+
+        self.consume("RPAREN")
+
+        if self.match("LPAREN"):
+            self.skip_balanced_parentheses()
+
+        return name
 
     def skip_default_parameter_value(self):
         self.skip_newlines()
@@ -1966,78 +2113,99 @@ class HipParser:
 
     def parse_logical_or_expression(self):
         left = self.parse_logical_and_expression()
+        self.skip_newlines()
 
         while self.match("LOGICAL_OR", "OR"):
             op = self.current_token.value
             self.advance()
+            self.skip_newlines()
             right = self.parse_logical_and_expression()
             left = BinaryOpNode(left, op, right)
+            self.skip_newlines()
 
         return left
 
     def parse_logical_and_expression(self):
         left = self.parse_bitwise_or_expression()
+        self.skip_newlines()
 
         while self.match("LOGICAL_AND", "AND"):
             op = self.current_token.value
             self.advance()
+            self.skip_newlines()
             right = self.parse_bitwise_or_expression()
             left = BinaryOpNode(left, op, right)
+            self.skip_newlines()
 
         return left
 
     def parse_bitwise_or_expression(self):
         left = self.parse_bitwise_xor_expression()
+        self.skip_newlines()
 
         while self.match("BITWISE_OR", "PIPE"):
             op = self.current_token.value
             self.advance()
+            self.skip_newlines()
             right = self.parse_bitwise_xor_expression()
             left = BinaryOpNode(left, op, right)
+            self.skip_newlines()
 
         return left
 
     def parse_bitwise_xor_expression(self):
         left = self.parse_bitwise_and_expression()
+        self.skip_newlines()
 
         while self.match("BITWISE_XOR", "XOR"):
             op = self.current_token.value
             self.advance()
+            self.skip_newlines()
             right = self.parse_bitwise_and_expression()
             left = BinaryOpNode(left, op, right)
+            self.skip_newlines()
 
         return left
 
     def parse_bitwise_and_expression(self):
         left = self.parse_equality_expression()
+        self.skip_newlines()
 
         while self.match("BITWISE_AND", "AMPERSAND"):
             op = self.current_token.value
             self.advance()
+            self.skip_newlines()
             right = self.parse_equality_expression()
             left = BinaryOpNode(left, op, right)
+            self.skip_newlines()
 
         return left
 
     def parse_equality_expression(self):
         left = self.parse_relational_expression()
+        self.skip_newlines()
 
         while self.match("EQ", "NE"):
             op = self.current_token.value
             self.advance()
+            self.skip_newlines()
             right = self.parse_relational_expression()
             left = BinaryOpNode(left, op, right)
+            self.skip_newlines()
 
         return left
 
     def parse_relational_expression(self):
         left = self.parse_shift_expression()
+        self.skip_newlines()
 
         while self.match("LT", "LE", "GT", "GE"):
             op = self.current_token.value
             self.advance()
+            self.skip_newlines()
             right = self.parse_shift_expression()
             left = BinaryOpNode(left, op, right)
+            self.skip_newlines()
 
         return left
 
@@ -2057,23 +2225,29 @@ class HipParser:
 
     def parse_additive_expression(self):
         left = self.parse_multiplicative_expression()
+        self.skip_newlines()
 
         while self.match("PLUS", "MINUS"):
             op = self.current_token.value
             self.advance()
+            self.skip_newlines()
             right = self.parse_multiplicative_expression()
             left = BinaryOpNode(left, op, right)
+            self.skip_newlines()
 
         return left
 
     def parse_multiplicative_expression(self):
         left = self.parse_unary_expression()
+        self.skip_newlines()
 
         while self.match("MULTIPLY", "STAR", "DIVIDE", "SLASH", "MODULO", "PERCENT"):
             op = self.current_token.value
             self.advance()
+            self.skip_newlines()
             right = self.parse_unary_expression()
             left = BinaryOpNode(left, op, right)
+            self.skip_newlines()
 
         return left
 
@@ -2107,7 +2281,7 @@ class HipParser:
                 expr = ArrayAccessNode(expr, index)
             elif self.match("SCOPE"):
                 self.consume("SCOPE")
-                member = self.consume("IDENTIFIER").value
+                member = self.consume_qualified_name_member()
                 expr = self.append_qualified_name(expr, "::", member)
             elif self.match("LT") and self.is_template_suffix():
                 expr = self.append_template_suffix(expr)
@@ -2147,6 +2321,13 @@ class HipParser:
             self.advance()
             return member
         self.error("Expected member name")
+
+    def consume_qualified_name_member(self):
+        if self.match("IDENTIFIER") or self.is_type_token(allow_identifier=False):
+            member = self.current_token.value
+            self.advance()
+            return member
+        self.error("Expected qualified name member")
 
     def is_sizeof_type_operand(self):
         saved_pos = self.pos
@@ -2216,6 +2397,7 @@ class HipParser:
                         "LPAREN",
                         "SCOPE",
                         "DOT",
+                        "LBRACE",
                         "KERNEL_LAUNCH_START",
                         "COMMA",
                         "RPAREN",
@@ -2238,6 +2420,7 @@ class HipParser:
                         "LPAREN",
                         "SCOPE",
                         "DOT",
+                        "LBRACE",
                         "KERNEL_LAUNCH_START",
                         "COMMA",
                         "RPAREN",
@@ -2454,6 +2637,18 @@ class HipParser:
             name = self.current_token.value
             self.advance()
             return name
+
+        elif self.match("SCOPE"):
+            self.consume("SCOPE")
+            member = self.consume_qualified_name_member()
+            return f"::{member}"
+
+        elif (
+            self.is_type_token(allow_identifier=False)
+            and self.peek()
+            and self.peek().type == "LPAREN"
+        ):
+            return self.parse_type_without_array_suffix()
 
         elif self.match("STRING"):
             return self.parse_string_literal_sequence()
@@ -2929,37 +3124,43 @@ class HipParser:
         if not self.match("LPAREN"):
             return False
 
-        saved_pos = self.pos
-        try:
-            self.advance()
-            while self.match(*self.TYPE_QUALIFIER_TOKENS):
-                self.advance()
+        type_start = self.skip_newlines_at_pos(self.pos + 1)
+        type_end = self.skip_type_at_pos(
+            type_start,
+            allow_unknown_identifier_pointers=True,
+        )
+        return (
+            type_end is not None
+            and type_end < len(self.tokens)
+            and self.tokens[type_end].type == "RPAREN"
+            and self.is_cast_type_sequence(type_start, type_end)
+        )
 
-            if not self.is_type_token(allow_identifier=False) and not (
-                self.match("IDENTIFIER")
-                and self.current_token.value in self.type_aliases
-            ):
-                return False
+    def is_cast_type_sequence(self, start, end):
+        index = start
+        while index < end and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS:
+            index += 1
 
-            token_type = self.current_token.type
-            self.advance()
-            if token_type == "LONG" and self.match("LONG"):
-                self.advance()
-            while self.match("ASTERISK", "STAR"):
-                self.advance()
+        if index >= end:
+            return False
 
-            while self.match("LBRACKET"):
-                self.advance()
-                while self.current_token and not self.match("RBRACKET"):
-                    self.advance()
-                self.consume("RBRACKET")
+        token = self.tokens[index]
+        if self.is_type_token(token, allow_identifier=False):
+            return True
 
-            return self.match("RPAREN")
-        finally:
-            self.pos = saved_pos
-            self.current_token = (
-                self.tokens[self.pos] if self.pos < len(self.tokens) else None
+        if token.type != "IDENTIFIER":
+            return False
+
+        type_tokens = self.tokens[index:end]
+        return (
+            self.is_identifier_type_name(token.value)
+            or self.is_probable_identifier_type_name(token.value)
+            or any(item.type == "SCOPE" for item in type_tokens)
+            or any(
+                item.type in {"ASTERISK", "STAR", *self.TYPE_REFERENCE_TOKENS}
+                for item in type_tokens
             )
+        )
 
     def parse_argument_list(self):
         args = []
