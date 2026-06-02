@@ -43,8 +43,9 @@ TOKENS = tuple(
         (
             "NUMBER",
             r"0[xX][0-9a-fA-F]+[uU]?"
-            r"|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fF]?"
-            r"|\d+[eE][+-]?\d+[fF]?"
+            r"|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?(?:[hH][fF]|[fF])?"
+            r"|\d+[eE][+-]?\d+(?:[hH][fF]|[fF])?"
+            r"|\d+(?:[hH][fF]|[fF])"
             r"|\d+[uU]?",
         ),
         ("SEMICOLON", r";"),

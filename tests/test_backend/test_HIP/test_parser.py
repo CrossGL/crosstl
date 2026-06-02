@@ -2257,6 +2257,28 @@ class TestHipParser:
         assert isinstance(function.body[0], ReturnNode)
         assert function.body[0].value == "x"
 
+    def test_explicit_template_instantiation_parsing(self):
+        code = """
+        template float moe_smoothquant_<
+            trait_<ck_tile::fp16_t, ck_tile::int8_t, 1, true>
+        >(const S&, A);
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "float"
+        assert function.name == (
+            "moe_smoothquant_<trait_<ck_tile::fp16_t, " "ck_tile::int8_t, 1, true>>"
+        )
+        assert function.qualifiers == ["template"]
+        assert function.params == [
+            {"type": "const S &", "name": ""},
+            {"type": "A", "name": ""},
+        ]
+        assert function.body is None
+
     def test_braced_for_body_and_sync_statement_parsing(self):
         code = """
         void helper(int n) {

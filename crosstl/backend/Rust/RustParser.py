@@ -133,7 +133,9 @@ class RustParser:
         type_aliases = []
 
         while self.current_token[0] != "EOF":
-            if self.current_token[0] == "USE":
+            if self.is_macro_rules_definition():
+                self.skip_macro_rules_definition()
+            elif self.current_token[0] == "USE":
                 u = self.parse_use_statement()
                 use_statements.append(u)
             elif self.current_token[0] == "TYPE":
@@ -225,6 +227,8 @@ class RustParser:
                 elif self.current_token[0] == "USE":
                     u = self.parse_use_statement(attributes=attrs)
                     use_statements.append(u)
+                elif self.is_macro_rules_definition():
+                    self.skip_macro_rules_definition()
                 elif self.current_token[0] == "EXTERN":
                     self.skip_extern_block()
                 elif (
@@ -294,6 +298,43 @@ class RustParser:
             return token
         else:
             raise SyntaxError(f"Expected {expected_type}, got {self.current_token[0]}")
+
+    def is_macro_rules_definition(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "macro_rules"
+            and self.peek_token_type() == "EXCLAMATION"
+        )
+
+    def skip_macro_rules_definition(self):
+        self.eat("IDENTIFIER")
+        self.eat("EXCLAMATION")
+        if self.current_token[0] in self.NAME_TOKENS:
+            self.eat(self.current_token[0])
+
+        if self.current_token[0] in {"LBRACE", "LPAREN", "LBRACKET"}:
+            self.skip_balanced_delimiters()
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+    def skip_balanced_delimiters(self):
+        opening_token = self.current_token[0]
+        closing_token = {
+            "LBRACE": "RBRACE",
+            "LPAREN": "RPAREN",
+            "LBRACKET": "RBRACKET",
+        }[opening_token]
+        depth = 0
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == opening_token:
+                depth += 1
+            elif token_type == closing_token:
+                depth -= 1
+
+            self.eat(token_type)
+            if depth == 0:
+                return
 
     def parse_name_token(self, context="name"):
         if self.current_token[0] not in self.NAME_TOKENS:
@@ -1620,6 +1661,9 @@ class RustParser:
         statements = []
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            if self.current_token[0] == "POUND":
+                self.parse_attributes()
+                continue
             if self.current_starts_function():
                 statements.append(self.parse_function_with_qualifiers())
             elif self.current_token[0] == "LIFETIME":
@@ -1861,6 +1905,10 @@ class RustParser:
         arms = []
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            if self.current_token[0] == "POUND":
+                self.parse_attributes()
+                continue
+
             pattern = self.parse_match_pattern()
 
             guard = None
@@ -2636,6 +2684,10 @@ class RustParser:
         return MatchesMacroNode(expression, pattern, guard)
 
     def parse_primary_expression(self):
+        if self.current_token[0] == "POUND":
+            self.parse_attributes()
+            return self.parse_expression()
+
         if self.current_token[0] == "IF":
             return self.parse_if_expression()
 
@@ -2863,6 +2915,9 @@ class RustParser:
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
+                continue
+            if self.current_token[0] == "POUND":
+                self.parse_attributes()
                 continue
 
             if self.current_token[0] in ["IF", "MATCH", "LOOP", "LIFETIME"]:

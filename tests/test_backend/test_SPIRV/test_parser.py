@@ -2360,6 +2360,117 @@ def test_hex_integer_literals_parse_as_single_numeric_values():
     assert selected.right.right == "0x1"
 
 
+def test_half_float_literal_suffixes_parse_as_single_numeric_values():
+    code = """
+    void main() {
+        f16vec4 color = f16vec4(0.95hf, 1.0HF, 2hf);
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    assignment = ast.functions[0].body[0]
+    constructor = assignment.right
+
+    assert isinstance(constructor, FunctionCallNode)
+    assert constructor.args == ["0.95", "1.0", "2"]
+
+
+def test_precision_qualified_local_declarations_parse():
+    code = """
+    void main() {
+        highp vec4 world_w = vec4(1.0);
+        mediump vec3 pos = world_w.xyz;
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    world_w, pos = ast.functions[0].body
+
+    assert isinstance(world_w, AssignmentNode)
+    assert world_w.left.vtype == "highp vec4"
+    assert world_w.left.name == "world_w"
+    assert isinstance(pos, AssignmentNode)
+    assert pos.left.vtype == "mediump vec3"
+    assert pos.left.name == "pos"
+
+
+def test_layout_qualifier_constant_expressions_parse():
+    code = """
+    layout(local_size_x = numMeshInvocationsX, local_size_y = numMeshInvocationsY, local_size_z = 1) in;
+    layout(triangles, max_vertices = 4 * numMeshInvocationsX * numMeshInvocationsY, max_primitives = 2 * numMeshInvocationsX * numMeshInvocationsY) out;
+    """
+
+    ast = parse_code(tokenize_code(code))
+    local_size, mesh_output = ast.global_variables
+
+    assert isinstance(local_size, LayoutNode)
+    assert local_size.qualifiers == [
+        ("local_size_x", "numMeshInvocationsX"),
+        ("local_size_y", "numMeshInvocationsY"),
+        ("local_size_z", "1"),
+    ]
+    assert isinstance(mesh_output, LayoutNode)
+    assert mesh_output.qualifiers == [
+        ("triangles", None),
+        (
+            "max_vertices",
+            "4 * numMeshInvocationsX * numMeshInvocationsY",
+        ),
+        (
+            "max_primitives",
+            "2 * numMeshInvocationsX * numMeshInvocationsY",
+        ),
+    ]
+
+
+def test_mesh_shader_task_payload_storage_qualifier_declaration():
+    code = """
+    struct SharedData {
+        vec2 position;
+    };
+
+    taskPayloadSharedEXT SharedData sharedData;
+    """
+
+    ast = parse_code(tokenize_code(code))
+    declaration = ast.global_variables[0]
+
+    assert isinstance(declaration, VariableNode)
+    assert declaration.vtype == "taskPayloadSharedEXT SharedData"
+    assert declaration.name == "sharedData"
+
+
+def test_vulkan_lexer_from_file_resolves_same_directory_include(tmp_path):
+    include_file = tmp_path / "lighting.h"
+    include_file.write_text(
+        """
+        struct Light {
+            vec4 color;
+        };
+        """,
+        encoding="utf-8",
+    )
+    shader_file = tmp_path / "lighting.frag"
+    shader_file.write_text(
+        """
+        #version 450
+        #include "lighting.h"
+
+        layout(set = 0, binding = 0) uniform Lights {
+            Light activeLight;
+        } lights;
+        """,
+        encoding="utf-8",
+    )
+
+    ast = parse_code(VulkanLexer.from_file(str(shader_file)).tokenize())
+    layout = ast.global_variables[0]
+
+    assert ast.structs[0].name == "Light"
+    assert isinstance(layout, LayoutNode)
+    assert layout.struct_fields == [("Light", "activeLight")]
+
+
 def test_unknown_identifier_statement_is_rejected_instead_of_dropped():
     code = """
     void main() {

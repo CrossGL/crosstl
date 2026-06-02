@@ -203,6 +203,29 @@ def test_braced_macro_invocation_parsing():
     assert "OpStore" in macro_call.args[0]
 
 
+def test_macro_rules_definition_is_skipped():
+    code = r"""
+    macro_rules! enum_repr_from {
+        ($ident:ident, $repr:ty) => {
+            impl From<$repr> for $ident {
+                fn from(value: $repr) -> Self {
+                    value as $repr
+                }
+            }
+        };
+    }
+
+    fn main() {
+        return;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert len(ast.functions) == 1
+    assert ast.functions[0].name == "main"
+
+
 def test_rust_gpu_path_qualified_attribute_parsing():
     code = r"""
     #[spirv_std_macros::gpu_only]
@@ -3748,6 +3771,39 @@ def test_local_const_static_item_parsing():
         assert block.expression is not None
     except Exception as e:
         pytest.fail(f"Local const/static item parsing failed: {e}")
+
+
+def test_statement_and_expression_attributes_are_ignored():
+    code = """
+    fn entry() {
+        #[spirv(vertex)]
+        let _statement = ();
+
+        let _closure = #[spirv(fragment)]
+        || {};
+
+        (
+            #[spirv(compute)]
+            (1, 2, 3)
+        );
+
+        match () {
+            #[spirv(fragment)]
+            _arm => {}
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    body = ast.functions[0].body
+
+    assert isinstance(body[0], LetNode)
+    assert body[0].name == "_statement"
+    assert isinstance(body[1], LetNode)
+    assert isinstance(body[1].value, ClosureNode)
+    assert isinstance(body[2], TupleNode)
+    assert isinstance(body[3], MatchNode)
+    assert body[3].arms[0].pattern == "_arm"
 
 
 def test_try_expression_host_parsing():

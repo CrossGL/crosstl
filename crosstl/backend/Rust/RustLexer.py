@@ -122,6 +122,7 @@ TOKENS = tuple(
         ("ARROW", r"->"),
         ("FAT_ARROW", r"=>"),
         ("POUND", r"#"),
+        ("DOLLAR", r"\$"),
         # Operators (multi-character operators MUST come before single-character ones)
         ("SHIFT_LEFT_EQUALS", r"<<="),
         ("SHIFT_RIGHT_EQUALS", r">>="),
@@ -327,6 +328,7 @@ class TokenType(Enum):
     ARROW = auto()
     FAT_ARROW = auto()
     POUND = auto()
+    DOLLAR = auto()
     EXCLAMATION = auto()
     AT = auto()
     AMPERSAND = auto()

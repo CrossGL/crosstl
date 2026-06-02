@@ -20,6 +20,10 @@ class VulkanParser:
         "rayPayloadEXT",
         "rayPayloadInEXT",
     }
+    MESH_SHADER_STORAGE_QUALIFIERS = {
+        "taskPayloadSharedEXT",
+        "taskPayloadSharedNV",
+    }
     LAYOUT_DECLARATION_QUALIFIERS = {
         "centroid",
         "coherent",
@@ -45,6 +49,7 @@ class VulkanParser:
         "in",
         "inout",
         "out",
+        *MESH_SHADER_STORAGE_QUALIFIERS,
     }
     ASSIGNMENT_TOKENS = (
         "EQUALS",
@@ -1061,12 +1066,41 @@ class VulkanParser:
         )
 
     def parse_layout_qualifier_value(self):
-        if self.current_token[0] in {"NUMBER", "IDENTIFIER"}:
-            value = self.current_token[1]
-            self.eat(self.current_token[0])
-            return value
-        raise SyntaxError(
-            f"Expected layout qualifier value, got {self.current_token[0]}"
+        parts = []
+        depth = 0
+
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if depth == 0 and token_type in {"COMMA", "RPAREN"}:
+                break
+
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+
+            parts.append(self.current_token[1])
+            self.eat(token_type)
+
+        if not parts:
+            raise SyntaxError(
+                f"Expected layout qualifier value, got {self.current_token[0]}"
+            )
+        if depth:
+            raise SyntaxError("Unterminated layout qualifier value")
+
+        return self.format_layout_qualifier_value(parts)
+
+    def format_layout_qualifier_value(self, parts):
+        text = " ".join(str(part) for part in parts)
+        return (
+            text.replace("( ", "(")
+            .replace(" )", ")")
+            .replace("[ ", "[")
+            .replace(" ]", "]")
+            .replace(" . ", ".")
+            .replace(" ,", ",")
+            .replace(", ", ", ")
         )
 
     def has_specialization_constant_qualifier(self, qualifiers):
@@ -1326,6 +1360,8 @@ class VulkanParser:
         if token_type == "LBRACE":
             return self.parse_block()
         if token_type == "CONST":
+            return self.parse_assignment_or_function_call()
+        if self.current_token[1] in self.DECLARATION_QUALIFIERS:
             return self.parse_assignment_or_function_call()
         if token_type == "IDENTIFIER" and (
             self.peek(1) in ["LPAREN", "LBRACKET"]
@@ -1764,7 +1800,9 @@ class VulkanParser:
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
-            if value[-1:] in {"u", "U", "f", "F"}:
+            if value.lower().endswith("hf"):
+                value = value[:-2]
+            elif value[-1:] in {"u", "U", "f", "F"}:
                 value = value[:-1]
             return self.parse_postfix_suffixes(value)
         elif self.current_token[0] == "STRING":

@@ -1525,6 +1525,92 @@ class TestCudaParser:
         assert body[5].expression == "q"
         assert body[5].is_array is False
 
+    def test_public_cuda_samples_placement_new_and_variadic_parameters(self):
+        code = """
+        template <typename T>
+        struct Vector {
+            int size;
+        };
+
+        void error_exit(const char *format, ...) {
+            return;
+        }
+
+        __global__ void construct(char* s_buffer, int* s_data) {
+            Vector<int>* s_vector;
+            s_vector = new (s_buffer) Vector<int>(1024, s_data);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.functions[0].params[-1].vtype == "..."
+        assert ast.functions[0].params[-1].name == ""
+
+        allocation = ast.kernels[0].body[1]
+        assert isinstance(allocation, AssignmentNode)
+        assert isinstance(allocation.right, NewNode)
+        assert allocation.right.target_type == "Vector<int>"
+        assert allocation.right.placement_args == ["s_buffer"]
+        assert allocation.right.args == ["1024", "s_data"]
+
+    def test_public_cuda_samples_dependent_qualified_typename_parsing(self):
+        code = """
+        template <typename T>
+        __device__ typename vec3<T>::Type
+        bodyBodyInteraction(typename vec3<T>::Type ai,
+                            typename vec4<T>::Type *positions) {
+            typename vec3<T>::Type r;
+            positions = (typename vec4<T>::Type *)positions;
+            return ai;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        function = ast.functions[0]
+        assert function.return_type == "typename vec3<T>::Type"
+        assert [(param.vtype, param.name) for param in function.params] == [
+            ("typename vec3<T>::Type", "ai"),
+            ("typename vec4<T>::Type *", "positions"),
+        ]
+        assert function.body[0].vtype == "typename vec3<T>::Type"
+        assert isinstance(function.body[1].right, CastNode)
+        assert function.body[1].right.target_type == "typename vec4<T>::Type *"
+
+    def test_public_cuda_samples_tile_attributes_bindings_and_udl_literals(self):
+        code = """
+        template <int NUM_CTAS>
+        [[using cutile: hint(0, num_cta_in_cga = NUM_CTAS),
+                         hint(0, occupancy = 1)]]
+        __global__ void tiled(float* _C) {
+            using namespace cuda::experimental::stf::literals;
+            float* C = ct::assume_aligned(_C, 16_ic);
+            auto [pid_m, pid_n, dummy] = ct::bid();
+            auto acc = ct::zeros<ct::tile<float, ct::shape<16, 16>>>();
+            [[cutile::hint(0, latency = 4)]] acc = acc;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.kernels) == 1
+        body = ast.kernels[0].body
+        assert body[0].value.name == "ct::assume_aligned"
+        assert body[0].value.args == ["_C", "16_ic"]
+        assert body[1].vtype == "auto"
+        assert body[1].name == "[pid_m, pid_n, dummy]"
+        assert body[1].value.name == "ct::bid"
+        assert body[2].value.name == "ct::zeros<ct::tile<float, ct::shape<16, 16>>>"
+        assert isinstance(body[3], AssignmentNode)
+        assert body[3].left == "acc"
+
     def test_unique_ptr_host_allocation_parsing(self):
         code = """
         void host(int n) {

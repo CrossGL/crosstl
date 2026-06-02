@@ -531,6 +531,10 @@ class HipParser:
 
     def parse_template_prefixed_declaration(self):
         self.consume("TEMPLATE")
+        self.skip_newlines()
+        if not self.match("LT"):
+            return self.parse_explicit_template_instantiation()
+
         self.parse_template_suffix()
         self.skip_newlines()
 
@@ -548,6 +552,39 @@ class HipParser:
         raise SyntaxError(
             f"Expected declaration after template prefix, got {self.current_token.type}"
         )
+
+    def parse_explicit_template_instantiation(self):
+        qualifiers = ["template"]
+
+        while self.match(
+            *self.FUNCTION_SPECIFIER_TOKENS,
+            "__DEVICE__",
+            "__HOST__",
+            "__GLOBAL__",
+            "__FORCEINLINE__",
+            "__NOINLINE__",
+        ):
+            qualifiers.append(self.current_token.value)
+            self.advance()
+            self.skip_newlines()
+
+        return_type = self.parse_type()
+        self.skip_newlines()
+        name = self.consume_function_name()
+        if self.match("LT"):
+            name += self.parse_template_suffix()
+
+        self.consume("LPAREN")
+        params = self.parse_parameter_list()
+        self.consume("RPAREN")
+        self.skip_newlines()
+        self.skip_post_function_qualifiers()
+
+        if self.match("SEMICOLON"):
+            self.advance()
+
+        self.user_function_names.add(name)
+        return FunctionNode(return_type, name, params, None, qualifiers)
 
     def is_identifier_value(self, value):
         return self.match("IDENTIFIER") and self.current_token.value == value
