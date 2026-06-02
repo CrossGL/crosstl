@@ -212,6 +212,10 @@ class HLSLParser:
                 self.parse_template_declaration_prefix()
                 continue
 
+            if self.is_effect_technique_block():
+                self.parse_effect_technique_block()
+                continue
+
             attributes = self.parse_attribute_list()
             if self.is_class_declaration_prefix():
                 self.parse_class_declaration()
@@ -230,6 +234,7 @@ class HLSLParser:
 
             qualifiers = self.parse_qualifiers()
             return_type = self.parse_type()
+            qualifiers.extend(self.parse_post_type_qualifiers())
             if not self.is_identifier_token(self.current_token[0]):
                 raise SyntaxError(
                     f"Expected identifier after type, got {self.current_token[0]}"
@@ -260,6 +265,21 @@ class HLSLParser:
             enums=enums,
             typedefs=typedefs,
         )
+
+    def is_effect_technique_block(self):
+        return self.current_token[0] == "IDENTIFIER" and str(
+            self.current_token[1]
+        ).lower() in {"technique", "technique10"}
+
+    def parse_effect_technique_block(self):
+        self.eat("IDENTIFIER")
+        while self.current_token[0] not in {"LBRACE", "SEMICOLON", "EOF"}:
+            self.eat(self.current_token[0])
+
+        if self.current_token[0] == "LBRACE":
+            self.skip_balanced_brace_block()
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
 
     def eat(self, expected_type):
         if self.current_token[0] == expected_type:
@@ -526,6 +546,18 @@ class HLSLParser:
             self.eat(self.current_token[0])
         return qualifiers
 
+    def parse_post_type_qualifiers(self):
+        qualifiers = []
+        while self.is_post_type_qualifier_token_at(self.current_index):
+            qualifiers.append(self.current_token[1])
+            self.eat(self.current_token[0])
+        return qualifiers
+
+    def is_post_type_qualifier_token_at(self, index):
+        if index >= len(self.tokens):
+            return False
+        return str(self.tokens[index][1]).lower() == "const"
+
     def is_qualifier_token_at(self, index):
         if index >= len(self.tokens):
             return False
@@ -697,6 +729,7 @@ class HLSLParser:
                     f"Expected type in struct member, got {self.current_token[0]}"
                 )
             return_type = self.parse_type()
+            qualifiers.extend(self.parse_post_type_qualifiers())
             member_name = self.parse_identifier()
             if self.current_token[0] == "LPAREN":
                 methods.append(
@@ -868,6 +901,7 @@ class HLSLParser:
         self.eat("TYPEDEF")
         qualifiers = self.parse_qualifiers()
         alias_type = self.parse_type()
+        qualifiers.extend(self.parse_post_type_qualifiers())
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("SEMICOLON")
@@ -1078,6 +1112,7 @@ class HLSLParser:
                         f"Unexpected token in parameter list: {self.current_token[0]}"
                     )
                 param_type = self.parse_type()
+                qualifiers.extend(self.parse_post_type_qualifiers())
 
                 if self.is_identifier_token(self.current_token[0]):
                     name = self.parse_identifier()
@@ -1226,6 +1261,8 @@ class HLSLParser:
         idx = self.skip_type_name_at(idx)
         if idx is None:
             return False
+        while idx < len(self.tokens) and self.is_post_type_qualifier_token_at(idx):
+            idx += 1
 
         if idx >= len(self.tokens) or not self.is_identifier_token_at(idx):
             return False
@@ -1248,7 +1285,11 @@ class HLSLParser:
             idx += 1
 
         idx = self.skip_type_name_at(idx)
-        if idx is None or not self.is_identifier_token_at(idx):
+        if idx is None:
+            return False
+        while idx < len(self.tokens) and self.is_post_type_qualifier_token_at(idx):
+            idx += 1
+        if not self.is_identifier_token_at(idx):
             return False
 
         idx += 1
@@ -1340,6 +1381,7 @@ class HLSLParser:
         qualifiers = qualifiers or []
         attributes = attributes or []
         vtype = self.parse_type()
+        qualifiers.extend(self.parse_post_type_qualifiers())
         name = self.parse_identifier()
         declarations = self.parse_variable_declaration_list_rest(
             vtype,
@@ -1408,9 +1450,15 @@ class HLSLParser:
             self.eat("EQUALS")
             value = self.parse_expression()
 
+        self.skip_effect_declaration_suffixes()
+
         sampler_state = None
         if self.is_sampler_state_type(vtype) and self.current_token[0] == "LBRACE":
             sampler_state = self.parse_sampler_state_block()
+        elif self.current_token[0] == "LBRACE":
+            self.skip_balanced_brace_block()
+
+        self.skip_effect_declaration_suffixes()
 
         if consume_semicolon:
             self.eat("SEMICOLON")
@@ -1430,6 +1478,27 @@ class HLSLParser:
         if sampler_state is not None:
             var.sampler_state = sampler_state
         return var
+
+    def skip_effect_declaration_suffixes(self):
+        while self.current_token[0] == "LESS_THAN":
+            self.skip_effect_annotation_block()
+
+    def skip_effect_annotation_block(self):
+        self.eat("LESS_THAN")
+        while self.current_token[0] != "EOF":
+            if self.current_token[0] == "GREATER_THAN" and self.peek()[0] in {
+                "LBRACE",
+                "COMMA",
+                "SEMICOLON",
+                "EQUALS",
+                "RBRACE",
+                "EOF",
+            }:
+                self.eat("GREATER_THAN")
+                return
+            self.eat(self.current_token[0])
+
+        raise SyntaxError("Unterminated effect annotation block")
 
     def is_sampler_state_type(self, vtype):
         return str(vtype).split("<", 1)[0] in {

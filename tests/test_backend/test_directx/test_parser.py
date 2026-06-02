@@ -392,6 +392,34 @@ def test_parse_snorm_unorm_scalar_modifiers_from_dxc_rewriter_samples():
     assert assignment.operator == "="
 
 
+def test_parse_post_type_const_modifiers_from_dxc_rewriter_gold_samples():
+    ast = parse_code("""
+    row_major float2x3 const g_row;
+    snorm float const g_scalar;
+
+    cbuffer CBInit {
+        row_major float2x3 const g_row_init = g_row;
+    };
+
+    typedef row_major float2x3 const RowMajorConstMatrix;
+
+    float3 foo(row_major float2x3 const val) {
+        return val[0];
+    }
+    """)
+
+    g_row, g_scalar = ast.global_variables
+    cbuffer_member = ast.cbuffers[0].members[0]
+    typedef = ast.typedefs[0]
+    param = ast.functions[0].params[0]
+
+    assert g_row.qualifiers == ["row_major", "const"]
+    assert g_scalar.qualifiers == ["snorm", "const"]
+    assert cbuffer_member.qualifiers == ["row_major", "const"]
+    assert typedef.qualifiers == ["row_major", "const"]
+    assert param.qualifiers == ["row_major", "const"]
+
+
 def test_parse_rootsignature_macro_adjacent_string_literals():
     code = r"""
     #define RootSig \
@@ -608,6 +636,63 @@ def test_parse_sampler_state_initializer_blocks_from_microsoft_docs():
         ("Filter", "COMPARISON_MIN_MAG_LINEAR_MIP_POINT"),
         ("AddressU", "Clamp"),
         ("ComparisonFunc", "LESS"),
+    ]
+
+
+def test_skip_deprecated_effect_annotations_and_state_blocks_from_dxc_rewriter():
+    code = """
+    Texture2D tex : register(t1), tex2 : register(t2)
+    < int foo=1; >
+    {
+        Texture = tex;
+        Filter = MIN_MAG_MIP_LINEAR;
+    }, texa[3]
+    <
+        string Name = "texa";
+        int ArraySize = 3;
+    >;
+
+    SamplerState samLinear : register(s7)
+    < bool foo=1 > 2; >
+    {
+        Texture = tex;
+        Filter = MIN_MAG_MIP_LINEAR;
+    };
+
+    float4 main() : SV_Target {
+        Texture2D localTex { state=foo; };
+        int foobar {blah=foo;};
+        return tex.Sample(samLinear, float2(0.1, 0.2));
+    }
+
+    technique T0 {
+        pass {}
+    }
+
+    Technique {
+        pass {}
+    }
+
+    technique10 T10 {
+        pass {}
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert [variable.name for variable in ast.global_variables] == [
+        "tex",
+        "tex2",
+        "texa",
+        "samLinear",
+    ]
+    assert ast.global_variables[0].register == "t1"
+    assert ast.global_variables[1].register == "t2"
+    assert ast.global_variables[2].array_sizes == [3]
+    assert ast.global_variables[3].register == "s7"
+    assert [statement.name for statement in ast.functions[0].body[:2]] == [
+        "localTex",
+        "foobar",
     ]
 
 
