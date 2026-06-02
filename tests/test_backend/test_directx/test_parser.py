@@ -283,6 +283,53 @@ def test_parse_compute_attributes_and_semantics():
     assert_parses(COMPUTE_HLSL)
 
 
+def test_parse_noperspective_interpolation_modifier_from_hlsl_docs():
+    ast = parse_code("""
+    struct PSInput {
+        centroid noperspective float2 uv : TEXCOORD0;
+        noperspective float4 color : COLOR0;
+    };
+
+    float4 PSMain(noperspective float4 color : COLOR0) : SV_Target0 {
+        return color;
+    }
+    """)
+
+    struct = ast.structs[0]
+    uv, color = struct.members
+    param = ast.functions[0].params[0]
+
+    assert uv.vtype == "float2"
+    assert uv.name == "uv"
+    assert uv.semantic == "TEXCOORD0"
+    assert uv.qualifiers == ["centroid", "noperspective"]
+    assert color.vtype == "float4"
+    assert color.qualifiers == ["noperspective"]
+    assert param.vtype == "float4"
+    assert param.qualifiers == ["noperspective"]
+
+
+def test_parse_contextual_shared_storage_modifier_from_hlsl_docs():
+    ast = parse_code("""
+    shared float cachedWeight;
+    Texture2D<float> shared : register(t0);
+
+    float4 PSMain(float2 uv : TEXCOORD0) : SV_Target0 {
+        return shared.SampleLevel(samplerState, uv, 0.0);
+    }
+    """)
+
+    cached_weight = ast.global_variables[0]
+    shared_texture = ast.global_variables[1]
+
+    assert cached_weight.name == "cachedWeight"
+    assert cached_weight.vtype == "float"
+    assert cached_weight.qualifiers == ["shared"]
+    assert shared_texture.name == "shared"
+    assert shared_texture.vtype == "Texture2D<float>"
+    assert shared_texture.qualifiers == []
+
+
 def test_parse_rootsignature_macro_adjacent_string_literals():
     code = r"""
     #define RootSig \

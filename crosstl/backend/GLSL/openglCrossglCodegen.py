@@ -1230,7 +1230,9 @@ class GLSLToCrossGLConverter:
         # Generate global constants
         for const_var in getattr(node, "constant", []) or []:
             result += (
-                self.indent_str + self.generate_variable_declaration(const_var) + ";\n"
+                self.indent_str
+                + self.generate_variable_declaration(const_var, array_on_type=True)
+                + ";\n"
             )
         if getattr(node, "constant", []):
             result += "\n"
@@ -2021,7 +2023,9 @@ class GLSLToCrossGLConverter:
             name = name.name
         return name in self.RAY_QUERY_TRANSFORM_FUNCTIONS
 
-    def generate_variable_declaration(self, node, array_before_attributes=False):
+    def generate_variable_declaration(
+        self, node, array_before_attributes=False, array_on_type=False
+    ):
         var_type = self.variable_declaration_type(node)
         var_name = node.name
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
@@ -2035,6 +2039,9 @@ class GLSLToCrossGLConverter:
             prefix_parts.append(interface_prefix)
         prefix = f"{' '.join(prefix_parts)} " if prefix_parts else ""
         array_suffix = self.array_suffix(node)
+        if array_on_type and array_suffix:
+            var_type = f"{var_type}{array_suffix}"
+            array_suffix = ""
         attributes = (
             self.variable_layout_attribute_suffix(node)
             + self.image_resource_attribute_suffix(node)

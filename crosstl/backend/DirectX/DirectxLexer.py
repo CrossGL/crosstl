@@ -37,6 +37,7 @@ TOKENS = tuple(
         ("COLUMN_MAJOR", r"\bcolumn_major\b"),
         # Interpolation modifiers
         ("NOINTERPOLATION", r"\bnointerpolation\b"),
+        ("NOPERSPECTIVE", r"\bnoperspective\b"),
         ("LINEAR", r"\blinear\b"),
         ("CENTROID", r"\bcentroid\b"),
         ("SAMPLE", r"\bsample\b"),
@@ -251,6 +252,7 @@ KEYWORDS = {
     "row_major": "ROW_MAJOR",
     "column_major": "COLUMN_MAJOR",
     "nointerpolation": "NOINTERPOLATION",
+    "noperspective": "NOPERSPECTIVE",
     "linear": "LINEAR",
     "centroid": "CENTROID",
     "sample": "SAMPLE",
@@ -362,6 +364,7 @@ class TokenType(Enum):
     ROW_MAJOR = auto()
     COLUMN_MAJOR = auto()
     NOINTERPOLATION = auto()
+    NOPERSPECTIVE = auto()
     LINEAR = auto()
     CENTROID = auto()
     SAMPLE = auto()

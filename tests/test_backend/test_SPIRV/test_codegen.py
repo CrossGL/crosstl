@@ -198,6 +198,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_READONLY_BUFFER_BLOCK_ASSEMBLY = """
+; Reduced from readonly storage-buffer SPIR-V decoration patterns.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %Data "Data"
+OpName %data "data"
+OpMemberName %Data 0 "value"
+OpDecorate %Data BufferBlock
+OpDecorate %data DescriptorSet 0
+OpDecorate %data Binding 1
+OpDecorate %data NonWritable
+OpMemberDecorate %Data 0 Offset 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%Data = OpTypeStruct %v4float
+%ptr_data = OpTypePointer Uniform %Data
+%data = OpVariable %ptr_data Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_RUNTIME_ARRAY_BUFFER_BLOCK_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -267,6 +294,27 @@ OpDecorate %linear_sampler Binding 1
 %ptr_sampler = OpTypePointer UniformConstant %sampler
 %combined = OpVariable %ptr_sampled UniformConstant
 %linear_sampler = OpVariable %ptr_sampler UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_STORAGE_IMAGE_FORMAT_ASSEMBLY = """
+; Reduced from Vulkan storage-image SPIR-V mapping examples.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpName %storage_image "storageImage"
+OpDecorate %storage_image DescriptorSet 0
+OpDecorate %storage_image Binding 0
+OpDecorate %storage_image NonWritable
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%image = OpTypeImage %uint 2D 0 0 0 2 R32ui
+%ptr_storage_image = OpTypePointer UniformConstant %image
+%storage_image = OpVariable %ptr_storage_image UniformConstant
 %main = OpFunction %void None %fn
 %label = OpLabel
 OpReturn
@@ -581,6 +629,17 @@ def test_spirv_assembly_buffer_block_codegen():
     assert "%data" not in generated_code
 
 
+def test_spirv_assembly_readonly_buffer_block_codegen():
+    tokens = tokenize_code(SPIRV_READONLY_BUFFER_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct Data" in generated_code
+    assert "float4 value;" in generated_code
+    assert "StructuredBuffer<Data> data @set(0) @binding(1);" in generated_code
+    assert "RWStructuredBuffer<Data> data" not in generated_code
+
+
 def test_spirv_assembly_runtime_array_buffer_block_codegen():
     tokens = tokenize_code(SPIRV_RUNTIME_ARRAY_BUFFER_BLOCK_ASSEMBLY)
     ast = parse_code(tokens)
@@ -614,6 +673,19 @@ def test_spirv_assembly_uniform_constant_resources_codegen():
     assert "Texture2D combinedTex @set(0) @binding(0);" in generated_code
     assert "sampler linearSampler @set(0) @binding(1);" in generated_code
     assert "%combined" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_storage_image_format_codegen():
+    tokens = tokenize_code(SPIRV_STORAGE_IMAGE_FORMAT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2D<uint> storageImage @binding(0) @r32ui @readonly;" in (
+        generated_code
+    )
+    assert "@set(0)" not in generated_code
+    assert "%storage_image" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

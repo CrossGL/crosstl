@@ -1055,6 +1055,9 @@ class MetalParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
+        if self.current_token[0] == "PREPROCESSOR":
+            self.parse_preprocessor_directive()
+            return None
         if self.current_token[0] == "USING":
             self.parse_using_statement()
             return None

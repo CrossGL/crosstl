@@ -1109,6 +1109,8 @@ class HLSLToCrossGLConverter:
     def format_global_storage_qualifier_prefix(self, node):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         ordered = []
+        if "shared" in qualifiers:
+            ordered.append("shared")
         if "groupshared" in qualifiers:
             ordered.append("groupshared")
         if "static" in qualifiers:
@@ -1116,6 +1118,34 @@ class HLSLToCrossGLConverter:
             if "const" in qualifiers:
                 ordered.append("const")
         return f"{' '.join(ordered)} " if ordered else ""
+
+    def format_interpolation_attributes(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        attributes = []
+
+        if "nointerpolation" in qualifiers:
+            attributes.append("flat")
+        elif "noperspective" in qualifiers:
+            attributes.append("noperspective")
+        elif "linear" in qualifiers:
+            attributes.append("smooth")
+
+        if "centroid" in qualifiers:
+            attributes.append("centroid")
+        elif "sample" in qualifiers:
+            attributes.append("sample")
+
+        return " ".join(f"@ {attribute}" for attribute in attributes)
+
+    def format_semantic_and_interpolation_attributes(self, node, semantic):
+        attributes = []
+        mapped_semantic = self.map_semantic(semantic)
+        if mapped_semantic:
+            attributes.append(mapped_semantic)
+        interpolation_attributes = self.format_interpolation_attributes(node)
+        if interpolation_attributes:
+            attributes.append(interpolation_attributes)
+        return f" {' '.join(attributes)}" if attributes else ""
 
     def format_inline_parameter_attributes(self, parameter):
         mesh_role_attributes = {"mesh_payload", "vertices", "indices", "primitives"}
@@ -1175,8 +1205,13 @@ class HLSLToCrossGLConverter:
                 function_qualifier, parameter, parameter_index
             )
         )
-        if semantic:
-            parameter_text += f" {semantic}"
+        interpolation_attributes = self.format_interpolation_attributes(parameter)
+        if semantic or interpolation_attributes:
+            parameter_text += " " + " ".join(
+                attribute
+                for attribute in (semantic, interpolation_attributes)
+                if attribute
+            )
         prefixes.append(parameter_text)
         return " ".join(prefixes)
 
@@ -1961,11 +1996,12 @@ class HLSLToCrossGLConverter:
                 code += f"    struct {node.name} {{\n"
                 for member in node.members:
                     array_suffix = self.format_array_suffixes(member)
-                    semantic = self.map_semantic(member.semantic)
-                    semantic = f" {semantic}" if semantic else ""
+                    attributes = self.format_semantic_and_interpolation_attributes(
+                        member, member.semantic
+                    )
                     code += (
                         f"        {self.map_variable_type(member)} "
-                        f"{member.name}{array_suffix}{semantic};\n"
+                        f"{member.name}{array_suffix}{attributes};\n"
                     )
                 code += "    }\n"
             elif isinstance(node, PragmaNode):
@@ -2911,14 +2947,14 @@ class HLSLToCrossGLConverter:
         self.indentation += 1
 
         for member in node.members:
-            semantic = ""
-            if member.semantic:
-                semantic = f" {self.map_semantic(member.semantic)}"
+            attributes = self.format_semantic_and_interpolation_attributes(
+                member, member.semantic
+            )
 
             array_suffix = self.format_array_suffixes(member)
             code += (
                 self.get_indent() + f"{self.map_variable_type(member)} "
-                f"{member.name}{array_suffix}{semantic};\n"
+                f"{member.name}{array_suffix}{attributes};\n"
             )
 
         self.indentation -= 1

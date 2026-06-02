@@ -869,6 +869,22 @@ def test_codegen_lowers_static_cast_from_apple_compute_sample():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_ignores_function_body_pragma_from_llama_cpp():
+    code = """
+    void quantize_q4_0(device const float* src, device block_q4_0& dst) {
+        #pragma METAL fp math_mode(safe)
+        float amax = 0.0f;
+        dst.d = amax;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "#pragma" not in crossgl
+    assert "float amax = 0.0f;" in crossgl
+    assert "dst.d = amax;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_preserves_binding_attributes():
     code = """
     #include <metal_stdlib>

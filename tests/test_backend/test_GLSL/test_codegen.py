@@ -562,6 +562,39 @@ def test_codegen_const_gather_offset_arrays_roundtrip():
     assert "ivec2 selected = nested[1][0];" in glsl
 
 
+def test_codegen_global_array_type_constants_roundtrip_parse():
+    code = textwrap.dedent("""
+        #version 450
+        const vec2[3] positions = vec2[]
+        (
+            vec2(-1, -1),
+            vec2(-1,  3),
+            vec2( 3, -1)
+        );
+
+        const vec2[3] uv = vec2[]
+        (
+            vec2(0, 0),
+            vec2(0, 2),
+            vec2(2, 0)
+        );
+
+        layout(location = 0) out vec2 outUV;
+
+        void main() {
+            gl_Position = vec4(positions[gl_VertexIndex], 0.0f, 1.0f);
+            outUV = uv[gl_VertexIndex];
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "vertex")
+
+    assert "const vec2[3] positions = {" in crossgl
+    assert "const vec2[3] uv = {" in crossgl
+    assert "const vec2 positions[3]" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_compute_roundtrip():
     output = assert_roundtrip(COMPUTE_GLSL, "compute", ShaderStage.COMPUTE)
     lowered = output.lower()

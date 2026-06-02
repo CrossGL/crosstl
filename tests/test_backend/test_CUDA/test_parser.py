@@ -190,6 +190,29 @@ class TestCudaParser:
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
 
+    def test_fp16_pointer_array_declarations_parse_as_variables(self):
+        code = """
+        void host(size_t size) {
+            half2 *vec[2];
+            half2 *const devVec[2];
+            checkCudaErrors(cudaMallocHost((void **)&vec[0],
+                                           size * sizeof *vec[0]));
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert isinstance(body[0], VariableNode)
+        assert body[0].vtype == "half2 *[2]"
+        assert body[0].name == "vec"
+        assert isinstance(body[1], VariableNode)
+        assert body[1].vtype == "half2 * const[2]"
+        assert body[1].name == "devVec"
+        assert isinstance(body[2], FunctionCallNode)
+
     def test_constructor_style_vector_declarations_parsing(self):
         code = """
         void launch() {

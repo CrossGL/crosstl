@@ -274,6 +274,24 @@ class TestCudaCodeGen:
         ):
             assert raw_name not in result
 
+    def test_cuda_fp16_pointer_array_declarations_convert_to_crossgl(self):
+        code = """
+        void host() {
+            half2 *vec[2];
+            half2 *const devVec[2];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "var vec: array<ptr<vec2<f16>>, 2>;" in result
+        assert "var devVec: array<ptr<vec2<f16>>, 2>;" in result
+        assert "(half2 * vec[2]);" not in result
+
     def test_constructor_style_vector_declaration_conversion(self):
         code = """
         void launch() {

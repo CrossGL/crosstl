@@ -252,6 +252,25 @@ def test_min_precision_types_tokenization():
     assert_values_present(values, expected, case_insensitive=True)
 
 
+def test_interpolation_modifiers_tokenization():
+    code = """
+    struct PSInput {
+        linear float2 uv0 : TEXCOORD0;
+        centroid noperspective float2 uv1 : TEXCOORD1;
+        nointerpolation uint id : TEXCOORD2;
+        sample float4 color : COLOR0;
+    };
+    """
+    tokens = tokenize_code(code)
+
+    assert ("LINEAR", "linear") in tokens
+    assert ("CENTROID", "centroid") in tokens
+    assert ("NOPERSPECTIVE", "noperspective") in tokens
+    assert ("NOINTERPOLATION", "nointerpolation") in tokens
+    assert ("SAMPLE", "sample") in tokens
+    assert ("IDENTIFIER", "noperspective") not in tokens
+
+
 def test_min_precision_vector_and_matrix_types_tokenization():
     code = """
     min16float3 hdr;

@@ -52,11 +52,16 @@ class VulkanParser:
     }
     SPIRV_DECLARATION_DECORATION_QUALIFIERS = {
         "Centroid": "centroid",
+        "Coherent": "coherent",
         "Flat": "flat",
         "Invariant": "invariant",
+        "NonReadable": "writeonly",
+        "NonWritable": "readonly",
         "NoPerspective": "noperspective",
         "Patch": "patch",
+        "Restrict": "restrict",
         "Sample": "sample",
+        "Volatile": "volatile",
     }
     SPIRV_VECTOR_TYPES = {
         ("float", "2"): "vec2",
@@ -530,6 +535,7 @@ class VulkanParser:
     def spirv_assembly_uniform_constant_layout(
         self, variable, pointer_type, names, decorations, types, constants
     ):
+        resource_type = types.get(pointer_type.get("type_id"), {})
         data_type, array_suffix = self.spirv_type_name_and_suffix(
             pointer_type.get("type_id"), types, constants
         )
@@ -538,9 +544,19 @@ class VulkanParser:
 
         variable_decorations = decorations.get(variable["id"], [])
         qualifiers = self.spirv_descriptor_qualifiers(variable_decorations)
+        image_format = self.spirv_image_format_qualifier(resource_type.get("format"))
+        if image_format is not None:
+            qualifiers.append((image_format, None))
         qualifier_names = {name for name, _value in qualifiers}
         if not {"set", "binding"}.issubset(qualifier_names):
             return None
+
+        declaration_qualifiers = self.spirv_declaration_qualifiers(variable_decorations)
+        access_qualifier = self.spirv_image_access_qualifier(
+            resource_type.get("access_qualifier")
+        )
+        if access_qualifier and access_qualifier not in declaration_qualifiers:
+            declaration_qualifiers.append(access_qualifier)
 
         variable_name = names.get(variable["id"]) or variable["id"].lstrip("%")
         variable_name += array_suffix
@@ -549,6 +565,7 @@ class VulkanParser:
             layout_type="UNIFORM",
             data_type=data_type,
             variable_name=variable_name,
+            declaration_qualifiers=declaration_qualifiers,
             spirv_id=variable["id"],
             spirv_decorations=variable_decorations,
             spirv_storage_class="UniformConstant",
@@ -659,6 +676,9 @@ class VulkanParser:
             qualifier_names = {name for name, _value in qualifiers}
             if not {"set", "binding"}.issubset(qualifier_names):
                 return None
+        declaration_qualifiers = self.spirv_declaration_qualifiers(
+            struct_decorations + variable_decorations
+        )
 
         return LayoutNode(
             qualifiers,
@@ -667,6 +687,7 @@ class VulkanParser:
             block_name=block_name,
             variable_name=variable_name,
             struct_fields=struct_fields,
+            declaration_qualifiers=declaration_qualifiers,
             spirv_id=variable_id,
             spirv_decorations=struct_decorations + variable_decorations,
             spirv_storage_class=storage_class,
@@ -766,6 +787,14 @@ class VulkanParser:
             if qualifier:
                 qualifiers.append(qualifier)
         return qualifiers
+
+    def spirv_image_format_qualifier(self, image_format):
+        if not image_format or image_format == "Unknown":
+            return None
+        return str(image_format).replace("Snorm", "_snorm").lower()
+
+    def spirv_image_access_qualifier(self, access_qualifier):
+        return {"ReadOnly": "readonly", "WriteOnly": "writeonly"}.get(access_qualifier)
 
     def spirv_has_interface_qualifier(self, qualifiers):
         return any(name in {"builtin", "location"} for name, _value in qualifiers)

@@ -508,6 +508,42 @@ def test_hlsl_psize_roundtrips_to_gl_point_size():
     assert "@ PointSize" not in crossgl
 
 
+def test_codegen_preserves_interpolation_modifiers_as_crossgl_metadata():
+    crossgl = generate_crossgl("""
+        struct PSInput {
+            centroid noperspective float2 uv : TEXCOORD0;
+            nointerpolation uint id : TEXCOORD1;
+            sample float4 color : COLOR0;
+        };
+
+        float4 PSMain(noperspective float4 color : COLOR0) : SV_Target0 {
+            return color;
+        }
+    """)
+
+    assert "vec2 uv @ TexCoord0 @ noperspective @ centroid;" in crossgl
+    assert "uint id @ TexCoord1 @ flat;" in crossgl
+    assert "vec4 color @ Color0 @ sample;" in crossgl
+    assert "vec4 color @ Color0 @ noperspective" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_preserves_contextual_shared_storage_modifier():
+    crossgl = generate_crossgl("""
+        shared float cachedWeight;
+        Texture2D<float> shared : register(t0);
+
+        float4 PSMain(float2 uv : TEXCOORD0) : SV_Target0 {
+            return shared.SampleLevel(samplerState, uv, 0.0);
+        }
+    """)
+
+    assert "shared float cachedWeight;" in crossgl
+    assert "sampler2D shared;" in crossgl
+    assert "shared sampler2D shared;" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_clip_intrinsic_imports_to_parseable_crossgl():
     crossgl = generate_crossgl("""
         float4 PSMain(float4 color : COLOR0) : SV_Target {

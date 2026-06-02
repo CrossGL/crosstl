@@ -118,6 +118,7 @@ QUALIFIER_TOKENS = {
     "ROW_MAJOR",
     "COLUMN_MAJOR",
     "NOINTERPOLATION",
+    "NOPERSPECTIVE",
     "LINEAR",
     "CENTROID",
     "SAMPLE",
@@ -127,6 +128,8 @@ QUALIFIER_TOKENS = {
     "UNIFORM",
     "GROUPSHARED",
 }
+
+CONTEXTUAL_QUALIFIER_IDENTIFIERS = {"shared"}
 
 ASSIGNMENT_TOKENS = {
     "EQUALS",
@@ -421,10 +424,27 @@ class HLSLParser:
 
     def parse_qualifiers(self):
         qualifiers = []
-        while self.current_token[0] in QUALIFIER_TOKENS:
+        while self.is_qualifier_token_at(self.current_index):
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
         return qualifiers
+
+    def is_qualifier_token_at(self, index):
+        if index >= len(self.tokens):
+            return False
+
+        token_type, token_value = self.tokens[index]
+        if token_type in QUALIFIER_TOKENS:
+            return True
+        if (
+            token_type == "IDENTIFIER"
+            and token_value in CONTEXTUAL_QUALIFIER_IDENTIFIERS
+        ):
+            next_token_type = (
+                self.tokens[index + 1][0] if index + 1 < len(self.tokens) else None
+            )
+            return next_token_type in QUALIFIER_TOKENS or next_token_type in TYPE_TOKENS
+        return False
 
     def parse_type(self):
         if not self.is_type_token(self.current_token[0]):
@@ -999,7 +1019,7 @@ class HLSLParser:
 
     def looks_like_declaration(self):
         idx = self.current_index
-        while idx < len(self.tokens) and self.tokens[idx][0] in QUALIFIER_TOKENS:
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
             idx += 1
         if idx >= len(self.tokens) or self.tokens[idx][0] not in TYPE_TOKENS:
             return False

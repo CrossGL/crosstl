@@ -811,6 +811,20 @@ def test_parse_template_kernel_typename_without_space_from_llama_cpp():
     assert ast.functions[0].params[1].qualifiers == ["device"]
 
 
+def test_parse_function_body_pragma_from_llama_cpp():
+    code = """
+    void quantize_q4_0(device const float* src, device block_q4_0& dst) {
+        #pragma METAL fp math_mode(safe)
+        float amax = 0.0f;
+        dst.d = amax;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [func.name for func in ast.functions] == ["quantize_q4_0"]
+    assert len(ast.functions[0].body) == 2
+
+
 def test_parse_preprocessor_define():
     code = """
     #define FOO 1

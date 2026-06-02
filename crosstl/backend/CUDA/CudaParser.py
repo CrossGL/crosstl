@@ -177,6 +177,10 @@ class CudaParser:
     CUDA_IDENTIFIER_TYPE_NAMES = {
         "cudaTextureObject_t",
         "cudaSurfaceObject_t",
+        "half",
+        "__half",
+        "half2",
+        "__half2",
     }
 
     def __init__(self, tokens):

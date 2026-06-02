@@ -170,6 +170,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_READONLY_BUFFER_BLOCK_ASSEMBLY = """
+; Reduced from readonly storage-buffer SPIR-V decoration patterns.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %Data "Data"
+OpName %data "data"
+OpMemberName %Data 0 "value"
+OpDecorate %Data BufferBlock
+OpDecorate %data DescriptorSet 0
+OpDecorate %data Binding 1
+OpDecorate %data NonWritable
+OpMemberDecorate %Data 0 Offset 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%Data = OpTypeStruct %v4float
+%ptr_data = OpTypePointer Uniform %Data
+%data = OpVariable %ptr_data Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_RUNTIME_ARRAY_BUFFER_BLOCK_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -239,6 +266,27 @@ OpDecorate %linear_sampler Binding 1
 %ptr_sampler = OpTypePointer UniformConstant %sampler
 %combined = OpVariable %ptr_sampled UniformConstant
 %linear_sampler = OpVariable %ptr_sampler UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_STORAGE_IMAGE_FORMAT_ASSEMBLY = """
+; Reduced from Vulkan storage-image SPIR-V mapping examples.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpName %storage_image "storageImage"
+OpDecorate %storage_image DescriptorSet 0
+OpDecorate %storage_image Binding 0
+OpDecorate %storage_image NonWritable
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%image = OpTypeImage %uint 2D 0 0 0 2 R32ui
+%ptr_storage_image = OpTypePointer UniformConstant %image
+%storage_image = OpVariable %ptr_storage_image UniformConstant
 %main = OpFunction %void None %fn
 %label = OpLabel
 OpReturn
@@ -372,6 +420,23 @@ def test_spirv_assembly_buffer_block_parse():
     assert layout.spirv_storage_class == "Uniform"
 
 
+def test_spirv_assembly_readonly_buffer_block_parse():
+    tokens = tokenize_code(SPIRV_READONLY_BUFFER_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert layout.layout_type == "BUFFER"
+    assert layout.variable_name == "data"
+    assert layout.declaration_qualifiers == ["readonly"]
+    assert layout.spirv_decorations == [
+        ("BufferBlock", []),
+        ("DescriptorSet", ["0"]),
+        ("Binding", ["1"]),
+        ("NonWritable", []),
+    ]
+
+
 def test_spirv_assembly_runtime_array_buffer_block_parse():
     tokens = tokenize_code(SPIRV_RUNTIME_ARRAY_BUFFER_BLOCK_ASSEMBLY)
     ast = parse_code(tokens)
@@ -432,6 +497,25 @@ def test_spirv_assembly_uniform_constant_resources_parse():
     assert linear_sampler.variable_name == "linearSampler"
     assert linear_sampler.qualifiers == [("set", "0"), ("binding", "1")]
     assert linear_sampler.spirv_storage_class == "UniformConstant"
+
+
+def test_spirv_assembly_storage_image_format_parse():
+    tokens = tokenize_code(SPIRV_STORAGE_IMAGE_FORMAT_ASSEMBLY)
+    ast = parse_code(tokens)
+    storage_image = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_types["%image"]["format"] == "R32ui"
+    assert storage_image.layout_type == "UNIFORM"
+    assert storage_image.data_type == "uimage2D"
+    assert storage_image.variable_name == "storageImage"
+    assert storage_image.qualifiers == [
+        ("set", "0"),
+        ("binding", "0"),
+        ("r32ui", None),
+    ]
+    assert storage_image.declaration_qualifiers == ["readonly"]
+    assert storage_image.spirv_storage_class == "UniformConstant"
 
 
 def test_spirv_assembly_flat_location_interface_parse():
