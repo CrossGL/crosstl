@@ -342,6 +342,8 @@ class CudaParser:
                         typedefs.append(item)
                     else:
                         self.append_parsed_global_variable(global_variables, item)
+            elif self.is_out_of_class_member_definition_start():
+                self.skip_out_of_class_member_definition()
             elif self.peek_function():
                 func = self.parse_function()
                 if isinstance(func, KernelNode):
@@ -707,6 +709,8 @@ class CudaParser:
                 items.append(self.parse_struct())
             elif self.current_token[0] == "ENUM":
                 items.append(self.parse_enum())
+            elif self.is_out_of_class_member_definition_start():
+                self.skip_out_of_class_member_definition()
             elif self.peek_function():
                 items.append(self.parse_function())
             elif self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]:
@@ -898,6 +902,58 @@ class CudaParser:
 
         return StructNode(name, members, attributes=attributes)
 
+    def is_out_of_class_member_definition_start(self):
+        index = self.current_index
+
+        if (
+            index >= len(self.tokens)
+            or self.tokens[index][0] not in self.NAME_COMPONENT_TOKENS
+        ):
+            return False
+
+        index += 1
+        if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
+            index = self.skip_template_at_index(index)
+            if index is None:
+                return False
+
+        saw_scope = False
+        while (
+            index + 1 < len(self.tokens)
+            and self.tokens[index][0] == "SCOPE"
+            and self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS
+        ):
+            saw_scope = True
+            index += 2
+            if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
+                index = self.skip_template_at_index(index)
+                if index is None:
+                    return False
+
+        return (
+            saw_scope and index < len(self.tokens) and self.tokens[index][0] == "LPAREN"
+        )
+
+    def skip_out_of_class_member_definition(self):
+        while self.current_token[0] not in {"LPAREN", "SEMICOLON", "EOF"}:
+            self.eat(self.current_token[0])
+
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_parentheses()
+
+        while self.current_token[0] not in {"LBRACE", "SEMICOLON", "EOF"}:
+            if self.current_token[0] == "LPAREN":
+                self.skip_balanced_parentheses()
+            elif self.current_token[0] == "LBRACKET":
+                self.skip_balanced_brackets()
+            else:
+                self.eat(self.current_token[0])
+
+        if self.current_token[0] == "LBRACE":
+            self.skip_balanced_brace_block()
+        elif self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
     def parse_enum(self):
         self.eat("ENUM")
         is_scoped = False
@@ -1071,6 +1127,34 @@ class CudaParser:
                 depth -= 1
                 if depth == 0:
                     self.eat("RBRACE")
+                    break
+            self.eat(token_type)
+
+    def skip_balanced_parentheses(self):
+        self.eat("LPAREN")
+        depth = 1
+        while self.current_token[0] != "EOF" and depth > 0:
+            token_type = self.current_token[0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RPAREN")
+                    break
+            self.eat(token_type)
+
+    def skip_balanced_brackets(self):
+        self.eat("LBRACKET")
+        depth = 1
+        while self.current_token[0] != "EOF" and depth > 0:
+            token_type = self.current_token[0]
+            if token_type == "LBRACKET":
+                depth += 1
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RBRACKET")
                     break
             self.eat(token_type)
 
@@ -1465,13 +1549,22 @@ class CudaParser:
     def parse_argument_list(self):
         self.eat("LPAREN")
         args = []
-        if self.current_token[0] != "RPAREN":
-            args.append(self.parse_expression())
-            while self.current_token[0] == "COMMA":
-                self.eat("COMMA")
-                args.append(self.parse_expression())
+        self.parse_expression_arguments(args, "RPAREN")
         self.eat("RPAREN")
         return args
+
+    def parse_expression_arguments(self, args, terminator):
+        while self.current_token[0] != terminator:
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+
+            args.append(self.parse_expression())
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+            elif self.current_token[0] != terminator:
+                break
 
     def parse_block(self):
         self.eat("LBRACE")
@@ -2059,11 +2152,8 @@ class CudaParser:
                 args = []
                 if left == "sizeof" and self.is_sizeof_type_operand():
                     args.append(self.parse_type())
-                elif self.current_token[0] != "RPAREN":
-                    args.append(self.parse_expression())
-                    while self.current_token[0] == "COMMA":
-                        self.eat("COMMA")
-                        args.append(self.parse_expression())
+                else:
+                    self.parse_expression_arguments(args, "RPAREN")
                 self.eat("RPAREN")
 
                 if (

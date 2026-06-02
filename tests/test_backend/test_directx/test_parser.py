@@ -11,7 +11,7 @@ from crosstl.backend.common_ast import (
     TextureSampleNode,
     VectorConstructorNode,
 )
-from crosstl.backend.DirectX.DirectxAst import ForNode, IfNode, VariableNode
+from crosstl.backend.DirectX.DirectxAst import ForNode, IfNode, StructNode, VariableNode
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 
@@ -1673,6 +1673,74 @@ def test_parse_scoped_local_variable_type_from_directx_graphics_samples():
     assert primitive_decl.value.target_type == "AnalyticPrimitive::Enum"
     assert params_decl.vtype == "CrossBilateral::BilinearDepthNormal::Parameters"
     assert params_decl.name == "params"
+
+
+def test_parse_unsigned_vector_cast_from_directx_graphics_samples():
+    ast = parse_code("""
+    RWTexture2D<float4> RT : register(u0);
+
+    void raygen_main() {
+        RT[(unsigned int2)DispatchRaysIndex()] = float4(1, 1, 1, 1);
+    }
+    """)
+
+    assignment = ast.functions[0].body[0]
+    index = assignment.left.index
+
+    assert isinstance(index, CastNode)
+    assert index.target_type == "unsigned int2"
+    assert isinstance(index.expression, FunctionCallNode)
+    assert index.expression.name == "DispatchRaysIndex"
+
+
+def test_parse_parenthesized_vector_values_from_directx_graphics_samples():
+    ast = parse_code("""
+    struct MyPayload {
+        float4 color;
+    };
+
+    void anyhit_main(inout MyPayload payload) {
+        payload.color += (0.1, 0.1, 0.1, 1);
+        payload.color = (1, 0, 0, 1);
+    }
+    """)
+
+    plus_assign, assign = ast.functions[0].body
+
+    assert isinstance(plus_assign.right, InitializerListNode)
+    assert plus_assign.right.elements == [0.1, 0.1, 0.1, 1]
+    assert isinstance(assign.right, InitializerListNode)
+    assert assign.right.elements == [1, 0, 0, 1]
+
+
+def test_parse_local_struct_declaration_from_directx_graphics_samples():
+    ast = parse_code("""
+    void ReformTree(in uint groupThreadId) {
+        if (groupThreadId != 0) {
+            return;
+        }
+
+        struct PartitionEntry {
+            uint Mask;
+            uint NodeIndex;
+        };
+
+        uint nodesAllocated = 1;
+        PartitionEntry partitionStack[FullTreeletSize];
+        partitionStack[0].Mask = 0;
+    }
+    """)
+
+    function = ast.functions[0]
+    local_struct = next(stmt for stmt in function.body if isinstance(stmt, StructNode))
+    partition_stack = next(
+        stmt for stmt in function.body if getattr(stmt, "name", "") == "partitionStack"
+    )
+
+    assert local_struct.name == "PartitionEntry"
+    assert [member.name for member in local_struct.members] == ["Mask", "NodeIndex"]
+    assert partition_stack.vtype == "PartitionEntry"
+    assert partition_stack.array_sizes == ["FullTreeletSize"]
 
 
 def test_parse_sample_contextual_identifier_from_directx_graphics_samples():

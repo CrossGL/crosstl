@@ -2035,6 +2035,31 @@ def test_parenthesized_expression_swizzle_from_autodiff_texture_learnmip_sample(
     assert isinstance(swizzle.object.left, ArrayAccessNode)
 
 
+def test_numeric_literal_swizzle_from_vulkan_samples_primitive_clipping():
+    code = """
+    struct VSOutput
+    {
+        float3 Normal;
+    };
+
+    float4 main(VSOutput input)
+    {
+        float4 outColor = float4(0.5 * input.Normal + 0.5.xxx, 1.0);
+        return outColor;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    main = find_function(ast, "main")
+    constructor = main.body[0].right
+    expression = constructor.args[0]
+
+    assert isinstance(expression.right, MemberAccessNode)
+    assert expression.right.object == "0.5"
+    assert expression.right.member == "xxx"
+
+
 def test_struct_method_attributes_and_no_diff_from_autodiff_texture_train_sample():
     code = """
     Texture2D texRef;
@@ -2203,6 +2228,37 @@ def test_groupshared_global_and_pointer_dereference_member_access_parse():
     assert dereference.op == "*"
     assert isinstance(dereference.operand, MemberAccessNode)
     assert dereference.operand.member == "scale"
+
+
+def test_interpolation_modifiers_from_vulkan_samples_parse_as_qualifiers():
+    code = """
+    struct VSOutput
+    {
+        float4 Pos : SV_POSITION;
+        nointerpolation uint TextureIndex;
+        nointerpolation float4 Color;
+    };
+
+    [shader("fragment")]
+    float4 main(
+        VSOutput input,
+        noperspective float3 baryCoordsAffine : SV_Barycentrics)
+    {
+        return input.Color + float4(baryCoordsAffine, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    output = ast.structs[0]
+    main = find_function(ast, "main")
+
+    assert output.members[1].qualifiers == ["nointerpolation"]
+    assert output.members[1].vtype == "uint"
+    assert output.members[2].qualifiers == ["nointerpolation"]
+    assert output.members[2].vtype == "float4"
+    assert main.params[1].qualifiers == ["noperspective"]
+    assert main.params[1].vtype == "float3"
 
 
 if __name__ == "__main__":

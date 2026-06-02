@@ -252,6 +252,58 @@ class TestCudaParser:
         assert body[1].left.array == "J"
         assert body[2].left.array == "J"
 
+    def test_public_cuda_samples_macro_expanded_empty_call_arguments_are_skipped(self):
+        code = """
+        void report() {
+            fprintf(stderr,
+                    "CUDART version %d.%d does not support "
+                    "<cudaDeviceProp.canMapHostMemory> field\\n",
+                    , CUDART_VERSION / 1000);
+            __checkCudaErrors(, "", 319);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        fprintf_call = ast.functions[0].body[0]
+        check_call = ast.functions[0].body[1]
+
+        assert isinstance(fprintf_call, FunctionCallNode)
+        assert len(fprintf_call.args) == 3
+        assert fprintf_call.args[0] == "stderr"
+        assert isinstance(fprintf_call.args[2], BinaryOpNode)
+        assert isinstance(check_call, FunctionCallNode)
+        assert check_call.args == ['""', "319"]
+
+    def test_public_cuda_samples_out_of_class_template_constructor_is_skipped(self):
+        code = """
+        template <typename Real>
+        PiEstimator<Real>::PiEstimator(unsigned int numSims,
+                                       unsigned int device,
+                                       unsigned int threadBlockSize,
+                                       unsigned int seed)
+            : m_numSims(numSims),
+              m_device(device),
+              m_threadBlockSize(threadBlockSize),
+              m_seed(seed) {
+            initialize();
+        }
+
+        __global__ void estimate(float* output) {
+            output[0] = 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.kernels) == 1
+        assert ast.kernels[0].name == "estimate"
+        assert ast.global_variables == []
+
     def test_public_cuda_samples_braced_template_temporaries_parse_as_calls(self):
         code = """
         __global__ void mdspan_kernel(int* smem_storage, __half* X, int idx) {

@@ -22,6 +22,8 @@ class SlangParser:
         "__extern_cpp",
         "groupshared",
         "no_diff",
+        "nointerpolation",
+        "noperspective",
         "override",
     }
     GEOMETRY_INPUT_PRIMITIVE_QUALIFIERS = {
@@ -1608,7 +1610,7 @@ class SlangParser:
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
-            return value
+            return self.parse_postfix_suffixes(value)
         elif self.current_token[0] == "STRING":
             value = self.current_token[1]
             self.eat("STRING")

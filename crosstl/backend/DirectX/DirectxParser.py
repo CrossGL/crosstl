@@ -132,7 +132,7 @@ QUALIFIER_TOKENS = {
 CONTEXTUAL_QUALIFIER_IDENTIFIERS = {"shared"}
 CONTEXTUAL_IDENTIFIER_TOKENS = {"SAMPLE"}
 COMPOSITE_TYPE_PREFIXES = {"signed", "unsigned"}
-COMPOSITE_TYPE_TOKENS = {"INT", "UINT", "DWORD"}
+COMPOSITE_TYPE_TOKENS = {"INT", "UINT", "DWORD", "IVECTOR", "UVECTOR"}
 
 ASSIGNMENT_TOKENS = {
     "EQUALS",
@@ -1153,6 +1153,9 @@ class HLSLParser:
             self.parse_preprocessor_directive()
             return None
 
+        if self.current_token[0] == "STRUCT":
+            return self.parse_struct()
+
         if self.looks_like_declaration():
             qualifiers = self.parse_qualifiers()
             var = self.parse_variable_declaration(
@@ -1869,6 +1872,13 @@ class HLSLParser:
         if token_type == "LPAREN":
             self.eat("LPAREN")
             expr = self.parse_expression()
+            if self.current_token[0] == "COMMA":
+                elements = [expr]
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    elements.append(self.parse_expression())
+                self.eat("RPAREN")
+                return InitializerListNode(elements)
             self.eat("RPAREN")
             return expr
         if token_type == "LBRACE":
