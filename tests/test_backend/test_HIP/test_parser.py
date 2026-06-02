@@ -1567,13 +1567,15 @@ class TestHipParser:
     def test_restrict_pointer_qualifier_parsing(self):
         code = """
         __global__ void kernel(const float* __restrict__ input,
-                               float __restrict__* output) {
+                               float __restrict__* output,
+                               const double* __restrict public_input) {
             output[threadIdx.x] = input[threadIdx.x];
         }
         void host(float* data) {
             float* __restrict__ p = data;
             const float* __restrict__ cp = data;
             float *__restrict__ a = data, *__restrict__ b = data;
+            double* __restrict public_ptr = public_input;
         }
         """
         lexer = HipLexer(code)
@@ -1584,6 +1586,7 @@ class TestHipParser:
         assert [param["type"] for param in ast.statements[0].params] == [
             "const float * __restrict__",
             "float __restrict__ *",
+            "const double * __restrict",
         ]
 
         body = ast.statements[1].body
@@ -1592,8 +1595,9 @@ class TestHipParser:
             "const float * __restrict__",
             "float * __restrict__",
             "float * __restrict__",
+            "double * __restrict",
         ]
-        assert [var.name for var in body] == ["p", "cp", "a", "b"]
+        assert [var.name for var in body] == ["p", "cp", "a", "b", "public_ptr"]
 
     def test_multiline_parameter_lists_parsing(self):
         code = """

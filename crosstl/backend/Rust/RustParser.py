@@ -1986,7 +1986,7 @@ class RustParser:
 
     def parse_match(self, result_mode=False):
         self.eat("MATCH")
-        expression = self.parse_expression()
+        expression = self.parse_expression_before_block()
 
         self.eat("LBRACE")
         arms = []

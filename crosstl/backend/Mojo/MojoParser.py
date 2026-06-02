@@ -169,10 +169,23 @@ class MojoParser:
         return ImportNode(module_name, alias=alias)
 
     def parse_import_path(self):
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = ""
+        while self.current_token[0] == "DOT":
+            name += "."
+            self.eat("DOT")
+
+        if self.current_token[0] == "IDENTIFIER":
+            name += self.current_token[1]
+            self.eat("IDENTIFIER")
+        elif not name:
+            raise SyntaxError(f"Expected import path, got {self.current_token[0]}")
+
         while self.current_token[0] == "DOT":
             self.eat("DOT")
+            if self.current_token[0] != "IDENTIFIER":
+                raise SyntaxError(
+                    f"Expected IDENTIFIER after dot, got {self.current_token[0]}"
+                )
             name += f".{self.current_token[1]}"
             self.eat("IDENTIFIER")
         return name

@@ -1634,6 +1634,35 @@ def test_tuple_constructor_match_pattern_parsing():
         pytest.fail(f"Tuple constructor match pattern parsing failed: {e}")
 
 
+def test_match_reference_scrutinee_with_qualified_variant_patterns_from_rust_gpu():
+    code = """
+    impl Command {
+        pub fn run(&self) -> i32 {
+            match &self {
+                Self::Install(install) => install.value,
+                Self::Build => 1,
+                Self::Show => 2,
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    impl_function = ast.impl_blocks[0].functions[0]
+    match_expr = impl_function.body[0]
+
+    assert isinstance(match_expr, MatchNode)
+    assert isinstance(match_expr.expression, ReferenceNode)
+    assert match_expr.expression.expression == "self"
+
+    install_pattern = match_expr.arms[0].pattern
+    assert isinstance(install_pattern, FunctionCallNode)
+    assert install_pattern.name == "Self::Install"
+    assert install_pattern.args == ["install"]
+    assert match_expr.arms[1].pattern == "Self::Build"
+    assert match_expr.arms[2].pattern == "Self::Show"
+
+
 def test_nested_constructor_match_pattern_parsing():
     code = """
     fn test_nested_constructor_patterns(value: Option<Result<i32, i32>>, pair: Pair) {

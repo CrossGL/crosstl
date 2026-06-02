@@ -2143,6 +2143,54 @@ def test_typed_brace_constructor_parsing():
     assert isinstance(body[1].right.elements[0], VectorConstructorNode)
 
 
+def test_typed_array_constructor_parsing_from_libretro_shader():
+    code = """
+    int[] font = int[](0x00000000, 0x1F803FC0);
+
+    struct Payload {
+        float[8] data;
+    };
+
+    void main() {
+        float weights[3] = float[3](1.0, 2.0, 3.0);
+        float4 colors[2] = float4[2](
+            float4(1.0, 0.0, 0.0, 1.0),
+            float4(0.0, 1.0, 0.0, 1.0)
+        );
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    font = ast.global_vars[0]
+    assert isinstance(font, AssignmentNode)
+    assert font.left.vtype == "int[]"
+    assert font.left.name == "font"
+    assert isinstance(font.right, VectorConstructorNode)
+    assert font.right.type_name == "int[]"
+    assert font.right.args == ["0x00000000", "0x1F803FC0"]
+
+    payload = ast.structs[0]
+    assert payload.members[0].vtype == "float[8]"
+    assert payload.members[0].name == "data"
+
+    body = find_function(ast, "main").body
+    weights = body[0]
+    assert isinstance(weights, AssignmentNode)
+    assert weights.left.vtype == "float"
+    assert weights.left.name == "weights"
+    assert weights.left.array_sizes == ["3"]
+    assert isinstance(weights.right, VectorConstructorNode)
+    assert weights.right.type_name == "float[3]"
+    assert weights.right.args == ["1.0", "2.0", "3.0"]
+
+    colors = body[1]
+    assert isinstance(colors.right, VectorConstructorNode)
+    assert colors.right.type_name == "float4[2]"
+    assert len(colors.right.args) == 2
+    assert all(isinstance(arg, VectorConstructorNode) for arg in colors.right.args)
+
+
 def test_local_matrix_declaration_parsing():
     code = """
     void main() {

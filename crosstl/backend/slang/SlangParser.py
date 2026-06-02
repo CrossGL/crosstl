@@ -902,7 +902,7 @@ class SlangParser:
     def parse_global_variable(self, attributes=None):
         attributes = attributes or []
         qualifiers = self.parse_qualifiers()
-        var_type = self.parse_type_name()
+        var_type = self.parse_type_name(allow_array_suffix=True)
         var_type += self.parse_pointer_suffix()
         declarations = []
 
@@ -1126,7 +1126,7 @@ class SlangParser:
         attributes = attributes or []
         members = []
         qualifiers = self.parse_qualifiers()
-        vtype = self.parse_type_name()
+        vtype = self.parse_type_name(allow_array_suffix=True)
         vtype += self.parse_pointer_suffix()
         while True:
             var_name = self.current_token[1]
@@ -2110,6 +2110,8 @@ class SlangParser:
             ]:
                 type_name = self.current_token[1]
                 self.eat(self.current_token[0])
+                if self.current_token[0] == "LBRACKET":
+                    type_name += self.parse_type_array_suffixes()
                 if self.current_token[0] == "IDENTIFIER":
                     var_name = self.current_token[1]
                     self.eat("IDENTIFIER")

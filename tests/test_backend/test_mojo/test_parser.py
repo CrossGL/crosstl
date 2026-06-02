@@ -718,6 +718,30 @@ def test_import_parsing():
         pytest.fail("Import parsing not implemented.")
 
 
+def test_relative_import_path_parsing_from_modular_corpus():
+    code = """
+    from .add_constant import *
+    from .. import PathLike
+    from .._linux_x86 import _stat as _stat_linux_x86
+    import .warp
+
+    fn main():
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+
+    assert [import_node.module_name for import_node in ast.includes] == [
+        ".add_constant",
+        "..",
+        ".._linux_x86",
+        ".warp",
+    ]
+    assert ast.includes[0].items == ["*"]
+    assert ast.includes[1].items == ["PathLike"]
+    assert ast.includes[2].items == ["_stat as _stat_linux_x86"]
+    assert ast.includes[3].items == []
+
+
 def test_hash_prefixed_lines_do_not_affect_import_parsing():
     code = """
     #define ENABLE_MATH 1
