@@ -170,6 +170,28 @@ def test_conditional_compilation_and_undef():
     assert "still_ok" in output
 
 
+def test_ifdef_trailing_comment_uses_identifier_only_from_directx_samples():
+    code = """
+    #ifdef _WAVE_OP // SM 6.0
+    uint WaveOr(uint mask) { return mask; }
+    #endif
+    """
+    output = HLSLPreprocessor(defines={"_WAVE_OP": "1"}).preprocess(code)
+
+    assert "WaveOr" in output
+
+
+def test_ifndef_trailing_comment_uses_identifier_only():
+    code = """
+    #ifndef DISABLED /* optional fallback */
+    uint Fallback() { return 1; }
+    #endif
+    """
+    output = HLSLPreprocessor().preprocess(code)
+
+    assert "Fallback" in output
+
+
 def test_line_directive_is_consumed():
     code = """
     #line 200

@@ -664,6 +664,26 @@ def test_parse_buffer_as_contextual_identifier_from_glsl_canvas():
     assert buffer_decl.vtype == "vec4"
 
 
+def test_parse_buffer_reference_block_does_not_export_members_as_globals():
+    code = textwrap.dedent("""
+        #version 460
+        #extension GL_EXT_buffer_reference : require
+
+        layout(buffer_reference, scalar) buffer Vertices {
+            vec4 v[];
+        };
+
+        void main() {}
+        """)
+
+    ast = parse_ok(code, "compute")
+    vertices = next(struct for struct in ast.structs if struct.name == "Vertices")
+
+    assert vertices.interface_layout == {"buffer_reference": None, "scalar": None}
+    assert vertices.members[0].name == "v"
+    assert not any(variable.name == "v" for variable in ast.global_variables)
+
+
 def test_parse_empty_statement_after_control_block():
     code = textwrap.dedent("""
         #version 450

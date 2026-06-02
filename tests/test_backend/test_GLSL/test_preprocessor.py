@@ -22,6 +22,20 @@ def test_preprocessor_conditional_expansion():
     assert "only_disabled" not in values
 
 
+def test_preprocessor_ifdef_trailing_comment_uses_identifier_only():
+    code = """
+    #version 450 core
+    #ifdef ENABLE_FEATURE // enabled by pipeline
+    int only_enabled = 1;
+    #endif
+    void main() { }
+    """
+    tokens = GLSLLexer(code, defines={"ENABLE_FEATURE": "1"}).tokenize()
+    values = [tok[1] for tok in tokens]
+
+    assert "only_enabled" in values
+
+
 def test_preprocessor_include(tmp_path):
     include_file = tmp_path / "inc.glsl"
     include_file.write_text("int from_include = 1;")

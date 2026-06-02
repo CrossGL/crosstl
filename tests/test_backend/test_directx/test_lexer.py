@@ -260,6 +260,17 @@ def test_legacy_special_float_literal_from_directx_graphics_samples():
     assert ("PREPROCESSOR", "#INF;") not in tokens
 
 
+def test_unsigned_long_long_integer_suffixes_from_directx_samples():
+    tokens = tokenize_code(
+        "uint64_t a = 1ull; uint64_t b = 1llu; uint64_t c = 0xffull;"
+    )
+
+    assert ("NUMBER", "1ull") in tokens
+    assert ("NUMBER", "1llu") in tokens
+    assert ("HEX_NUMBER", "0xffull") in tokens
+    assert ("IDENTIFIER", "l") not in tokens
+
+
 def test_min_precision_types_tokenization():
     code = "min16float a; min10float b; min16int c; min12int d; min16uint e;"
     tokens = tokenize_code(code)

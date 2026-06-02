@@ -679,6 +679,32 @@ def test_preprocessor_evaluates_conditionals():
     assert_parses(code)
 
 
+def test_preprocessor_ifdef_trailing_comment_keeps_enabled_branch():
+    code = """
+    #ifdef _WAVE_OP // SM 6.0
+    uint WaveOr(uint mask) { return mask; }
+    #endif
+    """
+    tokens = HLSLLexer(code, defines={"_WAVE_OP": "1"}).tokenize()
+    ast = HLSLParser(tokens).parse()
+
+    assert [function.name for function in ast.functions] == ["WaveOr"]
+
+
+def test_parse_unsigned_long_long_integer_suffixes_from_directx_samples():
+    code = """
+    uint64_t f() {
+        uint64_t laneBit = 1ull << WaveGetLaneIndex();
+        uint64_t otherBit = 1llu;
+        uint64_t hexBit = 0xffull;
+        return laneBit | otherBit | hexBit;
+    }
+    """
+    ast = parse_code(code)
+
+    assert ast.functions[0].name == "f"
+
+
 def test_parse_enum_and_typedef():
     code = """
     enum BlendMode {

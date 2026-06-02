@@ -161,15 +161,15 @@ TOKENS = tuple(
         # Numeric literals (hex, binary, octal, float, int with suffixes)
         (
             "HEX_NUMBER",
-            r"0[xX][0-9a-fA-F]+(?:[uU][lL]?|[lL][uU]?|[uUlL]{0,2})?",
+            r"0[xX][0-9a-fA-F]+(?:[uU][lL]{0,2}|[lL]{1,2}[uU]?)?",
         ),
         (
             "BINARY_NUMBER",
-            r"0[bB][01]+(?:[uU][lL]?|[lL][uU]?|[uUlL]{0,2})?",
+            r"0[bB][01]+(?:[uU][lL]{0,2}|[lL]{1,2}[uU]?)?",
         ),
         (
             "OCT_NUMBER",
-            r"0[0-7]+(?:[uU][lL]?|[lL][uU]?|[uUlL]{0,2})?",
+            r"0[0-7]+(?:[uU][lL]{0,2}|[lL]{1,2}[uU]?)?",
         ),
         (
             "NUMBER",
@@ -179,7 +179,7 @@ TOKENS = tuple(
             r"|\.\d+"
             r")(?:[eE][+-]?\d+)?[fFhH]?"
             r"|\d+[eE][+-]?\d+[fFhH]?"
-            r"|\d+(?:[uU][lL]?|[lL][uU]?|[fFhH]|[uUlL]{0,2})?",
+            r"|\d+(?:[uU][lL]{0,2}|[lL]{1,2}[uU]?|[fFhH])?",
         ),
         # Brackets and braces
         ("LBRACE", r"\{"),

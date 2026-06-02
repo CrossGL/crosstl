@@ -803,7 +803,7 @@ class GLSLParser:
             block_var.interface_block = block_name
             block_var.is_array = instance_is_array
             block_vars.append(block_var)
-        else:
+        elif not self.is_buffer_reference_block(qualifiers, layout):
             for member in members:
                 member.qualifiers = list(member.qualifiers or []) + list(
                     qualifiers or []
@@ -812,6 +812,11 @@ class GLSLParser:
                 block_vars.append(member)
 
         return struct_node, block_vars
+
+    def is_buffer_reference_block(self, qualifiers, layout):
+        return bool(layout and "buffer_reference" in layout) and "buffer" in {
+            str(qualifier).lower() for qualifier in qualifiers or []
+        }
 
     def parse_function(self, return_type):
         name = self.current_token[1]

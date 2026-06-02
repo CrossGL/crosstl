@@ -228,10 +228,12 @@ class HLSLPreprocessor:
         file_path: Optional[str],
     ) -> bool:
         if directive == "ifdef":
-            name = rest.strip()
+            parts = self._strip_macro_comments(rest).strip().split(maxsplit=1)
+            name = parts[0] if parts else ""
             return name in self.macros
         if directive == "ifndef":
-            name = rest.strip()
+            parts = self._strip_macro_comments(rest).strip().split(maxsplit=1)
+            name = parts[0] if parts else ""
             return name not in self.macros
         return bool(
             self._evaluate_expression(
