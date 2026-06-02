@@ -954,6 +954,93 @@ def test_type_test_and_cast_expression_operators_parse():
     assert as_expr.right == "MyInst"
 
 
+def test_operator_overload_declarations_from_official_samples_parse():
+    code = """
+    interface IArithmetic {}
+
+    struct Vec2d
+    {
+        float x, y;
+    };
+
+    Vec2d operator+(Vec2d a, Vec2d b)
+    {
+        return {a.x + b.x, a.y + b.y};
+    }
+
+    T operator *<T>(T a, T b) where T : IArithmetic
+    {
+        return a;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    add = ast.functions[0]
+    multiply = ast.functions[1]
+
+    assert add.name == "operator+"
+    assert [(param.vtype, param.name) for param in add.params] == [
+        ("Vec2d", "a"),
+        ("Vec2d", "b"),
+    ]
+    assert isinstance(add.body[0].value, InitializerListNode)
+    assert multiply.name == "operator*"
+    assert multiply.generic_parameters == "<T>"
+    assert multiply.generic_constraints[0].constraint_type == "IArithmetic"
+
+
+def test_struct_call_and_subscript_operator_methods_parse():
+    code = """
+    struct CubeContext
+    {
+        float sqr;
+
+        void operator()(out float dx, float dOut)
+        {
+            dx = dOut * sqr;
+        }
+
+        float operator[](uint index)
+        {
+            return sqr;
+        }
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    methods = ast.structs[0].methods
+
+    assert [method.name for method in methods] == ["operator()", "operator[]"]
+    assert methods[0].params[0].qualifiers == ["out"]
+    assert methods[0].params[0].name == "dx"
+    assert methods[1].params[0].vtype == "uint"
+    assert methods[1].params[0].name == "index"
+
+
+def test_unnamed_signature_parameters_and_void_parameter_list_parse():
+    code = """
+    interface IFilter
+    {
+        float eval(float3, Texture2D<float4>);
+        void reset(void);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    eval_method = ast.interfaces[0].methods[0]
+    reset_method = ast.interfaces[0].methods[1]
+
+    assert [(param.vtype, param.name) for param in eval_method.params] == [
+        ("float3", ""),
+        ("Texture2D<float4>", ""),
+    ]
+    assert reset_method.params == []
+
+
 def test_nested_enum_class_in_generic_struct_parses():
     code = """
     struct GenericContainer<T>

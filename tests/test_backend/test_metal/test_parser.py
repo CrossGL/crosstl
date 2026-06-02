@@ -564,6 +564,40 @@ def test_parse_stage_keyword_names_in_helpers_and_parameters():
     assert ast.functions[2].params[0].name == "compute"
 
 
+def test_parse_object_data_reference_parameter_from_satin_mesh_shader():
+    code = """
+    struct Payload {
+        uint indices[3];
+    };
+
+    [[object, max_total_threads_per_threadgroup(1)]]
+    void customObject(
+        object_data Payload &payload [[payload]],
+        mesh_grid_properties mgp
+    ) {
+        payload.indices[0] = 0;
+    }
+    """
+    ast = parse_ok(code)
+    param = ast.functions[0].params[0]
+
+    assert param.vtype == "Payload&"
+    assert param.name == "payload"
+    assert param.qualifiers == ["object_data"]
+    assert param.attributes[0].name == "payload"
+
+
+def test_parse_top_level_texture_parameter_fragment_from_satin_pbr_chunk():
+    code = """
+    texture2d<float> baseColorMap [[texture(PBRTextureBaseColor)]],
+        texture2d<float> subsurfaceMap [[texture(PBRTextureSubsurface)]],
+        texturecube<float> reflectionMap [[texture(PBRTextureReflection)]],
+    """
+    ast = parse_ok(code)
+
+    assert ast.global_variables == []
+
+
 def test_parse_sizeof_and_cast():
     code = """
     void main() {

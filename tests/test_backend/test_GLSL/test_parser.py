@@ -420,6 +420,27 @@ def test_parse_const_array_initializers():
     )
 
 
+def test_parse_static_const_contextual_qualifier_from_shared_vulkan_headers():
+    code = textwrap.dedent("""
+        #version 450
+
+        static const int eFrameInfo = 0;
+        static const uint eParticles = 1u;
+
+        void main() {
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+
+    assert [constant.name for constant in ast.constant] == [
+        "eFrameInfo",
+        "eParticles",
+    ]
+    assert ast.constant[0].qualifiers == ["static", "const"]
+    assert ast.constant[0].is_const is True
+
+
 def test_parse_vulkan_block_member_layouts_and_multiline_declarators():
     code = textwrap.dedent("""
         #version 450

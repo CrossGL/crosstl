@@ -26,6 +26,47 @@ class SlangParser:
         "nointerpolation",
         "noperspective",
         "override",
+        "__prefix",
+        "__postfix",
+        "__ref",
+        "expand",
+        "each",
+    }
+    OPERATOR_SYMBOL_TOKENS = {
+        "PLUS",
+        "MINUS",
+        "MULTIPLY",
+        "DIVIDE",
+        "MOD",
+        "EQUAL",
+        "NOT_EQUAL",
+        "LESS_THAN",
+        "LESS_EQUAL",
+        "GREATER_THAN",
+        "GREATER_EQUAL",
+        "AND",
+        "OR",
+        "NOT",
+        "BITWISE_NOT",
+        "EQUALS",
+        "PLUS_EQUALS",
+        "MINUS_EQUALS",
+        "MULTIPLY_EQUALS",
+        "DIVIDE_EQUALS",
+        "ASSIGN_MOD",
+        "ASSIGN_AND",
+        "ASSIGN_OR",
+        "ASSIGN_XOR",
+        "BITWISE_SHIFT_LEFT",
+        "ASSIGN_SHIFT_LEFT",
+        "BITWISE_SHIFT_RIGHT",
+        "ASSIGN_SHIFT_RIGHT",
+        "INCREMENT",
+        "DECREMENT",
+        "BITWISE_AND",
+        "BITWISE_OR",
+        "BITWISE_XOR",
+        "COMMA",
     }
     GEOMETRY_INPUT_PRIMITIVE_QUALIFIERS = {
         "point",
@@ -185,11 +226,48 @@ class SlangParser:
         current_pos = self.skip_qualified_type_suffix_tokens(current_pos)
         current_pos = self.skip_type_array_suffix_tokens(current_pos)
         current_pos = self.skip_pointer_declarator_tokens(current_pos)
-        if self.tokens[current_pos][0] != "IDENTIFIER":
-            return False
-        current_pos += 1
+        if self.is_operator_identifier_at(current_pos):
+            current_pos = self.skip_operator_function_name_tokens(current_pos)
+        else:
+            if self.tokens[current_pos][0] != "IDENTIFIER":
+                return False
+            current_pos += 1
         current_pos = self.skip_generic_type_suffix_tokens(current_pos)
         return self.tokens[current_pos][0] == "LPAREN"
+
+    def is_operator_identifier_at(self, index):
+        return (
+            index < len(self.tokens)
+            and self.tokens[index][0] == "IDENTIFIER"
+            and self.tokens[index][1] == "operator"
+        )
+
+    def skip_operator_function_name_tokens(self, current_pos):
+        if not self.is_operator_identifier_at(current_pos):
+            return current_pos
+
+        current_pos += 1
+        if current_pos >= len(self.tokens):
+            return current_pos
+
+        token_type = self.tokens[current_pos][0]
+        if (
+            token_type == "LPAREN"
+            and current_pos + 2 < len(self.tokens)
+            and self.tokens[current_pos + 1][0] == "RPAREN"
+            and self.tokens[current_pos + 2][0] == "LPAREN"
+        ):
+            return current_pos + 2
+        if (
+            token_type == "LBRACKET"
+            and current_pos + 2 < len(self.tokens)
+            and self.tokens[current_pos + 1][0] == "RBRACKET"
+            and self.tokens[current_pos + 2][0] == "LPAREN"
+        ):
+            return current_pos + 2
+        if token_type in self.OPERATOR_SYMBOL_TOKENS:
+            return current_pos + 1
+        return current_pos
 
     def is_namespace_declaration_start(self):
         return (
@@ -1085,8 +1163,7 @@ class SlangParser:
         qualifiers, is_generic = self.parse_declaration_prefixes()
         return_type = self.parse_type_name(allow_array_suffix=True)
         return_type += self.parse_pointer_suffix()
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_function_name()
         generic_parameters = None
         if self.current_token[0] == "LESS_THAN":
             generic_parameters = self.parse_generic_type_suffix()
@@ -1127,6 +1204,44 @@ class SlangParser:
             numthreads=self.get_numthreads_attribute(attributes),
         )
 
+    def parse_function_name(self):
+        if self.current_token == ("IDENTIFIER", "operator"):
+            return self.parse_operator_function_name()
+
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        return name
+
+    def parse_operator_function_name(self):
+        self.eat("IDENTIFIER")
+
+        if (
+            self.current_token[0] == "LPAREN"
+            and self.pos + 2 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "RPAREN"
+            and self.tokens[self.pos + 2][0] == "LPAREN"
+        ):
+            self.eat("LPAREN")
+            self.eat("RPAREN")
+            return "operator()"
+
+        if (
+            self.current_token[0] == "LBRACKET"
+            and self.pos + 2 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "RBRACKET"
+            and self.tokens[self.pos + 2][0] == "LPAREN"
+        ):
+            self.eat("LBRACKET")
+            self.eat("RBRACKET")
+            return "operator[]"
+
+        if self.current_token[0] in self.OPERATOR_SYMBOL_TOKENS:
+            operator_name = f"operator{self.current_token[1]}"
+            self.eat(self.current_token[0])
+            return operator_name
+
+        return "operator"
+
     def parse_generic_constraints(self):
         constraints = []
         self.eat("WHERE")
@@ -1151,16 +1266,22 @@ class SlangParser:
 
     def parse_parameters(self):
         params = []
+        if self.current_token[0] == "VOID" and self.tokens[self.pos + 1][0] == "RPAREN":
+            self.eat("VOID")
+            return params
+
         while self.current_token[0] != "RPAREN":
             struct_def = ""
             qualifiers = self.parse_parameter_qualifiers()
             vtype = self.parse_type_name(allow_array_suffix=True)
             vtype += self.parse_pointer_suffix()
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            name = ""
+            if self.current_token[0] == "IDENTIFIER":
+                name = self.current_token[1]
+                self.eat("IDENTIFIER")
             array_sizes = self.parse_array_suffixes()
             semantic = None
-            if self.current_token[0] == "IDENTIFIER":
+            if name and self.current_token[0] == "IDENTIFIER":
                 struct_def = f" {self.current_token[1]}"
                 self.eat("IDENTIFIER")
             if self.current_token[0] == "COLON":

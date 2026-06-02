@@ -350,6 +350,34 @@ class TestHipParser:
         assert "HIPCommandArgs" in member_names
         assert "parseCommandLine" in member_names
 
+    def test_public_rocm_composable_kernel_struct_inheritance_parse(self):
+        code = """
+        struct topk_softmax_kargs : public ck_tile::TopkSoftmaxHostArgs
+        {
+            static constexpr ck_tile::index_t M_Tile = 128;
+        };
+
+        template <typename PrecType>
+        struct GemmConfigComputeV3_2 : public GemmConfigBase
+        {
+            static constexpr ck_tile::index_t N_Tile = 256;
+        };
+        """
+        ast = self.parse_code(code)
+
+        first_struct = ast.statements[0]
+        templated_struct = ast.statements[1]
+
+        assert isinstance(first_struct, StructNode)
+        assert first_struct.name == "topk_softmax_kargs"
+        assert first_struct.members[0].qualifiers == ["static", "constexpr"]
+        assert first_struct.members[0].vtype == "ck_tile::index_t"
+        assert first_struct.members[0].name == "M_Tile"
+
+        assert isinstance(templated_struct, StructNode)
+        assert templated_struct.name == "GemmConfigComputeV3_2"
+        assert templated_struct.members[0].name == "N_Tile"
+
     def test_public_rocm_runtime_compilation_adjacent_raw_kernel_string_parsing(self):
         code = r"""
         static constexpr auto saxpy_kernel{

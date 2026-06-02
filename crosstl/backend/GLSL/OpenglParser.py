@@ -158,6 +158,7 @@ MESH_STORAGE_QUALIFIERS = {
 }
 
 IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS
+CONTEXTUAL_QUALIFIERS = {"static"}
 
 NAME_TOKENS = {"IDENTIFIER", "SAMPLE"}
 
@@ -464,7 +465,7 @@ class GLSLParser:
         qualifiers = []
         while self.current_token[0] in QUALIFIER_TOKENS or (
             self.current_token[0] == "IDENTIFIER"
-            and self.current_token[1] in IDENTIFIER_QUALIFIERS
+            and self.current_token[1] in IDENTIFIER_QUALIFIERS | CONTEXTUAL_QUALIFIERS
         ):
             if self.current_token[0] == "SUBROUTINE":
                 self.advance()

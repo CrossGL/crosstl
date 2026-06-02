@@ -1099,6 +1099,8 @@ class HipParser:
                 name += self.parse_template_suffix()
 
         self.skip_newlines()
+        self.skip_class_inheritance_clause()
+        self.skip_newlines()
         members = []
         if self.match("LBRACE"):
             self.consume("LBRACE")

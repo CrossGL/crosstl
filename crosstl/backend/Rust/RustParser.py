@@ -121,6 +121,7 @@ class RustParser:
         self.tokens = tokens
         self.current_index = 0
         self.current_token = tokens[0] if tokens else None
+        self.expression_stops_at_lbrace = False
 
     def parse(self):
         structs = []
@@ -538,7 +539,17 @@ class RustParser:
         path = []
         items = None
 
-        path.append(self.parse_use_path_segment())
+        if self.current_token[0] == "LBRACE":
+            self.eat("LBRACE")
+            items = self.parse_use_group_items()
+            self.eat("RBRACE")
+            path.append(
+                "{"
+                + ", ".join(self.format_use_group_item(item) for item in items)
+                + "}"
+            )
+        else:
+            path.append(self.parse_use_path_segment())
 
         while self.current_token[0] == "DOUBLE_COLON":
             self.eat("DOUBLE_COLON")
@@ -1804,7 +1815,7 @@ class RustParser:
     def parse_if_condition(self):
         if self.current_token[0] == "LET" or self.has_top_level_logical_and_let():
             return self.parse_condition_chain()
-        return self.parse_expression()
+        return self.parse_expression_before_block()
 
     def has_top_level_logical_and_let(self):
         paren_depth = 0
@@ -2385,7 +2396,7 @@ class RustParser:
             end = (
                 None
                 if self.is_range_expression_boundary()
-                else self.parse_logical_or_expression()
+                else self.parse_expression_before_block()
             )
             return RangeNode(None, end, op == "..=")
 
@@ -2399,11 +2410,19 @@ class RustParser:
             right = (
                 None
                 if self.is_range_expression_boundary()
-                else self.parse_logical_or_expression()
+                else self.parse_expression_before_block()
             )
             return RangeNode(left, right, op == "..=")
 
         return left
+
+    def parse_expression_before_block(self):
+        previous = self.expression_stops_at_lbrace
+        self.expression_stops_at_lbrace = True
+        try:
+            return self.parse_logical_or_expression()
+        finally:
+            self.expression_stops_at_lbrace = previous
 
     def is_range_expression_boundary(self):
         return self.current_token[0] in {
@@ -2720,7 +2739,11 @@ class RustParser:
                 return self.finish_path_or_call(name)
 
             # Only if this identifier is likely a struct constructor (starts with uppercase)
-            if self.current_token[0] == "LBRACE" and name[0].isupper():
+            if (
+                self.current_token[0] == "LBRACE"
+                and name[0].isupper()
+                and not self.expression_stops_at_lbrace
+            ):
                 return self.parse_struct_initialization(name)
 
             if (

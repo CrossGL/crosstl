@@ -96,6 +96,7 @@ STAGE_TOKENS = {
 
 UNARY_KEYWORDS = {"SIZEOF", "ALIGNOF"}
 MACRO_QUALIFIERS = {"METAL_FUNC"}
+IDENTIFIER_TYPE_QUALIFIERS = MACRO_QUALIFIERS | {"object_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
 CONSTRUCTOR_TYPE_TOKENS = TYPE_TOKENS - {
@@ -305,6 +306,8 @@ class MetalParser:
                     typedefs.append(typedef)
             elif self.current_token[0] == "STATIC_ASSERT":
                 global_variables.append(self.parse_static_assert())
+            elif self.is_top_level_parameter_fragment_start():
+                self.parse_top_level_parameter_fragment()
             elif self.current_token[0] == "CONSTANT":
                 if self.is_constant_buffer():
                     constants.append(self.parse_constant_buffer())
@@ -345,6 +348,53 @@ class MetalParser:
 
     def is_top_level_expression_statement_start(self):
         return self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "DOT"
+
+    def is_top_level_parameter_fragment_start(self):
+        if not (
+            self.current_token[0] in TYPE_TOKENS
+            or self.current_token[0] in QUALIFIER_TOKENS
+            or self.is_type_qualifier_start()
+        ):
+            return False
+
+        idx = self.pos
+        depth = 0
+        saw_comma = False
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "EOF":
+                return saw_comma
+            if depth == 0 and token_type in {"SEMICOLON", "LBRACE"}:
+                return False
+            if depth == 0 and token_type == "COMMA":
+                saw_comma = True
+            if token_type in {"LPAREN", "LBRACKET", "LESS_THAN"}:
+                depth += 1
+            elif token_type in {"RPAREN", "RBRACKET", "GREATER_THAN"} and depth > 0:
+                depth -= 1
+            idx += 1
+        return False
+
+    def parse_top_level_parameter_fragment(self):
+        while self.current_token[0] != "EOF":
+            self.parse_attributes()
+            self.parse_type_specifier()
+            self.parse_declarator()
+            self.parse_attributes()
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                self.parse_expression()
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                break
+            if self.current_token[0] == "EOF":
+                break
+            raise SyntaxError(
+                f"Expected comma or end of parameter fragment, got {self.current_token[0]}"
+            )
 
     def skip_bare_macro_invocation(self):
         self.eat("IDENTIFIER")
@@ -564,7 +614,7 @@ class MetalParser:
             return False
         tok_type, value = self.tokens[idx]
         if tok_type in QUALIFIER_TOKENS or (
-            tok_type == "IDENTIFIER" and value in MACRO_QUALIFIERS
+            tok_type == "IDENTIFIER" and value in IDENTIFIER_TYPE_QUALIFIERS
         ):
             return True
         return (
@@ -936,7 +986,7 @@ class MetalParser:
             return True
         if (
             self.current_token[0] == "IDENTIFIER"
-            and self.current_token[1] in MACRO_QUALIFIERS
+            and self.current_token[1] in IDENTIFIER_TYPE_QUALIFIERS
         ):
             return True
         return (
@@ -948,7 +998,7 @@ class MetalParser:
     def parse_type_qualifier(self):
         if self.current_token[0] in QUALIFIER_TOKENS or (
             self.current_token[0] == "IDENTIFIER"
-            and self.current_token[1] in MACRO_QUALIFIERS
+            and self.current_token[1] in IDENTIFIER_TYPE_QUALIFIERS
         ):
             qualifier = self.current_token[1]
             self.eat(self.current_token[0])
@@ -1353,7 +1403,7 @@ class MetalParser:
                     and self.peek(1)[0] in TYPE_TOKENS
                 ):
                     return True
-                if self.current_token[1] in MACRO_QUALIFIERS:
+                if self.current_token[1] in IDENTIFIER_TYPE_QUALIFIERS:
                     return True
                 next_tok = self.peek(1)[0]
                 if next_tok in [

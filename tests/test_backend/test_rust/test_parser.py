@@ -614,12 +614,13 @@ def test_use_statement_parsing():
     use crate::math::{Mat4 as CMat4Grouped, Unknown};
     use crate::{math as grouped_math, math::{Vec3 as NestedVec3, Mat4 as NestedMat4}, color::Vec4 as NestedVec4};
     use crate::{math::{*, Vec3 as GlobVec3}, color::*};
+    use {shared::*, spirv_std::num_traits::Float};
     pub use crate::shared as shared;
     pub(crate) use crate::internal::Vec4 as InternalVec4;
     """
     try:
         ast = parse_code(code)
-        assert len(ast.use_statements) >= 12
+        assert len(ast.use_statements) >= 13
         use_stmt = ast.use_statements[0]
         assert isinstance(use_stmt, UseNode)
         assert ast.use_statements[2].items == [
@@ -655,10 +656,17 @@ def test_use_statement_parsing():
             {"path": "math::Vec3", "alias": "GlobVec3"},
             {"path": "color::*", "alias": None},
         ]
-        assert ast.use_statements[10].visibility == "pub"
-        assert ast.use_statements[10].alias == "shared"
-        assert ast.use_statements[11].visibility == "pub(crate)"
-        assert ast.use_statements[11].alias == "InternalVec4"
+        assert ast.use_statements[10].items == [
+            {"path": "shared::*", "alias": None},
+            {"path": "spirv_std::num_traits::Float", "alias": None},
+        ]
+        assert ast.use_statements[10].path == (
+            "{shared::*, spirv_std::num_traits::Float}"
+        )
+        assert ast.use_statements[11].visibility == "pub"
+        assert ast.use_statements[11].alias == "shared"
+        assert ast.use_statements[12].visibility == "pub(crate)"
+        assert ast.use_statements[12].alias == "InternalVec4"
     except Exception as e:
         pytest.fail(f"Use statement parsing failed: {e}")
 
@@ -3854,6 +3862,66 @@ def test_try_expression_host_parsing():
         assert isinstance(mapped_match.expression.expression, str)
     except Exception as e:
         pytest.fail(f"Try expression host parsing failed: {e}")
+
+
+def test_for_range_uppercase_bound_does_not_parse_loop_body_as_struct_literal():
+    code = """
+    struct Output {
+        value: i32,
+    }
+
+    const AA: usize = 2;
+
+    fn shader_loop() {
+        for jj in 0..AA {
+            for ii in 0..AA {
+                let output = Output {
+                    value: ii as i32 + jj as i32,
+                };
+                use_value(output.value);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    body = ast.functions[0].body
+
+    outer_loop = body[0]
+    assert isinstance(outer_loop, ForNode)
+    assert isinstance(outer_loop.iterable, RangeNode)
+    assert outer_loop.iterable.end == "AA"
+
+    inner_loop = outer_loop.body[0]
+    assert isinstance(inner_loop, ForNode)
+    assert isinstance(inner_loop.iterable, RangeNode)
+    assert inner_loop.iterable.end == "AA"
+
+    output = inner_loop.body[0].value
+    assert isinstance(output, StructInitializationNode)
+    assert output.struct_name == "Output"
+
+
+def test_if_uppercase_condition_does_not_parse_body_as_struct_literal():
+    code = """
+    const SINGLE: bool = false;
+
+    fn shader_branch(value: i32) {
+        let mut s: i32 = 0;
+        if SINGLE {
+            s = value;
+        }
+        use_value(s);
+    }
+    """
+
+    ast = parse_code(code)
+    body = ast.functions[0].body
+
+    branch = body[1]
+    assert isinstance(branch, IfNode)
+    assert branch.condition == "SINGLE"
+    assert isinstance(branch.if_body[0], AssignmentNode)
 
 
 def test_try_block_expression_parsing():
