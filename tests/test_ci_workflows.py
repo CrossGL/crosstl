@@ -77,6 +77,13 @@ def _matrix_values(workflow_text, key):
     raise AssertionError(f"matrix key not found: {key}")
 
 
+def _assert_windows_py38_uses_windows_2022_runner(workflow_text, os_key="OS"):
+    assert "runs-on: ${{ matrix.runner || matrix." in workflow_text
+    assert 'python-version: "3.8"' in workflow_text
+    assert f"{os_key}: windows-latest" in workflow_text
+    assert "runner: windows-2022" in workflow_text
+
+
 def test_ci_runs_the_complete_pytest_suite_on_pull_requests_and_pushes():
     workflows = _workflow_texts()
     full_suite = workflows.get("full-tests.yml", "")
@@ -1619,6 +1626,7 @@ def test_backend_test_matrix_matches_support_catalog_and_platform_policy():
     )
     assert _matrix_values(backend_tests, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(backend_tests, "OS") == RUNNER_OSES
+    _assert_windows_py38_uses_windows_2022_runner(backend_tests)
     assert "fail-fast: false" in backend_tests
     assert "max-parallel: 24" in backend_tests
     assert "id: setup_python" in backend_tests
@@ -1665,6 +1673,7 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     assert _matrix_values(translator_tests, "component") == expected_components
     assert _matrix_values(translator_tests, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(translator_tests, "OS") == RUNNER_OSES
+    _assert_windows_py38_uses_windows_2022_runner(translator_tests)
     assert "fail-fast: false" in translator_tests
     assert "max-parallel: 24" in translator_tests
     assert "id: setup_python" in translator_tests
@@ -1770,6 +1779,7 @@ def test_examples_workflow_enforces_backend_outputs_and_platform_matrix():
     assert "workflow_dispatch:" in examples
     assert _matrix_values(examples, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(examples, "os") == RUNNER_OSES
+    _assert_windows_py38_uses_windows_2022_runner(examples, os_key="os")
     for backend in BACKEND_TEST_MATRIX_NAMES:
         assert f'backend: "{backend}"' in examples
     assert "python test.py" in examples

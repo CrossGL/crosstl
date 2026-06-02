@@ -6961,6 +6961,28 @@ def test_closure_helper_names_avoid_user_function_collisions():
         pytest.fail(f"Closure helper name collision conversion failed: {e}")
 
 
+def test_scalar_statement_block_node_codegen():
+    statement = LetNode("value", "1", "i32")
+    block = BlockNode(statement, "value")
+    ast = ShaderNode(
+        functions=[
+            FunctionNode(
+                "i32",
+                "scalar_block",
+                [],
+                [ReturnNode(block)],
+            ),
+        ]
+    )
+
+    result = RustToCrossGLConverter().generate(ast)
+
+    assert block.statements == [statement]
+    assert "int scalar_block() {" in result
+    assert "int value = 1;" in result
+    assert "return value;" in result
+
+
 def test_closure_block_body_conversion():
     code = """
     fn closure_blocks(values: Values) {

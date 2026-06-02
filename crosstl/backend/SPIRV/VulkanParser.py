@@ -11,6 +11,14 @@ from .VulkanLexer import *
 class VulkanParser:
     """Parse Vulkan/SPIR-V style tokens into the Vulkan backend AST."""
 
+    SWIZZLE_COMPONENT_SETS = (set("xyzw"), set("rgba"), set("stpq"))
+    GEOMETRY_INPUT_PRIMITIVE_QUALIFIERS = {
+        "line",
+        "lineadj",
+        "point",
+        "triangle",
+        "triangleadj",
+    }
     PARAMETER_QUALIFIER_TOKENS = {"CONST", "IN", "OUT", "INOUT"}
     PRECISION_QUALIFIER_TOKENS = {"HIGHP", "MEDIUMP", "LOWP"}
     RAY_TRACING_STORAGE_QUALIFIERS = {
@@ -1259,6 +1267,14 @@ class VulkanParser:
             allow_identifier and self.current_token[0] == "IDENTIFIER"
         )
 
+    def is_data_type_token_at(self, index, allow_identifier=False):
+        if index >= len(self.tokens):
+            return False
+        token_type, token_value = self.tokens[index]
+        return token_value in VALID_DATA_TYPES or (
+            allow_identifier and token_type == "IDENTIFIER"
+        )
+
     def parse_data_type(self, allow_identifier=False, error_message=None):
         if not self.is_data_type_token(allow_identifier=allow_identifier):
             raise SyntaxError(
@@ -1311,6 +1327,57 @@ class VulkanParser:
             .replace(" >", ">")
         )
 
+    def skip_type_template_suffix_at_pos(self, index):
+        if index >= len(self.tokens) or self.tokens[index][0] != "LESS_THAN":
+            return index
+
+        depth = 1
+        index += 1
+        while index < len(self.tokens) and depth:
+            token_type = self.tokens[index][0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+            index += 1
+        return index if depth == 0 else len(self.tokens)
+
+    def skip_array_suffixes_at_pos(self, index):
+        while index < len(self.tokens) and self.tokens[index][0] == "LBRACKET":
+            depth = 1
+            index += 1
+            while index < len(self.tokens) and depth:
+                token_type = self.tokens[index][0]
+                if token_type == "LBRACKET":
+                    depth += 1
+                elif token_type == "RBRACKET":
+                    depth -= 1
+                index += 1
+            if depth:
+                return len(self.tokens)
+        return index
+
+    def skip_type_suffixes_at_pos(self, index):
+        index = self.skip_type_template_suffix_at_pos(index)
+        return self.skip_array_suffixes_at_pos(index)
+
+    def is_geometry_input_primitive_qualifier_at(self, index):
+        if (
+            index >= len(self.tokens)
+            or self.tokens[index][1] not in self.GEOMETRY_INPUT_PRIMITIVE_QUALIFIERS
+        ):
+            return False
+
+        type_index = index + 1
+        if not self.is_data_type_token_at(type_index, allow_identifier=True):
+            return False
+
+        declarator_index = self.skip_type_suffixes_at_pos(type_index + 1)
+        return (
+            declarator_index < len(self.tokens)
+            and self.tokens[declarator_index][0] == "IDENTIFIER"
+        )
+
     def parse_layout_declaration_qualifiers(self):
         qualifiers = []
         while self.current_token[1] in self.LAYOUT_DECLARATION_QUALIFIERS:
@@ -1330,6 +1397,7 @@ class VulkanParser:
         while (
             self.current_token[0] in self.PARAMETER_QUALIFIER_TOKENS
             or self.current_token[1] in self.LAYOUT_DECLARATION_QUALIFIERS
+            or self.is_geometry_input_primitive_qualifier_at(self.pos)
         ):
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
@@ -1926,6 +1994,34 @@ class VulkanParser:
 
             return node
 
+    def is_swizzle_member(self, member):
+        return (
+            isinstance(member, str)
+            and 1 <= len(member) <= 4
+            and any(
+                set(member) <= component_set
+                for component_set in self.SWIZZLE_COMPONENT_SETS
+            )
+        )
+
+    def parse_numeric_postfix_suffixes(self, value):
+        if value.lower().endswith("hf"):
+            value = value[:-2]
+        elif value[-1:] in {"u", "U", "f", "F"}:
+            value = value[:-1]
+
+        if (
+            value.endswith(".")
+            and self.current_token[0] == "IDENTIFIER"
+            and self.is_swizzle_member(self.current_token[1])
+        ):
+            member = self.current_token[1]
+            self.eat("IDENTIFIER")
+            node = MemberAccessNode(value[:-1] or "0", member)
+            return self.parse_postfix_suffixes(node)
+
+        return self.parse_postfix_suffixes(value)
+
     def looks_like_member_call_statement(self):
         index = self.pos
         if self.tokens[index][0] != "IDENTIFIER":
@@ -1978,11 +2074,7 @@ class VulkanParser:
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
-            if value.lower().endswith("hf"):
-                value = value[:-2]
-            elif value[-1:] in {"u", "U", "f", "F"}:
-                value = value[:-1]
-            return self.parse_postfix_suffixes(value)
+            return self.parse_numeric_postfix_suffixes(value)
         elif self.current_token[0] == "STRING":
             value = self.current_token[1]
             self.eat("STRING")

@@ -84,6 +84,35 @@ def test_parse_type_leading_array_suffix_from_vulkan_compute_samples():
     assert conv.body[0].name == "localKernel"
 
 
+def test_parse_geometry_input_primitive_parameter_qualifier_from_vulkan_samples():
+    code = """
+    struct VSOutput {
+        vec4 position;
+    };
+    struct triangle {
+        vec4 position;
+    };
+
+    void geometry_main(triangle VSOutput input[3]) {
+    }
+    void typed(triangle value) {
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    geometry_main = next(
+        function for function in ast.functions if function.name == "geometry_main"
+    )
+    typed = next(function for function in ast.functions if function.name == "typed")
+    assert geometry_main.params[0].qualifiers == ["triangle"]
+    assert geometry_main.params[0].vtype == "VSOutput"
+    assert geometry_main.params[0].name == "input[3]"
+    assert typed.params[0].qualifiers == []
+    assert typed.params[0].vtype == "triangle"
+    assert typed.params[0].name == "value"
+
+
 def test_parse_struct_instance_declarator_from_vulkan_compute_samples():
     code = """
     struct ImageData {
@@ -256,6 +285,8 @@ def test_parse_numeric_literal_postfix_swizzle_from_vulkan_samples():
     void main() {
         vec3 value = 0u.xxx;
         float scalar = 1.0.xxx.x;
+        vec4 zeroVector = 0.xxxx;
+        float zeroScalar = 0.xxxx.x;
     }
     """
 
@@ -264,12 +295,22 @@ def test_parse_numeric_literal_postfix_swizzle_from_vulkan_samples():
     main = next(function for function in ast.functions if function.name == "main")
     vector_assignment = main.body[0]
     scalar_assignment = main.body[1]
+    zero_vector_assignment = main.body[2]
+    zero_scalar_assignment = main.body[3]
     assert isinstance(vector_assignment.right, MemberAccessNode)
     assert vector_assignment.right.object == "0"
     assert vector_assignment.right.member == "xxx"
     assert isinstance(scalar_assignment.right, MemberAccessNode)
     assert scalar_assignment.right.member == "x"
     assert isinstance(scalar_assignment.right.object, MemberAccessNode)
+    assert isinstance(zero_vector_assignment.right, MemberAccessNode)
+    assert zero_vector_assignment.right.object == "0"
+    assert zero_vector_assignment.right.member == "xxxx"
+    assert isinstance(zero_scalar_assignment.right, MemberAccessNode)
+    assert zero_scalar_assignment.right.member == "x"
+    assert isinstance(zero_scalar_assignment.right.object, MemberAccessNode)
+    assert zero_scalar_assignment.right.object.object == "0"
+    assert zero_scalar_assignment.right.object.member == "xxxx"
 
 
 def test_parse_parenthesized_expression_postfix_swizzle_from_vulkan_samples():

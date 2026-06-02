@@ -3279,6 +3279,35 @@ def test_block_loop_expression_parsing():
         pytest.fail(f"Block loop expression parsing failed: {e}")
 
 
+def test_parsed_block_node_statements_are_lists():
+    code = """
+    fn parsed_blocks(flag: bool) -> i32 {
+        let value = {
+            let seed = 1;
+            if flag {
+                let selected = seed;
+                selected
+            } else {
+                let selected = 0;
+                selected
+            }
+        };
+        return value;
+    }
+    """
+
+    ast = parse_code(code)
+    block = ast.functions[0].body[0].value
+
+    assert isinstance(block, BlockNode)
+    assert isinstance(block.statements, list)
+    assert isinstance(block.expression, IfNode)
+    assert isinstance(block.expression.if_body, BlockNode)
+    assert isinstance(block.expression.if_body.statements, list)
+    assert isinstance(block.expression.else_body, BlockNode)
+    assert isinstance(block.expression.else_body.statements, list)
+
+
 def test_if_expression_result_parsing():
     code = """
     fn test_if_expression() -> i32 {

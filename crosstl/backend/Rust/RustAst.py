@@ -656,6 +656,13 @@ class BlockNode(ASTNode):
     """Node representing a block expression"""
 
     def __init__(self, statements, returns_value=None):
+        if statements is None:
+            statements = []
+        elif isinstance(statements, tuple):
+            statements = list(statements)
+        elif not isinstance(statements, list):
+            statements = [statements]
+
         self.statements = statements
         self.returns_value = returns_value
         self.expression = returns_value
