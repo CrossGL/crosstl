@@ -61,6 +61,29 @@ class HLSLPreprocessor:
             logical_lines.append(buffer)
         return logical_lines
 
+    def _paren_balance(self, text: str) -> int:
+        balance = 0
+        i = 0
+        while i < len(text):
+            if text[i] in "\"'":
+                _literal, consumed = self._read_string(text, i)
+                i += consumed
+                continue
+            if text.startswith("//", i):
+                break
+            if text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            if text[i] == "(":
+                balance += 1
+            elif text[i] == ")" and balance > 0:
+                balance -= 1
+            i += 1
+        return balance
+
     def _process_lines(self, lines: List[str], file_path: Optional[str]) -> List[str]:
         output: List[str] = []
         conditional_stack: List[Dict[str, bool]] = []
@@ -70,10 +93,13 @@ class HLSLPreprocessor:
         def is_active() -> bool:
             return all(frame["active"] for frame in conditional_stack)
 
-        for raw_line in lines:
+        idx = 0
+        while idx < len(lines):
+            raw_line = lines[idx]
             line = raw_line
             stripped = line.lstrip()
             active = is_active()
+            consumed_lines = 1
 
             if stripped.startswith("#"):
                 directive, rest = self._parse_directive(stripped)
@@ -147,16 +173,46 @@ class HLSLPreprocessor:
                         output.append(line)
             else:
                 if active:
+                    line, consumed_lines = self._join_multiline_function_macro_call(
+                        lines, idx
+                    )
                     expanded = self._expand_macros(
                         line, current_line, False, current_file
                     )
                     output.append(expanded)
-            current_line += 1
+            current_line += consumed_lines
+            idx += consumed_lines
 
         if conditional_stack:
             raise SyntaxError("Unterminated #if block")
 
         return output
+
+    def _join_multiline_function_macro_call(
+        self, lines: List[str], start: int
+    ) -> Tuple[str, int]:
+        line = lines[start]
+        consumed = 1
+        while self._function_macro_call_balance(line) > 0 and start + consumed < len(
+            lines
+        ):
+            next_line = lines[start + consumed]
+            if next_line.lstrip().startswith("#"):
+                break
+            line += " " + next_line.lstrip()
+            consumed += 1
+        return line, consumed
+
+    def _function_macro_call_balance(self, text: str) -> int:
+        for name, macro in self.macros.items():
+            if not macro.is_function_like():
+                continue
+            pattern = rf"\b{re.escape(name)}\s*\("
+            for match in re.finditer(pattern, text):
+                balance = self._paren_balance(text[match.start() :])
+                if balance > 0:
+                    return balance
+        return 0
 
     def _parse_directive(self, line: str) -> Tuple[str, str]:
         match = re.match(r"#\s*([A-Za-z_][A-Za-z0-9_]*)\s*(.*)", line)
@@ -453,7 +509,11 @@ class HLSLPreprocessor:
             for idx, name in enumerate(params):
                 param_map[name] = args[idx] if idx < len(args) else ""
 
-        return self._replace_params(macro.replacement, param_map)
+        replacement = self._replace_params(macro.replacement, param_map)
+        if macro.name in replacement:
+            pattern = rf"\b{re.escape(macro.name)}(?=\s*\()"
+            replacement = re.sub(pattern, f"{macro.name}/**/", replacement)
+        return replacement
 
     def _replace_params(self, replacement: str, param_map: Dict[str, str]) -> str:
         tokens = self._tokenize_replacement(replacement)

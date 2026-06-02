@@ -8,6 +8,7 @@ from crosstl.backend.common_ast import (
     FunctionCallNode,
     InitializerListNode,
     MemberAccessNode,
+    SwitchNode,
     TextureSampleNode,
     VectorConstructorNode,
 )
@@ -1610,6 +1611,75 @@ def test_parse_function_prototype_declaration():
     assert ast.functions[0].name == "TraceRay_OnMiss"
     assert ast.functions[0].body == []
     assert ast.functions[0].is_prototype is True
+
+
+def test_parse_relational_condition_before_parenthesized_expression_from_blur_shader():
+    ast = parse_code("""
+    float4 PSSimpleBlur(float2 uv) : SV_TARGET {
+        float3 textureColor = float3(1.0f, 0.0f, 0.0f);
+        if (uv.x > (blurXOffset + 0.005f)) {
+            for (int i = 1; i < 3; i++) {
+                textureColor += textureColor;
+            }
+        }
+        return float4(textureColor, 1.0);
+    }
+    """)
+
+    condition = next(
+        node.condition for node in iter_ast_nodes(ast) if isinstance(node, IfNode)
+    )
+
+    assert condition.op == ">"
+    assert isinstance(condition.left, MemberAccessNode)
+
+
+def test_parse_raw_bvh_macro_invocations_inside_switch_from_directx_graphics_samples():
+    code = """
+    #define GetBVHSize(ID) case ID: size = GetBVHSize(BVH##ID); break
+
+    void main(uint3 DTid : SV_DispatchThreadID) {
+        uint size = 0;
+        switch (DTid.x + 1) {
+            GetBVHSize(1);
+            GetBVHSize(2);
+        }
+    }
+    """
+
+    tokens = HLSLLexer(textwrap.dedent(code), preprocess=False).tokenize()
+    ast = HLSLParser(tokens).parse()
+
+    switch = next(node for node in iter_ast_nodes(ast) if isinstance(node, SwitchNode))
+
+    assert [call.name for call in switch.default_case] == ["GetBVHSize", "GetBVHSize"]
+    assert [call.args for call in switch.default_case] == [[1], [2]]
+
+
+def test_preprocess_self_referential_bvh_function_macro_from_directx_graphics_samples():
+    ast = parse_code("""
+    #define GetBVHSize(ID) case ID: size = GetBVHSize(BVH##ID); break
+
+    void main(uint3 DTid : SV_DispatchThreadID) {
+        uint size = 0;
+        switch (DTid.x + 1) {
+            GetBVHSize(1);
+            GetBVHSize(2);
+        }
+    }
+    """)
+
+    switch = next(node for node in iter_ast_nodes(ast) if isinstance(node, SwitchNode))
+
+    assert [case.value for case in switch.cases] == [1, 2]
+    assert [case.body[0].right.name for case in switch.cases] == [
+        "GetBVHSize",
+        "GetBVHSize",
+    ]
+    assert [case.body[0].right.args for case in switch.cases] == [
+        ["BVH1"],
+        ["BVH2"],
+    ]
 
 
 def test_parse_ray_payload_struct_attributes_from_directx_graphics_samples():

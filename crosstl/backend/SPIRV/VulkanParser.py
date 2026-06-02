@@ -1074,6 +1074,7 @@ class VulkanParser:
 
         type_name = self.current_token[1]
         self.eat(self.current_token[0])
+        type_name += self.parse_array_suffixes_as_text()
         return type_name
 
     def parse_layout_declaration_qualifiers(self):
@@ -1141,6 +1142,7 @@ class VulkanParser:
                 raise SyntaxError(
                     f"Unexpected token in struct member: {self.current_token}"
                 )
+            type_name += self.parse_array_suffixes_as_text()
 
             member_name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -1151,6 +1153,12 @@ class VulkanParser:
             members.append(VariableNode(type_name, member_name))
 
         self.eat("RBRACE")
+        while self.current_token[0] == "IDENTIFIER":
+            self.eat("IDENTIFIER")
+            self.parse_array_suffixes_as_text()
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
         self.eat("SEMICOLON")
 
         return StructNode(name, members)
@@ -1183,6 +1191,7 @@ class VulkanParser:
 
             vtype = self.current_token[1]
             self.eat(self.current_token[0])
+            vtype += self.parse_array_suffixes_as_text()
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             name += self.parse_array_suffixes_as_text()
@@ -1195,13 +1204,24 @@ class VulkanParser:
         self.eat("LBRACE")
         statements = []
         while self.current_token[0] != "RBRACE":
-            statements.append(self.parse_body())
+            statement = self.parse_body()
+            if isinstance(statement, list):
+                statements.extend(statement)
+            else:
+                statements.append(statement)
         self.eat("RBRACE")
         return statements
+
+    def parse_statement_or_block(self):
+        if self.current_token[0] == "LBRACE":
+            return self.parse_block()
+        return [self.parse_body()]
 
     def parse_body(self):
         token_type = self.current_token[0]
 
+        if token_type == "LBRACE":
+            return self.parse_block()
         if token_type == "CONST":
             return self.parse_assignment_or_function_call()
         if token_type == "IDENTIFIER" and (
@@ -1295,7 +1315,7 @@ class VulkanParser:
         self.eat("LPAREN")
         if_condition = self.parse_expression()
         self.eat("RPAREN")
-        if_body = self.parse_block()
+        if_body = self.parse_statement_or_block()
         else_body = None
         else_if_chain = []
         while self.current_token[0] == "ELSE" and self.peek(1) == "IF":
@@ -1304,10 +1324,10 @@ class VulkanParser:
             self.eat("LPAREN")
             else_if_condition = self.parse_expression()
             self.eat("RPAREN")
-            else_if_chain.append((else_if_condition, self.parse_block()))
+            else_if_chain.append((else_if_condition, self.parse_statement_or_block()))
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
-            else_body = self.parse_block()
+            else_body = self.parse_statement_or_block()
         return IfNode(
             if_condition,
             if_body,
@@ -1325,7 +1345,7 @@ class VulkanParser:
         self.loop_depth += 1
         self.breakable_depth += 1
         try:
-            body = self.parse_block()
+            body = self.parse_statement_or_block()
         finally:
             self.breakable_depth -= 1
             self.loop_depth -= 1
@@ -1567,6 +1587,10 @@ class VulkanParser:
             if value[-1:] in {"u", "U", "f", "F"}:
                 value = value[:-1]
             return value
+        elif self.current_token[0] == "STRING":
+            value = self.current_token[1]
+            self.eat("STRING")
+            return value
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
             expr = self.parse_expression()
@@ -1615,6 +1639,7 @@ class VulkanParser:
             ):
                 type_name = " ".join([*qualifiers, self.current_token[1]])
                 self.eat(self.current_token[0])
+                type_name += self.parse_array_suffixes_as_text()
             else:
                 raise SyntaxError(
                     f"Unexpected token after const: {self.current_token[0]}"
@@ -1640,9 +1665,11 @@ class VulkanParser:
         if self.current_token[0] == "IDENTIFIER" and self.peek(1) == "IDENTIFIER":
             type_name = self.current_token[1]
             self.eat("IDENTIFIER")
+            type_name += self.parse_array_suffixes_as_text()
         elif self.current_token[1] in VALID_DATA_TYPES:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
+            type_name += self.parse_array_suffixes_as_text()
         if self.current_token[0] == "IDENTIFIER":
             return self.parse_variable(
                 type_name,
@@ -1771,7 +1798,7 @@ class VulkanParser:
         self.loop_depth += 1
         self.breakable_depth += 1
         try:
-            body = self.parse_block()
+            body = self.parse_statement_or_block()
         finally:
             self.breakable_depth -= 1
             self.loop_depth -= 1

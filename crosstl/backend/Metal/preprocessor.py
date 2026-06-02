@@ -39,6 +39,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             return text
         return super()._expand_macros(text, line_num, in_expression, file_path)
 
+    def _join_multiline_function_macro_call(self, lines: List[str], start: int):
+        return lines[start], 1
+
     def _has_incomplete_function_macro_call(self, text: str) -> bool:
         i = 0
         while i < len(text):

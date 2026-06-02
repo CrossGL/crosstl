@@ -45,6 +45,92 @@ def tokenize_code(code: str) -> List:
     return lexer.tokenize()
 
 
+def test_parse_debug_printf_string_literal_argument_from_vulkan_samples():
+    code = """
+    #extension GL_EXT_debug_printf : enable
+    void main() {
+        vec4 pos = vec4(1.0);
+        debugPrintfEXT("Position = %v4f", pos);
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    main = next(function for function in ast.functions if function.name == "main")
+    call = main.body[1]
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "debugPrintfEXT"
+    assert call.args[0] == '"Position = %v4f"'
+
+
+def test_parse_type_leading_array_suffix_from_vulkan_compute_samples():
+    code = """
+    float conv(in float[9] kernel, in float[9] data) {
+        float[9] localKernel;
+        return kernel[0] + data[0];
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    conv = next(function for function in ast.functions if function.name == "conv")
+    assert conv.params[0].vtype == "float[9]"
+    assert conv.params[0].name == "kernel"
+    assert conv.params[1].vtype == "float[9]"
+    assert isinstance(conv.body[0], VariableNode)
+    assert conv.body[0].vtype == "float[9]"
+    assert conv.body[0].name == "localKernel"
+
+
+def test_parse_struct_instance_declarator_from_vulkan_compute_samples():
+    code = """
+    struct ImageData {
+        float avg[9];
+    } imageData;
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.structs[0].name == "ImageData"
+    assert ast.structs[0].members[0].vtype == "float"
+    assert ast.structs[0].members[0].name == "avg[9]"
+
+
+def test_parse_unbraced_if_body_from_vulkan_compute_samples():
+    code = """
+    void main() {
+        uint index = 4u;
+        if (index > 2u)
+            return;
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    main = next(function for function in ast.functions if function.name == "main")
+    if_stmt = main.body[1]
+    assert isinstance(if_stmt, IfNode)
+    assert isinstance(if_stmt.if_body[0], ReturnNode)
+
+
+def test_parse_standalone_scoped_block_from_vulkan_samples():
+    code = """
+    void main() {
+        {
+            outColor = inColor;
+        }
+        gl_Position = inPos;
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    main = next(function for function in ast.functions if function.name == "main")
+    assert len(main.body) == 2
+    assert isinstance(main.body[0], AssignmentNode)
+    assert isinstance(main.body[1], AssignmentNode)
+
+
 SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY = """
 ; Reduced from Khronos SPIRV-Tools test/diff/diff_files/basic_src.spvasm.
 OpCapability Shader

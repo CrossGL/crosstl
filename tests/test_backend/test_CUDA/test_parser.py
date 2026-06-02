@@ -356,6 +356,30 @@ class TestCudaParser:
         ]
         assert ast.functions[0].return_type == "blockFunction_t"
 
+    def test_public_cuda_samples_function_pointer_headers_before_kernels(self):
+        code = """
+        int setup(int (*combine)(int, int), int count);
+
+        __device__ int (*select_block_function(int mode))(int) {
+            return 0;
+        }
+
+        __global__ void function_pointer_kernel(int *out) {
+            out[threadIdx.x] = 0;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.functions[0].name == "setup"
+        assert [(param.vtype, param.name) for param in ast.functions[0].params] == [
+            ("int (*)", "combine"),
+            ("int", "count"),
+        ]
+        assert [kernel.name for kernel in ast.kernels] == ["function_pointer_kernel"]
+
     def test_public_cuda_samples_elaborated_and_qualified_type_declarations(self):
         code = """
         void configure(int n) {
@@ -1868,6 +1892,50 @@ class TestCudaParser:
         assert ast.structs[1].name == "SharedMemory<double>"
         assert ast.structs[1].members == []
         assert ast.kernels[0].name == "reduce"
+
+    def test_public_cuda_samples_typedef_typename_inside_template_struct(self):
+        code = """
+        template <class RNG>
+        struct PiEstimator {
+            typedef typename RNG::value_type value_type;
+            int samples;
+        };
+
+        __global__ void estimate_pi(int *out) {
+            out[threadIdx.x] = 0;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.structs[0].name == "PiEstimator"
+        assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+            ("int", "samples")
+        ]
+        assert ast.kernels[0].name == "estimate_pi"
+
+    def test_public_cuda_samples_function_template_specialization_header(self):
+        code = """
+        template <class T, unsigned int blockSize, bool nIsPow2>
+        __global__ void reduce<T, blockSize, nIsPow2>(T *out) {
+            extern __shared__ unsigned int sdata[];
+            out[threadIdx.x] = sdata[threadIdx.x];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        kernel = ast.kernels[0]
+        assert kernel.name == "reduce<T, blockSize, nIsPow2>"
+        assert [(param.vtype, param.name) for param in kernel.params] == [
+            ("T *", "out")
+        ]
+        assert isinstance(kernel.body[0], SharedMemoryNode)
+        assert kernel.body[0].is_extern_shared_memory is True
 
     def test_constexpr_local_declaration_in_switch_case_parsing(self):
         code = """

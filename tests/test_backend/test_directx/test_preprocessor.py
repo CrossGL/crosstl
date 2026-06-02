@@ -32,6 +32,37 @@ def test_function_like_macro_expansion():
     assert "2" in output and "3" in output
 
 
+def test_multiline_function_like_macro_arguments_from_raytracing_fallback():
+    code = """
+    #define SIZE 116
+    #define GetBVHMetadataAddress(ptr, offset, leafIndex) offset + leafIndex * SIZE
+    #define GetBVHMetadataFromLeafIndex(ptr, offset, leafIndex) LoadBVHMetadata(ptr.buffer, GetBVHMetadataAddress(ptr, offset, leafIndex))
+
+    BVHMetadata metadata = GetBVHMetadataFromLeafIndex(
+        topLevelAccelerationStructure, offsetToInstanceLevelDesc, leafIndex);
+    """
+
+    output = HLSLPreprocessor().preprocess(code)
+
+    assert (
+        "LoadBVHMetadata(topLevelAccelerationStructure.buffer, "
+        "offsetToInstanceLevelDesc + leafIndex * 116)"
+    ) in output
+
+
+def test_self_referential_function_macro_does_not_reexpand_recursively():
+    code = """
+    #define GetBVHSize(ID) case ID: size = GetBVHSize(BVH##ID); break
+    switch (id) {
+        GetBVHSize(1);
+    }
+    """
+
+    output = HLSLPreprocessor().preprocess(code)
+
+    assert "case 1: size = GetBVHSize/**/(BVH1); break;" in output
+
+
 def test_variadic_stringize_and_paste():
     code = """
     #define LOG(fmt, ...) printf(fmt, __VA_ARGS__)

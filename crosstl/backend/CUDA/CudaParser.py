@@ -292,12 +292,17 @@ class CudaParser:
         ):
             index = self.skip_function_attribute_at_index(index)
 
-        if (
-            index + 1 < len(self.tokens)
-            and self.is_function_name_token(self.tokens[index])
-            and self.tokens[index + 1][0] == "LPAREN"
+        if index + 1 < len(self.tokens) and self.is_function_name_token(
+            self.tokens[index]
         ):
-            return index
+            suffix_index = self.skip_optional_function_template_suffix_at_index(
+                index + 1
+            )
+            if (
+                suffix_index < len(self.tokens)
+                and self.tokens[suffix_index][0] == "LPAREN"
+            ):
+                return index
 
         return None
 
@@ -344,8 +349,12 @@ class CudaParser:
                         self.append_parsed_global_variable(global_variables, item)
             elif self.is_out_of_class_member_definition_start():
                 self.skip_out_of_class_member_definition()
+            elif self.is_function_pointer_declaration_start():
+                self.skip_out_of_class_member_definition()
             elif self.peek_function():
                 func = self.parse_function()
+                if func is None:
+                    continue
                 if isinstance(func, KernelNode):
                     kernels.append(func)
                 else:
@@ -356,8 +365,13 @@ class CudaParser:
                         global_variables, self.parse_global_variable()
                     )
                     continue
+                if self.is_function_pointer_declaration_start():
+                    self.skip_out_of_class_member_definition()
+                    continue
 
                 func = self.parse_function()
+                if func is None:
+                    continue
                 if isinstance(func, KernelNode):
                     kernels.append(func)
                 else:
@@ -410,14 +424,60 @@ class CudaParser:
             saved_index = self.skip_function_attribute_at_index(saved_index)
 
         if saved_index is not None:
-            if (
-                saved_index < len(self.tokens) - 1
-                and self.is_function_name_token(self.tokens[saved_index])
-                and self.tokens[saved_index + 1][0] == "LPAREN"
+            if saved_index < len(self.tokens) - 1 and self.is_function_name_token(
+                self.tokens[saved_index]
             ):
-                return True
+                suffix_index = self.skip_optional_function_template_suffix_at_index(
+                    saved_index + 1
+                )
+                return (
+                    suffix_index < len(self.tokens)
+                    and self.tokens[suffix_index][0] == "LPAREN"
+                )
 
         return False
+
+    def skip_optional_function_template_suffix_at_index(self, index):
+        if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
+            skipped = self.skip_template_at_index(index)
+            if skipped is not None:
+                return skipped
+        return index
+
+    def is_function_pointer_declaration_start(self):
+        saved_index = self.current_index
+
+        while (
+            saved_index < len(self.tokens)
+            and self.tokens[saved_index][0] in self.FUNCTION_SPECIFIER_TOKENS
+        ):
+            if self.tokens[saved_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS:
+                saved_index = self.skip_function_attribute_at_index(saved_index)
+                continue
+            saved_index += 1
+
+        while (
+            saved_index < len(self.tokens)
+            and self.tokens[saved_index][0] in self.TYPE_QUALIFIER_TOKENS
+        ):
+            saved_index += 1
+
+        saved_index = self.skip_type_at_index(saved_index)
+        if saved_index is None:
+            return False
+
+        while (
+            saved_index < len(self.tokens)
+            and self.tokens[saved_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS
+        ):
+            saved_index = self.skip_function_attribute_at_index(saved_index)
+
+        return (
+            saved_index + 1 < len(self.tokens)
+            and self.tokens[saved_index][0] == "LPAREN"
+            and self.tokens[saved_index + 1][0]
+            in {"MULTIPLY", *self.TYPE_REFERENCE_TOKENS}
+        )
 
     def peek_variable(self):
         saved_index = self.current_index
@@ -711,15 +771,23 @@ class CudaParser:
                 items.append(self.parse_enum())
             elif self.is_out_of_class_member_definition_start():
                 self.skip_out_of_class_member_definition()
+            elif self.is_function_pointer_declaration_start():
+                self.skip_out_of_class_member_definition()
             elif self.peek_function():
-                items.append(self.parse_function())
+                func = self.parse_function()
+                if func is not None:
+                    items.append(func)
             elif self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]:
                 if self.current_token[0] == "DEVICE" and self.peek_variable():
                     self.append_parsed_global_variable(
                         items, self.parse_global_variable()
                     )
+                elif self.is_function_pointer_declaration_start():
+                    self.skip_out_of_class_member_definition()
                 else:
-                    items.append(self.parse_function())
+                    func = self.parse_function()
+                    if func is not None:
+                        items.append(func)
             elif (
                 self.current_token[0] in ["CONSTANT", "SHARED"] or self.peek_variable()
             ):
@@ -1021,6 +1089,9 @@ class CudaParser:
             if self.is_struct_method_start():
                 self.skip_struct_method()
                 continue
+            if self.is_type_alias_start():
+                self.parse_type_alias()
+                continue
 
             member_declarations = self.parse_variable_declaration_list()
             members.extend(member_declarations)
@@ -1180,6 +1251,8 @@ class CudaParser:
             attributes.append(self.parse_function_attribute())
 
         name = self.consume_function_name()
+        if self.current_token[0] == "LESS_THAN":
+            name += self.parse_template_suffix()
         self.user_function_names.add(name)
         params = self.parse_parameters()
         body = None
@@ -1265,6 +1338,8 @@ class CudaParser:
     def parse_parameter(self):
         param_type = self.parse_type()
         param_type = self.parse_declarator_prefix(param_type)
+        if self.is_function_pointer_parameter_declarator():
+            return self.parse_function_pointer_parameter(param_type)
         if self.current_token[0] in {"COMMA", "RPAREN"}:
             self.skip_parameter_default()
             return VariableNode(param_type, "")
@@ -1273,6 +1348,28 @@ class CudaParser:
         param_type += self.parse_array_suffix()
         self.skip_parameter_default()
         return VariableNode(param_type, param_name)
+
+    def is_function_pointer_parameter_declarator(self):
+        return (
+            self.current_index + 2 < len(self.tokens)
+            and self.current_token[0] == "LPAREN"
+            and self.tokens[self.current_index + 1][0]
+            in {"MULTIPLY", *self.TYPE_REFERENCE_TOKENS}
+            and self.tokens[self.current_index + 2][0] == "IDENTIFIER"
+        )
+
+    def parse_function_pointer_parameter(self, return_type):
+        self.eat("LPAREN")
+        pointer_prefix = self.parse_declarator_prefix("")
+        name = self.eat("IDENTIFIER")[1]
+        self.eat("RPAREN")
+
+        if self.current_token[0] == "LPAREN":
+            self.parse_parameters()
+
+        param_type = f"{return_type} ({pointer_prefix})".strip()
+        self.skip_parameter_default()
+        return VariableNode(param_type, name)
 
     def parse_type(self):
         type_parts = []

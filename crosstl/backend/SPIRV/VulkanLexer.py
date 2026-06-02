@@ -88,6 +88,7 @@ TOKENS = tuple(
         ("BINARY_NOT", r"~"),
         ("QUESTION", r"\?"),
         ("COLON", r":"),
+        ("STRING", r'"([^"\\]|\\.)*"'),
         ("MOD", r"%"),
     ]
 )

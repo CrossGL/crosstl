@@ -1194,7 +1194,18 @@ class HLSLParser:
 
         if idx >= len(self.tokens) or not self.is_identifier_token_at(idx):
             return False
-        return True
+        idx += 1
+        idx = self.skip_array_suffixes_at(idx)
+        if idx is None or idx >= len(self.tokens):
+            return False
+
+        return self.tokens[idx][0] in {
+            "SEMICOLON",
+            "EQUALS",
+            "LBRACE",
+            "COLON",
+            "COMMA",
+        }
 
     def looks_like_external_declaration(self):
         idx = self.current_index
@@ -1518,10 +1529,10 @@ class HLSLParser:
         cases = []
         default_body = None
 
-        while self.current_token[0] in ("CASE", "DEFAULT"):
+        while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             if self.current_token[0] == "CASE":
                 cases.append(self.parse_switch_case())
-            else:
+            elif self.current_token[0] == "DEFAULT":
                 self.eat("DEFAULT")
                 self.eat("COLON")
                 default_body = []
@@ -1537,6 +1548,15 @@ class HLSLParser:
                             default_body.extend(stmt)
                         else:
                             default_body.append(stmt)
+            else:
+                if default_body is None:
+                    default_body = []
+                stmt = self.parse_statement()
+                if stmt is not None:
+                    if isinstance(stmt, list):
+                        default_body.extend(stmt)
+                    else:
+                        default_body.append(stmt)
 
         self.eat("RBRACE")
         return SwitchNode(condition, cases, default_body)
@@ -1791,6 +1811,8 @@ class HLSLParser:
                         else ("EOF", "")
                     )
                     return next_token[0] == "LPAREN"
+            elif depth == 1 and token_type in {"SEMICOLON", "RPAREN", "RBRACE"}:
+                return False
             elif token_type == "EOF":
                 return False
             idx += 1
@@ -1841,6 +1863,8 @@ class HLSLParser:
                         else ("EOF", "")
                     )
                     return next_token[0] == "LPAREN"
+            elif depth == 1 and token_type in {"SEMICOLON", "RPAREN", "RBRACE"}:
+                return False
             elif token_type == "EOF":
                 return False
             idx += 1
