@@ -185,13 +185,22 @@ class TestCudaLexer:
         assert "SHIFT_RIGHT_EQUALS" in token_types
 
     def test_numeric_literal_tokenization(self):
-        code = "0xffu 0XCAFEull 0b1010u 0777u 1e-3f .5f"
+        code = "0xffu 0XCAFEull 0b1010u 0777u 1e-3f .5f 1'000 1'000'000"
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
 
         values = [value for token_type, value in tokens if token_type == "NUMBER"]
 
-        assert values == ["0xffu", "0XCAFEull", "0b1010u", "0777u", "1e-3f", ".5f"]
+        assert values == [
+            "0xffu",
+            "0XCAFEull",
+            "0b1010u",
+            "0777u",
+            "1e-3f",
+            ".5f",
+            "1'000",
+            "1'000'000",
+        ]
 
     def test_character_literal_tokenization(self):
         code = r"'c' '\n' '\x7f' '\377' u8'a' L'b' char"

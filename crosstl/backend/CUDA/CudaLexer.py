@@ -148,7 +148,7 @@ TOKENS = tuple(
         # Identifiers and literals (must come after keywords)
         (
             "NUMBER",
-            r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFdDlLuU]*",
+            r"(?:0[xX][0-9a-fA-F](?:'?[0-9a-fA-F])*|0[bB][01](?:'?[01])*|\d(?:'?\d)*\.\d(?:'?\d)*|\d(?:'?\d)*\.|\.\d(?:'?\d)*|\d(?:'?\d)*)(?:[eE][+-]?\d(?:'?\d)*)?[fFdDlLuU]*",
         ),
         ("STRING", r'(?:u8|u|U|L)?R"([^\s()\\]{0,16})\([\s\S]*?\)\1"'),
         ("STRING", r'"([^"\\]|\\.)*"'),

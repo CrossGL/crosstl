@@ -2385,11 +2385,33 @@ class SlangParser:
                 self.eat("IDENTIFIER")
                 continue
             break
+        if self.current_token[0] == "LBRACKET" and self.is_array_constructor_suffix():
+            name += self.parse_type_array_suffixes()
+            return self.parse_vector_constructor(name)
         if self.current_token[0] == "LPAREN":
             node = self.parse_function_call(name)
         else:
             node = VariableNode("", name)
         return self.parse_postfix_suffixes(node)
+
+    def is_array_constructor_suffix(self):
+        index = self.pos
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LBRACKET":
+                depth += 1
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    return (
+                        index + 1 < len(self.tokens)
+                        and self.tokens[index + 1][0] == "LPAREN"
+                    )
+            elif token_type == "EOF":
+                return False
+            index += 1
+        return False
 
     def is_generic_expression_suffix(self):
         try:

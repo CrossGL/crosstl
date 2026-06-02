@@ -2187,6 +2187,8 @@ def test_typed_array_constructor_parsing_from_libretro_shader():
             float4(1.0, 0.0, 0.0, 1.0),
             float4(0.0, 1.0, 0.0, 1.0)
         );
+        vec3 ap4[4] = vec3[](red, green, blue, black);
+        ivec3 palette[2] = ivec3[](ivec3(1), ivec3(2));
     }
     """
     tokens = tokenize_code(code)
@@ -2219,6 +2221,16 @@ def test_typed_array_constructor_parsing_from_libretro_shader():
     assert colors.right.type_name == "float4[2]"
     assert len(colors.right.args) == 2
     assert all(isinstance(arg, VectorConstructorNode) for arg in colors.right.args)
+
+    ap4 = body[2]
+    assert isinstance(ap4.right, VectorConstructorNode)
+    assert ap4.right.type_name == "vec3[]"
+    assert [arg.name for arg in ap4.right.args] == ["red", "green", "blue", "black"]
+
+    palette = body[3]
+    assert isinstance(palette.right, VectorConstructorNode)
+    assert palette.right.type_name == "ivec3[]"
+    assert len(palette.right.args) == 2
 
 
 def test_local_matrix_declaration_parsing():
