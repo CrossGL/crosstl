@@ -1262,7 +1262,7 @@ class SlangParser:
             self.eat("LPAREN")
             expr = self.parse_expression()
             self.eat("RPAREN")
-            return expr
+            return self.parse_postfix_suffixes(expr)
         else:
             raise SyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"

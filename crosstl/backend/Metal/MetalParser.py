@@ -599,11 +599,69 @@ class MetalParser:
         self.eat("TYPEDEF")
         if self.current_token[0] == "STRUCT":
             return self.parse_typedef_struct()
-        alias_type, _qualifiers = self.parse_type_specifier()
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "decltype"
+        ):
+            alias_type = self.parse_decltype_type()
+        else:
+            alias_type, _qualifiers = self.parse_type_specifier()
+        if self.current_token[0] == "LPAREN":
+            alias_name = self.parse_function_typedef_declarator(alias_type)
+            self.eat("SEMICOLON")
+            self.known_types.add(alias_name)
+            return TypeAliasNode(alias_type, alias_name)
         alias_name, _array = self.parse_declarator()
         self.eat("SEMICOLON")
         self.known_types.add(alias_name)
         return TypeAliasNode(alias_type, alias_name)
+
+    def parse_function_typedef_declarator(self, return_type):
+        self.eat("LPAREN")
+        while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+            self.eat(self.current_token[0])
+        alias_name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("RPAREN")
+        if self.current_token[0] == "LPAREN":
+            self.parse_parenthesized_parameter_tokens()
+        return alias_name
+
+    def parse_parenthesized_parameter_tokens(self):
+        self.eat("LPAREN")
+        depth = 1
+        while depth > 0 and self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RPAREN")
+                    break
+            self.eat(token_type)
+        if depth != 0:
+            raise SyntaxError("Unterminated function typedef parameter list")
+
+    def parse_decltype_type(self):
+        self.eat("IDENTIFIER")
+        self.eat("LPAREN")
+        depth = 1
+        parts = []
+        while depth > 0 and self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RPAREN")
+                    break
+            parts.append(token_value)
+            self.eat(token_type)
+        if depth != 0:
+            raise SyntaxError("Unterminated decltype typedef")
+        return f"decltype({self.format_generic_type_tokens(parts)})"
 
     def parse_typedef_struct(self):
         self.eat("STRUCT")
@@ -651,6 +709,25 @@ class MetalParser:
         self.eat("RPAREN")
         self.eat("SEMICOLON")
         return StaticAssertNode(condition, message)
+
+    def parse_pragma_statement(self):
+        self.eat("IDENTIFIER")
+        self.eat("LPAREN")
+        depth = 1
+        while depth > 0 and self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RPAREN")
+                    break
+            self.eat(token_type)
+        if depth != 0:
+            raise SyntaxError("Unterminated _Pragma statement")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
 
     def parse_global_variable(self, pre_alignas=None):
         attributes = self.parse_attributes()
@@ -1065,9 +1142,14 @@ class MetalParser:
         if self.current_token[0] == "PREPROCESSOR":
             self.parse_preprocessor_directive()
             return None
+        if self.current_token == ("IDENTIFIER", "_Pragma"):
+            self.parse_pragma_statement()
+            return None
         if self.current_token[0] == "USING":
             self.parse_using_statement()
             return None
+        if self.current_token[0] == "LBRACE":
+            return BlockNode(self.parse_block())
         if self.is_declaration_start():
             return self.parse_variable_declaration_or_assignment()
         elif self.current_token[0] == "IF":
@@ -1471,7 +1553,9 @@ class MetalParser:
         if self.current_token[0] != "LPAREN":
             return False
         idx = self.pos + 1
+        saw_qualifier = False
         while idx < len(self.tokens) and self.tokens[idx][0] in QUALIFIER_TOKENS:
+            saw_qualifier = True
             idx += 1
         if idx >= len(self.tokens):
             return False
@@ -1481,7 +1565,13 @@ class MetalParser:
         if tok_type == "IDENTIFIER":
             name = self.tokens[idx][1]
             next_type = self.tokens[idx + 1][0] if idx + 1 < len(self.tokens) else "EOF"
-            if name not in self.known_types and next_type not in {"SCOPE", "LESS_THAN"}:
+            if (
+                name not in self.known_types
+                and next_type not in {"SCOPE", "LESS_THAN"}
+                and not (
+                    saw_qualifier and next_type in {"MULTIPLY", "BITWISE_AND", "RPAREN"}
+                )
+            ):
                 return False
         idx += 1
         if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
@@ -1516,6 +1606,14 @@ class MetalParser:
             if self.is_as_type_template_call(node):
                 template_args = self.parse_template_argument_suffix()
                 suffix = f"<{''.join(template_args)}>"
+                if isinstance(node, VariableNode):
+                    node.name += suffix
+                else:
+                    node.member += suffix
+                continue
+            if self.is_template_identifier_suffix(node):
+                template_args = self.parse_template_argument_suffix()
+                suffix = f"<{self.format_generic_type_tokens(template_args)}>"
                 if isinstance(node, VariableNode):
                     node.name += suffix
                 else:
@@ -1559,6 +1657,21 @@ class MetalParser:
                 self.eat(self.current_token[0])
                 node = MemberAccessNode(node, member, True)
                 continue
+            if self.current_token[0] == "SCOPE":
+                self.eat("SCOPE")
+                if self.current_token[0] not in ["IDENTIFIER", "READ", "WRITE"]:
+                    raise SyntaxError(
+                        f"Expected identifier after scope, got {self.current_token[0]}"
+                    )
+                member = self.current_token[1]
+                self.eat(self.current_token[0])
+                if isinstance(node, VariableNode):
+                    node.name += f"::{member}"
+                elif isinstance(node, MemberAccessNode):
+                    node.member += f"::{member}"
+                else:
+                    node = MemberAccessNode(node, member)
+                continue
             if self.current_token[0] == "LBRACKET":
                 self.eat("LBRACKET")
                 index = None
@@ -1601,21 +1714,54 @@ class MetalParser:
             return False
         return self.template_argument_list_followed_by_call()
 
-    def template_argument_list_followed_by_call(self):
+    def is_template_identifier_suffix(self, node):
+        if self.current_token[0] != "LESS_THAN":
+            return False
+        if not isinstance(node, (VariableNode, MemberAccessNode)):
+            return False
+        return self.template_argument_list_followed_by_call(
+            follow_token_types={"LPAREN", "SCOPE"}, require_type_like_argument=True
+        )
+
+    def template_argument_list_followed_by_call(
+        self, follow_token_types=None, require_type_like_argument=False
+    ):
+        follow_token_types = follow_token_types or {"LPAREN"}
         idx = self.pos
         depth = 0
+        saw_type_like = False
         while idx < len(self.tokens):
             token_type = self.tokens[idx][0]
+            if depth > 0 and token_type in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
+                return False
             if token_type == "LESS_THAN":
                 depth += 1
             elif token_type == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
+                    if require_type_like_argument and not saw_type_like:
+                        return False
                     return (
                         idx + 1 < len(self.tokens)
-                        and self.tokens[idx + 1][0] == "LPAREN"
+                        and self.tokens[idx + 1][0] in follow_token_types
                     )
+            elif depth > 0 and self.is_template_type_argument_token(idx):
+                saw_type_like = True
             idx += 1
+        return False
+
+    def is_template_type_argument_token(self, idx):
+        token_type, token_value = self.tokens[idx]
+        if token_type in TYPE_TOKENS - {"IDENTIFIER", "TYPEDEF"}:
+            return True
+        if token_type == "IDENTIFIER":
+            next_type = self.tokens[idx + 1][0] if idx + 1 < len(self.tokens) else "EOF"
+            return token_value in self.known_types or next_type in {
+                "SCOPE",
+                "LESS_THAN",
+                "COMMA",
+                "GREATER_THAN",
+            }
         return False
 
     def parse_template_argument_suffix(self):
@@ -1703,13 +1849,49 @@ class MetalParser:
                 designators.append(("field", field))
                 continue
             self.eat("LBRACKET")
-            index = self.parse_expression()
+            index = self.parse_designator_bound_expression()
+            if (
+                self.current_token[0] == "DOT"
+                and self.peek(1)[0] == "DOT"
+                and self.peek(2)[0] == "DOT"
+            ):
+                self.eat("DOT")
+                self.eat("DOT")
+                self.eat("DOT")
+                end = self.parse_designator_bound_expression()
+                designators.append(("range", index, end))
+                self.eat("RBRACKET")
+                continue
             self.eat("RBRACKET")
             designators.append(("index", index))
 
         self.eat("EQUALS")
         value = self.parse_expression()
         return DesignatedInitializerNode(designators, value)
+
+    def parse_designator_bound_expression(self):
+        depth = 0
+        parts = []
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if depth == 0:
+                if token_type == "RBRACKET":
+                    break
+                if (
+                    token_type == "DOT"
+                    and self.peek(1)[0] == "DOT"
+                    and self.peek(2)[0] == "DOT"
+                ):
+                    break
+            if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
+                depth += 1
+            elif token_type in {"RPAREN", "RBRACKET", "RBRACE"}:
+                depth -= 1
+            parts.append(token_value)
+            self.eat(token_type)
+        if not parts:
+            raise SyntaxError("Expected designator expression")
+        return self.format_generic_type_tokens(parts)
 
     def parse_scoped_identifier(self):
         parts = []

@@ -245,6 +245,22 @@ def test_rust_gpu_ray_query_parenthesized_statement_macro_parsing():
     assert origin.vtype == "glam::Vec3"
 
 
+def test_rust_gpu_compute_shader_method_turbofish_parsing():
+    code = """
+    fn main() {
+        let result = src_range.clone().into_par_iter().map(collatz).collect::<Vec<_>>();
+    }
+    """
+
+    ast = parse_code(code)
+    result = ast.functions[0].body[0]
+    collect_call = result.value
+
+    assert isinstance(collect_call, FunctionCallNode)
+    assert isinstance(collect_call.name, MemberAccessNode)
+    assert collect_call.name.member == "collect<Vec<_>>"
+
+
 def test_underscore_parameter_name_parsing():
     code = """
     pub fn fallback(_value: u32) -> u32 {

@@ -695,6 +695,10 @@ class SlangToCrossGLConverter:
             return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object, is_main)
+            if isinstance(
+                expr.object, (AssignmentNode, BinaryOpNode, TernaryOpNode, UnaryOpNode)
+            ):
+                obj = f"({obj})"
             return f"{obj}.{expr.member}"
         elif isinstance(expr, ArrayAccessNode):
             array = self.generate_expression(expr.array, is_main)

@@ -1139,6 +1139,12 @@ class MetalToCrossGLConverter:
                         )
             elif isinstance(stmt, BinaryOpNode):
                 code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
+            elif isinstance(stmt, BlockNode):
+                code += "{\n"
+                code += self.generate_function_body(
+                    stmt.statements, indent + 1, is_main
+                )
+                code += "    " * indent + "}\n"
             elif isinstance(stmt, ForNode):
                 code += self.generate_for_loop(stmt, indent, is_main)
             elif isinstance(stmt, WhileNode):

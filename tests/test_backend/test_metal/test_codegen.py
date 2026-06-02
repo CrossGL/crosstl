@@ -917,6 +917,28 @@ def test_codegen_braced_uchar_vector_constructor_from_llama_cpp():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_standalone_scoped_block_from_llama_cpp():
+    code = """
+    void FC_unary_op(device const float* src0, device float* dst, uint i0) {
+        {
+            if (i0 >= 4) {
+                return;
+            }
+
+            const float x = src0[i0];
+            dst[i0] = x;
+        }
+    }
+    """
+    crossgl = convert(code)
+
+    assert "void FC_unary_op" in crossgl
+    assert re.search(r"\n\s+\{\n\s+if \(i0 >= 4\)", crossgl)
+    assert "float x = src0[i0];" in crossgl
+    assert "dst[i0] = x;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_preserves_binding_attributes():
     code = """
     #include <metal_stdlib>

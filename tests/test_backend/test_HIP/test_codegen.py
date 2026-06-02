@@ -74,6 +74,36 @@ class TestHipCodeGen:
         assert "var load_callback_dev: auto = load_callback;" in result
         assert "@group(0) @binding(0) var<uniform> c0: f32 = 299792458.0f;" in result
 
+    def test_public_rocm_bit_extract_fixed_width_pointer_declaration_conversion(self):
+        code = """
+        __global__ void bit_extract_kernel(
+            uint32_t* d_output,
+            const uint32_t* d_input,
+            size_t size) {
+            uint32_t *d_local, *d_shadow;
+            d_output[0] = ((d_input[0] & 0xf00) >> 8);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "@group(0) @binding(0) var<storage, read_write> d_output: array<u32>"
+            in result
+        )
+        assert (
+            "@group(0) @binding(1) var<storage, read_write> d_input: array<u32>"
+            in result
+        )
+        assert "var d_local: ptr<u32>;" in result
+        assert "var d_shadow: ptr<u32>;" in result
+        assert "d_output[0] = ((d_input[0] & 0xf00) >> 8);" in result
+
     def test_public_rocm_bandwidth_enum_class_conversion(self):
         code = """
         enum class MemoryMode : unsigned int

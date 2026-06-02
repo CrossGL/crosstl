@@ -245,6 +245,22 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_NUMERIC_ID_SPEC_CONSTANT_ASSEMBLY = """
+; Reduced from Vulkan-Samples compute_nbody/glsl/particle_calculate.comp.spv.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpDecorate %104 SpecId 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%104 = OpSpecConstant %uint 1
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
 ; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
 OpCapability Shader
@@ -471,6 +487,20 @@ def test_spirv_assembly_specialization_constants_parse():
     assert enable_shadows.declaration.left.vtype == "const bool"
     assert enable_shadows.declaration.left.name == "ENABLE_SHADOWS"
     assert enable_shadows.declaration.right == "true"
+
+
+def test_spirv_assembly_numeric_id_specialization_constant_parse():
+    tokens = tokenize_code(SPIRV_NUMERIC_ID_SPEC_CONSTANT_ASSEMBLY)
+    ast = parse_code(tokens)
+    constant = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert constant.layout_type == "CONST"
+    assert constant.qualifiers == [("constant_id", "0")]
+    assert constant.spirv_id == "%104"
+    assert constant.declaration.left.vtype == "const uint"
+    assert constant.declaration.left.name == "spec_constant_0"
+    assert constant.declaration.right == "1"
 
 
 def test_spirv_assembly_uniform_constant_resources_parse():

@@ -15,6 +15,7 @@ from crosstl.backend.common_ast import (
     TextureSampleNode,
     VectorConstructorNode,
 )
+from crosstl.backend.Metal.MetalAst import BlockNode
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 
@@ -870,6 +871,102 @@ def test_parse_braced_uchar_vector_constructor_from_llama_cpp():
 
     assert len(braced_constructors) == 2
     assert len(scalar_constructors) == 4
+
+
+def test_parse_standalone_scoped_block_from_llama_cpp():
+    code = """
+    void FC_unary_op(device const float* src0, device float* dst, uint i0) {
+        {
+            if (i0 >= 4) {
+                return;
+            }
+
+            const float x = src0[i0];
+            dst[i0] = x;
+        }
+    }
+    """
+    ast = parse_ok(code)
+    block = ast.functions[0].body[0]
+
+    assert isinstance(block, BlockNode)
+    assert len(block.statements) == 3
+    assert isinstance(block.statements[0], IfNode)
+    assert isinstance(block.statements[2], AssignmentNode)
+
+
+def test_parse_decltype_template_typedef_and_explicit_instantiations_from_llama_cpp():
+    code = """
+    template [[host_name("kernel_unary_f32_f32")]]
+    kernel void kernel_unary_impl(device const float* src, device float* dst) {
+        dst[0] = erf_approx<float>(src[0]);
+    }
+
+    typedef decltype(kernel_unary_impl<float>) kernel_unary_t;
+    template [[host_name("kernel_unary_f32_f32")]]
+    kernel kernel_unary_t kernel_unary_impl<float>;
+    """
+    ast = parse_ok(code)
+
+    assert ast.typedefs[0].name == "kernel_unary_t"
+    assert ast.typedefs[0].alias_type == "decltype(kernel_unary_impl<float>)"
+    assert len(ast.functions) == 1
+    assert ast.functions[0].name == "kernel_unary_impl"
+
+
+def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
+    code = """
+    void reduce(uint j, uint limit, device float* dst_row) {
+        for (int i = 0; i < limit; i++) {
+            _Pragma("clang loop unroll(full)")
+            dst_row[i] = erf_approx<float>(dst_row[i]);
+        }
+
+        if (is_same<float4, T0>::value) {
+            dst_row[0] = 0.0f;
+        }
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert isinstance(body[0], ForNode)
+    assert len(body[0].body) == 1
+    assert isinstance(body[1], IfNode)
+
+
+def test_parse_qualified_casts_and_range_designator_from_llama_cpp():
+    code = """
+    void load_block(device const void* src0, uint offset0, short r1ptg) {
+        device const block_q1_0* block =
+            (device const block_q1_0*)((device char*)src0 + offset0);
+        float sumf[8] = {[0 ... r1ptg - 1] = 0.0f};
+    }
+    """
+    ast = parse_ok(code)
+    cast_assignment = ast.functions[0].body[0]
+    range_assignment = ast.functions[0].body[1]
+    initializer = range_assignment.right
+    designator = initializer.elements[0]
+
+    assert isinstance(cast_assignment.right, CastNode)
+    assert cast_assignment.right.target_type == "block_q1_0*"
+    assert designator.designators[0][0] == "range"
+    assert designator.designators[0][1] == "0"
+    assert designator.designators[0][2] == "r1ptg-1"
+
+
+def test_parse_function_pointer_typedef_from_llama_cpp():
+    code = """
+    typedef void (im2col_t)(constant ggml_metal_kargs_im2col& args,
+                            device const float* x,
+                            device char* dst,
+                            uint3 tgpig [[threadgroup_position_in_grid]]);
+    """
+    ast = parse_ok(code)
+
+    assert ast.typedefs[0].name == "im2col_t"
+    assert ast.typedefs[0].alias_type == "void"
 
 
 def test_parse_preprocessor_define():

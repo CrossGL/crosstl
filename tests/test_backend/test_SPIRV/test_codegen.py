@@ -273,6 +273,22 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_NUMERIC_ID_SPEC_CONSTANT_ASSEMBLY = """
+; Reduced from Vulkan-Samples compute_nbody/glsl/particle_calculate.comp.spv.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpDecorate %104 SpecId 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%104 = OpSpecConstant %uint 1
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
 ; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
 OpCapability Shader
@@ -662,6 +678,16 @@ def test_spirv_assembly_specialization_constants_codegen():
 
     assert "const uint MAX_LIGHTS @constant_id(0) = 4;" in generated_code
     assert "const bool ENABLE_SHADOWS @constant_id(1) = true;" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_numeric_id_specialization_constant_codegen():
+    tokens = tokenize_code(SPIRV_NUMERIC_ID_SPEC_CONSTANT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "const uint spec_constant_0 @constant_id(0) = 1;" in generated_code
+    assert "const uint 104" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

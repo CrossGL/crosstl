@@ -225,6 +225,18 @@ def test_rust_gpu_ray_query_parenthesized_statement_macro_codegen():
     assert "vec3 origin = handle.get_world_ray_origin();" in result
 
 
+def test_rust_gpu_compute_shader_method_turbofish_codegen():
+    code = """
+    fn main() {
+        let result = src_range.clone().into_par_iter().map(collatz).collect::<Vec<_>>();
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "collect<Vec<_>>();" in result
+
+
 def test_rust_gpu_path_qualified_attribute_codegen():
     code = r"""
     #[spirv_std_macros::gpu_only]

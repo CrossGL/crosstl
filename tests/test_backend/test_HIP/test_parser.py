@@ -194,6 +194,32 @@ class TestHipParser:
         assert function.name == "add"
         assert "__device__" in function.qualifiers
 
+    def test_public_rocm_bit_extract_fixed_width_pointer_declarations_parse(self):
+        code = """
+        __global__ void bit_extract_kernel(
+            uint32_t* d_output,
+            const uint32_t* d_input,
+            size_t size) {
+            uint32_t *d_local, *d_shadow;
+            d_output[0] = ((d_input[0] & 0xf00) >> 8);
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+        d_local, d_shadow, assignment = kernel.body
+
+        assert kernel.params[0] == {"type": "uint32_t *", "name": "d_output"}
+        assert kernel.params[1] == {"type": "const uint32_t *", "name": "d_input"}
+        assert isinstance(d_local, VariableNode)
+        assert d_local.vtype == "uint32_t *"
+        assert d_local.name == "d_local"
+        assert isinstance(d_shadow, VariableNode)
+        assert d_shadow.vtype == "uint32_t *"
+        assert d_shadow.name == "d_shadow"
+        assert isinstance(assignment, AssignmentNode)
+        assert assignment.right.op == ">>"
+
     def test_public_rocm_bandwidth_enum_class_parse_as_top_level_declaration(self):
         code = """
         enum class MemoryMode : unsigned int

@@ -177,6 +177,16 @@ class HipParser:
         "ULONGLONG4",
     }
     RESOURCE_TYPE_TOKENS = {"TEXTURE", "SURFACE", "HIPARRAY", "HIPARRAYT"}
+    HIP_IDENTIFIER_TYPE_NAMES = {
+        "int8_t",
+        "uint8_t",
+        "int16_t",
+        "uint16_t",
+        "int32_t",
+        "uint32_t",
+        "int64_t",
+        "uint64_t",
+    }
 
     def __init__(self, tokens: List[Token]):
         self.tokens = tokens
@@ -2756,8 +2766,7 @@ class HipParser:
             type_token != "IDENTIFIER"
             or has_qualified_suffix
             or type_value == "auto"
-            or type_value in self.type_aliases
-            or self.is_hip_opaque_handle_type(type_value)
+            or self.is_identifier_type_name(type_value)
         )
         while (
             can_have_pointer_suffix
@@ -2802,6 +2811,13 @@ class HipParser:
             isinstance(type_name, str)
             and type_name.startswith("hip")
             and type_name.endswith("_t")
+        )
+
+    def is_identifier_type_name(self, type_name):
+        return (
+            type_name in self.type_aliases
+            or type_name in self.HIP_IDENTIFIER_TYPE_NAMES
+            or self.is_hip_opaque_handle_type(type_name)
         )
 
     def skip_postfix_type_qualifiers_at_pos(self, index):

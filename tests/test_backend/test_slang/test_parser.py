@@ -1649,5 +1649,29 @@ def test_c_style_scalar_cast_from_official_select_expr_sample():
     assert cast.expression.member == "x"
 
 
+def test_parenthesized_expression_swizzle_from_autodiff_texture_learnmip_sample():
+    code = """
+    RWTexture2D dstTexture;
+
+    void computeMain(uint2 p)
+    {
+        var val = float4(1.0);
+        float4 color = float4((dstTexture[p] - val).xyz, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    compute_main = find_function(ast, "computeMain")
+    color_assignment = compute_main.body[1]
+    constructor = color_assignment.right
+    swizzle = constructor.args[0]
+
+    assert isinstance(swizzle, MemberAccessNode)
+    assert swizzle.member == "xyz"
+    assert isinstance(swizzle.object, BinaryOpNode)
+    assert isinstance(swizzle.object.left, ArrayAccessNode)
+
+
 if __name__ == "__main__":
     pytest.main()

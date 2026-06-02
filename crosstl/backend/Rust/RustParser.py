@@ -2471,6 +2471,20 @@ class RustParser:
                     left = self.parse_matches_macro_expression()
                 else:
                     left = self.parse_macro_invocation(left)
+            elif (
+                self.current_token[0] == "DOUBLE_COLON"
+                and self.peek_token_type() == "LESS_THAN"
+            ):
+                self.eat("DOUBLE_COLON")
+                generic_suffix = self.parse_generic_argument_suffix()
+                if isinstance(left, MemberAccessNode):
+                    left.member += generic_suffix
+                elif isinstance(left, str):
+                    left += generic_suffix
+                else:
+                    raise SyntaxError(
+                        f"Expected path before turbofish, got {type(left).__name__}"
+                    )
             elif self.current_token[0] == "LPAREN":
                 self.eat("LPAREN")
                 args = []

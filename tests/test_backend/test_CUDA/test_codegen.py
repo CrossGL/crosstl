@@ -170,6 +170,36 @@ class TestCudaCodeGen:
         assert "var g_uids: i32 = 0;" in result
         assert "var grid_dot_result: f64 = 0.0;" in result
 
+    def test_fixed_width_pointer_declaration_list_conversion(self):
+        code = """
+        __global__ void bit_extract_kernel(
+            uint32_t* d_output,
+            const uint32_t* d_input,
+            size_t size) {
+            uint32_t *d_local, *d_shadow;
+            d_output[0] = ((d_input[0] & 0xf00) >> 8);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "@group(0) @binding(0) var<storage, read_write> d_output: array<u32>"
+            in result
+        )
+        assert (
+            "@group(0) @binding(1) var<storage, read_write> d_input: array<u32>"
+            in result
+        )
+        assert "var d_local: ptr<u32>;" in result
+        assert "var d_shadow: ptr<u32>;" in result
+        assert "d_output[0] = ((d_input[0] & 0xf00) >> 8);" in result
+
     def test_enum_class_declaration_conversion(self):
         code = """
         enum class MemoryMode : unsigned int

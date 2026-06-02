@@ -1626,5 +1626,40 @@ def test_c_style_scalar_cast_codegen_from_official_select_expr_sample():
     )
 
 
+def test_parenthesized_expression_swizzle_codegen_from_autodiff_texture_learnmip_sample():
+    code = """
+    RWTexture2D dstTexture;
+
+    void computeMain(uint2 p)
+    {
+        var val = float4(1.0);
+        float4 color = float4((dstTexture[p] - val).xyz, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 color = vec4((dstTexture[p] - val).xyz, 1.0);" in generated_code
+    assert "dstTexture[p] - val.xyz" not in generated_code
+
+
+def test_parenthesized_unary_swizzle_codegen_preserves_receiver_grouping():
+    code = """
+    void computeMain(float4 value)
+    {
+        float x = (-value).x;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float x = (-value).x;" in generated_code
+    assert "float x = -value.x;" not in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()

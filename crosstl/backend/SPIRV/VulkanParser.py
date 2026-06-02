@@ -1,5 +1,6 @@
 """Parser for Vulkan SPIR-V source AST construction."""
 
+import re
 import shlex
 
 from .VulkanAst import *
@@ -584,7 +585,9 @@ class VulkanParser:
             if data_type is None:
                 continue
 
-            variable_name = names.get(result_id) or result_id.lstrip("%")
+            variable_name = names.get(result_id) or self.spirv_fallback_identifier(
+                constant_id, "spec_constant"
+            )
             declaration = AssignmentNode(
                 VariableNode(f"const {data_type}", variable_name),
                 constants.get(result_id),
@@ -606,6 +609,14 @@ class VulkanParser:
             if decoration == "SpecId" and operands:
                 return operands[0]
         return None
+
+    def spirv_fallback_identifier(self, raw_value, prefix):
+        identifier = re.sub(r"\W", "_", str(raw_value or "").lstrip("%"))
+        if not identifier:
+            return prefix
+        if identifier[0].isdigit():
+            return f"{prefix}_{identifier}"
+        return identifier
 
     def spirv_assembly_resource_block_layout(
         self,

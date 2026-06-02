@@ -132,6 +132,37 @@ class TestCudaParser:
         assert len(ast.functions) == 1
         assert ast.functions[0].name == "add"
 
+    def test_fixed_width_pointer_declaration_lists_parse_as_variables(self):
+        code = """
+        __global__ void bit_extract_kernel(
+            uint32_t* d_output,
+            const uint32_t* d_input,
+            size_t size) {
+            uint32_t *d_local, *d_shadow;
+            d_output[0] = ((d_input[0] & 0xf00) >> 8);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        kernel = ast.kernels[0]
+        d_local, d_shadow, assignment = kernel.body
+
+        assert kernel.params[0].vtype == "uint32_t *"
+        assert kernel.params[0].name == "d_output"
+        assert kernel.params[1].vtype == "const uint32_t *"
+        assert kernel.params[1].name == "d_input"
+        assert isinstance(d_local, VariableNode)
+        assert d_local.vtype == "uint32_t *"
+        assert d_local.name == "d_local"
+        assert isinstance(d_shadow, VariableNode)
+        assert d_shadow.vtype == "uint32_t *"
+        assert d_shadow.name == "d_shadow"
+        assert isinstance(assignment, AssignmentNode)
+        assert assignment.right.op == ">>"
+
     def test_enum_class_declarations_parse_before_functions(self):
         code = """
         enum class MemoryMode : unsigned int
