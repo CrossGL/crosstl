@@ -969,6 +969,44 @@ def test_parse_function_pointer_typedef_from_llama_cpp():
     assert ast.typedefs[0].alias_type == "void"
 
 
+def test_parse_struct_forward_declaration_from_mlx_complex_header():
+    code = """
+    struct complex64_t;
+
+    void use_complex(thread complex64_t& value) {
+        return;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert ast.structs == []
+    assert ast.functions[0].params[0].vtype == "complex64_t&"
+
+
+def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
+    code = """
+    #define instantiate_metal_math_funcs(itype, otype, ctype, mfast) \\
+      METAL_FUNC otype abs(itype x) { \\
+        return static_cast<otype>(__metal_fabs(static_cast<ctype>(x), mfast)); \\
+      }
+
+    namespace metal {
+    instantiate_metal_math_funcs(
+        bfloat16_t,
+        bfloat16_t,
+        float,
+        __METAL_MAYBE_FAST_MATH__);
+    }
+
+    kernel void real_kernel(device float* out [[buffer(0)]]) {
+        out[0] = 1.0f;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [func.name for func in ast.functions] == ["real_kernel"]
+
+
 def test_parse_preprocessor_define():
     code = """
     #define FOO 1

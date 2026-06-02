@@ -172,7 +172,10 @@ TOKENS = tuple(
         ),
         (
             "NUMBER",
-            r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFhH]?|\d+[eE][+-]?\d+[fFhH]?|\d+(?:[uU][lL]?|[lL][uU]?|[fFhH]|[uUlL]{0,2})?",
+            r"\d+\.\#(?i:inf|ind|qnan|snan)"
+            r"|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFhH]?"
+            r"|\d+[eE][+-]?\d+[fFhH]?"
+            r"|\d+(?:[uU][lL]?|[lL][uU]?|[fFhH]|[uUlL]{0,2})?",
         ),
         # Brackets and braces
         ("LBRACE", r"\{"),

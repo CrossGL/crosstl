@@ -28,6 +28,76 @@ class MetalPreprocessor(HLSLPreprocessor):
         processed = super().preprocess(code, file_path=file_path)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
+    def _expand_macros(
+        self,
+        text: str,
+        line_num: int,
+        in_expression: bool,
+        file_path: Optional[str] = None,
+    ) -> str:
+        if not in_expression and self._has_incomplete_function_macro_call(text):
+            return text
+        return super()._expand_macros(text, line_num, in_expression, file_path)
+
+    def _has_incomplete_function_macro_call(self, text: str) -> bool:
+        i = 0
+        while i < len(text):
+            if text[i] in "\"'":
+                _literal, consumed = self._read_string(text, i)
+                i += consumed
+                continue
+            if text.startswith("//", i):
+                return False
+            if text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                if end == -1:
+                    return False
+                i = end + 2
+                continue
+            if text[i].isalpha() or text[i] == "_":
+                ident, consumed = self._read_identifier(text, i)
+                macro = self.macros.get(ident)
+                i += consumed
+                if macro is None or not macro.is_function_like():
+                    continue
+                j = i
+                while j < len(text) and text[j].isspace():
+                    j += 1
+                if (
+                    j < len(text)
+                    and text[j] == "("
+                    and not self._call_closes_on_line(text, j)
+                ):
+                    return True
+                continue
+            i += 1
+        return False
+
+    def _call_closes_on_line(self, text: str, start: int) -> bool:
+        depth = 0
+        i = start
+        while i < len(text):
+            if text[i] in "\"'":
+                _literal, consumed = self._read_string(text, i)
+                i += consumed
+                continue
+            if text.startswith("//", i):
+                return False
+            if text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                if end == -1:
+                    return False
+                i = end + 2
+                continue
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    return True
+            i += 1
+        return False
+
     def _handle_include(self, rest: str, file_path: Optional[str]) -> Optional[str]:
         included = super()._handle_include(rest, file_path)
         if included is not None or self.strict:

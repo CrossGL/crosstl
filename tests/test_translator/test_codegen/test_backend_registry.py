@@ -124,6 +124,29 @@ def test_source_registry_covers_backend_dirs():
     assert not missing, f"Unregistered source backends: {missing}"
 
 
+@pytest.mark.parametrize(
+    "extension",
+    (
+        ".glsl",
+        ".vs",
+        ".fs",
+        ".vert",
+        ".frag",
+        ".comp",
+        ".geom",
+        ".tesc",
+        ".tese",
+    ),
+)
+def test_source_registry_recognizes_glsl_stage_extensions(extension):
+    register_default_sources()
+
+    assert SOURCE_REGISTRY.get_by_extension(extension).name == "opengl"
+    assert (
+        SOURCE_REGISTRY.get_by_extension(f"shader{extension.upper()}").name == "opengl"
+    )
+
+
 def test_each_backend_has_codegen_tests():
     backend_files = [name.lower() for name in _backend_test_files()]
     missing = []

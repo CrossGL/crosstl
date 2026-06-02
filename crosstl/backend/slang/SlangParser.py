@@ -44,7 +44,9 @@ class SlangParser:
     TYPE_NAME_TOKENS = (
         DECLARATION_TYPE_TOKENS | RESOURCE_TYPE_TOKENS | {"IDENTIFIER", "VOID"}
     )
-    TOP_LEVEL_DECLARATION_TOKENS = TYPE_NAME_TOKENS | QUALIFIER_TOKENS | {"GENERIC"}
+    TOP_LEVEL_DECLARATION_TOKENS = (
+        TYPE_NAME_TOKENS | QUALIFIER_TOKENS | {"GENERIC", "TYPEALIAS"}
+    )
     ASSIGNMENT_TOKENS = (
         "EQUALS",
         "PLUS_EQUALS",
@@ -124,7 +126,7 @@ class SlangParser:
                 extensions.append(self.parse_extension())
             elif declaration_token == "CBUFFER":
                 cbuffers.append(self.parse_cbuffer(attributes=pending_attributes))
-            elif self.current_token[0] == "TYPEDEF":
+            elif declaration_token in {"TYPEDEF", "TYPEALIAS"}:
                 typedefs.append(self.parse_typedef())
             elif self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS:
                 if self.is_function():
@@ -586,11 +588,16 @@ class SlangParser:
 
         self.eat("LBRACE")
         methods = []
+        associated_types = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
                 raise SyntaxError("Unterminated interface declaration")
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
+                continue
+            declaration_token = self.peek_declaration_token_type()
+            if declaration_token == "ASSOCIATEDTYPE":
+                associated_types.append(self.parse_associated_type())
                 continue
             if not self.is_function():
                 raise SyntaxError(
@@ -600,7 +607,12 @@ class SlangParser:
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-        node = InterfaceNode(name, methods, generic_parameters=generic_parameters)
+        node = InterfaceNode(
+            name,
+            methods,
+            generic_parameters=generic_parameters,
+            associated_types=associated_types,
+        )
         node.qualifiers = qualifiers
         return node
 
@@ -616,6 +628,7 @@ class SlangParser:
         self.eat("LBRACE")
         members = []
         methods = []
+        typedefs = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
                 raise SyntaxError("Unterminated struct declaration")
@@ -629,6 +642,10 @@ class SlangParser:
                 break
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
+                continue
+            declaration_token = self.peek_declaration_token_type()
+            if declaration_token in {"TYPEDEF", "TYPEALIAS"}:
+                typedefs.append(self.parse_typedef())
                 continue
             if self.is_function():
                 methods.append(
@@ -644,6 +661,7 @@ class SlangParser:
         self.eat("RBRACE")
         node = StructNode(name, members)
         node.methods = methods
+        node.typedefs = typedefs
         node.generic_parameters = generic_parameters
         node.conformances = conformances
         node.qualifiers = qualifiers
@@ -724,13 +742,46 @@ class SlangParser:
         return conformances
 
     def parse_typedef(self):
-        self.eat("TYPEDEF")
-        original_type = self.current_token[1]
-        self.eat(self.current_token[0])
-        new_type = self.current_token[1]
-        self.eat("IDENTIFIER")
+        qualifiers = self.parse_qualifiers()
+        if self.current_token[0] == "TYPEDEF":
+            self.eat("TYPEDEF")
+            original_type = self.parse_type_name(allow_array_suffix=True)
+            original_type += self.parse_pointer_suffix()
+            new_type = self.current_token[1]
+            self.eat("IDENTIFIER")
+        else:
+            self.eat("TYPEALIAS")
+            new_type = self.current_token[1]
+            self.eat("IDENTIFIER")
+            self.eat("EQUALS")
+            original_type = self.parse_type_name(allow_array_suffix=True)
+            original_type += self.parse_pointer_suffix()
         self.eat("SEMICOLON")
-        return TypedefNode(original_type, new_type)
+        node = TypedefNode(original_type, new_type)
+        node.qualifiers = qualifiers
+        return node
+
+    def parse_associated_type(self):
+        qualifiers = self.parse_qualifiers()
+        self.eat("ASSOCIATEDTYPE")
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        constraint_type = None
+        target_type = None
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            constraint_type = self.parse_type_name()
+        if self.current_token[0] == "EQUALS":
+            self.eat("EQUALS")
+            target_type = self.parse_type_name(allow_array_suffix=True)
+            target_type += self.parse_pointer_suffix()
+        self.eat("SEMICOLON")
+        return AssociatedTypeNode(
+            name,
+            constraint_type=constraint_type,
+            target_type=target_type,
+            qualifiers=qualifiers,
+        )
 
     def parse_function(self, shader_type=None, attributes=None, allow_signature=False):
         attributes = attributes or []

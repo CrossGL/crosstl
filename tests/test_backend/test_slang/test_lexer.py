@@ -192,6 +192,16 @@ def test_interface_extension_and_where_tokenization():
     assert ("WHERE", "where") in tokens
 
 
+def test_typealias_and_associatedtype_tokenization():
+    tokens = tokenize_code(
+        "typealias Color = float4; "
+        "interface IMaterial { associatedtype BRDF : IBRDF; }"
+    )
+
+    assert ("TYPEALIAS", "typealias") in tokens
+    assert ("ASSOCIATEDTYPE", "associatedtype") in tokens
+
+
 def test_numeric_literal_tokenization():
     tokens = tokenize_code("1e-3f 1.0f .5f 1. 0xffu 123u")
 

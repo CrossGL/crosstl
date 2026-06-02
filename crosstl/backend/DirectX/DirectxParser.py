@@ -130,6 +130,7 @@ QUALIFIER_TOKENS = {
 }
 
 CONTEXTUAL_QUALIFIER_IDENTIFIERS = {"shared"}
+CONTEXTUAL_IDENTIFIER_TOKENS = {"SAMPLE"}
 
 ASSIGNMENT_TOKENS = {
     "EQUALS",
@@ -215,13 +216,12 @@ class HLSLParser:
                 continue
 
             return_type = self.parse_type()
-            if self.current_token[0] != "IDENTIFIER":
+            if not self.is_identifier_token(self.current_token[0]):
                 raise SyntaxError(
                     f"Expected identifier after type, got {self.current_token[0]}"
                 )
 
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            name = self.parse_identifier()
 
             if self.current_token[0] == "LPAREN":
                 func = self.parse_function(return_type, name, qualifiers, attributes)
@@ -266,6 +266,21 @@ class HLSLParser:
 
     def is_type_token(self, token_type):
         return token_type in TYPE_TOKENS
+
+    def is_identifier_token(self, token_type):
+        return token_type == "IDENTIFIER" or token_type in CONTEXTUAL_IDENTIFIER_TOKENS
+
+    def is_identifier_token_at(self, index):
+        return index < len(self.tokens) and self.is_identifier_token(
+            self.tokens[index][0]
+        )
+
+    def parse_identifier(self):
+        if self.is_identifier_token(self.current_token[0]):
+            token = self.current_token
+            self.eat(token[0])
+            return token[1]
+        raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
 
     def current_token_is_keyword(self, token_type, value):
         return self.current_token[0] == token_type or (
@@ -601,13 +616,11 @@ class HLSLParser:
         self.eat("RBRACE")
 
         variables = []
-        if self.current_token[0] == "IDENTIFIER":
-            variables.append(self.current_token[1])
-            self.eat("IDENTIFIER")
+        if self.is_identifier_token(self.current_token[0]):
+            variables.append(self.parse_identifier())
             while self.current_token[0] == "COMMA":
                 self.eat("COMMA")
-                variables.append(self.current_token[1])
-                self.eat("IDENTIFIER")
+                variables.append(self.parse_identifier())
 
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
@@ -627,9 +640,11 @@ class HLSLParser:
     ):
         self.eat("STRUCT")
         nested_name = None
-        if self.current_token[0] == "IDENTIFIER" and self.peek()[0] == "LBRACE":
-            nested_name = self.current_token[1]
-            self.eat("IDENTIFIER")
+        if (
+            self.is_identifier_token(self.current_token[0])
+            and self.peek()[0] == "LBRACE"
+        ):
+            nested_name = self.parse_identifier()
 
         self.eat("LBRACE")
         nested_members = []
@@ -659,7 +674,7 @@ class HLSLParser:
 
         self.eat("RBRACE")
 
-        if self.current_token[0] != "IDENTIFIER":
+        if not self.is_identifier_token(self.current_token[0]):
             if nested_name is None:
                 raise SyntaxError("Expected identifier after anonymous struct member")
             if self.current_token[0] == "SEMICOLON":
@@ -667,8 +682,7 @@ class HLSLParser:
             self.synthetic_structs.append(StructNode(nested_name, nested_members))
             return []
 
-        first_name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        first_name = self.parse_identifier()
         struct_type = nested_name or self.synthetic_struct_type_name(
             parent_name, first_name
         )
@@ -934,9 +948,8 @@ class HLSLParser:
                     )
                 param_type = self.parse_type()
 
-                if self.current_token[0] == "IDENTIFIER":
-                    name = self.current_token[1]
-                    self.eat("IDENTIFIER")
+                if self.is_identifier_token(self.current_token[0]):
+                    name = self.parse_identifier()
                 else:
                     name = ""
 
@@ -1078,7 +1091,7 @@ class HLSLParser:
                         idx += 1
                         break
                 idx += 1
-        if idx >= len(self.tokens) or self.tokens[idx][0] != "IDENTIFIER":
+        if idx >= len(self.tokens) or not self.is_identifier_token_at(idx):
             return False
         return True
 
@@ -1092,8 +1105,7 @@ class HLSLParser:
         qualifiers = qualifiers or []
         attributes = attributes or []
         vtype = self.parse_type()
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_identifier()
         declarations = self.parse_variable_declaration_list_rest(
             vtype,
             name,
@@ -1129,8 +1141,7 @@ class HLSLParser:
             if self.current_token[0] != "COMMA":
                 break
             self.eat("COMMA")
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            name = self.parse_identifier()
 
         if consume_semicolon:
             self.eat("SEMICOLON")
@@ -1553,8 +1564,7 @@ class HLSLParser:
                 expr = ArrayAccessNode(expr, index)
             elif self.current_token[0] == "DOT":
                 self.eat("DOT")
-                member = self.current_token[1]
-                self.eat("IDENTIFIER")
+                member = self.parse_identifier()
                 if self.looks_like_template_call_arguments():
                     member = self.format_templated_name(
                         member, self.parse_generic_arguments()
@@ -1619,8 +1629,7 @@ class HLSLParser:
         scoped_name = prefix
         while self.current_token_is_double_colon():
             self.eat_double_colon()
-            member = self.current_token[1]
-            self.eat("IDENTIFIER")
+            member = self.parse_identifier()
             scoped_name = f"{scoped_name}::{member}"
         return scoped_name
 
@@ -1669,8 +1678,8 @@ class HLSLParser:
             type_name = self.parse_type()
             args = self.parse_call_arguments()
             return VectorConstructorNode(type_name, args)
-        if token_type == "IDENTIFIER":
-            self.eat("IDENTIFIER")
+        if self.is_identifier_token(token_type):
+            self.eat(token_type)
             return value
         if token_type == "CLIP":
             self.eat("CLIP")
@@ -1751,6 +1760,10 @@ class HLSLParser:
         return left + right
 
     def parse_numeric_literal(self, token_type, value):
+        if "#INF" in value.upper():
+            return float("inf")
+        if "#" in value:
+            return float("nan")
         if token_type == "HEX_NUMBER":
             stripped = re.sub(r"[uUlL]+$", "", value)
             return int(stripped, 16)

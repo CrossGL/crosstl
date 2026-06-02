@@ -6,6 +6,7 @@ from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 from crosstl.backend.slang.SlangAst import (
     ArrayAccessNode,
     AssignmentNode,
+    AssociatedTypeNode,
     BinaryOpNode,
     BreakNode,
     CallNode,
@@ -676,6 +677,57 @@ def test_interface_struct_and_extension_conformance_metadata_parsing():
     assert len(extension.methods) == 1
     assert extension.methods[0].name == "bar"
     assert not extension.methods[0].is_declaration
+
+
+def test_interface_associated_type_requirement_from_model_viewer_sample():
+    code = """
+    interface IMaterial
+    {
+        associatedtype BRDF : IBRDF;
+        BRDF prepare(SurfaceGeometry geometry);
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    interface = ast.interfaces[0]
+
+    assert len(interface.associated_types) == 1
+    associated_type = interface.associated_types[0]
+    assert isinstance(associated_type, AssociatedTypeNode)
+    assert associated_type.name == "BRDF"
+    assert associated_type.constraint_type == "IBRDF"
+    assert associated_type.target_type is None
+    assert len(interface.methods) == 1
+    assert interface.methods[0].return_type == "BRDF"
+    assert interface.methods[0].name == "prepare"
+
+
+def test_typealias_declarations_from_shader_toy_and_mlp_vec_samples():
+    code = """
+    typealias vec2 = float2;
+
+    public struct MLVec<int N> : IDifferentiable
+    {
+        public typealias Differential = MLVec<N>;
+        public CoopVec<NFloat, N> data;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    typedef = ast.typedefs[0]
+    struct = ast.structs[0]
+    struct_typedef = struct.typedefs[0]
+
+    assert typedef.original_type == "float2"
+    assert typedef.new_type == "vec2"
+    assert struct_typedef.original_type == "MLVec<N>"
+    assert struct_typedef.new_type == "Differential"
+    assert struct_typedef.qualifiers == ["public"]
+    assert [(member.vtype, member.name) for member in struct.members] == [
+        ("CoopVec<NFloat, N>", "data")
+    ]
 
 
 def test_function_generic_where_conformance_constraint_parsing():

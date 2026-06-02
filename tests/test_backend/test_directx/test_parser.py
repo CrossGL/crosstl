@@ -1,3 +1,4 @@
+import math
 import textwrap
 
 import pytest
@@ -1504,6 +1505,58 @@ def test_parse_scoped_enum_parameter_type_from_directx_graphics_samples():
     assert function.is_prototype is True
     assert function.params[1].vtype == "SignedDistancePrimitive::Enum"
     assert function.params[1].name == "sdPrimitive"
+
+
+def test_parse_sample_contextual_identifier_from_directx_graphics_samples():
+    ast = parse_code("""
+    struct SampleValue {
+        float3 value;
+    };
+
+    StructuredBuffer<SampleValue> g_sampleSets : register(t0);
+
+    float3 GenerateRayDirection(
+        uint sampleSetJump,
+        uint sampleJump,
+        uint numSamplesPerSet,
+        float3 u,
+        float3 v,
+        float3 w
+    ) {
+        float3 sample =
+            g_sampleSets[sampleSetJump + (sampleJump % numSamplesPerSet)].value;
+        float3 rayDirection =
+            normalize(sample.x * u + sample.y * v + sample.z * w);
+        return rayDirection;
+    }
+    """)
+
+    function = ast.functions[0]
+    sample_decl = next(
+        stmt for stmt in function.body if getattr(stmt, "name", "") == "sample"
+    )
+
+    assert sample_decl.vtype == "float3"
+    assert sample_decl.name == "sample"
+
+
+def test_parse_legacy_special_float_literal_from_directx_graphics_samples():
+    ast = parse_code("""
+    bool RayAABBIntersectionTest(float3 rayDirection) {
+        const float FLT_INFINITY = 1.#INF;
+        float3 invRayDirection = rayDirection != 0
+            ? 1 / rayDirection
+            : float3(FLT_INFINITY, FLT_INFINITY, FLT_INFINITY);
+        return true;
+    }
+    """)
+
+    function = ast.functions[0]
+    infinity = next(
+        stmt for stmt in function.body if getattr(stmt, "name", "") == "FLT_INFINITY"
+    )
+
+    assert math.isinf(infinity.value)
 
 
 @pytest.mark.parametrize(

@@ -244,6 +244,13 @@ def test_numeric_literals_tokenization():
     assert_values_present(values, expected)
 
 
+def test_legacy_special_float_literal_from_directx_graphics_samples():
+    tokens = tokenize_code("const float FLT_INFINITY = 1.#INF;")
+
+    assert ("NUMBER", "1.#INF") in tokens
+    assert ("PREPROCESSOR", "#INF;") not in tokens
+
+
 def test_min_precision_types_tokenization():
     code = "min16float a; min10float b; min16int c; min12int d; min16uint e;"
     tokens = tokenize_code(code)

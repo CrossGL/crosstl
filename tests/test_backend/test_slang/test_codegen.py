@@ -95,6 +95,18 @@ def test_struct_comma_member_declarators_codegen():
     assert "screenWidth, screenHeight" not in generated_code
 
 
+def test_typealias_codegen():
+    code = """
+    typealias Color = float4;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "typedef vec4 Color;" in generated_code
+
+
 def test_visibility_qualified_struct_codegen_from_mlp_training_adam_sample():
     code = """
     public struct AdamState

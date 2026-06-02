@@ -266,16 +266,22 @@ class MetalParser:
                 alias = self.parse_using_statement()
                 if alias is not None:
                     typedefs.append(alias)
+            elif self.is_bare_macro_invocation():
+                self.skip_bare_macro_invocation()
             elif self.is_template_declaration_start():
                 function = self.parse_template_declaration()
                 if function is not None:
                     functions.append(function)
             elif self.current_token[0] == "STRUCT":
-                structs.append(self.parse_struct())
+                struct = self.parse_struct()
+                if struct is not None:
+                    structs.append(struct)
             elif self.current_token[0] == "ALIGNAS":
                 alignas_specs = self.parse_alignas_specifiers()
                 if self.current_token[0] == "STRUCT":
-                    structs.append(self.parse_struct(alignas_specs))
+                    struct = self.parse_struct(alignas_specs)
+                    if struct is not None:
+                        structs.append(struct)
                 else:
                     global_variables.append(
                         self.parse_global_variable(pre_alignas=alignas_specs)
@@ -324,6 +330,28 @@ class MetalParser:
             enums=enums,
             typedefs=typedefs,
         )
+
+    def is_bare_macro_invocation(self):
+        return self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "LPAREN"
+
+    def skip_bare_macro_invocation(self):
+        self.eat("IDENTIFIER")
+        self.eat("LPAREN")
+        depth = 1
+        while depth > 0 and self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RPAREN")
+                    break
+            self.eat(token_type)
+        if depth != 0:
+            raise SyntaxError("Unterminated macro invocation")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
 
     def parse_namespace_start(self):
         self.eat("NAMESPACE")
@@ -921,6 +949,9 @@ class MetalParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.known_types.add(name)
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return None
         self.eat("LBRACE")
 
         members = self.parse_struct_members()

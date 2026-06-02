@@ -125,13 +125,37 @@ class GenericConstraintNode(ASTNode):
         )
 
 
+class AssociatedTypeNode(ASTNode):
+    """Node representing a Slang interface associated type requirement."""
+
+    def __init__(self, name, constraint_type=None, target_type=None, qualifiers=None):
+        self.name = name
+        self.constraint_type = constraint_type
+        self.target_type = target_type
+        self.qualifiers = qualifiers or []
+
+    def __repr__(self):
+        return (
+            "AssociatedTypeNode("
+            f"name={self.name}, constraint_type={self.constraint_type}, "
+            f"target_type={self.target_type})"
+        )
+
+
 class InterfaceNode(ASTNode):
     """Node representing a Slang interface declaration."""
 
-    def __init__(self, name, methods=None, generic_parameters=None):
+    def __init__(
+        self,
+        name,
+        methods=None,
+        generic_parameters=None,
+        associated_types=None,
+    ):
         self.name = name
         self.methods = methods or []
         self.generic_parameters = generic_parameters
+        self.associated_types = associated_types or []
 
     def __repr__(self):
         return f"InterfaceNode(name={self.name}, methods={len(self.methods)})"

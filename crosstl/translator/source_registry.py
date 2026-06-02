@@ -311,7 +311,17 @@ def register_default_sources() -> None:
     _register(
         SourceSpec(
             name="opengl",
-            extensions=(".glsl",),
+            extensions=(
+                ".glsl",
+                ".vs",
+                ".fs",
+                ".vert",
+                ".frag",
+                ".comp",
+                ".geom",
+                ".tesc",
+                ".tese",
+            ),
             load_lexer_parser=_load_glsl,
             reverse_codegen_factory=_reverse_glsl,
             aliases=("glsl", "ogl"),
