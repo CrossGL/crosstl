@@ -1252,6 +1252,25 @@ def test_bound_cbuffer_parsing():
     ]
 
 
+def test_cbuffer_comma_member_declarators_parsing():
+    code = """
+    cbuffer Camera {
+        float exposure, gamma;
+        float4 offsets[2], tint;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    members = ast.cbuffers[0].members
+
+    assert [(member.vtype, member.name, member.array_sizes) for member in members] == [
+        ("float", "exposure", []),
+        ("float", "gamma", []),
+        ("float4", "offsets", ["2"]),
+        ("float4", "tint", []),
+    ]
+
+
 def test_vulkan_attributes_on_cbuffer_parsing():
     code = """
     [[vk::binding(0, 1)]]
@@ -1454,6 +1473,61 @@ def test_initialized_top_level_global_parsing():
     assert isinstance(gain, AssignmentNode)
     assert gain.left.register == "c0"
     assert gain.right == "1f"
+
+
+def test_comma_separated_global_declarations_parsing():
+    code = """
+    static float exposure, gamma = 2.2, weights[2];
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    exposure = ast.global_vars[0]
+    gamma = ast.global_vars[1]
+    weights = ast.global_vars[2]
+
+    assert isinstance(exposure, VariableNode)
+    assert exposure.vtype == "float"
+    assert exposure.name == "exposure"
+    assert exposure.qualifiers == ["static"]
+
+    assert isinstance(gamma, AssignmentNode)
+    assert gamma.left.vtype == "float"
+    assert gamma.left.name == "gamma"
+    assert gamma.left.qualifiers == ["static"]
+    assert gamma.right == "2.2"
+
+    assert isinstance(weights, VariableNode)
+    assert weights.name == "weights"
+    assert weights.array_sizes == ["2"]
+
+
+def test_comma_separated_local_declarations_from_public_corpus():
+    code = """
+    void main() {
+        float3 a, b, c;
+        float4x4 mx, my = float4x4(1.0), mz;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "main").body
+
+    assert [(stmt.vtype, stmt.name) for stmt in body[:3]] == [
+        ("float3", "a"),
+        ("float3", "b"),
+        ("float3", "c"),
+    ]
+    assert isinstance(body[3], VariableNode)
+    assert body[3].vtype == "float4x4"
+    assert body[3].name == "mx"
+    assert isinstance(body[4], AssignmentNode)
+    assert body[4].left.vtype == "float4x4"
+    assert body[4].left.name == "my"
+    assert isinstance(body[4].right, VectorConstructorNode)
+    assert isinstance(body[5], VariableNode)
+    assert body[5].vtype == "float4x4"
+    assert body[5].name == "mz"
 
 
 def test_initializer_list_declaration_parsing():

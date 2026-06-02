@@ -136,8 +136,9 @@ class SlangParser:
                 if self.is_function():
                     functions.append(self.parse_function(attributes=pending_attributes))
                 else:
-                    global_variables.append(
-                        self.parse_global_variable(attributes=pending_attributes)
+                    self.append_parsed_statement(
+                        global_variables,
+                        self.parse_global_variable(attributes=pending_attributes),
                     )
             else:
                 self.eat(self.current_token[0])
@@ -515,12 +516,7 @@ class SlangParser:
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":
-            vtype = self.parse_type_name()
-            var_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            array_sizes = self.parse_array_suffixes()
-            self.eat("SEMICOLON")
-            members.append(VariableNode(vtype, var_name, array_sizes=array_sizes))
+            members.extend(self.parse_struct_field_members())
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
@@ -535,27 +531,37 @@ class SlangParser:
         qualifiers = self.parse_qualifiers()
         var_type = self.parse_type_name()
         var_type += self.parse_pointer_suffix()
-        var_name = self.current_token[1]
-        self.eat("IDENTIFIER")
-        array_sizes = self.parse_array_suffixes()
-        register_name = self.parse_register_annotation()
-        variable = VariableNode(
-            var_type,
-            var_name,
-            qualifiers=qualifiers,
-            array_sizes=array_sizes,
-            attributes=attributes,
-            register=register_name,
-        )
-        if self.current_token[0] == "EQUALS":
-            op = self.current_token[1]
-            self.eat("EQUALS")
-            value = self.parse_expression()
-            self.eat("SEMICOLON")
-            return AssignmentNode(variable, value, op)
+        declarations = []
+
+        while True:
+            var_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            array_sizes = self.parse_array_suffixes()
+            register_name = self.parse_register_annotation()
+            variable = VariableNode(
+                var_type,
+                var_name,
+                qualifiers=qualifiers,
+                array_sizes=array_sizes,
+                attributes=attributes,
+                register=register_name,
+            )
+            if self.current_token[0] == "EQUALS":
+                op = self.current_token[1]
+                self.eat("EQUALS")
+                value = self.parse_expression()
+                declarations.append(AssignmentNode(variable, value, op))
+            else:
+                declarations.append(variable)
+
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
 
         self.eat("SEMICOLON")
-        return variable
+        if len(declarations) == 1:
+            return declarations[0]
+        return declarations
 
     def parse_import(self):
         self.eat("IMPORT")
@@ -1001,14 +1007,22 @@ class SlangParser:
         statements = []
         self.eat("LBRACE")
         while self.current_token[0] != "RBRACE":
-            statements.append(self.parse_statement())
+            self.append_parsed_statement(statements, self.parse_statement())
         self.eat("RBRACE")
         return statements
 
     def parse_statement_or_block(self):
         if self.current_token[0] == "LBRACE":
             return self.parse_block()
-        return [self.parse_statement()]
+        return self.as_statement_list(self.parse_statement())
+
+    def as_statement_list(self, statement):
+        if isinstance(statement, list):
+            return statement
+        return [statement]
+
+    def append_parsed_statement(self, statements, statement):
+        statements.extend(self.as_statement_list(statement))
 
     def parse_statement(self):
         while self.current_token[0] == "LBRACKET":
@@ -1070,34 +1084,36 @@ class SlangParser:
         qualifiers = self.parse_qualifiers()
         var_type = self.parse_type_name(allow_array_suffix=True)
         var_type += self.parse_pointer_suffix()
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
-        array_sizes = self.parse_array_suffixes()
+        declarations = []
 
-        if self.current_token[0] == "SEMICOLON":
-            self.eat("SEMICOLON")
-            return VariableNode(
+        while True:
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            array_sizes = self.parse_array_suffixes()
+            variable = VariableNode(
                 var_type,
                 name,
                 qualifiers=qualifiers,
                 array_sizes=array_sizes,
             )
 
-        if self.current_token[0] in self.ASSIGNMENT_TOKENS:
-            op = self.current_token[1]
-            self.eat(self.current_token[0])
-            value = self.parse_expression()
+            if self.current_token[0] in self.ASSIGNMENT_TOKENS:
+                op = self.current_token[1]
+                self.eat(self.current_token[0])
+                value = self.parse_expression()
+                declarations.append(AssignmentNode(variable, value, op))
+            else:
+                declarations.append(variable)
+
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+
+        if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-            return AssignmentNode(
-                VariableNode(
-                    var_type,
-                    name,
-                    qualifiers=qualifiers,
-                    array_sizes=array_sizes,
-                ),
-                value,
-                op,
-            )
+            if len(declarations) == 1:
+                return declarations[0]
+            return declarations
 
         raise SyntaxError(f"Unexpected token in declaration: {self.current_token[0]}")
 
@@ -1213,7 +1229,7 @@ class SlangParser:
                     if self.current_token[0] == "SEMICOLON":
                         self.eat("SEMICOLON")
                         continue
-                    body.append(self.parse_statement())
+                    self.append_parsed_statement(body, self.parse_statement())
                 case = CaseNode(value, body)
                 cases.append(case)
                 ordered_cases.append(case)
@@ -1230,7 +1246,7 @@ class SlangParser:
                     if self.current_token[0] == "SEMICOLON":
                         self.eat("SEMICOLON")
                         continue
-                    default_case.append(self.parse_statement())
+                    self.append_parsed_statement(default_case, self.parse_statement())
                 ordered_cases.append(CaseNode(None, default_case))
                 continue
 

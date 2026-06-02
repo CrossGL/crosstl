@@ -984,10 +984,8 @@ class HLSLParser:
                     str(qualifier).lower() in {"in", "out", "inout"}
                     for qualifier in qualifiers
                 )
-                while (
-                    has_direction_qualifier
-                    and self.current_token[0] == "IDENTIFIER"
-                    and self.current_token[1].lower() in mesh_parameter_roles
+                while has_direction_qualifier and self.is_parameter_role_token_at(
+                    self.current_index, mesh_parameter_roles
                 ):
                     role = self.current_token[1].lower()
                     attributes.append(AttributeNode(mesh_parameter_roles[role]))
@@ -1029,6 +1027,17 @@ class HLSLParser:
 
         self.eat("RPAREN")
         return params
+
+    def is_parameter_role_token_at(self, index, roles):
+        if index >= len(self.tokens):
+            return False
+
+        token_type, token_value = self.tokens[index]
+        if token_type != "IDENTIFIER" or token_value.lower() not in roles:
+            return False
+
+        type_end = self.skip_type_name_at(index + 1)
+        return type_end is not None and self.is_identifier_token_at(type_end)
 
     def parse_block(self):
         self.eat("LBRACE")

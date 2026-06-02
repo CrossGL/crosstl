@@ -909,6 +909,46 @@ def test_parse_raytracing_shader_stages():
     assert_parses(code)
 
 
+def test_parse_raytracing_payload_parameter_named_payload():
+    ast = parse_code("""
+    struct Payload {
+        float3 hitValue;
+        bool shadowed;
+    };
+
+    struct Attributes {
+        float2 bary;
+    };
+
+    [shader(\"closesthit\")]
+    void ClosestHit(inout Payload payload, in Attributes attribs) {
+        payload.shadowed = true;
+    }
+
+    [shader(\"miss\")]
+    void Miss(inout Payload payload) {
+        payload.shadowed = false;
+    }
+    """)
+
+    closest_hit = ast.functions[0]
+    miss = ast.functions[1]
+
+    assert closest_hit.qualifier == "ray_closest_hit"
+    assert closest_hit.params[0].vtype == "Payload"
+    assert closest_hit.params[0].name == "payload"
+    assert closest_hit.params[0].qualifiers == ["inout"]
+    assert closest_hit.params[0].attributes == []
+    assert closest_hit.params[1].vtype == "Attributes"
+    assert closest_hit.params[1].name == "attribs"
+    assert closest_hit.params[1].qualifiers == ["in"]
+    assert miss.qualifier == "ray_miss"
+    assert miss.params[0].vtype == "Payload"
+    assert miss.params[0].name == "payload"
+    assert miss.params[0].qualifiers == ["inout"]
+    assert miss.params[0].attributes == []
+
+
 def test_parse_additional_attributes():
     code = """
     [earlydepthstencil]
