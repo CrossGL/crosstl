@@ -303,6 +303,12 @@ class RustParser:
         self.eat(self.current_token[0])
         return name
 
+    def parse_name_or_underscore(self, context="name"):
+        if self.current_token[0] == "UNDERSCORE":
+            self.eat("UNDERSCORE")
+            return "_"
+        return self.parse_name_token(context)
+
     def peek_token_type(self, offset=1):
         index = self.current_index + offset
         if index < len(self.tokens):
@@ -512,8 +518,7 @@ class RustParser:
         alias = None
         if self.current_token[0] == "AS":
             self.eat("AS")
-            alias = self.current_token[1]
-            self.eat("IDENTIFIER")
+            alias = self.parse_name_or_underscore("use alias")
 
         self.eat("SEMICOLON")
         return UseNode("::".join(path), alias, items, visibility, attributes)
@@ -559,8 +564,7 @@ class RustParser:
         alias = None
         if self.current_token[0] == "AS":
             self.eat("AS")
-            alias = self.current_token[1]
-            self.eat("IDENTIFIER")
+            alias = self.parse_name_or_underscore("use alias")
 
         return [{"path": "::".join(item_path), "alias": alias}]
 
@@ -1028,6 +1032,16 @@ class RustParser:
             self.eat("IMPL")
             return f"impl {self.parse_type()}"
 
+        if self.current_token[0] == "FN":
+            return self.parse_function_pointer_type()
+
+        if self.current_token[0] == "MULTIPLY":
+            return self.parse_raw_pointer_type()
+
+        if self.current_token[0] == "LOGICAL_AND":
+            self.eat("LOGICAL_AND")
+            return f"&&{self.parse_type()}"
+
         if self.current_token[0] == "LPAREN":
             return self.parse_tuple_type()
 
@@ -1078,6 +1092,37 @@ class RustParser:
             self.eat("RBRACKET")
 
         return "".join(type_parts)
+
+    def parse_function_pointer_type(self):
+        self.eat("FN")
+        self.eat("LPAREN")
+
+        parameters = []
+        while self.current_token[0] != "RPAREN":
+            parameters.append(self.parse_type())
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            break
+
+        self.eat("RPAREN")
+        if self.current_token[0] != "ARROW":
+            return f"fn({', '.join(parameters)})"
+
+        self.eat("ARROW")
+        return_type = self.parse_type()
+        return f"fn({', '.join(parameters)}) -> {return_type}"
+
+    def parse_raw_pointer_type(self):
+        self.eat("MULTIPLY")
+        if self.current_token[0] not in {"CONST", "MUT"}:
+            raise SyntaxError(
+                f"Expected raw pointer qualifier, got {self.current_token[0]}"
+            )
+
+        qualifier = self.current_token[1]
+        self.eat(self.current_token[0])
+        return f"*{qualifier} {self.parse_type()}"
 
     def parse_tuple_type(self):
         self.eat("LPAREN")
@@ -1394,8 +1439,25 @@ class RustParser:
         is_const=False,
     ):
         name, generics, params, return_type, where_clauses = self.parse_function_header(
-            {"LBRACE"}
+            {"LBRACE", "SEMICOLON"}
         )
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return FunctionNode(
+                return_type,
+                name,
+                params,
+                [],
+                attributes,
+                visibility,
+                generics,
+                where_clauses,
+                is_async,
+                is_unsafe,
+                abi,
+                is_const,
+            )
+
         self.eat("LBRACE")
         body = self.parse_block()
         self.eat("RBRACE")
@@ -1528,8 +1590,7 @@ class RustParser:
 
     def parse_const(self, visibility=None):
         self.eat("CONST")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_name_or_underscore("const name")
         self.eat("COLON")
         const_type = self.parse_type()
         self.eat("EQUALS")
@@ -1546,8 +1607,7 @@ class RustParser:
             is_mutable = True
             self.eat("MUT")
 
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_name_token("static name")
         self.eat("COLON")
         static_type = self.parse_type()
         self.eat("EQUALS")
@@ -1586,6 +1646,7 @@ class RustParser:
                     "ASYNC",
                     "UNSAFE",
                     "LPAREN",
+                    "LESS_THAN",
                 ]
                 or (
                     self.current_token[0] == "CONST"
@@ -2108,6 +2169,8 @@ class RustParser:
         return LoopNode(body, label)
 
     def parse_expression(self):
+        if self.current_token[0] == "LESS_THAN":
+            return self.parse_qualified_path_expression()
         return self.parse_assignment_expression()
 
     def parse_assignment_expression(self):
@@ -2332,6 +2395,10 @@ class RustParser:
 
         if self.current_token[0] in {"PIPE", "LOGICAL_OR", "MOVE"}:
             return self.parse_closure_expression()
+
+        if self.current_token[0] == "LOGICAL_AND":
+            self.eat("LOGICAL_AND")
+            return ReferenceNode(ReferenceNode(self.parse_unary_expression()))
 
         if self.current_token[0] in ["MINUS", "EXCLAMATION", "AMPERSAND", "MULTIPLY"]:
             op = self.current_token[1]
@@ -2590,6 +2657,9 @@ class RustParser:
         if self.current_token[0] == "CONST" and self.peek_token_type() == "LBRACE":
             return self.parse_const_block_expression()
 
+        if self.current_token[0] == "LESS_THAN":
+            return self.parse_qualified_path_expression()
+
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -2747,6 +2817,23 @@ class RustParser:
             raise SyntaxError(
                 f"Unexpected token in primary expression: {self.current_token}"
             )
+
+    def parse_qualified_path_expression(self):
+        self.eat("LESS_THAN")
+        qualified_type = self.collect_token_text_until({"AS", "GREATER_THAN"})
+
+        trait = None
+        if self.current_token[0] == "AS":
+            self.eat("AS")
+            trait = self.collect_token_text_until({"GREATER_THAN"})
+
+        self.eat("GREATER_THAN")
+        self.eat("DOUBLE_COLON")
+        item = self.parse_path_expression(self.parse_name_token("qualified path item"))
+        path = f"<{qualified_type}{f' as {trait}' if trait else ''}>::{item}"
+        if self.current_token[0] == "LPAREN":
+            return FunctionCallNode(path, self.parse_call_arguments())
+        return path
 
     def parse_try_block_expression(self):
         self.eat("TRY")

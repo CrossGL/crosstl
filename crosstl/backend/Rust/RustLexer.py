@@ -90,8 +90,8 @@ TOKENS = tuple(
             r"(?:[eE][+-]?\d(?:_?\d)*)?)"
             r"_?((i|u)(8|16|32|64|128|size)|f(32|64))?",
         ),
-        # Underscore must come before identifier to match wildcard patterns
-        ("UNDERSCORE", r"_"),
+        # Bare underscore is a wildcard pattern; prefixed names like _value are identifiers.
+        ("UNDERSCORE", r"_(?![a-zA-Z0-9_])"),
         (
             "BYTE_RAW_STRING",
             r'br(?P<byte_raw_hashes>#*)"(?:.|\n)*?"(?P=byte_raw_hashes)',

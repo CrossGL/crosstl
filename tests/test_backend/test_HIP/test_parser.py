@@ -486,6 +486,102 @@ class TestHipParser:
         assert isinstance(statement, FunctionCallNode)
         assert statement.name == "HIP_CHECK"
 
+    def test_public_rocm_hipblaslt_templated_constructor_declaration(self):
+        code = """
+        int main() {
+            runner<hipblasLtHalf, hipblasLtHalf, hipblasLtHalf, float, float>
+                runner(1024, 512, 1024, 1, 1.f, 1.f, 32 * 1024 * 1024);
+            runner.run([&runner] { gemm_ext(runner.handle); });
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0].body[0]
+        run_call = ast.statements[0].body[1]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == (
+            "runner<hipblasLtHalf, hipblasLtHalf, hipblasLtHalf, float, float>"
+        )
+        assert declaration.name == "runner"
+        assert isinstance(declaration.value, FunctionCallNode)
+        assert declaration.value.name == declaration.vtype
+        assert isinstance(run_call, FunctionCallNode)
+        assert isinstance(run_call.name, MemberAccessNode)
+        assert run_call.name.object == "runner"
+        assert run_call.name.member == "run"
+
+    def test_public_rocm_hip_doc_constexpr_qualified_size_t_global(self):
+        code = """
+        constexpr std::size_t const_array_size = 32;
+        __constant__ double const_array[const_array_size];
+
+        void set_constant_memory(double* values) {
+            HIP_CHECK(hipMemcpyToSymbol(
+                const_array, values, const_array_size * sizeof(double)));
+        }
+        """
+        ast = self.parse_code(code)
+
+        size = ast.statements[0]
+        const_array = ast.statements[1]
+        call = ast.statements[2].body[0]
+
+        assert isinstance(size, VariableNode)
+        assert size.qualifiers == ["constexpr"]
+        assert size.vtype == "std::size_t"
+        assert size.name == "const_array_size"
+        assert isinstance(const_array, VariableNode)
+        assert const_array.vtype == "double[const_array_size]"
+        assert const_array.qualifiers == ["__constant__"]
+        assert isinstance(call, FunctionCallNode)
+        assert call.name == "HIP_CHECK"
+
+    def test_public_rocm_reduction_structured_binding_and_templated_lambda(self):
+        code = """
+        template<uint32_t WarpSize>
+        void host(int dev_id, unsigned* front, std::size_t count) {
+            auto [name, block_size, warp_size] = [dev_id]()
+            {
+                return std::make_tuple(std::string{prop.name}, 256, 64);
+            }();
+
+            auto kernel_op = [] __device__(unsigned lhs, unsigned rhs) {
+                return max(lhs, rhs);
+            };
+
+            tmp::static_for<WarpSize, tmp::not_equal<0>, tmp::divide<2>>(
+                [&]<int I>()
+                {
+                    sink(I);
+                });
+
+            HIP_CHECK(hipMalloc((void**)&front, sizeof(unsigned) * count));
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        binding = function.body[0]
+        kernel_op = function.body[1]
+        static_for = function.body[2]
+        hip_check = function.body[3]
+
+        assert isinstance(binding, VariableNode)
+        assert binding.vtype == "auto"
+        assert binding.name == "[name, block_size, warp_size]"
+        assert isinstance(binding.value, FunctionCallNode)
+        assert isinstance(kernel_op.value, FunctionCallNode)
+        assert kernel_op.value.name == "lambda"
+        assert isinstance(static_for, FunctionCallNode)
+        assert static_for.name == (
+            "tmp::static_for<WarpSize, tmp::not_equal<0>, tmp::divide<2>>"
+        )
+        assert isinstance(static_for.args[0], FunctionCallNode)
+        assert static_for.args[0].name == "lambda"
+        assert isinstance(hip_check, FunctionCallNode)
+        assert hip_check.name == "HIP_CHECK"
+
     def test_dynamic_shared_memory_parsing_marks_extern_unsized_array(self):
         code = """
         __global__ void kernel() {

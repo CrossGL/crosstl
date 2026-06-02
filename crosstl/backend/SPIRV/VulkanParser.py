@@ -3,6 +3,7 @@
 import re
 import shlex
 
+from ..common_ast import InitializerListNode
 from .VulkanAst import *
 from .VulkanLexer import *
 
@@ -10,8 +11,15 @@ from .VulkanLexer import *
 class VulkanParser:
     """Parse Vulkan/SPIR-V style tokens into the Vulkan backend AST."""
 
-    PARAMETER_QUALIFIER_TOKENS = {"IN", "OUT", "INOUT"}
+    PARAMETER_QUALIFIER_TOKENS = {"CONST", "IN", "OUT", "INOUT"}
     PRECISION_QUALIFIER_TOKENS = {"HIGHP", "MEDIUMP", "LOWP"}
+    RAY_TRACING_STORAGE_QUALIFIERS = {
+        "callableDataEXT",
+        "callableDataInEXT",
+        "hitAttributeEXT",
+        "rayPayloadEXT",
+        "rayPayloadInEXT",
+    }
     LAYOUT_DECLARATION_QUALIFIERS = {
         "centroid",
         "coherent",
@@ -30,6 +38,13 @@ class VulkanParser:
         "smooth",
         "volatile",
         "writeonly",
+        *RAY_TRACING_STORAGE_QUALIFIERS,
+    }
+    DECLARATION_QUALIFIERS = LAYOUT_DECLARATION_QUALIFIERS | {
+        "const",
+        "in",
+        "inout",
+        "out",
     }
     ASSIGNMENT_TOKENS = (
         "EQUALS",
@@ -184,6 +199,7 @@ class VulkanParser:
                         "MAT4",
                     ]
                     or self.current_token[1] in VALID_DATA_TYPES
+                    or self.current_token[0] == "IDENTIFIER"
                 )
                 and self.peek(1) == "IDENTIFIER"
                 and self.peek(2) == "LPAREN"
@@ -191,6 +207,7 @@ class VulkanParser:
                 functions.append(self.parse_function())
             elif (
                 (self.current_token[0] == "IDENTIFIER" and self.peek(1) == "IDENTIFIER")
+                or self.current_token[1] in self.DECLARATION_QUALIFIERS
                 or (
                     self.current_token[1] in VALID_DATA_TYPES
                     and self.peek(1) == "IDENTIFIER"
@@ -1068,12 +1085,70 @@ class VulkanParser:
 
         type_name = self.current_token[1]
         self.eat(self.current_token[0])
+        type_name += self.parse_type_template_suffix()
         type_name += self.parse_array_suffixes_as_text()
         return type_name
+
+    def parse_type_template_suffix(self):
+        if self.current_token[0] != "LESS_THAN":
+            return ""
+
+        self.eat("LESS_THAN")
+        parts = []
+        depth = 1
+        while depth:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated type template argument list")
+
+            if self.current_token[0] == "LESS_THAN":
+                depth += 1
+                parts.append("<")
+                self.eat("LESS_THAN")
+                continue
+
+            if self.current_token[0] == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("GREATER_THAN")
+                    break
+                parts.append(">")
+                self.eat("GREATER_THAN")
+                continue
+
+            parts.append(self.current_token[1])
+            self.eat(self.current_token[0])
+
+        return f"<{self.format_type_template_parts(parts)}>"
+
+    def format_type_template_parts(self, parts):
+        text = " ".join(str(part) for part in parts)
+        return (
+            text.replace(" ,", ",")
+            .replace(", ", ", ")
+            .replace("< ", "<")
+            .replace(" >", ">")
+        )
 
     def parse_layout_declaration_qualifiers(self):
         qualifiers = []
         while self.current_token[1] in self.LAYOUT_DECLARATION_QUALIFIERS:
+            qualifiers.append(self.current_token[1])
+            self.eat(self.current_token[0])
+        return qualifiers
+
+    def parse_declaration_qualifiers(self):
+        qualifiers = []
+        while self.current_token[1] in self.DECLARATION_QUALIFIERS:
+            qualifiers.append(self.current_token[1])
+            self.eat(self.current_token[0])
+        return qualifiers
+
+    def parse_parameter_qualifiers(self):
+        qualifiers = []
+        while (
+            self.current_token[0] in self.PARAMETER_QUALIFIER_TOKENS
+            or self.current_token[1] in self.LAYOUT_DECLARATION_QUALIFIERS
+        ):
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
         return qualifiers
@@ -1170,6 +1245,7 @@ class VulkanParser:
                 raise SyntaxError(
                     f"Unexpected token in struct member: {self.current_token}"
                 )
+            type_name += self.parse_type_template_suffix()
             type_name += self.parse_array_suffixes_as_text()
 
             member_name = self.current_token[1]
@@ -1192,18 +1268,15 @@ class VulkanParser:
         return StructNode(name, members)
 
     def parse_function(self):
-        return_type = self.current_token[1]
-        if self.current_token[1] in VALID_DATA_TYPES:
-            self.eat(self.current_token[0])
-        else:
-            raise SyntaxError(f"Unexpected type: {self.current_token[1]}")
+        qualifiers = self.parse_declaration_qualifiers()
+        return_type = self.parse_data_type(allow_identifier=True)
         func_name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
         body = self.parse_block()
-        return FunctionNode(return_type, func_name, params, body)
+        return FunctionNode(return_type, func_name, params, body, qualifiers=qualifiers)
 
     def parse_parameters(self):
         params = []
@@ -1212,14 +1285,8 @@ class VulkanParser:
             return params
 
         while self.current_token[0] != "RPAREN":
-            qualifiers = []
-            while self.current_token[0] in self.PARAMETER_QUALIFIER_TOKENS:
-                qualifiers.append(self.current_token[1])
-                self.eat(self.current_token[0])
-
-            vtype = self.current_token[1]
-            self.eat(self.current_token[0])
-            vtype += self.parse_array_suffixes_as_text()
+            qualifiers = self.parse_parameter_qualifiers()
+            vtype = self.parse_data_type(allow_identifier=True)
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             name += self.parse_array_suffixes_as_text()
@@ -1235,7 +1302,7 @@ class VulkanParser:
             statement = self.parse_body()
             if isinstance(statement, list):
                 statements.extend(statement)
-            else:
+            elif statement is not None:
                 statements.append(statement)
         self.eat("RBRACE")
         return statements
@@ -1243,11 +1310,19 @@ class VulkanParser:
     def parse_statement_or_block(self):
         if self.current_token[0] == "LBRACE":
             return self.parse_block()
-        return [self.parse_body()]
+        statement = self.parse_body()
+        if isinstance(statement, list):
+            return statement
+        if statement is None:
+            return []
+        return [statement]
 
     def parse_body(self):
         token_type = self.current_token[0]
 
+        if token_type == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return []
         if token_type == "LBRACE":
             return self.parse_block()
         if token_type == "CONST":
@@ -1383,6 +1458,11 @@ class VulkanParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
+
+        if self.current_token[0] in {"PRE_INCREMENT", "PRE_DECREMENT"}:
+            item = self.parse_update()
+            self.eat("SEMICOLON")
+            return item
 
         items = [
             self.parse_assignment_or_function_call(
@@ -1696,10 +1776,28 @@ class VulkanParser:
             expr = self.parse_expression()
             self.eat("RPAREN")
             return self.parse_postfix_suffixes(expr)
+        elif self.current_token[0] == "LBRACE":
+            return self.parse_initializer_list()
         else:
             raise SyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"
             )
+
+    def parse_initializer_list(self):
+        self.eat("LBRACE")
+        elements = []
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated initializer list")
+            elements.append(self.parse_expression())
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                if self.current_token[0] == "RBRACE":
+                    break
+                continue
+            break
+        self.eat("RBRACE")
+        return InitializerListNode(elements)
 
     def parse_multiplicative(self):
         left = self.parse_unary()
@@ -1727,22 +1825,18 @@ class VulkanParser:
     ):
         terminators = terminators or {"SEMICOLON"}
         type_name = ""
-        qualifiers = []
-        while self.current_token[0] == "CONST":
-            qualifiers.append(self.current_token[1])
-            self.eat("CONST")
+        qualifiers = self.parse_declaration_qualifiers()
 
         if qualifiers:
             if (
                 self.current_token[0] == "IDENTIFIER"
                 or self.current_token[1] in VALID_DATA_TYPES
             ):
-                type_name = " ".join([*qualifiers, self.current_token[1]])
-                self.eat(self.current_token[0])
-                type_name += self.parse_array_suffixes_as_text()
+                parsed_type = self.parse_data_type(allow_identifier=True)
+                type_name = " ".join([*qualifiers, parsed_type])
             else:
                 raise SyntaxError(
-                    f"Unexpected token after const: {self.current_token[0]}"
+                    f"Unexpected token after declaration qualifier: {self.current_token[0]}"
                 )
         elif self.current_token[0] == "IDENTIFIER" and self.peek(1) in [
             "POST_INCREMENT",
@@ -1763,13 +1857,9 @@ class VulkanParser:
                     f"Unexpected token after identifier: {self.current_token[0]}"
                 )
         if self.current_token[0] == "IDENTIFIER" and self.peek(1) == "IDENTIFIER":
-            type_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            type_name += self.parse_array_suffixes_as_text()
+            type_name = self.parse_data_type(allow_identifier=True)
         elif self.current_token[1] in VALID_DATA_TYPES:
-            type_name = self.current_token[1]
-            self.eat(self.current_token[0])
-            type_name += self.parse_array_suffixes_as_text()
+            type_name = self.parse_data_type()
         if self.current_token[0] == "IDENTIFIER":
             if type_name and "COMMA" not in terminators:
                 return self.parse_variable_declaration(
@@ -1964,7 +2054,11 @@ class VulkanParser:
             )
         statements = []
         while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
-            statements.append(self.parse_body())
+            statement = self.parse_body()
+            if isinstance(statement, list):
+                statements.extend(statement)
+            elif statement is not None:
+                statements.append(statement)
         if self.current_token[0] == "EOF":
             raise SyntaxError("Unterminated switch case")
         return CaseNode(value, statements)

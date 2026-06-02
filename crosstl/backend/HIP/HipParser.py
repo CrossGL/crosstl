@@ -1290,6 +1290,7 @@ class HipParser:
             self.advance()
 
         var_type = self.parse_type()
+        self.skip_newlines()
         name = self.consume_declarator_name()
         var_type += self.parse_array_suffix()
         self.skip_newlines()
@@ -1356,6 +1357,22 @@ class HipParser:
         if allow_prefix:
             var_type = self.parse_declarator_prefix(var_type)
 
+        self.skip_newlines()
+        if self.match("LBRACKET"):
+            name = self.parse_structured_binding_name()
+            self.skip_newlines()
+            value = self.parse_variable_initializer(var_type)
+            return VariableNode(
+                var_type,
+                name,
+                value,
+                list(qualifiers),
+                is_extern_shared_memory=self.is_extern_shared_memory(qualifiers),
+                is_dynamic_shared_memory=self.is_dynamic_shared_memory(
+                    var_type, qualifiers
+                ),
+            )
+
         name = self.consume_declarator_name()
         var_type += self.parse_array_suffix()
         self.skip_newlines()
@@ -1371,6 +1388,34 @@ class HipParser:
                 var_type, qualifiers
             ),
         )
+
+    def parse_structured_binding_name(self):
+        tokens = []
+        self.consume("LBRACKET")
+        self.skip_newlines()
+
+        while self.current_token and not self.match("RBRACKET"):
+            if not self.match("NEWLINE"):
+                tokens.append(self.current_token.value)
+            self.advance()
+
+        self.consume("RBRACKET")
+        return f"[{self.format_structured_binding_tokens(tokens)}]"
+
+    def format_structured_binding_tokens(self, tokens):
+        text = ""
+        previous = None
+        for token in tokens:
+            if token == ",":
+                text = text.rstrip() + ", "
+            elif token in {"&", "*", "&&"}:
+                text += token
+            elif previous in {"&", "*", "&&"} or not text or text.endswith(" "):
+                text += token
+            else:
+                text += " " + token
+            previous = token
+        return text.strip()
 
     def is_extern_shared_memory(self, qualifiers):
         return "__shared__" in qualifiers and "extern" in qualifiers
@@ -1473,11 +1518,18 @@ class HipParser:
             self.advance()
             self.parse_postfix_type_qualifiers(type_parts)
 
-        array_suffix = self.parse_array_suffix()
-        if array_suffix:
-            type_parts.append(array_suffix)
+        if not (
+            self.is_auto_type_parts(type_parts)
+            and self.is_structured_binding_declarator_at_pos(self.pos)
+        ):
+            array_suffix = self.parse_array_suffix()
+            if array_suffix:
+                type_parts.append(array_suffix)
 
         return " ".join(type_parts)
+
+    def is_auto_type_parts(self, type_parts):
+        return "auto" in type_parts
 
     def parse_type_without_array_suffix(self):
         type_parts = []
@@ -2332,8 +2384,14 @@ class HipParser:
     def is_sizeof_type_operand(self):
         saved_pos = self.pos
         try:
+            saw_integral_sign = False
             while self.match(*self.TYPE_QUALIFIER_TOKENS):
+                if self.current_token.type in {"SIGNED", "UNSIGNED"}:
+                    saw_integral_sign = True
                 self.advance()
+
+            if saw_integral_sign and self.match("RPAREN"):
+                return True
 
             if not self.is_type_token(allow_identifier=False) and not (
                 self.match("IDENTIFIER")
@@ -2715,6 +2773,8 @@ class HipParser:
             return False
 
         index = self.skip_lambda_specifiers_at_pos(index)
+        index = self.skip_lambda_template_parameters_at_pos(index)
+        index = self.skip_lambda_specifiers_at_pos(index)
         return index < len(self.tokens) and self.tokens[index].type in {
             "LPAREN",
             "LBRACE",
@@ -2741,6 +2801,13 @@ class HipParser:
             break
         return index
 
+    def skip_lambda_template_parameters_at_pos(self, index):
+        if index < len(self.tokens) and self.tokens[index].type == "LT":
+            skipped = self.skip_template_at_pos(index)
+            if skipped is not None:
+                return skipped
+        return index
+
     def skip_balanced_tokens_at_pos(self, index, open_token, close_token):
         depth = 0
         while index < len(self.tokens):
@@ -2759,6 +2826,8 @@ class HipParser:
     def parse_lambda_expression(self):
         self.consume_balanced_lambda_tokens("LBRACKET", "RBRACKET")
         self.skip_newlines()
+        self.skip_lambda_specifiers()
+        self.skip_lambda_template_parameters()
         self.skip_lambda_specifiers()
 
         args = []
@@ -2802,6 +2871,11 @@ class HipParser:
                     self.consume_balanced_lambda_tokens("LPAREN", "RPAREN")
                 continue
             break
+
+    def skip_lambda_template_parameters(self):
+        if self.match("LT"):
+            self.parse_template_suffix()
+            self.skip_newlines()
 
     def skip_lambda_trailing_return_type(self):
         self.consume("ARROW")
@@ -3242,6 +3316,13 @@ class HipParser:
 
         index = self.skip_type_at_pos(index)
         if index is not None:
+            index = self.skip_newlines_at_pos(index)
+            structured_binding_end = self.skip_structured_binding_declarator_at_pos(
+                index
+            )
+            if structured_binding_end is not None:
+                return True
+
             if self.is_declarator_name_token_at(index):
                 index += 1
                 while index < len(self.tokens) and self.tokens[index].type == "NEWLINE":
@@ -3291,7 +3372,7 @@ class HipParser:
         while (
             index + 1 < len(self.tokens)
             and self.tokens[index].type == "SCOPE"
-            and self.tokens[index + 1].type == "IDENTIFIER"
+            and self.is_qualified_type_member_token_at(index + 1)
         ):
             has_qualified_suffix = True
             index += 2
@@ -3324,7 +3405,51 @@ class HipParser:
             index += 1
             index = self.skip_postfix_type_qualifiers_at_pos(index)
 
+        if type_value == "auto" and self.is_structured_binding_declarator_at_pos(index):
+            return index
+
         return self.skip_array_suffix_at_pos(index)
+
+    def is_qualified_type_member_token_at(self, index):
+        return index < len(self.tokens) and (
+            self.tokens[index].type == "IDENTIFIER"
+            or self.is_type_token(self.tokens[index], allow_identifier=False)
+        )
+
+    def skip_structured_binding_at_pos(self, index):
+        if index >= len(self.tokens) or self.tokens[index].type != "LBRACKET":
+            return None
+
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index].type
+            if token_type == "LBRACKET":
+                depth += 1
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            elif token_type in {"SEMICOLON", "LBRACE", "RBRACE"} and depth == 0:
+                return None
+            index += 1
+
+        return None
+
+    def is_structured_binding_declarator_at_pos(self, index):
+        return self.skip_structured_binding_declarator_at_pos(index) is not None
+
+    def skip_structured_binding_declarator_at_pos(self, index):
+        binding_end = self.skip_structured_binding_at_pos(index)
+        if binding_end is None:
+            return None
+
+        binding_end = self.skip_newlines_at_pos(binding_end)
+        if binding_end < len(self.tokens) and self.tokens[binding_end].type in {
+            "ASSIGN",
+            "SEMICOLON",
+        }:
+            return binding_end
+        return None
 
     def is_implicit_int_type_at_pos(self, index, saw_integral_sign):
         if not saw_integral_sign or index >= len(self.tokens):

@@ -405,6 +405,78 @@ class TestCudaParser:
         assert body[3].value.name == "sizeof"
         assert body[3].value.args == ["unsigned int"]
 
+    def test_public_cuda_samples_typedef_enum_aliases_and_forward_structs(self):
+        code = """
+        typedef enum memAllocType_enum {
+            MEMALLOC_TYPE_START,
+            USE_MANAGED_MEMORY = MEMALLOC_TYPE_START,
+            MEMALLOC_TYPE_END = USE_MANAGED_MEMORY
+        } MemAllocType;
+
+        struct resultsData;
+
+        MemAllocType currentType;
+        struct resultsData *results;
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        enum = ast.structs[0]
+        assert isinstance(enum, EnumNode)
+        assert enum.name == "MemAllocType"
+        assert enum.tag_name == "memAllocType_enum"
+        assert ast.structs[1].name == "resultsData"
+        assert ast.structs[1].members == []
+        assert ast.global_variables[0].vtype == "MemAllocType"
+        assert ast.global_variables[1].vtype == "struct resultsData *"
+
+    def test_public_cuda_samples_templated_class_declarations(self):
+        code = """
+        template <typename Real> class PiEstimator
+        {
+        public:
+            PiEstimator(unsigned int numSims, unsigned int device);
+            Real operator()();
+
+        private:
+            unsigned int m_seed;
+            unsigned int m_numSims;
+        };
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        klass = ast.structs[0]
+        assert isinstance(klass, StructNode)
+        assert klass.name == "PiEstimator"
+        assert [member.name for member in klass.members] == ["m_seed", "m_numSims"]
+        assert [member.vtype for member in klass.members] == [
+            "unsigned int",
+            "unsigned int",
+        ]
+
+    def test_public_cuda_samples_qualified_c_style_cast_parsing(self):
+        code = """
+        constexpr int BATCH = 1;
+        constexpr int HEADS = 8;
+        constexpr std::size_t Q_SIZE = (std::size_t)BATCH * HEADS;
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        q_size = ast.global_variables[2]
+        assert q_size.vtype == "std::size_t"
+        assert isinstance(q_size.value, BinaryOpNode)
+        assert isinstance(q_size.value.left, CastNode)
+        assert q_size.value.left.target_type == "std::size_t"
+        assert q_size.value.left.expression == "BATCH"
+
     def test_public_cuda_samples_local_anonymous_enum_declaration(self):
         code = """
         void configure() {

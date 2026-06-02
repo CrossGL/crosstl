@@ -84,6 +84,26 @@ def test_struct_parsing():
         pytest.fail(f"Struct parsing failed: {e}")
 
 
+def test_underscore_prefixed_identifier_parsing():
+    code = """
+    #[rust_gpu::vector::v1]
+    pub struct _Struct {
+        _field: f32,
+    }
+
+    pub fn _fn(_: _Struct, _value: f32) -> f32 {
+        return _value;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.structs[0].name == "_Struct"
+    assert ast.structs[0].members[0].name == "_field"
+    assert ast.functions[0].name == "_fn"
+    assert [param.name for param in ast.functions[0].params] == ["_", "_value"]
+
+
 def test_enum_parsing():
     code = """
     #[repr(u32)]
@@ -620,6 +640,22 @@ def test_use_statement_parsing():
         pytest.fail(f"Use statement parsing failed: {e}")
 
 
+def test_underscore_use_alias_parsing():
+    code = """
+    use spirv_std as _;
+    use glam::{Vec3 as _, Vec4};
+    """
+
+    ast = parse_code(code)
+
+    assert ast.use_statements[0].path == "spirv_std"
+    assert ast.use_statements[0].alias == "_"
+    assert ast.use_statements[1].items == [
+        {"path": "Vec3", "alias": "_"},
+        {"path": "Vec4", "alias": None},
+    ]
+
+
 def test_cfg_attributes_preserved_on_use_and_function_items():
     code = """
     #[cfg(feature = "gpu")]
@@ -1126,6 +1162,76 @@ def test_const_static_parsing():
         assert isinstance(static_var, StaticNode)
     except Exception as e:
         pytest.fail(f"Const/static parsing failed: {e}")
+
+
+def test_raw_pointer_type_parsing():
+    code = """
+    const NULL_PTR: *const i32 = null();
+
+    fn copy<T>(src: *const T, dst: *mut T, count: usize);
+    """
+
+    ast = parse_code(code)
+
+    assert ast.global_variables[0].vtype == "*const i32"
+    assert ast.functions[0].params[0].vtype == "*const T"
+    assert ast.functions[0].params[1].vtype == "*mut T"
+
+
+def test_function_pointer_type_parsing():
+    code = """
+    struct Position(u32);
+
+    fn use_cmp(cmp: fn(&Position) -> u32) {
+        let value = cmp(&Position(0));
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.functions[0].params[0].vtype == "fn(&Position) -> u32"
+
+
+def test_double_reference_type_and_expression_parsing():
+    code = """
+    fn take_slice(value: &&[u32]) {
+        let nested = &&123;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.functions[0].params[0].vtype == "&&u32[]"
+    nested = ast.functions[0].body[0].value
+    assert isinstance(nested, ReferenceNode)
+    assert isinstance(nested.expression, ReferenceNode)
+
+
+def test_qualified_associated_path_expression_parsing():
+    code = """
+    fn add(a: u32, b: u32) -> u32 {
+        <u32 as core::ops::Add>::add(a, b)
+    }
+    """
+
+    ast = parse_code(code)
+    call = ast.functions[0].body[0]
+
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "<u32 as core::ops::Add>::add"
+
+
+def test_anonymous_const_item_parsing():
+    code = """
+    const _: () = {};
+    """
+
+    ast = parse_code(code)
+
+    assert len(ast.global_variables) == 1
+    assert isinstance(ast.global_variables[0], ConstNode)
+    assert ast.global_variables[0].name == "_"
+    assert ast.global_variables[0].vtype == "()"
 
 
 def test_fixed_array_type_and_repeated_literal_parsing():

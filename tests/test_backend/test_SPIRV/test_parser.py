@@ -2,6 +2,7 @@ from typing import List
 
 import pytest
 
+from crosstl.backend.common_ast import InitializerListNode
 from crosstl.backend.SPIRV import VulkanParser
 from crosstl.backend.SPIRV.VulkanAst import (
     ArrayAccessNode,
@@ -272,6 +273,128 @@ def test_parse_standalone_scoped_block_from_vulkan_samples():
     main = next(function for function in ast.functions if function.name == "main")
     assert len(main.body) == 2
     assert isinstance(main.body[0], AssignmentNode)
+    assert isinstance(main.body[1], AssignmentNode)
+
+
+def test_parse_ray_tracing_payload_layout_qualifier_from_glsl_samples():
+    code = """
+    struct RayPayload {
+        vec3 color;
+        float distance;
+    };
+    layout(location = 0) rayPayloadEXT RayPayload rayPayload;
+    layout(location = 1) callableDataEXT vec3 outColor;
+    hitAttributeEXT vec2 attribs;
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    payload = ast.global_variables[0]
+    callable_data = ast.global_variables[1]
+    hit_attribute = ast.global_variables[2]
+    assert isinstance(payload, LayoutNode)
+    assert payload.data_type == "RayPayload"
+    assert payload.variable_name == "rayPayload"
+    assert payload.declaration_qualifiers == ["rayPayloadEXT"]
+    assert callable_data.declaration_qualifiers == ["callableDataEXT"]
+    assert hit_attribute.vtype == "hitAttributeEXT vec2"
+    assert hit_attribute.name == "attribs"
+
+
+def test_parse_mesh_shader_const_array_brace_initializers_from_glsl_samples():
+    code = """
+    const vec4[3] positions = {
+        vec4(0.0, -1.0, 0.0, 1.0),
+        vec4(-1.0, 1.0, 0.0, 1.0),
+        vec4(1.0, 1.0, 0.0, 1.0)
+    };
+    void main() {
+        float r = 0.1;
+        float g = 0.2;
+        float b = 0.3;
+        float[3] rgb_values = { r, g, b };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    positions = ast.global_variables[0]
+    assert positions.left.vtype == "const vec4[3]"
+    assert isinstance(positions.right, InitializerListNode)
+    assert len(positions.right.elements) == 3
+
+    rgb_values = ast.functions[0].body[3]
+    assert rgb_values.left.vtype == "float[3]"
+    assert isinstance(rgb_values.right, InitializerListNode)
+    assert [element.name for element in rgb_values.right.elements] == ["r", "g", "b"]
+
+
+def test_parse_template_style_tensor_layout_type_from_glsl_samples():
+    code = """
+    layout(set = 0, binding = 0) writeonly uniform tensorARM<float, 4> output_tensor;
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    layout = ast.global_variables[0]
+    assert isinstance(layout, LayoutNode)
+    assert layout.data_type == "tensorARM<float, 4>"
+    assert layout.variable_name == "output_tensor"
+    assert layout.declaration_qualifiers == ["writeonly"]
+
+
+def test_parse_user_defined_return_type_and_const_parameter_from_glsl_samples():
+    code = """
+    struct Sphere {
+        vec3 center;
+        float radius;
+    };
+    struct Triangle {
+        vec3 normal;
+    };
+    Triangle unpackTriangle(uint index, const Sphere sphere) {
+        Triangle tri;
+        return tri;
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    function = ast.functions[0]
+    assert function.return_type == "Triangle"
+    assert function.params[1].vtype == "Sphere"
+    assert function.params[1].qualifiers == ["const"]
+
+
+def test_parse_restrict_buffer_reference_local_declaration_from_glsl_samples():
+    code = """
+    void main() {
+        restrict Position positions = registers.references.buffers[slice];
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    declaration = ast.functions[0].body[0]
+    assert declaration.left.vtype == "restrict Position"
+    assert declaration.left.name == "positions"
+
+
+def test_parse_empty_statement_after_block_from_glsl_samples():
+    code = """
+    void main() {
+        if (sampledColor.a < 0.5) {
+            discard;
+        };
+        outColor = vec4(0.0);
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    main = ast.functions[0]
+    assert len(main.body) == 2
+    assert isinstance(main.body[0], IfNode)
     assert isinstance(main.body[1], AssignmentNode)
 
 

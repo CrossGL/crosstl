@@ -271,7 +271,10 @@ class CudaParser:
     def collect_struct_names(self):
         names = set()
         for index, token in enumerate(self.tokens[:-1]):
-            if token[0] == "STRUCT" and self.tokens[index + 1][0] == "IDENTIFIER":
+            if (
+                token[0] in {"CLASS", "STRUCT"}
+                and self.tokens[index + 1][0] == "IDENTIFIER"
+            ):
                 names.add(self.tokens[index + 1][1])
         return names
 
@@ -361,19 +364,21 @@ class CudaParser:
                 includes.append(self.parse_preprocessor())
             elif self.current_token[0] == "TEMPLATE":
                 self.parse_template_declaration()
+            elif self.is_namespace_alias_start():
+                self.parse_namespace_alias()
             elif self.is_type_alias_start():
                 aliases = self.parse_type_alias()
                 if isinstance(aliases, list):
                     for alias in aliases:
-                        if isinstance(alias, StructNode):
+                        if isinstance(alias, (StructNode, EnumNode)):
                             structs.append(alias)
                         elif alias is not None:
                             typedefs.append(alias)
-                elif isinstance(aliases, StructNode):
+                elif isinstance(aliases, (StructNode, EnumNode)):
                     structs.append(aliases)
                 elif aliases is not None:
                     typedefs.append(aliases)
-            elif self.current_token[0] == "STRUCT":
+            elif self.is_struct_or_class_declaration_start():
                 structs.append(self.parse_struct())
             elif self.current_token[0] == "ENUM":
                 structs.append(self.parse_enum())
@@ -906,13 +911,15 @@ class CudaParser:
                 items.append(self.parse_preprocessor())
             elif self.current_token[0] == "TEMPLATE":
                 self.parse_template_declaration()
+            elif self.is_namespace_alias_start():
+                self.parse_namespace_alias()
             elif self.is_type_alias_start():
                 aliases = self.parse_type_alias()
                 if isinstance(aliases, list):
                     items.extend(aliases)
                 elif aliases is not None:
                     items.append(aliases)
-            elif self.current_token[0] == "STRUCT":
+            elif self.is_struct_or_class_declaration_start():
                 items.append(self.parse_struct())
             elif self.current_token[0] == "ENUM":
                 items.append(self.parse_enum())
@@ -967,6 +974,8 @@ class CudaParser:
         self.eat("TYPEDEF")
         if self.current_token[0] == "STRUCT":
             return self.parse_typedef_struct_alias()
+        if self.current_token[0] == "ENUM":
+            return self.parse_typedef_enum_alias()
 
         first_type = self.parse_type()
         base_type = self.strip_declarator_markers(first_type)
@@ -1037,6 +1046,52 @@ class CudaParser:
         self.struct_names.add(alias_name)
         return StructNode(alias_name, members, attributes=attributes)
 
+    def parse_typedef_enum_alias(self):
+        self.eat("ENUM")
+        is_scoped = False
+
+        if self.current_token[0] in {"CLASS", "STRUCT"}:
+            is_scoped = True
+            self.eat(self.current_token[0])
+
+        tag_name = None
+        if self.current_token[0] == "IDENTIFIER":
+            tag_name = self.eat("IDENTIFIER")[1]
+
+        underlying_type = None
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            underlying_type = self.parse_type()
+
+        if self.current_token[0] != "LBRACE":
+            alias = self.parse_type_alias_declarator(
+                f"enum {tag_name}", allow_prefix=True
+            )
+            self.eat("SEMICOLON")
+            return alias
+
+        self.eat("LBRACE")
+        members = self.parse_enum_members()
+        self.eat("RBRACE")
+
+        alias_name = tag_name
+        if self.current_token[0] == "IDENTIFIER":
+            alias_name = self.eat("IDENTIFIER")[1]
+        if not alias_name:
+            raise SyntaxError("Expected typedef enum alias name")
+
+        self.eat("SEMICOLON")
+        for name in {tag_name, alias_name}:
+            if name:
+                self.type_aliases.add(name)
+                self.struct_names.add(name)
+
+        enum_node = EnumNode(alias_name, members)
+        enum_node.underlying_type = underlying_type
+        enum_node.is_scoped = is_scoped
+        enum_node.tag_name = tag_name
+        return enum_node
+
     def parse_alignment_attributes(self):
         attributes = []
         while self.current_token[0] == "ALIGNAS":
@@ -1097,6 +1152,41 @@ class CudaParser:
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
 
+    def is_namespace_alias_start(self):
+        return (
+            self.current_token[0] == "NAMESPACE"
+            and self.current_index + 2 < len(self.tokens)
+            and self.tokens[self.current_index + 1][0] == "IDENTIFIER"
+            and self.tokens[self.current_index + 2][0] == "ASSIGN"
+        )
+
+    def parse_namespace_alias(self):
+        self.eat("NAMESPACE")
+        self.eat("IDENTIFIER")
+        self.eat("ASSIGN")
+        self.skip_until_semicolon()
+        return None
+
+    def is_struct_or_class_declaration_start(self):
+        if self.current_token[0] not in {"CLASS", "STRUCT"}:
+            return False
+
+        index = self.current_index + 1
+        if index >= len(self.tokens) or self.tokens[index][0] != "IDENTIFIER":
+            return False
+
+        index += 1
+        if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
+            index = self.skip_template_at_index(index)
+            if index is None:
+                return False
+
+        return index < len(self.tokens) and self.tokens[index][0] in {
+            "COLON",
+            "LBRACE",
+            "SEMICOLON",
+        }
+
     def skip_until_semicolon(self):
         while self.current_token[0] not in {"SEMICOLON", "EOF"}:
             self.eat(self.current_token[0])
@@ -1104,18 +1194,28 @@ class CudaParser:
             self.eat("SEMICOLON")
 
     def parse_struct(self):
-        self.eat("STRUCT")
+        self.eat(self.current_token[0])
         attributes = self.parse_alignment_attributes()
         name = self.eat("IDENTIFIER")[1]
         if self.current_token[0] == "LESS_THAN":
             name += self.parse_template_suffix()
         self.struct_names.add(name)
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return StructNode(name, [], attributes=attributes)
+        if self.current_token[0] == "COLON":
+            self.skip_struct_inheritance_clause()
         self.eat("LBRACE")
         members = self.parse_struct_members()
         self.eat("RBRACE")
         self.eat("SEMICOLON")
 
         return StructNode(name, members, attributes=attributes)
+
+    def skip_struct_inheritance_clause(self):
+        self.eat("COLON")
+        while self.current_token[0] not in {"LBRACE", "EOF"}:
+            self.eat(self.current_token[0])
 
     def is_out_of_class_member_definition_start(self):
         index = self.current_index
@@ -1839,6 +1939,8 @@ class CudaParser:
             return None
         if self.current_token[0] == "PREPROCESSOR":
             return self.parse_preprocessor()
+        if self.is_namespace_alias_start():
+            return self.parse_namespace_alias()
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -3128,14 +3230,26 @@ class CudaParser:
                 self.current_token[0] == "IDENTIFIER"
                 and not self.is_identifier_type_name(self.current_token[1])
                 and not self.is_identifier_cast_target_at_current_index()
+                and not self.is_qualified_identifier_cast_target_at_current_index()
             ):
                 return False
 
             token_type = self.current_token[0]
             self.eat(token_type)
             self.consume_composite_scalar_type_suffix(token_type)
-            while self.current_token[0] == "MULTIPLY":
-                self.eat("MULTIPLY")
+            while self.current_token[0] == "SCOPE":
+                self.eat("SCOPE")
+                self.parse_name_component()
+
+            if self.current_token[0] == "LESS_THAN":
+                self.parse_template_suffix()
+
+            while self.current_token[0] in {
+                "MULTIPLY",
+                *self.TYPE_REFERENCE_TOKENS,
+                *self.POSTFIX_TYPE_QUALIFIER_TOKENS,
+            }:
+                self.eat(self.current_token[0])
 
             while self.current_token[0] == "LBRACKET":
                 self.eat("LBRACKET")
@@ -3177,11 +3291,47 @@ class CudaParser:
         if close_index >= len(self.tokens) or self.tokens[close_index][0] != "RPAREN":
             return False
 
-        operand_index = close_index + 1
-        if operand_index >= len(self.tokens):
+        return self.is_cast_operand_start_at_index(close_index + 1)
+
+    def is_qualified_identifier_cast_target_at_current_index(self):
+        if self.current_token[0] != "IDENTIFIER":
             return False
 
-        return self.tokens[operand_index][0] in {
+        index = self.current_index + 1
+        saw_scope = False
+        while (
+            index + 1 < len(self.tokens)
+            and self.tokens[index][0] == "SCOPE"
+            and self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS
+        ):
+            saw_scope = True
+            index += 2
+
+        if not saw_scope:
+            return False
+
+        if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
+            index = self.skip_template_at_index(index)
+            if index is None:
+                return False
+
+        while index < len(self.tokens) and self.tokens[index][0] in {
+            "MULTIPLY",
+            *self.TYPE_REFERENCE_TOKENS,
+            *self.POSTFIX_TYPE_QUALIFIER_TOKENS,
+        }:
+            index += 1
+
+        if index >= len(self.tokens) or self.tokens[index][0] != "RPAREN":
+            return False
+
+        return self.is_cast_operand_start_at_index(index + 1)
+
+    def is_cast_operand_start_at_index(self, index):
+        if index >= len(self.tokens):
+            return False
+
+        return self.tokens[index][0] in {
             "IDENTIFIER",
             "NUMBER",
             "STRING",
