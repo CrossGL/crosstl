@@ -172,6 +172,90 @@ def test_parse_resource_bindings_and_address_spaces():
     parse_ok(code)
 
 
+def test_parse_gnu_attribute_before_local_declaration():
+    code = """
+    void main(float b) {
+        __attribute__((unused)) float zero = b;
+    }
+    """
+    ast = parse_ok(code)
+
+    assignment = ast.functions[0].body[0]
+    variable = assignment.left
+    assert variable.name == "zero"
+    assert variable.vtype == "float"
+    assert variable.attributes[0].name == "unused"
+    assert variable.attributes[0].args == []
+
+
+def test_parse_gnu_attribute_before_threadgroup_local_declaration():
+    code = """
+    void main() {
+        __attribute__((unused)) threadgroup float scratch[16];
+    }
+    """
+    ast = parse_ok(code)
+
+    variable = ast.functions[0].body[0]
+    assert variable.name == "scratch"
+    assert variable.vtype == "float"
+    assert variable.qualifiers == ["threadgroup"]
+    assert variable.array_sizes == ["16"]
+    assert variable.attributes[0].name == "unused"
+    assert variable.attributes[0].args == []
+
+
+def test_parse_gnu_attribute_before_global_constant_declaration():
+    code = """
+    __attribute__((unused)) constant int MathError_DivisionByZero = 0;
+    """
+    ast = parse_ok(code)
+
+    constant = ast.global_variables[0]
+    assert isinstance(constant, AssignmentNode)
+    assert constant.left.name == "MathError_DivisionByZero"
+    assert constant.left.vtype == "int"
+    assert constant.left.qualifiers == ["constant"]
+    assert constant.left.attributes[0].name == "unused"
+    assert constant.left.attributes[0].args == []
+    assert constant.right == "0"
+
+
+def test_parse_gnu_attribute_before_global_constant_multiline_initializer():
+    code = """
+    __attribute__((unused)) constant float VALUES[2] = {
+        1.0,
+        2.0,
+    };
+    """
+    ast = parse_ok(code)
+
+    constant = ast.global_variables[0]
+    assert isinstance(constant, AssignmentNode)
+    assert constant.left.name == "VALUES"
+    assert constant.left.qualifiers == ["constant"]
+    assert constant.left.array_sizes == ["2"]
+    assert constant.left.attributes[0].name == "unused"
+    assert isinstance(constant.right, InitializerListNode)
+    assert constant.right.elements == ["1.0", "2.0"]
+
+
+def test_parse_gnu_attribute_after_function_return_type():
+    code = """
+    static inline float4 __attribute__((unused))
+    helper(float4 value) {
+        return value;
+    }
+    """
+    ast = parse_ok(code)
+
+    function = ast.functions[0]
+    assert function.name == "helper"
+    assert function.return_type == "float4"
+    assert function.attributes[0].name == "unused"
+    assert function.attributes[0].args == []
+
+
 def test_parse_coherent_memory_qualifier_from_mlx_fence_kernel():
     code = """
     [[kernel]] void input_coherent(
@@ -222,6 +306,24 @@ def test_parse_imageblock_member_array_after_attribute_from_apple_sample():
     assert members[0].vtype == "rgba8unorm<half4>"
     assert members[0].array_sizes[0].name == "kNumLayers"
     assert members[1].array_sizes[0].name == "kNumLayers"
+
+
+def test_parse_fragment_output_color_and_depth_attributes():
+    code = """
+    struct FragmentOutput {
+        float4 color0 [[color(0)]];
+        float depth [[depth(any)]];
+    };
+    """
+    ast = parse_ok(code)
+    members = ast.structs[0].members
+
+    assert members[0].name == "color0"
+    assert members[0].attributes[0].name == "color"
+    assert members[0].attributes[0].args == ["0"]
+    assert members[1].name == "depth"
+    assert members[1].attributes[0].name == "depth"
+    assert members[1].attributes[0].args == ["any"]
 
 
 def test_parse_argument_buffer_array_of_device_pointers_from_apple_sample():
@@ -307,6 +409,50 @@ def test_parse_argument_buffer_reference_array_parameter():
     assert params[1].attributes[0].args == ["1"]
     assert params[2].vtype == "array<texture2d<float>,10>"
     assert params[2].name == "texturesArray"
+
+
+def test_parse_shader_parameter_attribute_on_following_line_and_texture_arrays():
+    code = """
+    fragment float4 fragment_main(
+        constant LightingModel &lighting_model
+        [[buffer(3)]],
+        array<texture2d<float>, MAX_SHADOW_CASCADES> shadow_maps [[texture(6)]],
+        texture2d_array<float, access::read_write> irradiance_map [[texture(11)]]) {
+        return float4(1.0);
+    }
+    """
+    ast = parse_ok(code)
+    params = ast.functions[0].params
+
+    assert params[0].name == "lighting_model"
+    assert params[0].vtype == "LightingModel&"
+    assert params[0].qualifiers == ["constant"]
+    assert params[0].attributes[0].name == "buffer"
+    assert params[0].attributes[0].args == ["3"]
+    assert params[1].name == "shadow_maps"
+    assert params[1].vtype == "array<texture2d<float>,MAX_SHADOW_CASCADES>"
+    assert params[1].attributes[0].name == "texture"
+    assert params[1].attributes[0].args == ["6"]
+    assert params[2].name == "irradiance_map"
+    assert params[2].vtype == "texture2d_array<float,access::read_write>"
+    assert params[2].attributes[0].name == "texture"
+    assert params[2].attributes[0].args == ["11"]
+
+
+def test_parse_fragment_entry_name_on_following_line():
+    code = """
+    fragment FragmentOutput
+    fragment_main(FragmentInput input [[stage_in]]) {
+        return FragmentOutput();
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+
+    assert function.qualifier == "fragment"
+    assert function.return_type == "FragmentOutput"
+    assert function.name == "fragment_main"
+    assert function.params[0].attributes[0].name == "stage_in"
 
 
 def test_parse_defaulted_function_constant_preserves_attribute():

@@ -1852,6 +1852,7 @@ class RustParser:
                     "MAT4",
                     "ASYNC",
                     "UNSAFE",
+                    "LBRACE",
                     "LPAREN",
                     "LESS_THAN",
                 ]

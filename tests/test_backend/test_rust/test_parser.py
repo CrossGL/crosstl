@@ -4308,6 +4308,36 @@ def test_builtin_vector_struct_initialization_in_result_match_arm():
     ]
 
 
+def test_match_arm_block_tail_preserves_following_guarded_struct_arm():
+    code = """
+    fn shade(model: LightingModel) {
+        match model {
+            LightingModel::PBR { ao } => {
+                let x: f32 = 1.0;
+                {
+                    let y = x;
+                    y
+                }
+            },
+            LightingModel::Toon { levels } if (levels > 0) => use_levels(levels),
+            _ => use_default(),
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    match_stmt = ast.functions[0].body[0]
+
+    assert isinstance(match_stmt, MatchNode)
+    assert len(match_stmt.arms) == 3
+    assert isinstance(match_stmt.arms[0].body[-1], BlockNode)
+    guarded = match_stmt.arms[1]
+    assert isinstance(guarded.pattern, MatchStructPatternNode)
+    assert guarded.pattern.name == "LightingModel::Toon"
+    assert isinstance(guarded.guard, BinaryOpNode)
+    assert guarded.guard.op == ">"
+
+
 def test_lowercase_self_condition_does_not_parse_body_as_struct_literal():
     code = """
     impl FloatExt for f32 {

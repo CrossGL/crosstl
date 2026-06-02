@@ -313,7 +313,7 @@ class MetalParser:
                     constants.append(self.parse_constant_buffer())
                 else:
                     global_variables.append(self.parse_global_variable())
-            elif self.current_token[0] == "ATTRIBUTE":
+            elif self.current_token[0] == "ATTRIBUTE" or self.is_gnu_attribute_start():
                 if self.is_function_definition():
                     function = self.parse_function()
                     if function is not None:
@@ -344,7 +344,11 @@ class MetalParser:
         )
 
     def is_bare_macro_invocation(self):
-        return self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "LPAREN"
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.peek(1)[0] == "LPAREN"
+            and not self.is_gnu_attribute_start()
+        )
 
     def is_top_level_expression_statement_start(self):
         return self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "DOT"
@@ -541,9 +545,7 @@ class MetalParser:
             self.eat(token_type)
 
     def is_function_definition(self):
-        idx = self.pos
-        while idx < len(self.tokens) and self.tokens[idx][0] == "ATTRIBUTE":
-            idx += 1
+        idx = self.skip_leading_attribute_tokens_at(self.pos)
         while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
             idx += 1
         if idx >= len(self.tokens):
@@ -552,8 +554,7 @@ class MetalParser:
         tok_type = self.tokens[idx][0]
         if tok_type in STAGE_TOKENS:
             idx += 1
-            while idx < len(self.tokens) and self.tokens[idx][0] == "ATTRIBUTE":
-                idx += 1
+            idx = self.skip_leading_attribute_tokens_at(idx)
             while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
                 idx += 1
             if idx >= len(self.tokens):
@@ -583,6 +584,8 @@ class MetalParser:
             "BITWISE_AND",
         ]:
             idx += 1
+
+        idx = self.skip_leading_attribute_tokens_at(idx)
 
         if idx >= len(self.tokens) or not self.is_name_token_at(idx):
             return False
@@ -1029,7 +1032,9 @@ class MetalParser:
         args = self.parse_balanced_token_text("LPAREN", "RPAREN")
         return f"{qualifier_name}({args})"
 
-    def parse_balanced_token_text(self, open_token, close_token):
+    def parse_balanced_token_text(
+        self, open_token, close_token, error_message="Unterminated type qualifier"
+    ):
         self.eat(open_token)
         depth = 1
         tokens = []
@@ -1050,7 +1055,7 @@ class MetalParser:
                 tokens.append(token_value)
                 self.eat(token_type)
         if depth != 0:
-            raise SyntaxError("Unterminated type qualifier")
+            raise SyntaxError(error_message)
         return self.format_generic_type_tokens(tokens)
 
     def format_generic_type_tokens(self, tokens):
@@ -1283,6 +1288,8 @@ class MetalParser:
                 qualifier = self.current_token[1]
             self.eat(self.current_token[0])
 
+        attributes.extend(self.parse_attributes())
+
         name = self.current_token[1]
         if not self.is_current_name_token():
             raise SyntaxError(f"Expected function name, got {self.current_token[0]}")
@@ -1355,30 +1362,65 @@ class MetalParser:
                 )
         return params
 
+    def is_gnu_attribute_start(self):
+        return (
+            self.current_token == ("IDENTIFIER", "__attribute__")
+            and self.peek(1)[0] == "LPAREN"
+        )
+
+    def is_gnu_attribute_start_at(self, idx):
+        return (
+            idx + 1 < len(self.tokens)
+            and self.tokens[idx] == ("IDENTIFIER", "__attribute__")
+            and self.tokens[idx + 1][0] == "LPAREN"
+        )
+
+    def skip_balanced_tokens_at(self, idx, open_token, close_token):
+        if idx >= len(self.tokens) or self.tokens[idx][0] != open_token:
+            return idx
+        depth = 0
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == open_token:
+                depth += 1
+            elif token_type == close_token:
+                depth -= 1
+                if depth == 0:
+                    return idx + 1
+            idx += 1
+        return idx
+
+    def skip_leading_attribute_tokens_at(self, idx):
+        while idx < len(self.tokens):
+            if self.tokens[idx][0] == "ATTRIBUTE":
+                idx += 1
+            elif self.is_gnu_attribute_start_at(idx):
+                idx = self.skip_balanced_tokens_at(idx + 1, "LPAREN", "RPAREN")
+            else:
+                break
+        return idx
+
     def parse_attributes(self):
-        attributes = []
-        while self.current_token[0] == "ATTRIBUTE":
-            attr_content = self.current_token[1][2:-2].strip()  # Remove [[ and ]]
+        def split_top_level(text):
+            parts = []
+            buf = ""
+            depth = 0
+            for ch in text:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth = max(0, depth - 1)
+                if ch == "," and depth == 0:
+                    if buf.strip():
+                        parts.append(buf.strip())
+                    buf = ""
+                    continue
+                buf += ch
+            if buf.strip():
+                parts.append(buf.strip())
+            return parts
 
-            def split_top_level(text):
-                parts = []
-                buf = ""
-                depth = 0
-                for ch in text:
-                    if ch == "(":
-                        depth += 1
-                    elif ch == ")":
-                        depth = max(0, depth - 1)
-                    if ch == "," and depth == 0:
-                        if buf.strip():
-                            parts.append(buf.strip())
-                        buf = ""
-                        continue
-                    buf += ch
-                if buf.strip():
-                    parts.append(buf.strip())
-                return parts
-
+        def append_attributes(attr_content):
             for part in split_top_level(attr_content):
                 name = part
                 args = []
@@ -1388,7 +1430,22 @@ class MetalParser:
                     args = [arg.strip() for arg in split_top_level(arg_str)]
                     name = name.strip()
                 attributes.append(AttributeNode(name.strip(), args))
-            self.eat("ATTRIBUTE")
+
+        attributes = []
+        while self.current_token[0] == "ATTRIBUTE" or self.is_gnu_attribute_start():
+            if self.current_token[0] == "ATTRIBUTE":
+                attr_content = self.current_token[1][2:-2].strip()  # Remove [[ and ]]
+                append_attributes(attr_content)
+                self.eat("ATTRIBUTE")
+                continue
+
+            self.eat("IDENTIFIER")
+            attr_content = self.parse_balanced_token_text(
+                "LPAREN", "RPAREN", "Unterminated GNU attribute"
+            ).strip()
+            if attr_content.startswith("(") and attr_content.endswith(")"):
+                attr_content = attr_content[1:-1].strip()
+            append_attributes(attr_content)
         return attributes
 
     def parse_block(self):
@@ -1412,20 +1469,31 @@ class MetalParser:
         return [] if statement is None else [statement]
 
     def is_declaration_start(self):
-        if self.current_token[0] == "ALIGNAS":
+        return self.is_declaration_start_at(
+            self.skip_leading_attribute_tokens_at(self.pos)
+        )
+
+    def is_declaration_start_at(self, idx):
+        if idx >= len(self.tokens):
+            return False
+        token_type, token_value = self.tokens[idx]
+        if token_type == "ALIGNAS":
             return True
-        if self.is_type_qualifier_start():
+        if self.is_qualifier_token_at(idx):
             return True
-        if self.current_token[0] in TYPE_TOKENS:
-            if self.current_token[0] == "IDENTIFIER":
+        if token_type in TYPE_TOKENS:
+            if token_type == "IDENTIFIER":
                 if (
-                    self.current_token[1] in SIGNED_TYPE_PREFIXES
-                    and self.peek(1)[0] in TYPE_TOKENS
+                    token_value in SIGNED_TYPE_PREFIXES
+                    and idx + 1 < len(self.tokens)
+                    and self.tokens[idx + 1][0] in TYPE_TOKENS
                 ):
                     return True
-                if self.current_token[1] in IDENTIFIER_TYPE_QUALIFIERS:
+                if token_value in IDENTIFIER_TYPE_QUALIFIERS:
                     return True
-                next_tok = self.peek(1)[0]
+                next_tok = (
+                    self.tokens[idx + 1][0] if idx + 1 < len(self.tokens) else "EOF"
+                )
                 if next_tok in [
                     "IDENTIFIER",
                     "SCOPE",
@@ -1434,7 +1502,7 @@ class MetalParser:
                     "BITWISE_AND",
                 ]:
                     return True
-                return self.current_token[1] in self.known_types
+                return token_value in self.known_types
             return True
         return False
 
@@ -1494,10 +1562,12 @@ class MetalParser:
         return bool(name) and name == name.upper()
 
     def parse_variable_declaration_or_assignment(self):
+        attributes = self.parse_attributes()
         alignas_specs = self.parse_alignas_specifiers()
+        attributes.extend(self.parse_attributes())
         vtype, qualifiers = self.parse_type_specifier()
         name, array_sizes = self.parse_declarator()
-        attributes = self.parse_attributes()
+        attributes.extend(self.parse_attributes())
 
         var_node = VariableNode(
             vtype, name, qualifiers=qualifiers, attributes=attributes
