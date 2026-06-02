@@ -772,6 +772,35 @@ def test_codegen_mesh_task_stages():
     assert "task" in lowered
 
 
+def test_codegen_pascal_case_mesh_attributes_infer_stage():
+    code = textwrap.dedent("""
+        struct VertexOut {
+            float4 position : SV_Position;
+        };
+
+        [NumThreads(128, 1, 1)]
+        [OutputTopology("triangle")]
+        void main(
+            out indices uint3 tris[1],
+            out vertices VertexOut verts[1]
+        ) {
+            SetMeshOutputCounts(1, 1);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "mesh {" in crossgl
+    assert "@ NumThreads(128, 1, 1)" in crossgl
+    assert '@ OutputTopology("triangle")' in crossgl
+    assert "@ indices out uvec3 tris[1]" in crossgl
+    assert "@ vertices out VertexOut verts[1]" in crossgl
+    assert "SetMeshOutputCounts(1, 1);" in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    assert ShaderStage.MESH in shader_ast.stages
+
+
 def test_codegen_mesh_payload_parameters_roundtrip():
     code = textwrap.dedent("""
         struct MeshPayload {

@@ -754,6 +754,7 @@ class HLSLParser:
         return function
 
     def infer_function_qualifier(self, name, attributes, params, semantic):
+        attribute_names = {str(attr.name).lower() for attr in attributes}
         for attr in attributes:
             if attr.name.lower() == "shader" and attr.args:
                 raw = attr.args[0]
@@ -799,7 +800,18 @@ class HLSLParser:
             return "mesh"
         if name_lower.startswith("as"):
             return "task"
-        if any(attr.name == "numthreads" for attr in attributes):
+        has_mesh_output_parameter = any(
+            any(
+                str(attr.name).lower() in {"vertices", "indices", "primitives"}
+                for attr in getattr(param, "attributes", []) or []
+            )
+            for param in params
+        )
+        if "outputtopology" in attribute_names and (
+            "numthreads" in attribute_names or has_mesh_output_parameter
+        ):
+            return "mesh"
+        if "numthreads" in attribute_names:
             return "compute"
         if semantic:
             semantic_upper = semantic.upper()

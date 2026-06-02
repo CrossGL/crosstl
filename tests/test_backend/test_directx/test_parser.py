@@ -737,6 +737,39 @@ def test_parse_mesh_task_shaders():
     assert_parses(code)
 
 
+def test_parse_pascal_case_mesh_attributes_infer_mesh_stage():
+    code = """
+    struct VertexOut {
+        float4 position : SV_Position;
+    };
+
+    [NumThreads(128, 1, 1)]
+    [OutputTopology(\"triangle\")]
+    void main(
+        out indices uint3 tris[1],
+        out vertices VertexOut verts[1]
+    ) {
+        SetMeshOutputCounts(1, 1);
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.name == "main"
+    assert function.qualifier == "mesh"
+    assert [attribute.name for attribute in function.attributes] == [
+        "NumThreads",
+        "OutputTopology",
+    ]
+    assert [attribute.name for attribute in function.params[0].attributes] == [
+        "indices"
+    ]
+    assert [attribute.name for attribute in function.params[1].attributes] == [
+        "vertices"
+    ]
+
+
 def test_parse_raytracing_shader():
     code = """
     RaytracingAccelerationStructure accel : register(t0, space1);

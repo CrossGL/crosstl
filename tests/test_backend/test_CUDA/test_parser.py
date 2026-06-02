@@ -1328,6 +1328,87 @@ class TestCudaParser:
         assert ast.kernels[0].params[0].vtype == "Pair *"
         assert ast.kernels[0].params[0].name == "pairs"
 
+    def test_cuda_struct_conversion_operator_methods_are_skipped(self):
+        code = """
+        template <class T> struct SharedMemory {
+            int tag;
+
+            __device__ inline operator T *() {
+                extern __shared__ int __smem[];
+                return (T *)__smem;
+            }
+
+            __device__ inline operator const T *() const {
+                extern __shared__ int __smem[];
+                return (T *)__smem;
+            }
+        };
+
+        template <> struct SharedMemory<double> {
+            __device__ inline operator double *() {
+                extern __shared__ double __smem_d[];
+                return (double *)__smem_d;
+            }
+        };
+
+        template <class T, unsigned int blockSize, bool nIsPow2>
+        __global__ void reduce(T *out) {
+            T *sdata = SharedMemory<T>();
+            out[threadIdx.x] = sdata[threadIdx.x];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.structs[0].name == "SharedMemory"
+        assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+            ("int", "tag")
+        ]
+        assert ast.structs[1].name == "SharedMemory<double>"
+        assert ast.structs[1].members == []
+        assert ast.kernels[0].name == "reduce"
+
+    def test_constexpr_local_declaration_in_switch_case_parsing(self):
+        code = """
+        void launch(int mode) {
+            switch (mode) {
+            case 9:
+                constexpr int numGroups = 2;
+                break;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        declaration = ast.functions[0].body[0].cases[0].body[0]
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "int"
+        assert declaration.name == "numGroups"
+        assert declaration.qualifiers == ["constexpr"]
+
+    def test_explicit_template_instantiation_declaration_is_skipped(self):
+        code = """
+        template <class T>
+        void reduce(int size, T *data) {
+            data[0] = (T)size;
+        }
+
+        template void reduce<int>(int size, int *data);
+        template void reduce<float>(int size, float *data);
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [function.name for function in ast.functions] == ["reduce"]
+        assert ast.global_variables == []
+
     def test_type_alias_c_style_cast_parsing(self):
         code = """
         typedef unsigned int LaneMask;

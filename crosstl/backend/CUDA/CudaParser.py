@@ -274,6 +274,8 @@ class CudaParser:
         while self.current_token[0] != "EOF":
             if self.current_token[0] == "PREPROCESSOR":
                 includes.append(self.parse_preprocessor())
+            elif self.current_token[0] == "TEMPLATE":
+                self.parse_template_declaration()
             elif self.is_type_alias_start():
                 aliases = self.parse_type_alias()
                 if isinstance(aliases, list):
@@ -609,6 +611,8 @@ class CudaParser:
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             if self.current_token[0] == "PREPROCESSOR":
                 items.append(self.parse_preprocessor())
+            elif self.current_token[0] == "TEMPLATE":
+                self.parse_template_declaration()
             elif self.is_type_alias_start():
                 aliases = self.parse_type_alias()
                 if isinstance(aliases, list):
@@ -774,6 +778,8 @@ class CudaParser:
         self.eat("STRUCT")
         attributes = self.parse_alignment_attributes()
         name = self.eat("IDENTIFIER")[1]
+        if self.current_token[0] == "LESS_THAN":
+            name += self.parse_template_suffix()
         self.struct_names.add(name)
         self.eat("LBRACE")
         members = self.parse_struct_members()
@@ -788,11 +794,121 @@ class CudaParser:
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 continue
+            if self.is_struct_access_label():
+                self.eat(self.current_token[0])
+                self.eat("COLON")
+                continue
+            if self.is_struct_method_start():
+                self.skip_struct_method()
+                continue
 
             member_declarations = self.parse_variable_declaration_list()
             members.extend(member_declarations)
             self.eat("SEMICOLON")
         return members
+
+    def is_struct_access_label(self):
+        return (
+            self.current_token[0] in {"PUBLIC", "PRIVATE", "PROTECTED"}
+            and self.current_index + 1 < len(self.tokens)
+            and self.tokens[self.current_index + 1][0] == "COLON"
+        )
+
+    def is_struct_method_start(self):
+        index = self.current_index
+        index = self.skip_optional_template_declaration_at_index(index)
+        index = self.skip_struct_method_specifiers_at_index(index)
+
+        if index >= len(self.tokens):
+            return False
+
+        token_type, token_value = self.tokens[index]
+        if token_value == "operator":
+            return True
+        if (
+            token_type == "BITWISE_NOT"
+            and index + 2 < len(self.tokens)
+            and self.tokens[index + 1][0] == "IDENTIFIER"
+            and self.tokens[index + 2][0] == "LPAREN"
+        ):
+            return True
+        if (
+            token_type == "IDENTIFIER"
+            and index + 1 < len(self.tokens)
+            and self.tokens[index + 1][0] == "LPAREN"
+        ):
+            return True
+
+        name_index = self.skip_type_at_index(index)
+        if name_index is None or name_index >= len(self.tokens):
+            return False
+
+        token_type, token_value = self.tokens[name_index]
+        if token_value == "operator":
+            return True
+        return (
+            self.is_function_name_token(self.tokens[name_index])
+            and name_index + 1 < len(self.tokens)
+            and self.tokens[name_index + 1][0] == "LPAREN"
+        )
+
+    def skip_optional_template_declaration_at_index(self, index):
+        if index >= len(self.tokens) or self.tokens[index][0] != "TEMPLATE":
+            return index
+
+        index += 1
+        if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
+            skipped = self.skip_template_at_index(index)
+            if skipped is not None:
+                return skipped
+        return index
+
+    def skip_struct_method_specifiers_at_index(self, index):
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type in self.FUNCTION_ATTRIBUTE_TOKENS:
+                index = self.skip_function_attribute_at_index(index)
+                continue
+            if token_type in self.FUNCTION_SPECIFIER_TOKENS or token_type == "VIRTUAL":
+                if (
+                    token_type == "EXTERN"
+                    and index + 1 < len(self.tokens)
+                    and self.tokens[index + 1][0] == "STRING"
+                ):
+                    index += 2
+                    continue
+                index += 1
+                continue
+            break
+        return index
+
+    def skip_struct_method(self):
+        if self.current_token[0] == "TEMPLATE":
+            self.eat("TEMPLATE")
+            if self.current_token[0] == "LESS_THAN":
+                self.parse_template_suffix()
+
+        while self.current_token[0] not in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
+            self.eat(self.current_token[0])
+
+        if self.current_token[0] == "LBRACE":
+            self.skip_balanced_brace_block()
+        elif self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+    def skip_balanced_brace_block(self):
+        self.eat("LBRACE")
+        depth = 1
+        while self.current_token[0] != "EOF" and depth > 0:
+            token_type = self.current_token[0]
+            if token_type == "LBRACE":
+                depth += 1
+            elif token_type == "RBRACE":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RBRACE")
+                    break
+            self.eat(token_type)
 
     def parse_function(self):
         qualifiers = []
@@ -1021,6 +1137,7 @@ class CudaParser:
             "CONSTANT",
             "STATIC",
             "EXTERN",
+            "CONSTEXPR",
             "DEVICE",
             "MANAGED",
         ]:
@@ -1058,6 +1175,7 @@ class CudaParser:
             "CONSTANT",
             "STATIC",
             "EXTERN",
+            "CONSTEXPR",
             "DEVICE",
             "MANAGED",
         ]:
@@ -1861,6 +1979,16 @@ class CudaParser:
                 self.eat(token_type)
 
         return f"<{self.format_template_parts(parts)}>"
+
+    def parse_template_declaration(self):
+        self.eat("TEMPLATE")
+        if self.current_token[0] == "LESS_THAN":
+            self.parse_template_suffix()
+            return
+
+        self.collect_balanced_tokens_until("SEMICOLON")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
 
     def format_template_parts(self, parts):
         formatted = []

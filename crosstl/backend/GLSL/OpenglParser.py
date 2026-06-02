@@ -298,10 +298,20 @@ class GLSLParser:
                 continue
 
             if self.current_token[0] == "STRUCT":
-                struct_node, extra_vars = self.parse_struct()
+                struct_node, extra_vars = self.parse_struct(
+                    qualifiers=qualifiers, layout=layout
+                )
                 structs.append(struct_node)
                 for var in extra_vars:
-                    global_variables.append(var)
+                    lowered = {q.lower() for q in var.qualifiers or []}
+                    if "uniform" in lowered:
+                        uniforms.append(var)
+                    elif "const" in lowered:
+                        constants.append(var)
+                    elif "in" in lowered or "out" in lowered or "inout" in lowered:
+                        io_variables.append(var)
+                    else:
+                        global_variables.append(var)
                 continue
 
             if (
@@ -593,7 +603,8 @@ class GLSLParser:
             sizes.append(size)
         return sizes
 
-    def parse_struct(self):
+    def parse_struct(self, qualifiers=None, layout=None):
+        declaration_qualifiers = qualifiers or []
         self.eat("STRUCT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -609,12 +620,12 @@ class GLSLParser:
             if self.current_token[0] == "LAYOUT":
                 member_layout = self.parse_layout_qualifier()
                 self.skip_newlines()
-            qualifiers = self.parse_qualifiers()
+            member_qualifiers = self.parse_qualifiers()
             member_type = self.parse_type()
             members.extend(
                 self.parse_variable_declarations(
                     member_type,
-                    qualifiers=qualifiers,
+                    qualifiers=member_qualifiers,
                     layout=member_layout,
                 )
             )
@@ -624,7 +635,9 @@ class GLSLParser:
 
         variables = []
         if self.current_token[0] == "IDENTIFIER":
-            variables = self.parse_variable_declarations(name, qualifiers=[])
+            variables = self.parse_variable_declarations(
+                name, qualifiers=declaration_qualifiers, layout=layout
+            )
         else:
             self.eat("SEMICOLON")
 
@@ -841,6 +854,9 @@ class GLSLParser:
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
             return DiscardNode()
+        if self.current_token[0] == "STRUCT":
+            struct_node, extra_vars = self.parse_struct()
+            return [struct_node, *extra_vars]
 
         if self.is_declaration_start():
             qualifiers = self.parse_qualifiers()

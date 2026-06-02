@@ -1236,7 +1236,7 @@ class MetalParser:
                 update = BinaryOpNode(update, ",", self.parse_expression())
         self.eat("RPAREN")
 
-        body = self.parse_block()
+        body = self.parse_statement_body()
 
         return ForNode(init, condition, update, body)
 

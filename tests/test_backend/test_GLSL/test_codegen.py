@@ -583,6 +583,49 @@ def test_codegen_interface_block_roundtrip():
     assert "cbuffer Uniforms" in output
 
 
+def test_codegen_uniform_struct_specifier_uses_uniform_buffer():
+    code = textwrap.dedent("""
+        precision mediump float;
+        uniform struct S {
+            float field;
+        } s;
+
+        void main() {
+            gl_FragColor = vec4(0.0, s.field, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "struct S" in crossgl
+    assert "cbuffer Uniforms" in crossgl
+    assert "S s;" in crossgl
+    assert "\n    S s;\n\n    fragment" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_local_struct_with_mixed_array_declarators_from_khronos_webgl():
+    code = textwrap.dedent("""
+        precision mediump float;
+        void main() {
+            struct S {
+                float field;
+            };
+            S s1[2], s2;
+            s1[0].field = 1.0;
+            gl_FragColor = vec4(0.0, s1[0].field, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "struct S" in crossgl
+    assert "S s1[2];" in crossgl
+    assert "S s2;" in crossgl
+    assert "s1[0].field = 1.0;" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_push_constant_interface_block_preserves_attribute():
     code = textwrap.dedent("""
         #version 450

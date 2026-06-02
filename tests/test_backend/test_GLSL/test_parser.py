@@ -6,6 +6,7 @@ import pytest
 from crosstl.backend.GLSL.OpenglAst import (
     BinaryOpNode,
     InitializerListNode,
+    StructNode,
     VariableNode,
 )
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
@@ -173,6 +174,52 @@ def test_parse_interface_block_with_newline_brace_and_instance():
     assert ast.structs[0].interface_layout == {"push_constant": None}
     assert ast.uniforms[0].name == "registers"
     assert ast.uniforms[0].layout == {"push_constant": None}
+
+
+def test_parse_uniform_struct_specifier_preserves_uniform_qualifier():
+    code = textwrap.dedent("""
+        precision mediump float;
+        uniform struct S {
+            float field;
+        } s;
+
+        void main() {
+            gl_FragColor = vec4(0.0, s.field, 0.0, 1.0);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+
+    assert ast.structs[0].name == "S"
+    assert ast.uniforms[0].name == "s"
+    assert ast.uniforms[0].vtype == "S"
+    assert ast.uniforms[0].qualifiers == ["uniform"]
+    assert not any(var.name == "s" for var in ast.global_variables)
+
+
+def test_parse_local_struct_with_mixed_array_declarators_from_khronos_webgl():
+    code = textwrap.dedent("""
+        precision mediump float;
+        void main() {
+            struct S {
+                float field;
+            };
+            S s1[2], s2;
+            s1[0].field = 1.0;
+            gl_FragColor = vec4(0.0, s1[0].field, 0.0, 1.0);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    body = ast.functions[0].body
+
+    assert isinstance(body[0], StructNode)
+    assert body[0].name == "S"
+    assert [member.name for member in body[0].members] == ["field"]
+    assert [(var.name, var.is_array, len(var.array_sizes)) for var in body[1:3]] == [
+        ("s1", True, 1),
+        ("s2", False, 0),
+    ]
 
 
 def test_parse_control_flow_with_brace_on_next_line():

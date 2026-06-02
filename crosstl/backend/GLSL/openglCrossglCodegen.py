@@ -19,6 +19,7 @@ from .OpenglAst import (
     PostfixOpNode,
     ReturnNode,
     ShaderNode,
+    StructNode,
     SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
@@ -1551,6 +1552,8 @@ class GLSLToCrossGLConverter:
                 return ray_control + ";"
             self.register_variable_type(node)
             return self.generate_variable_declaration(node) + ";"
+        elif isinstance(node, StructNode):
+            return self.generate_struct(node)
         elif isinstance(node, FunctionCallNode):
             return self.generate_function_call(node) + ";"
         elif isinstance(node, SwitchNode):

@@ -683,6 +683,25 @@ def test_codegen_control_flow_and_ops():
     assert ">>" in result
 
 
+def test_codegen_nested_unbraced_for_loops_from_public_msl_example():
+    code = """
+    fragment float4 shader_day53(float4 pixPos [[position]]) {
+        const float PIXEL_SIZE = 40.0;
+        float4 col = float4(0.0);
+        for (int i = 0; i < int(PIXEL_SIZE); i++)
+            for (int j = 0; j < int(PIXEL_SIZE); j++)
+                col += float4(float(i + j));
+        return col;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "for (int i = 0; i < int(PIXEL_SIZE); i++)" in crossgl
+    assert "for (int j = 0; j < int(PIXEL_SIZE); j++)" in crossgl
+    assert "col += vec4(float(i + j));" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_ternary_expression():
     code = """
     void main() {

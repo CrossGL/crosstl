@@ -6,6 +6,7 @@ from crosstl.backend.common_ast import (
     AssignmentNode,
     CastNode,
     DiscardNode,
+    ForNode,
     FunctionCallNode,
     IfNode,
     MemberAccessNode,
@@ -125,6 +126,24 @@ def test_parse_control_flow_constructs():
     }
     """
     parse_ok(code)
+
+
+def test_parse_nested_unbraced_for_loops_from_public_msl_example():
+    code = """
+    fragment float4 shader_day53(float4 pixPos [[position]]) {
+        const float PIXEL_SIZE = 40.0;
+        float4 col = float4(0.0);
+        for (int i = 0; i < int(PIXEL_SIZE); i++)
+            for (int j = 0; j < int(PIXEL_SIZE); j++)
+                col += float4(float(i + j));
+        return col;
+    }
+    """
+    ast = parse_ok(code)
+    loops = [node for node in iter_ast_nodes(ast) if isinstance(node, ForNode)]
+
+    assert len(loops) == 2
+    assert isinstance(loops[0].body[0], ForNode)
 
 
 def test_parse_resource_bindings_and_address_spaces():
