@@ -405,6 +405,47 @@ class TestCudaParser:
         assert body[3].value.name == "sizeof"
         assert body[3].value.args == ["unsigned int"]
 
+    def test_public_cuda_strided_access_throw_runtime_error_statements(self):
+        code = """
+        inline void cuda_last_error_check() {
+            cudaError_t error_code = cudaGetLastError();
+
+            if (cudaSuccess != error_code) {
+                std::stringstream ss;
+                ss << "CUDA Runtime API error " << error_code << ": "
+                   << cudaGetErrorString(error_code) << std::endl;
+                throw std::runtime_error(ss.str());
+            }
+        }
+
+        int main() {
+            cudaError_t err = cudaGetDeviceProperties(&prop, 0);
+            if (err != cudaSuccess)
+                throw std::runtime_error("Failed to get CUDA device name");
+            return EXIT_SUCCESS;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        error_check_body = ast.functions[0].body
+        braced_if = error_check_body[1]
+        braced_throw = braced_if.if_body[2]
+
+        assert isinstance(braced_if, IfNode)
+        assert isinstance(braced_throw, FunctionCallNode)
+        assert braced_throw.name == "throw"
+        assert isinstance(braced_throw.args[0], FunctionCallNode)
+        assert braced_throw.args[0].name == "std::runtime_error"
+
+        main_body = ast.functions[1].body
+        unbraced_throw = main_body[1].if_body
+        assert isinstance(unbraced_throw, FunctionCallNode)
+        assert unbraced_throw.name == "throw"
+        assert unbraced_throw.args[0].name == "std::runtime_error"
+
     def test_public_cuda_samples_typedef_enum_aliases_and_forward_structs(self):
         code = """
         typedef enum memAllocType_enum {

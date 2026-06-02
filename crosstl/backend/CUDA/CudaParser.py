@@ -2275,6 +2275,8 @@ class CudaParser:
             return self.parse_type_alias()
         elif self.is_identifier_value("try"):
             return self.parse_try_statement()
+        elif self.is_identifier_value("throw"):
+            return self.parse_throw_statement()
         elif self.is_identifier_value("delete"):
             stmt = self.parse_delete_statement()
             self.eat("SEMICOLON")
@@ -2318,6 +2320,14 @@ class CudaParser:
             self.parse_statement()
 
         return try_body
+
+    def parse_throw_statement(self):
+        self.eat("IDENTIFIER")
+        args = []
+        if self.current_token[0] != "SEMICOLON":
+            args.append(self.parse_expression())
+        self.eat("SEMICOLON")
+        return FunctionCallNode("throw", args)
 
     def is_identifier_value(self, value):
         return self.current_token[0] == "IDENTIFIER" and self.current_token[1] == value

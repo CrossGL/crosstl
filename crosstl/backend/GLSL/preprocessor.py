@@ -4,7 +4,50 @@ import os
 import re
 from typing import Dict, List, Optional
 
-from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor
+from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
+
+
+class _GLSLDirectivePreprocessor(HLSLPreprocessor):
+    """HLSL preprocessor variant with GLSL comment/directive semantics."""
+
+    def _split_logical_lines(self, code: str) -> List[str]:
+        return super()._split_logical_lines(self._strip_comments(code))
+
+    def _strip_comments(self, code: str) -> str:
+        result = []
+        i = 0
+        while i < len(code):
+            ch = code[i]
+            if ch in "\"'":
+                literal, consumed = self._read_string(code, i)
+                result.append(literal)
+                i += consumed
+                continue
+            if code.startswith("//", i):
+                i = self._skip_line_comment_text(code, i)
+                continue
+            if code.startswith("/*", i):
+                consumed, newline_count = self._skip_block_comment_text(code, i)
+                result.append(" ")
+                result.extend("\n" for _ in range(newline_count))
+                i += consumed
+                continue
+            result.append(ch)
+            i += 1
+        return "".join(result)
+
+    def _skip_line_comment_text(self, code: str, start: int) -> int:
+        end = code.find("\n", start)
+        if end == -1:
+            return len(code)
+        return end
+
+    def _skip_block_comment_text(self, code: str, start: int) -> tuple[int, int]:
+        end = code.find("*/", start + 2)
+        if end == -1:
+            raise SyntaxError("Unterminated block comment")
+        comment = code[start : end + 2]
+        return len(comment), comment.count("\n")
 
 
 class GLSLPreprocessor:
@@ -18,7 +61,7 @@ class GLSLPreprocessor:
         max_expansion_depth: int = 64,
     ):
         self.strict = strict
-        self._preprocessor = HLSLPreprocessor(
+        self._preprocessor = _GLSLDirectivePreprocessor(
             include_paths=include_paths,
             defines=defines,
             strict=strict,
@@ -28,6 +71,8 @@ class GLSLPreprocessor:
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
         self._ensure_version_first(code)
         include_paths = self._preprocessor.include_paths
+        macros = dict(self._preprocessor.macros)
+        self._apply_version_macros(code)
         implicit_paths = self._implicit_include_paths(file_path)
         if implicit_paths:
             self._preprocessor.include_paths = [
@@ -38,8 +83,33 @@ class GLSLPreprocessor:
             processed = self._preprocessor.preprocess(code, file_path=file_path)
         finally:
             self._preprocessor.include_paths = include_paths
+            self._preprocessor.macros = macros
         self._ensure_version_first(processed)
         return processed
+
+    def _apply_version_macros(self, code: str):
+        match = re.search(
+            r"(?m)^\s*#\s*version\s+([0-9]+)(?:\s+([A-Za-z_][A-Za-z0-9_]*))?",
+            code,
+        )
+        if not match:
+            return
+
+        version = match.group(1)
+        profile = (match.group(2) or "").lower()
+        self._define_macro("__VERSION__", version)
+        if profile == "es":
+            self._define_macro("GL_ES", "1")
+            return
+        if profile == "compatibility":
+            self._define_macro("GL_compatibility_profile", "1")
+            return
+        self._define_macro("GL_core_profile", "1")
+
+    def _define_macro(self, name: str, value: str):
+        self._preprocessor.macros.setdefault(
+            name, Macro(name=name, params=None, replacement=value)
+        )
 
     def _implicit_include_paths(self, file_path: Optional[str]) -> List[str]:
         if file_path is None:

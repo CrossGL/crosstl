@@ -6,6 +6,7 @@ import pytest
 from crosstl.backend.common_ast import (
     CastNode,
     FunctionCallNode,
+    FunctionNode,
     InitializerListNode,
     MemberAccessNode,
     SwitchNode,
@@ -367,6 +368,30 @@ def test_parse_contextual_shared_storage_modifier_from_hlsl_docs():
     assert shared_texture.qualifiers == []
 
 
+def test_parse_snorm_unorm_scalar_modifiers_from_dxc_rewriter_samples():
+    ast = parse_code("""
+    snorm float globalWeight;
+
+    void main() {
+        float left;
+        unorm min16float right;
+        left = right;
+    }
+    """)
+
+    global_weight = ast.global_variables[0]
+    left, right, assignment = ast.functions[0].body
+
+    assert global_weight.name == "globalWeight"
+    assert global_weight.qualifiers == ["snorm"]
+    assert left.name == "left"
+    assert left.qualifiers == []
+    assert right.name == "right"
+    assert right.vtype == "min16float"
+    assert right.qualifiers == ["unorm"]
+    assert assignment.operator == "="
+
+
 def test_parse_rootsignature_macro_adjacent_string_literals():
     code = r"""
     #define RootSig \
@@ -491,11 +516,25 @@ def test_parse_enum_and_typedef():
         BlendAdd = 1,
     };
     typedef float4 Color;
+    typedef row_major float2x3 RowMajorMatrix;
+    typedef precise const float2 PreciseConstVector;
     Color main(Color input) : SV_Target0 {
         return input;
     }
     """
-    assert_parses(code)
+    ast = parse_code(code)
+
+    assert [typedef.name for typedef in ast.typedefs] == [
+        "Color",
+        "RowMajorMatrix",
+        "PreciseConstVector",
+    ]
+    assert ast.typedefs[0].alias_type == "float4"
+    assert ast.typedefs[0].qualifiers == []
+    assert ast.typedefs[1].alias_type == "float2x3"
+    assert ast.typedefs[1].qualifiers == ["row_major"]
+    assert ast.typedefs[2].alias_type == "float2"
+    assert ast.typedefs[2].qualifiers == ["precise", "const"]
 
 
 def test_parse_anonymous_enum_constants_inside_namespace_from_directx_samples():
@@ -757,6 +796,31 @@ def test_parse_anonymous_old_style_cbuffer_uses_synthetic_name():
     assert cbuffer.register == "b1"
     assert [member.name for member in cbuffer.members] == ["a", "b"]
     assert [member.vtype for member in cbuffer.members] == ["float4", "int2"]
+
+
+def test_parse_nested_cbuffer_members_from_dxc_packreg_sample():
+    ast = parse_code("""
+    cbuffer OuterBuffer {
+        float OuterItem0;
+        cbuffer InnerBuffer {
+            float InnerItem0;
+        };
+        float OuterItem1;
+    };
+    """)
+
+    outer = ast.cbuffers[0]
+    nested = outer.members[1]
+
+    assert outer.name == "OuterBuffer"
+    assert [member.name for member in outer.members] == [
+        "OuterItem0",
+        "InnerBuffer",
+        "OuterItem1",
+    ]
+    assert nested.is_cbuffer is True
+    assert nested.name == "InnerBuffer"
+    assert [member.name for member in nested.members] == ["InnerItem0"]
 
 
 def test_parse_tbuffer_preserves_texture_buffer_metadata():
@@ -1891,6 +1955,60 @@ def test_parse_unsigned_int_namespace_constants_from_directx_graphics_samples():
     assert radius.vtype == "unsigned int"
     assert width.vtype == "unsigned int"
     assert [variable.name for variable in ast.global_variables[-1:]] == ["g_inDepth"]
+
+
+def test_parse_struct_methods_from_dxc_rewriter_samples():
+    code = textwrap.dedent("""
+        struct MyTestStruct
+        {
+            uint4 data[2];
+
+            uint getData1() {
+                return uint(data[1].z);
+            }
+
+            float3 getDataAsFloat() {
+                return float3(asfloat(data[0].x), asfloat(data[0].y), asfloat(data[0].z));
+            }
+        };
+        """)
+
+    ast = parse_code(code)
+    struct = ast.structs[0]
+
+    assert isinstance(struct, StructNode)
+    assert [member.name for member in struct.members] == ["data"]
+    assert [method.name for method in struct.methods] == [
+        "getData1",
+        "getDataAsFloat",
+    ]
+    assert all(isinstance(method, FunctionNode) for method in struct.methods)
+    assert struct.methods[0].return_type == "uint"
+    assert isinstance(struct.methods[0].body[0].value, VectorConstructorNode)
+
+
+def test_parse_top_level_anonymous_struct_variable_from_dxc_rewriter_samples():
+    code = textwrap.dedent("""
+        SamplerState ss;
+
+        static const struct {
+            float a;
+            SamplerState s;
+        } A = {1.2, ss};
+
+        float4 main() : SV_Target {
+            return A.a;
+        }
+        """)
+
+    ast = parse_code(code)
+    anonymous = ast.structs[0]
+
+    assert anonymous.name == "AnonymousStruct_A"
+    assert [member.name for member in anonymous.members] == ["a", "s"]
+    assert anonymous.variables == ["A"]
+    assert anonymous.variable_declarations[0].name == "A"
+    assert isinstance(anonymous.variable_declarations[0].value, InitializerListNode)
 
 
 @pytest.mark.parametrize(

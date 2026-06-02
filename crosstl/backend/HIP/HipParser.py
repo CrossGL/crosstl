@@ -182,6 +182,7 @@ class HipParser:
         "ULONGLONG4",
     }
     RESOURCE_TYPE_TOKENS = {"TEXTURE", "SURFACE", "HIPARRAY", "HIPARRAYT"}
+    ELABORATED_TYPE_TOKENS = {"STRUCT", "CLASS", "ENUM"}
     CONTEXTUAL_IDENTIFIER_TOKENS = RESOURCE_TYPE_TOKENS
     HIP_IDENTIFIER_TYPE_NAMES = {
         "int8_t",
@@ -418,6 +419,8 @@ class HipParser:
         if token.type in self.VECTOR_TYPE_TOKENS:
             return True
         if token.type in self.RESOURCE_TYPE_TOKENS:
+            return True
+        if token.type in self.ELABORATED_TYPE_TOKENS:
             return True
         return allow_identifier and token.type == "IDENTIFIER"
 
@@ -1606,6 +1609,7 @@ class HipParser:
             self.is_builtin_type_token()
             or self.match(*self.VECTOR_TYPE_TOKENS)
             or self.match(*self.RESOURCE_TYPE_TOKENS)
+            or self.match(*self.ELABORATED_TYPE_TOKENS)
             or self.match("IDENTIFIER")
         ):
             type_parts.append(self.parse_type_name())
@@ -1655,6 +1659,7 @@ class HipParser:
             self.is_builtin_type_token()
             or self.match(*self.VECTOR_TYPE_TOKENS)
             or self.match(*self.RESOURCE_TYPE_TOKENS)
+            or self.match(*self.ELABORATED_TYPE_TOKENS)
             or self.match("IDENTIFIER")
         ):
             type_parts.append(self.parse_type_name())
@@ -1683,6 +1688,9 @@ class HipParser:
             self.advance()
 
     def parse_type_name(self):
+        if self.match(*self.ELABORATED_TYPE_TOKENS):
+            return self.parse_elaborated_type_name()
+
         type_name = self.current_token.value
         token_type = self.current_token.type
         self.advance()
@@ -1693,6 +1701,31 @@ class HipParser:
         if token_type == "LONG" and self.match("INT"):
             self.advance()
 
+        if self.match("LT"):
+            type_name += self.parse_template_suffix()
+
+        while self.match("SCOPE"):
+            self.consume("SCOPE")
+            member = self.consume_qualified_name_member()
+            type_name += f"::{member}"
+            if self.match("LT"):
+                type_name += self.parse_template_suffix()
+
+        return type_name
+
+    def parse_elaborated_type_name(self):
+        type_name = self.current_token.value
+        token_type = self.current_token.type
+        self.advance()
+        self.skip_newlines()
+
+        if token_type == "ENUM" and self.match("CLASS", "STRUCT"):
+            type_name += f" {self.current_token.value}"
+            self.advance()
+            self.skip_newlines()
+
+        member = self.consume_qualified_name_member()
+        type_name += f" {member}"
         if self.match("LT"):
             type_name += self.parse_template_suffix()
 
@@ -2515,6 +2548,12 @@ class HipParser:
 
             token_type = self.current_token.type
             self.advance()
+            if token_type in self.ELABORATED_TYPE_TOKENS:
+                if token_type == "ENUM" and self.match("CLASS", "STRUCT"):
+                    self.advance()
+                if not self.match("IDENTIFIER"):
+                    return False
+                self.advance()
             if token_type == "LONG" and self.match("LONG"):
                 self.advance()
 
@@ -3335,6 +3374,8 @@ class HipParser:
             return False
 
         token = self.tokens[index]
+        if token.type in self.ELABORATED_TYPE_TOKENS:
+            return True
         if self.is_type_token(token, allow_identifier=False):
             return True
 
@@ -3505,6 +3546,12 @@ class HipParser:
             type_token = self.tokens[index].type
             type_value = self.tokens[index].value
             index += 1
+            if type_token in self.ELABORATED_TYPE_TOKENS:
+                index = self.skip_elaborated_type_name_at_pos(
+                    index, keyword_token_type=type_token, allow_scoped_suffix=True
+                )
+                if index is None:
+                    return None
             if type_token == "LONG" and index < len(self.tokens):
                 if self.tokens[index].type == "LONG":
                     index += 1
@@ -3539,6 +3586,7 @@ class HipParser:
             or type_token != "IDENTIFIER"
             or has_qualified_suffix
             or type_value == "auto"
+            or type_token in self.ELABORATED_TYPE_TOKENS
             or self.is_identifier_type_name(type_value)
             or self.is_probable_identifier_type_name(type_value)
         )
@@ -3559,6 +3607,43 @@ class HipParser:
             return index
 
         return self.skip_array_suffix_at_pos(index)
+
+    def skip_elaborated_type_name_at_pos(
+        self, index, keyword_token_type=None, allow_scoped_suffix=False
+    ):
+        index = self.skip_newlines_at_pos(index)
+        if (
+            index < len(self.tokens)
+            and keyword_token_type == "ENUM"
+            and self.tokens[index].type in {"CLASS", "STRUCT"}
+        ):
+            index += 1
+            index = self.skip_newlines_at_pos(index)
+
+        if index >= len(self.tokens) or not self.is_qualified_type_member_token_at(
+            index
+        ):
+            return None
+
+        index += 1
+        if index < len(self.tokens) and self.tokens[index].type == "LT":
+            index = self.skip_template_at_pos(index)
+            if index is None:
+                return None
+
+        if allow_scoped_suffix:
+            while (
+                index + 1 < len(self.tokens)
+                and self.tokens[index].type == "SCOPE"
+                and self.is_qualified_type_member_token_at(index + 1)
+            ):
+                index += 2
+                if index < len(self.tokens) and self.tokens[index].type == "LT":
+                    index = self.skip_template_at_pos(index)
+                    if index is None:
+                        return None
+
+        return index
 
     def is_qualified_type_member_token_at(self, index):
         return index < len(self.tokens) and (

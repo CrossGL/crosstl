@@ -1462,6 +1462,15 @@ class RustParser:
         fields = []
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            if self.current_token[0] == "RANGE":
+                self.eat("RANGE")
+                fields.append(("..", self.parse_expression()))
+
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    continue
+                break
+
             field_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
@@ -1480,6 +1489,10 @@ class RustParser:
 
         self.eat("RBRACE")
         return StructInitializationNode(struct_name, fields)
+
+    def is_struct_initialization_name(self, name):
+        last_segment = str(name).split("::")[-1]
+        return bool(last_segment) and last_segment[0].isupper()
 
     def parse_function(
         self,
@@ -1936,7 +1949,7 @@ class RustParser:
                 body = self.parse_block()
                 self.eat("RBRACE")
             elif result_mode:
-                body = self.parse_result_expression()
+                body = self.parse_match_arm_result_expression()
             else:
                 body = [self.parse_expression()]
                 if self.current_token[0] == "SEMICOLON":
@@ -1949,6 +1962,16 @@ class RustParser:
 
         self.eat("RBRACE")
         return MatchNode(expression, arms)
+
+    def parse_match_arm_result_expression(self):
+        if self.current_token[0] == "RETURN":
+            self.eat("RETURN")
+            value = None
+            if self.current_token[0] not in {"COMMA", "RBRACE"}:
+                value = self.parse_result_expression()
+            return ReturnNode(value)
+
+        return self.parse_result_expression()
 
     def parse_match_pattern(self):
         patterns = [self.parse_single_match_pattern()]
@@ -2829,7 +2852,10 @@ class RustParser:
             name = self.current_token[1]
             self.eat("SELF")
 
-            if self.current_token[0] == "LBRACE":
+            if (
+                self.current_token[0] == "LBRACE"
+                and not self.expression_stops_at_lbrace
+            ):
                 return self.parse_struct_initialization(name)
 
             if self.current_token[0] == "DOUBLE_COLON":
@@ -3014,6 +3040,12 @@ class RustParser:
 
     def finish_path_or_call(self, first_segment):
         path = self.parse_path_expression(first_segment)
+        if (
+            self.current_token[0] == "LBRACE"
+            and self.is_struct_initialization_name(path)
+            and not self.expression_stops_at_lbrace
+        ):
+            return self.parse_struct_initialization(path)
         if self.current_token[0] == "LPAREN":
             return FunctionCallNode(path, self.parse_call_arguments())
         return path

@@ -441,6 +441,26 @@ def test_parse_static_const_contextual_qualifier_from_shared_vulkan_headers():
     assert ast.constant[0].is_const is True
 
 
+def test_parse_ray_tracing_hit_object_attribute_qualifier():
+    code = textwrap.dedent("""
+        #version 460
+        #extension GL_EXT_ray_tracing : require
+
+        layout(location = 0) hitObjectAttributeEXT vec3 objAttribs;
+
+        void main() {
+        }
+        """)
+
+    ast = parse_ok(code, "raygen")
+    variable = ast.global_variables[0]
+
+    assert variable.name == "objAttribs"
+    assert variable.vtype == "vec3"
+    assert variable.layout == {"location": "0"}
+    assert variable.qualifiers == ["hitObjectAttributeEXT"]
+
+
 def test_parse_vulkan_block_member_layouts_and_multiline_declarators():
     code = textwrap.dedent("""
         #version 450

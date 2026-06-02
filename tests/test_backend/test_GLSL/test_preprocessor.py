@@ -122,6 +122,47 @@ def test_preprocessor_resolves_vulkan_samples_shared_glsl_include(tmp_path):
     assert any(struct.name == "Light" for struct in ast.structs)
 
 
+def test_preprocessor_uses_glsl_profile_macros_and_ignores_commented_directives(
+    tmp_path,
+):
+    include_file = tmp_path / "shared_types.h"
+    include_file.write_text("""
+        #ifndef SHARED_TYPES_H
+        #define SHARED_TYPES_H
+
+        /*
+        #include <missing_from_doc_comment.glsl>
+        */
+
+        #ifdef __cplusplus
+        #error "C++ branch should be inactive"
+        #elif defined(GL_core_profile)  // GLSL
+        #define SHARED_VECTOR vec3
+        #else
+        #error "Unknown language environment"
+        #endif
+
+        #endif
+        """)
+
+    code = """
+    #version 450
+    #include "shared_types.h"
+
+    void main()
+    {
+        SHARED_VECTOR color = vec3(1.0);
+    }
+    """
+
+    tokens = GLSLLexer(code, include_paths=[str(tmp_path)]).tokenize()
+    values = [tok[1] for tok in tokens]
+
+    assert "missing_from_doc_comment" not in values
+    assert "SHARED_VECTOR" not in values
+    assert "vec3" in values
+
+
 def test_preprocessor_version_must_be_first():
     code = """
     #define SOMETHING 1

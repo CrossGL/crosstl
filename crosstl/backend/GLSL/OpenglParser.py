@@ -146,8 +146,15 @@ RAY_STORAGE_QUALIFIERS = {
     "rayPayloadEXT",
     "rayPayloadInEXT",
     "hitAttributeEXT",
+    "hitObjectAttributeEXT",
     "callableDataEXT",
     "callableDataInEXT",
+    "rayPayloadNV",
+    "rayPayloadInNV",
+    "hitAttributeNV",
+    "hitObjectAttributeNV",
+    "callableDataNV",
+    "callableDataInNV",
 }
 
 MESH_STORAGE_QUALIFIERS = {

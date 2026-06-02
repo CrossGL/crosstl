@@ -3264,6 +3264,26 @@ def test_match_expression_result_parsing():
         pytest.fail(f"Match expression result parsing failed: {e}")
 
 
+def test_match_expression_return_arm_parsing():
+    code = """
+    fn render() {
+        let window_surface = match self.window_surface {
+            Some(ws) => ws,
+            None => return,
+        };
+        use_value(window_surface);
+    }
+    """
+
+    ast = parse_code(code)
+    match_value = ast.functions[0].body[0].value
+
+    assert isinstance(match_value, MatchNode)
+    assert match_value.arms[0].body == "ws"
+    assert isinstance(match_value.arms[1].body, ReturnNode)
+    assert match_value.arms[1].body.value is None
+
+
 def test_block_final_if_match_expression_parsing():
     code = """
     fn test_block_final_expression() -> i32 {
@@ -4100,6 +4120,85 @@ def test_struct_initialization_field_shorthand_parsing():
 
     assert isinstance(value, StructInitializationNode)
     assert value.fields == [("shape", "shape"), ("thickness", "thickness")]
+
+
+def test_qualified_struct_initialization_chains_in_match_arm():
+    code = """
+    fn shade(i: i32, resolution: Vec3, time: f32, color: &mut Vec4, frag_coord: Vec2) {
+        match i {
+            0 => two_tweets::Inputs { resolution, time }.main_image(color, frag_coord),
+            _ => {}
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    arm_call = ast.functions[0].body[0].arms[0].body[0]
+
+    assert isinstance(arm_call, FunctionCallNode)
+    assert isinstance(arm_call.name, MemberAccessNode)
+    assert arm_call.name.member == "main_image"
+    assert isinstance(arm_call.name.object, StructInitializationNode)
+    assert arm_call.name.object.struct_name == "two_tweets::Inputs"
+    assert arm_call.name.object.fields == [
+        ("resolution", "resolution"),
+        ("time", "time"),
+    ]
+
+
+def test_lowercase_self_condition_does_not_parse_body_as_struct_literal():
+    code = """
+    impl FloatExt for f32 {
+        fn step(self, x: f32) -> f32 {
+            if x < self {
+                0.0
+            } else {
+                1.0
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    branch = ast.impl_blocks[0].functions[0].body[0]
+
+    assert isinstance(branch, IfNode)
+    assert isinstance(branch.condition, BinaryOpNode)
+    assert branch.condition.left == "x"
+    assert branch.condition.op == "<"
+    assert branch.condition.right == "self"
+
+
+def test_qualified_struct_initialization_rest_field_parsing():
+    code = """
+    fn configure(instance_flags: wgpu::InstanceFlags) {
+        let descriptor = wgpu::InstanceDescriptor {
+            flags: instance_flags,
+            ..Default::default()
+        };
+        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }));
+    }
+    """
+
+    ast = parse_code(code)
+    descriptor = ast.functions[0].body[0].value
+    adapter_call = ast.functions[0].body[1].value
+
+    assert isinstance(descriptor, StructInitializationNode)
+    assert descriptor.struct_name == "wgpu::InstanceDescriptor"
+    assert descriptor.fields[0] == ("flags", "instance_flags")
+    assert descriptor.fields[1][0] == ".."
+    assert isinstance(descriptor.fields[1][1], FunctionCallNode)
+    assert descriptor.fields[1][1].name == "Default::default"
+
+    request_call = adapter_call.args[0]
+    assert isinstance(request_call.args[0], ReferenceNode)
+    assert isinstance(request_call.args[0].expression, StructInitializationNode)
+    assert request_call.args[0].expression.struct_name == "wgpu::RequestAdapterOptions"
 
 
 def test_impl_trait_parameter_type_parsing():

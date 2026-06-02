@@ -29,6 +29,7 @@ class SlangParser:
         "__prefix",
         "__postfix",
         "__ref",
+        "__func_extension",
         "expand",
         "each",
     }
@@ -215,6 +216,9 @@ class SlangParser:
         )
 
     def is_function(self):
+        if self.is_function_extension_declaration_start():
+            return True
+
         current_pos = self.skip_declaration_prefix_tokens(
             self.pos, include_generic=True
         )
@@ -234,6 +238,18 @@ class SlangParser:
             current_pos += 1
         current_pos = self.skip_generic_type_suffix_tokens(current_pos)
         return self.tokens[current_pos][0] == "LPAREN"
+
+    def is_function_extension_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
+        if current_pos + 1 >= len(self.tokens):
+            return False
+        return (
+            self.tokens[current_pos][0] == "IDENTIFIER"
+            and self.tokens[current_pos][1] in {"__apply", "fwd_diff", "bwd_diff"}
+            and self.tokens[current_pos + 1][0] == "LPAREN"
+        )
 
     def is_operator_identifier_at(self, index):
         return (
@@ -857,6 +873,9 @@ class SlangParser:
         if self.current_token[0] == "LESS_THAN":
             generic_parameters = self.parse_generic_type_suffix()
         conformances = self.parse_conformance_clause()
+        generic_constraints = []
+        if self.current_token[0] == "WHERE":
+            generic_constraints = self.parse_generic_constraints()
 
         self.eat("LBRACE")
         methods = []
@@ -894,6 +913,7 @@ class SlangParser:
         )
         node.qualifiers = qualifiers
         node.conformances = conformances
+        node.generic_constraints = generic_constraints
         return node
 
     def parse_struct(self):
@@ -905,6 +925,9 @@ class SlangParser:
         if self.current_token[0] == "LESS_THAN":
             generic_parameters = self.parse_generic_type_suffix()
         conformances = self.parse_conformance_clause()
+        generic_constraints = []
+        if self.current_token[0] == "WHERE":
+            generic_constraints = self.parse_generic_constraints()
         self.eat("LBRACE")
         members = []
         methods = []
@@ -961,6 +984,7 @@ class SlangParser:
         node.enums = enums
         node.structs = structs
         node.generic_parameters = generic_parameters
+        node.generic_constraints = generic_constraints
         node.conformances = conformances
         node.qualifiers = qualifiers
         return node
@@ -1046,26 +1070,48 @@ class SlangParser:
     def parse_extension(self):
         qualifiers = self.parse_qualifiers()
         self.eat("EXTENSION")
+        generic_parameters = None
+        generic_constraints = []
+        if self.current_token[0] == "LESS_THAN":
+            generic_parameters = self.parse_generic_type_suffix()
         extended_type = self.parse_type_name()
         conformances = self.parse_conformance_clause()
+        if self.current_token[0] == "WHERE":
+            generic_constraints = self.parse_generic_constraints()
         self.eat("LBRACE")
         methods = []
+        typedefs = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
                 raise SyntaxError("Unterminated extension declaration")
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 continue
+            pending_attributes = []
+            while self.current_token[0] == "LBRACKET":
+                pending_attributes.extend(self.parse_attribute_list())
+            if self.current_token[0] == "RBRACE":
+                break
+            declaration_token = self.peek_declaration_token_type()
+            if declaration_token in {"TYPEDEF", "TYPEALIAS"}:
+                typedefs.append(self.parse_typedef())
+                continue
             if not self.is_function():
                 raise SyntaxError(
                     f"Unsupported extension member: {self.current_token[0]}"
                 )
-            methods.append(self.parse_function(allow_signature=True))
+            methods.append(
+                self.parse_function(attributes=pending_attributes, allow_signature=True)
+            )
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
         node = ExtensionNode(extended_type, methods, conformances=conformances)
         node.qualifiers = qualifiers
+        node.typedefs = typedefs
+        node.generic_parameters = generic_parameters
+        node.generic_constraints = generic_constraints
+        node.is_generic = generic_parameters is not None
         return node
 
     def parse_conformance_clause(self):
@@ -1157,6 +1203,13 @@ class SlangParser:
         )
 
     def parse_function(self, shader_type=None, attributes=None, allow_signature=False):
+        if self.is_function_extension_declaration_start():
+            return self.parse_function_extension(
+                shader_type=shader_type,
+                attributes=attributes,
+                allow_signature=allow_signature,
+            )
+
         attributes = attributes or []
         shader_type = shader_type or self.get_shader_attribute(attributes)
         attributes = self.filter_function_attributes(attributes)
@@ -1204,6 +1257,99 @@ class SlangParser:
             numthreads=self.get_numthreads_attribute(attributes),
         )
 
+    def parse_function_extension(
+        self, shader_type=None, attributes=None, allow_signature=False
+    ):
+        attributes = attributes or []
+        shader_type = shader_type or self.get_shader_attribute(attributes)
+        attributes = self.filter_function_attributes(attributes)
+        qualifiers, is_generic, generic_parameters = (
+            self.parse_function_extension_prefixes()
+        )
+        name = self.parse_function_extension_name()
+        self.eat("LPAREN")
+        params = self.parse_parameters()
+        self.eat("RPAREN")
+        self.eat("MINUS")
+        self.eat("GREATER_THAN")
+        return_type = self.parse_type_name(allow_array_suffix=True)
+        return_type += self.parse_pointer_suffix()
+        generic_constraints = []
+        if self.current_token[0] == "WHERE":
+            generic_constraints = self.parse_generic_constraints()
+        if self.current_token[0] == "SEMICOLON":
+            if not allow_signature:
+                raise SyntaxError("Expected function body, got SEMICOLON")
+            self.eat("SEMICOLON")
+            body = []
+            is_declaration = True
+        else:
+            body = self.parse_block()
+            is_declaration = False
+        return FunctionNode(
+            return_type,
+            name,
+            params,
+            body,
+            qualifiers=qualifiers,
+            qualifier=shader_type,
+            is_generic=is_generic,
+            generic_parameters=generic_parameters,
+            generic_constraints=generic_constraints,
+            is_declaration=is_declaration,
+            attributes=attributes,
+            numthreads=self.get_numthreads_attribute(attributes),
+        )
+
+    def parse_function_extension_prefixes(self):
+        qualifiers = []
+        is_generic = False
+        generic_parameters = None
+        while self.current_token[0] == "GENERIC" or self.is_qualifier_token_at(
+            self.pos
+        ):
+            if self.current_token[0] == "GENERIC":
+                is_generic = True
+                self.eat("GENERIC")
+                if self.current_token[0] == "LESS_THAN":
+                    generic_parameters = self.parse_generic_type_suffix()
+                continue
+
+            qualifier = self.current_token[1]
+            qualifiers.append(qualifier)
+            self.eat(self.current_token[0])
+            if qualifier == "__func_extension" and self.current_token[0] == "LESS_THAN":
+                is_generic = True
+                generic_parameters = self.parse_generic_type_suffix()
+
+        return qualifiers, is_generic, generic_parameters
+
+    def parse_function_extension_name(self):
+        extension_name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("LPAREN")
+        target_name = self.parse_function_extension_target_name()
+        self.eat("RPAREN")
+        return f"{extension_name}({target_name})"
+
+    def parse_function_extension_target_name(self):
+        tokens = []
+        depth = 0
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if token_type == "RPAREN" and depth == 0:
+                break
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+            tokens.append(str(token_value))
+            self.eat(token_type)
+
+        if not tokens:
+            raise SyntaxError("Expected function extension target")
+        return "".join(tokens)
+
     def parse_function_name(self):
         if self.current_token == ("IDENTIFIER", "operator"):
             return self.parse_operator_function_name()
@@ -1250,15 +1396,21 @@ class SlangParser:
                 raise SyntaxError(
                     f"Expected generic parameter name, got {self.current_token[0]}"
                 )
-            parameter = self.current_token[1]
-            self.eat("IDENTIFIER")
-            if self.current_token[0] != "COLON":
+            parameter = self.parse_type_name()
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
+                relation = ":"
+            elif self.current_token[0] == "EQUAL":
+                self.eat("EQUAL")
+                relation = "=="
+            else:
                 raise SyntaxError(
-                    "Only simple generic conformance constraints are supported"
+                    "Only simple generic conformance and equality constraints are supported"
                 )
-            self.eat("COLON")
             constraint_type = self.parse_type_name()
-            constraints.append(GenericConstraintNode(parameter, constraint_type))
+            constraint = GenericConstraintNode(parameter, constraint_type)
+            constraint.relation = relation
+            constraints.append(constraint)
             if self.current_token[0] != "COMMA":
                 break
             self.eat("COMMA")
@@ -2049,19 +2201,26 @@ class SlangParser:
     def parse_function_call_or_identifier(self):
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-        while (
-            self.current_token[0] == "COLON"
-            and self.pos + 1 < len(self.tokens)
-            and self.tokens[self.pos + 1][0] == "COLON"
-            and self.pos + 2 < len(self.tokens)
-            and self.tokens[self.pos + 2][0] == "IDENTIFIER"
-        ):
-            self.eat("COLON")
-            self.eat("COLON")
-            name += f"::{self.current_token[1]}"
-            self.eat("IDENTIFIER")
-        if self.current_token[0] == "LESS_THAN" and self.is_generic_expression_suffix():
-            name += self.parse_generic_type_suffix()
+        while True:
+            if (
+                self.current_token[0] == "LESS_THAN"
+                and self.is_generic_expression_suffix()
+            ):
+                name += self.parse_generic_type_suffix()
+                continue
+            if (
+                self.current_token[0] == "COLON"
+                and self.pos + 1 < len(self.tokens)
+                and self.tokens[self.pos + 1][0] == "COLON"
+                and self.pos + 2 < len(self.tokens)
+                and self.tokens[self.pos + 2][0] == "IDENTIFIER"
+            ):
+                self.eat("COLON")
+                self.eat("COLON")
+                name += f"::{self.current_token[1]}"
+                self.eat("IDENTIFIER")
+                continue
+            break
         if self.current_token[0] == "LPAREN":
             node = self.parse_function_call(name)
         else:
@@ -2075,7 +2234,18 @@ class SlangParser:
             return False
         if suffix_end >= len(self.tokens):
             return False
-        return self.tokens[suffix_end][0] in {"DOT", "LPAREN"}
+        if self.tokens[suffix_end][0] == "COLON":
+            return (
+                suffix_end + 1 < len(self.tokens)
+                and self.tokens[suffix_end + 1][0] == "COLON"
+            )
+        return self.tokens[suffix_end][0] in {
+            "COMMA",
+            "DOT",
+            "LPAREN",
+            "RPAREN",
+            "SEMICOLON",
+        }
 
     def parse_call_arguments(self):
         self.eat("LPAREN")

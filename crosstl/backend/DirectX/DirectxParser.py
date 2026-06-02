@@ -129,7 +129,7 @@ QUALIFIER_TOKENS = {
     "GROUPSHARED",
 }
 
-CONTEXTUAL_QUALIFIER_IDENTIFIERS = {"shared"}
+CONTEXTUAL_QUALIFIER_IDENTIFIERS = {"shared", "snorm", "unorm"}
 CONTEXTUAL_IDENTIFIER_TOKENS = {"SAMPLE"}
 COMPOSITE_TYPE_PREFIXES = {"signed", "unsigned"}
 COMPOSITE_TYPE_TOKENS = {"INT", "UINT", "DWORD", "IVECTOR", "UVECTOR"}
@@ -669,15 +669,17 @@ class HLSLParser:
     def parse_struct(self):
         self.eat("STRUCT")
         struct_attributes = self.parse_attribute_list()
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = None
+        if self.is_identifier_token(self.current_token[0]):
+            name = self.parse_identifier()
 
         semantic = None
-        if self.current_token[0] == "COLON":
+        if name is not None and self.current_token[0] == "COLON":
             semantic, _, _ = self.parse_semantic_or_register()
 
         self.eat("LBRACE")
         members = []
+        methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             attributes = self.parse_attribute_list()
             qualifiers = self.parse_qualifiers()
@@ -694,30 +696,57 @@ class HLSLParser:
                 raise SyntaxError(
                     f"Expected type in struct member, got {self.current_token[0]}"
                 )
-            declarations = self.parse_variable_declaration(
-                qualifiers=qualifiers,
-                attributes=attributes,
-                allow_semantic=True,
-                consume_semicolon=True,
-            )
-            members.extend(self.ensure_statement_list(declarations))
+            return_type = self.parse_type()
+            member_name = self.parse_identifier()
+            if self.current_token[0] == "LPAREN":
+                methods.append(
+                    self.parse_function(
+                        return_type,
+                        member_name,
+                        qualifiers=qualifiers,
+                        attributes=attributes,
+                    )
+                )
+            else:
+                declarations = self.parse_variable_declaration_list_rest(
+                    return_type,
+                    member_name,
+                    qualifiers=qualifiers,
+                    attributes=attributes,
+                    allow_semantic=True,
+                    consume_semicolon=True,
+                )
+                members.extend(self.ensure_statement_list(declarations))
 
         self.eat("RBRACE")
 
         variables = []
+        variable_declarations = []
         if self.is_identifier_token(self.current_token[0]):
-            variables.append(self.parse_identifier())
-            while self.current_token[0] == "COMMA":
-                self.eat("COMMA")
-                variables.append(self.parse_identifier())
-
-        if self.current_token[0] == "SEMICOLON":
+            first_name = self.parse_identifier()
+            struct_type = name or self.synthetic_struct_type_name(
+                "AnonymousStruct", first_name
+            )
+            if name is None:
+                name = struct_type
+            variable_declarations = self.parse_variable_declaration_list_rest(
+                struct_type,
+                first_name,
+                qualifiers=[],
+                attributes=[],
+                allow_semantic=True,
+                consume_semicolon=True,
+            )
+            variables = [declaration.name for declaration in variable_declarations]
+        elif self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
         struct_node = StructNode(name, members)
         struct_node.attributes = struct_attributes
         struct_node.variables = variables
+        struct_node.variable_declarations = variable_declarations
         struct_node.semantic = semantic
+        struct_node.methods = methods
         return struct_node
 
     def parse_nested_struct_member(
@@ -837,11 +866,14 @@ class HLSLParser:
 
     def parse_typedef(self):
         self.eat("TYPEDEF")
+        qualifiers = self.parse_qualifiers()
         alias_type = self.parse_type()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("SEMICOLON")
-        return TypeAliasNode(alias_type, name)
+        alias = TypeAliasNode(alias_type, name)
+        alias.qualifiers = qualifiers
+        return alias
 
     def parse_cbuffer(self, attributes=None):
         buffer_kind = self.current_token[1]
@@ -863,6 +895,9 @@ class HLSLParser:
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
+                members.append(self.parse_cbuffer(attributes=[]))
+                continue
             qualifiers = self.parse_qualifiers()
             declarations = self.parse_variable_declaration(
                 qualifiers=qualifiers,

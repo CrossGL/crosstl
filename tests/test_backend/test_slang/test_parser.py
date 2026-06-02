@@ -1020,6 +1020,108 @@ def test_struct_call_and_subscript_operator_methods_parse():
     assert methods[1].params[0].name == "index"
 
 
+def test_func_extension_apply_declaration_parse():
+    code = """
+    float cube(float x) { return x * x * x; }
+
+    struct CubeContext
+    {
+        float sqr;
+        void operator()(out float dx, float dOut)
+        {
+            dx = dOut * 3.0 * sqr;
+        }
+    };
+
+    __func_extension __apply(cube)(float x) -> Tuple<float, CubeContext>
+    {
+        let sqr = x * x;
+        return makeTuple(sqr * x, CubeContext(sqr));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    extension = ast.functions[1]
+
+    assert extension.name == "__apply(cube)"
+    assert extension.return_type == "Tuple<float, CubeContext>"
+    assert extension.qualifiers == ["__func_extension"]
+    assert [(param.vtype, param.name) for param in extension.params] == [("float", "x")]
+
+
+def test_generic_func_extension_member_method_declaration_parse():
+    code = """
+    struct MyVec<T : __BuiltinArithmeticType> : IDifferentiable
+    {
+        typedef MyVec<T> Differential;
+        T x;
+        T y;
+
+        T lengthSquared() { return x * x + y * y; }
+    };
+
+    __func_extension<T : __BuiltinFloatingPointType>
+    fwd_diff(MyVec<T>::lengthSquared)(DifferentialPair<MyVec<T>> self) -> DifferentialPair<T>
+        where T.Differential == T
+    {
+        return diffPair(self.p.lengthSquared(), T(0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    extension = ast.functions[0]
+
+    assert extension.name == "fwd_diff(MyVec<T>::lengthSquared)"
+    assert extension.return_type == "DifferentialPair<T>"
+    assert extension.is_generic is True
+    assert extension.generic_parameters == "<T:__BuiltinFloatingPointType>"
+    assert extension.generic_constraints[0].parameter == "T.Differential"
+    assert extension.generic_constraints[0].relation == "=="
+    assert extension.generic_constraints[0].constraint_type == "T"
+
+
+def test_generic_extension_typedef_and_specialized_function_value_parse():
+    code = """
+    struct MyVec<T : __BuiltinArithmeticType>
+    {
+        T x;
+        T y;
+        T lengthSquared() { return x * x + y * y; }
+    };
+
+    extension<T : __BuiltinFloatingPointType> MyVec<T> : IDifferentiable
+        where T.Differential == T
+    {
+        typedef MyVec<T> Differential;
+
+        static Differential dzero()
+        {
+            return MyVec<T>(T(0), T(0));
+        }
+    }
+
+    void computeMain()
+    {
+        var dpv = diffPair(MyVec<float>(0.0, 0.0), MyVec<float>(0.0, 0.0));
+        bwd_diff(MyVec<float>::lengthSquared)(dpv, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    extension = ast.extensions[0]
+    call = ast.functions[0].body[1]
+
+    assert extension.generic_parameters == "<T:__BuiltinFloatingPointType>"
+    assert extension.generic_constraints[0].parameter == "T.Differential"
+    assert extension.typedefs[0].new_type == "Differential"
+    assert isinstance(call, CallNode)
+    assert call.callee.name == "bwd_diff"
+    assert call.callee.args[0].name == "MyVec<float>::lengthSquared"
+
+
 def test_unnamed_signature_parameters_and_void_parameter_list_parse():
     code = """
     interface IFilter

@@ -378,6 +378,65 @@ class TestHipParser:
         assert templated_struct.name == "GemmConfigComputeV3_2"
         assert templated_struct.members[0].name == "N_Tile"
 
+    def test_public_hip_elaborated_struct_types_parse(self):
+        code = """
+        struct usageStatistics
+        {
+            std::uint64_t usedMemCurrent;
+        };
+
+        void cpu_timer_start(struct timespec *tstart_cpu);
+        double cpu_timer_stop(struct timespec tstart_cpu);
+
+        void getUsageStatistics(hipMemPool_t memPool,
+                                struct usageStatistics *statistics)
+        {
+            size_t bytes = sizeof(struct usageStatistics);
+            HIP_CHECK(hipMemPoolGetAttribute(
+                memPool,
+                hipMemPoolAttrUsedMemCurrent,
+                &statistics->usedMemCurrent));
+        }
+
+        static int indexPlusValue_comp(const void *a, const void *b)
+        {
+            const struct indexPlusValue *da = (indexPlusValue *)a;
+            const struct indexPlusValue *db = (indexPlusValue *)b;
+
+            return da->idx < db->idx ? -1 : da->idx > db->idx;
+        }
+        """
+        ast = self.parse_code(code)
+
+        timer_start = ast.statements[1]
+        timer_stop = ast.statements[2]
+        usage_stats = ast.statements[3]
+        comparator = ast.statements[4]
+
+        assert timer_start.params[0] == {
+            "type": "struct timespec *",
+            "name": "tstart_cpu",
+        }
+        assert timer_stop.params[0] == {
+            "type": "struct timespec",
+            "name": "tstart_cpu",
+        }
+        assert usage_stats.params[1] == {
+            "type": "struct usageStatistics *",
+            "name": "statistics",
+        }
+        sizeof_decl = usage_stats.body[0]
+        assert isinstance(sizeof_decl.value, FunctionCallNode)
+        assert sizeof_decl.value.name == "sizeof"
+        assert sizeof_decl.value.args == ["struct usageStatistics"]
+
+        assert comparator.qualifiers == ["static"]
+        assert comparator.body[0].vtype == "const struct indexPlusValue *"
+        assert comparator.body[0].name == "da"
+        assert isinstance(comparator.body[0].value, CastNode)
+        assert comparator.body[0].value.target_type == "indexPlusValue *"
+        assert comparator.body[1].vtype == "const struct indexPlusValue *"
+
     def test_public_rocm_runtime_compilation_adjacent_raw_kernel_string_parsing(self):
         code = r"""
         static constexpr auto saxpy_kernel{
