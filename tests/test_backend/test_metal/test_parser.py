@@ -326,6 +326,29 @@ def test_parse_fragment_output_color_and_depth_attributes():
     assert members[1].attributes[0].args == ["any"]
 
 
+def test_parse_struct_member_default_initializers_from_metal4_basics_pbr():
+    code = """
+    typedef struct FragmentMaterial {
+        float4 baseColor { 1.0f, 1.0f, 1.0f, 1.0f };
+        float3 c_diff { 1.0f, 1.0f, 1.0f };
+        float metalness = 1.0f;
+        float perceptualRoughness = 1.0f;
+    } FragmentMaterial;
+    """
+    ast = parse_ok(code)
+    members = ast.structs[0].members
+
+    assert members[0].name == "baseColor"
+    assert isinstance(members[0].default_value, InitializerListNode)
+    assert members[0].default_value.elements == ["1.0f", "1.0f", "1.0f", "1.0f"]
+    assert members[1].name == "c_diff"
+    assert isinstance(members[1].default_value, InitializerListNode)
+    assert members[2].name == "metalness"
+    assert members[2].default_value == "1.0f"
+    assert members[3].name == "perceptualRoughness"
+    assert members[3].default_value == "1.0f"
+
+
 def test_parse_argument_buffer_array_of_device_pointers_from_apple_sample():
     code = """
     struct FragmentShaderArguments {
@@ -670,6 +693,58 @@ def test_parse_enum_and_typedef():
     }
     """
     parse_ok(code)
+
+
+def test_parse_scoped_enum_with_underlying_type_from_metal4_basics():
+    code = """
+    enum class BRDF : uint {
+        Lambert,
+        TrowbridgeReitz,
+    };
+    """
+    ast = parse_ok(code)
+    enum = ast.enums[0]
+
+    assert enum.name == "BRDF"
+    assert enum.is_scoped is True
+    assert enum.underlying_type == "uint"
+    assert enum.members == [("Lambert", None), ("TrowbridgeReitz", None)]
+
+
+def test_parse_unscoped_enum_with_underlying_type_from_metal_splatter():
+    code = """
+    enum BufferIndex: int32_t
+    {
+        BufferIndexMeshPositions = 0,
+        BufferIndexMeshGenerics  = 1,
+        BufferIndexUniforms      = 2,
+    };
+    """
+    ast = parse_ok(code)
+    enum = ast.enums[0]
+
+    assert enum.name == "BufferIndex"
+    assert enum.is_scoped is False
+    assert enum.underlying_type == "int32_t"
+    assert enum.members[1] == ("BufferIndexMeshGenerics", "1")
+
+
+def test_parse_anonymous_enum_from_metal_base_effect():
+    code = """
+    enum {
+        VertexAttributePosition,
+        VertexAttributeNormal,
+        VertexAttributeColor,
+        VertexAttributeTexCoord0,
+    };
+    """
+    ast = parse_ok(code)
+    enum = ast.enums[0]
+
+    assert enum.name is None
+    assert enum.underlying_type is None
+    assert enum.members[0] == ("VertexAttributePosition", None)
+    assert enum.members[-1] == ("VertexAttributeTexCoord0", None)
 
 
 def test_parse_typedef_enum_with_tag_and_alias_from_satin_constants():
@@ -1094,6 +1169,39 @@ def test_parse_template_kernel_typename_without_space_from_llama_cpp():
     assert ast.functions[0].generics == ["T"]
     assert ast.functions[0].params[1].vtype == "T*"
     assert ast.functions[0].params[1].qualifiers == ["device"]
+
+
+def test_parse_template_struct_from_mlx_arg_reduce():
+    code = """
+    template <typename U>
+    struct IndexValPair {
+        uint32_t index;
+        U val;
+    };
+    """
+    ast = parse_ok(code)
+    struct = ast.structs[0]
+
+    assert struct.name == "IndexValPair"
+    assert struct.generics == ["U"]
+    assert struct.template_parameters == [("typename", "U")]
+    assert [member.name for member in struct.members] == ["index", "val"]
+    assert [member.vtype for member in struct.members] == ["uint32_t", "U"]
+
+
+def test_skip_struct_constructor_with_initializer_list_and_trailing_semicolon_from_mlx():
+    code = """
+    struct complex64_t {
+        float real;
+        float imag;
+        constexpr complex64_t(float real, float imag) : real(real), imag(imag) {};
+    };
+    """
+    ast = parse_ok(code)
+    struct = ast.structs[0]
+
+    assert struct.name == "complex64_t"
+    assert [member.name for member in struct.members] == ["real", "imag"]
 
 
 def test_parse_function_body_pragma_from_llama_cpp():

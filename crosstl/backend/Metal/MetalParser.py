@@ -277,9 +277,11 @@ class MetalParser:
             elif self.is_top_level_expression_statement_start():
                 self.parse_expression_statement()
             elif self.is_template_declaration_start():
-                function = self.parse_template_declaration()
-                if function is not None:
-                    functions.append(function)
+                declaration = self.parse_template_declaration()
+                if isinstance(declaration, FunctionNode):
+                    functions.append(declaration)
+                elif isinstance(declaration, StructNode):
+                    structs.append(declaration)
             elif self.current_token[0] == "STRUCT":
                 struct = self.parse_struct()
                 if struct is not None:
@@ -458,6 +460,15 @@ class MetalParser:
         self.known_types.update(added_type_names)
 
         try:
+            if self.current_token[0] == "STRUCT":
+                struct = self.parse_struct()
+                if struct is not None:
+                    struct.generics = [
+                        name for _kind, name in template_parameters if name
+                    ]
+                    struct.template_parameters = template_parameters
+                return struct
+
             if not self.is_function_definition():
                 self.skip_template_declaration()
                 return None
@@ -687,18 +698,33 @@ class MetalParser:
         return TypeAliasNode(alias_type, alias_name)
 
     def parse_enum(self):
-        self.eat("ENUM")
-        if self.current_token[0] == "CLASS":
-            self.eat("CLASS")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
-        self.known_types.add(name)
+        name, is_scoped, underlying_type = self.parse_enum_header()
         self.eat("LBRACE")
         members = self.parse_enum_members()
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-        return EnumNode(name, members)
+        enum = EnumNode(name, members)
+        enum.is_scoped = is_scoped
+        enum.underlying_type = underlying_type
+        return enum
+
+    def parse_enum_header(self):
+        self.eat("ENUM")
+        is_scoped = False
+        if self.current_token[0] == "CLASS":
+            is_scoped = True
+            self.eat("CLASS")
+        name = None
+        if self.current_token[0] == "IDENTIFIER":
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            self.known_types.add(name)
+        underlying_type = None
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            underlying_type, _qualifiers = self.parse_type_specifier()
+        return name, is_scoped, underlying_type
 
     def parse_enum_members(self):
         members = []
@@ -744,14 +770,7 @@ class MetalParser:
         return TypeAliasNode(alias_type, alias_name)
 
     def parse_typedef_enum(self):
-        self.eat("ENUM")
-        if self.current_token[0] == "CLASS":
-            self.eat("CLASS")
-        tag_name = None
-        if self.current_token[0] == "IDENTIFIER":
-            tag_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            self.known_types.add(tag_name)
+        tag_name, is_scoped, underlying_type = self.parse_enum_header()
 
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
@@ -765,6 +784,8 @@ class MetalParser:
             self.known_types.add(enum_name)
             enum = EnumNode(enum_name, members)
             enum.typedef_tag = tag_name
+            enum.is_scoped = is_scoped
+            enum.underlying_type = underlying_type
             return enum
 
         if not tag_name:
@@ -1219,12 +1240,19 @@ class MetalParser:
                 continue
             attributes = self.parse_attributes()
             array_sizes.extend(self.parse_declarator_array_sizes())
+            default_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_value = self.parse_expression()
+            elif self.current_token[0] == "LBRACE":
+                default_value = self.parse_initializer_list()
             self.eat("SEMICOLON")
             var_node = VariableNode(
                 vtype, var_name, qualifiers=qualifiers, attributes=attributes
             )
             var_node.array_sizes = array_sizes
             var_node.alignas = member_alignas
+            var_node.default_value = default_value
             members.append(var_node)
         return members
 
@@ -1236,6 +1264,8 @@ class MetalParser:
             return
         if self.current_token[0] == "LBRACE":
             self.skip_balanced_block()
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
 
     def skip_balanced_block(self):
         self.eat("LBRACE")
