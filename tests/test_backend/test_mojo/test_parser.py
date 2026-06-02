@@ -1271,6 +1271,19 @@ def test_comptime_declarations_and_raises_function_parse():
     assert function.body[3].else_body[0].name == "raise"
 
 
+def test_function_raises_effect_before_return_type_parse():
+    code = """
+    fn parse_value(text: String) raises -> Int:
+        return 1
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "parse_value")
+
+    assert function.return_type == "Int"
+    assert [param.name for param in function.params] == ["text"]
+    assert function.params[0].vtype == "String"
+
+
 def test_alias_declarations_parse_as_comptime_aliases():
     code = """
     alias THREADS_PER_BLOCK = 256

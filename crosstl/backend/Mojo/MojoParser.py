@@ -520,6 +520,7 @@ class MojoParser:
         params = self.parse_parameters()
         self.eat("RPAREN")
 
+        self.parse_function_effects()
         if self.current_token[0] == "MINUS":
             self.eat("MINUS")
             if self.current_token[0] == "GREATER_THAN":
@@ -529,8 +530,7 @@ class MojoParser:
         post_attributes = self.parse_attributes()
         attributes.extend(post_attributes)
 
-        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "raises":
-            self.eat("IDENTIFIER")
+        self.parse_function_effects()
 
         where_clause = self.parse_where_clause()
 
@@ -545,6 +545,10 @@ class MojoParser:
         func.qualifier = qualifier
         func.where_clause = where_clause
         return func
+
+    def parse_function_effects(self):
+        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "raises":
+            self.eat("IDENTIFIER")
 
     def parse_where_clause(self):
         if not (

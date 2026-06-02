@@ -28,7 +28,7 @@ implicitly supported.
    "Vulkan SPIR-V", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "738", "33", "SPIR-V unified grammar; Khronos SPIR-V headers"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "552", "166", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "590", "106", "ROCm HIP documentation"
-   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "618", "97", "Mojo manual"
+   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "619", "97", "Mojo manual"
    "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "734", "69", "Rust reference"
    "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "604", "402", "Slang user guide"
 
