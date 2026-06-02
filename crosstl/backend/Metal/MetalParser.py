@@ -564,6 +564,7 @@ class MetalParser:
             return False
         type_name = self.tokens[idx][1]
         idx += 1
+        idx = self.skip_scoped_type_suffix_at(idx)
 
         if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
             depth = 0
@@ -592,6 +593,20 @@ class MetalParser:
         if type_name == "sampler" and self.parenthesized_list_ends_with_semicolon(idx):
             return False
         return True
+
+    def skip_scoped_type_suffix_at(self, idx):
+        while idx < len(self.tokens) and self.tokens[idx][0] == "SCOPE":
+            idx += 1
+            if idx >= len(self.tokens):
+                return idx
+            if (
+                self.tokens[idx][0] not in TYPE_TOKENS
+                and self.tokens[idx][0] not in STAGE_TOKENS
+                and self.tokens[idx][0] != "METAL"
+            ):
+                return idx
+            idx += 1
+        return idx
 
     def parenthesized_list_ends_with_semicolon(self, idx):
         depth = 0

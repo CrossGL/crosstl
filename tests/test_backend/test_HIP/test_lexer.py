@@ -6,7 +6,7 @@ class TestHipLexer:
     def test_keywords_tokenization(self):
         code = """
         __global__ __device__ __host__ __shared__ __constant__ __restrict __restrict__
-        __forceinline__ __noinline__ __launch_bounds__ template typename class
+        __forceinline__ __noinline__ __launch_bounds__ inline __inline__ template typename class
         struct union enum namespace using extern static const
         """
         lexer = HipLexer(code)
@@ -23,6 +23,7 @@ class TestHipLexer:
         assert "__FORCEINLINE__" in token_types
         assert "__NOINLINE__" in token_types
         assert "__LAUNCH_BOUNDS__" in token_types
+        assert token_types.count("INLINE") == 2
         assert "TEMPLATE" in token_types
         assert "TYPENAME" in token_types
         assert "CLASS" in token_types

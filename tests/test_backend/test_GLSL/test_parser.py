@@ -565,6 +565,74 @@ def test_parse_vulkan_extension_types_suffixes_and_qualifiers():
     assert in_color.is_array is True
 
 
+def test_parse_repeated_layout_qualifiers_from_slang_glsl():
+    code = textwrap.dedent("""
+        #version 450
+        layout(row_major) uniform;
+        layout(row_major) buffer;
+
+        layout(binding = 0)
+        layout(std140) uniform _S1
+        {
+            uint index_0;
+        } C_0;
+
+        layout(r32ui)
+        layout(binding = 1)
+        uniform uimage2D t_0;
+
+        void main()
+        {
+            uint u_0 = imageAtomicAdd(t_0, ivec2(uvec2(0)), 1);
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+    block = next(struct for struct in ast.structs if struct.name == "_S1")
+    block_var = next(var for var in ast.uniforms if var.name == "C_0")
+    image_var = next(var for var in ast.uniforms if var.name == "t_0")
+
+    assert ast.layouts[0] == {"layout": {"row_major": None}, "qualifiers": ["uniform"]}
+    assert ast.layouts[1] == {"layout": {"row_major": None}, "qualifiers": ["buffer"]}
+    assert block.interface_layout == {"binding": "0", "std140": None}
+    assert block_var.layout == {"binding": "0", "std140": None}
+    assert image_var.layout == {"r32ui": None, "binding": "1"}
+
+
+def test_parse_layout_after_extension_qualifier_from_mesh_shader_glsl():
+    code = textwrap.dedent("""
+        #version 460
+        #extension GL_EXT_mesh_shader : require
+
+        perprimitiveEXT layout(location = 1)
+        out vec3 primitives_triangleNormal_0[1];
+
+        perprimitiveEXT out gl_MeshPerPrimitiveEXT
+        {
+            int gl_PrimitiveID;
+            bool gl_CullPrimitiveEXT;
+        } gl_MeshPrimitivesEXT[];
+
+        void main()
+        {
+        }
+        """)
+
+    ast = parse_ok(code, "mesh")
+    primitive_normal = next(
+        var for var in ast.io_variables if var.name == "primitives_triangleNormal_0"
+    )
+    mesh_primitives = next(
+        var for var in ast.io_variables if var.name == "gl_MeshPrimitivesEXT"
+    )
+
+    assert primitive_normal.layout == {"location": "1"}
+    assert primitive_normal.qualifiers == ["perprimitiveEXT", "out"]
+    assert primitive_normal.is_array is True
+    assert mesh_primitives.qualifiers == ["perprimitiveEXT", "out"]
+    assert mesh_primitives.is_array is True
+
+
 def test_parse_buffer_as_contextual_identifier_from_glsl_canvas():
     code = textwrap.dedent("""
         #version 300 es

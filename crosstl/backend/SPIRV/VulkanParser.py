@@ -164,6 +164,99 @@ class VulkanParser:
         else:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
+    def skip_hlsl_attributes(self):
+        while self.current_token[0] == "LBRACKET":
+            if self.peek(1) == "LBRACKET":
+                self.skip_double_bracket_hlsl_attribute()
+            elif self.peek(1) == "IDENTIFIER":
+                self.skip_single_bracket_hlsl_attribute()
+            else:
+                break
+
+    def skip_double_bracket_hlsl_attribute(self):
+        self.eat("LBRACKET")
+        self.eat("LBRACKET")
+        depth = 1
+        while depth and self.current_token[0] != "EOF":
+            if self.current_token[0] == "LBRACKET" and self.peek(1) == "LBRACKET":
+                depth += 1
+                self.eat("LBRACKET")
+                self.eat("LBRACKET")
+            elif self.current_token[0] == "RBRACKET" and self.peek(1) == "RBRACKET":
+                depth -= 1
+                self.eat("RBRACKET")
+                self.eat("RBRACKET")
+            else:
+                self.eat(self.current_token[0])
+        if depth:
+            raise SyntaxError("Unterminated HLSL attribute")
+
+    def skip_single_bracket_hlsl_attribute(self):
+        self.eat("LBRACKET")
+        depth = 1
+        while depth and self.current_token[0] != "EOF":
+            if self.current_token[0] == "LBRACKET":
+                depth += 1
+            elif self.current_token[0] == "RBRACKET":
+                depth -= 1
+            self.eat(self.current_token[0])
+        if depth:
+            raise SyntaxError("Unterminated HLSL attribute")
+
+    def parse_optional_hlsl_semantic(self):
+        if self.current_token[0] == "SEMANTIC":
+            semantic = self.current_token[1].lstrip(":")
+            self.eat("SEMANTIC")
+            return semantic
+
+        if self.current_token[0] != "COLON" or self.peek(1) not in {
+            "IDENTIFIER",
+            "SEMANTIC",
+        }:
+            return None
+
+        self.eat("COLON")
+        semantic = self.current_token[1].lstrip(":")
+        self.eat(self.current_token[0])
+        if self.current_token[0] == "LPAREN":
+            semantic += self.parse_parenthesized_text()
+        return semantic
+
+    def parse_parenthesized_text(self):
+        self.eat("LPAREN")
+        parts = []
+        depth = 1
+        while depth and self.current_token[0] != "EOF":
+            if self.current_token[0] == "LPAREN":
+                depth += 1
+                parts.append("(")
+                self.eat("LPAREN")
+            elif self.current_token[0] == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RPAREN")
+                    break
+                parts.append(")")
+                self.eat("RPAREN")
+            else:
+                parts.append(str(self.current_token[1]))
+                self.eat(self.current_token[0])
+        if depth:
+            raise SyntaxError("Unterminated parenthesized semantic")
+        return f"({''.join(parts)})"
+
+    def skip_balanced_brace_tokens(self):
+        self.eat("LBRACE")
+        depth = 1
+        while depth and self.current_token[0] != "EOF":
+            if self.current_token[0] == "LBRACE":
+                depth += 1
+            elif self.current_token[0] == "RBRACE":
+                depth -= 1
+            self.eat(self.current_token[0])
+        if depth:
+            raise SyntaxError("Unterminated brace block")
+
     def parse(self):
         module = self.parse_module()
         self.eat("EOF")
@@ -179,6 +272,9 @@ class VulkanParser:
         structs = []
         global_variables = []
         while self.current_token[0] != "EOF":
+            self.skip_hlsl_attributes()
+            if self.current_token[0] == "EOF":
+                break
             if self.current_token[0] == "PRECISION":
                 self.parse_precision_declaration()
             elif self.current_token[0] == "LAYOUT":
@@ -1243,6 +1339,7 @@ class VulkanParser:
         struct_fields = []
 
         while self.current_token[0] != "RBRACE":
+            self.skip_hlsl_attributes()
             while self.current_token[0] == "LAYOUT":
                 self.skip_layout_annotation()
             self.parse_layout_declaration_qualifiers()
@@ -1253,6 +1350,7 @@ class VulkanParser:
             field_name = self.current_token[1]
             self.eat("IDENTIFIER")
             field_name += self.parse_array_suffixes_as_text()
+            self.parse_optional_hlsl_semantic()
             self.eat("SEMICOLON")
             struct_fields.append((field_type, field_name))
 
@@ -1300,6 +1398,7 @@ class VulkanParser:
         members = []
 
         while self.current_token[0] != "RBRACE":
+            self.skip_hlsl_attributes()
             if self.current_token[0] in [
                 "VEC2",
                 "VEC3",
@@ -1336,10 +1435,11 @@ class VulkanParser:
             member_name = self.current_token[1]
             self.eat("IDENTIFIER")
             member_name += self.parse_array_suffixes_as_text()
+            semantic = self.parse_optional_hlsl_semantic()
 
             self.eat("SEMICOLON")
 
-            members.append(VariableNode(type_name, member_name))
+            members.append(VariableNode(type_name, member_name, semantic=semantic))
 
         self.eat("RBRACE")
         while self.current_token[0] == "IDENTIFIER":
@@ -1360,8 +1460,16 @@ class VulkanParser:
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
+        semantic = self.parse_optional_hlsl_semantic()
         body = self.parse_block()
-        return FunctionNode(return_type, func_name, params, body, qualifiers=qualifiers)
+        return FunctionNode(
+            return_type,
+            func_name,
+            params,
+            body,
+            qualifiers=qualifiers,
+            semantic=semantic,
+        )
 
     def parse_parameters(self):
         params = []
@@ -1370,12 +1478,16 @@ class VulkanParser:
             return params
 
         while self.current_token[0] != "RPAREN":
+            self.skip_hlsl_attributes()
             qualifiers = self.parse_parameter_qualifiers()
             vtype = self.parse_data_type(allow_identifier=True)
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             name += self.parse_array_suffixes_as_text()
-            params.append(VariableNode(vtype, name, qualifiers=qualifiers))
+            semantic = self.parse_optional_hlsl_semantic()
+            params.append(
+                VariableNode(vtype, name, qualifiers=qualifiers, semantic=semantic)
+            )
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
         return params
@@ -1617,6 +1729,14 @@ class VulkanParser:
         target = VariableNode(type_name, name)
         if not type_name:
             target = self.parse_postfix_suffixes(target)
+        else:
+            target.semantic = self.parse_optional_hlsl_semantic()
+
+        if type_name in {"cbuffer", "tbuffer"} and self.current_token[0] == "LBRACE":
+            self.skip_balanced_brace_tokens()
+            if consume_terminator and self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+            return target
 
         if self.current_token[0] in terminators:
             if consume_terminator:
@@ -1689,6 +1809,12 @@ class VulkanParser:
                 expected_terminators=terminators,
             )
         ]
+        if (
+            isinstance(declarations[0], VariableNode)
+            and declarations[0].vtype in {"cbuffer", "tbuffer"}
+            and self.current_token[0] not in declarator_terminators
+        ):
+            return declarations[0]
 
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
@@ -1861,6 +1987,8 @@ class VulkanParser:
             self.eat("STRING")
             return value
         elif self.current_token[0] == "LPAREN":
+            if self.looks_like_c_style_cast():
+                return self.parse_c_style_cast()
             self.eat("LPAREN")
             expr = self.parse_expression()
             self.eat("RPAREN")
@@ -1871,6 +1999,48 @@ class VulkanParser:
             raise SyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"
             )
+
+    def looks_like_c_style_cast(self):
+        return (
+            self.current_token[0] == "LPAREN"
+            and self.peek(1)
+            in {
+                "IDENTIFIER",
+                "FLOAT",
+                "INT",
+                "UINT",
+                "BOOL",
+                "VEC2",
+                "VEC3",
+                "VEC4",
+                "MAT2",
+                "MAT3",
+                "MAT4",
+            }
+            and self.peek(2) == "RPAREN"
+            and self.peek(3)
+            in {
+                "IDENTIFIER",
+                "NUMBER",
+                "STRING",
+                "LPAREN",
+                "LBRACE",
+                "MINUS",
+                "PLUS",
+                "NOT",
+                "BITWISE_NOT",
+                "BINARY_NOT",
+            }
+        )
+
+    def parse_c_style_cast(self):
+        self.eat("LPAREN")
+        type_name = self.current_token[1]
+        self.eat(self.current_token[0])
+        self.eat("RPAREN")
+        return self.parse_postfix_suffixes(
+            FunctionCallNode(type_name, [self.parse_unary()])
+        )
 
     def parse_initializer_list(self):
         self.eat("LBRACE")
@@ -1912,6 +2082,7 @@ class VulkanParser:
         terminators=None,
         consume_terminator=True,
     ):
+        self.skip_hlsl_attributes()
         terminators = terminators or {"SEMICOLON"}
         type_name = ""
         qualifiers = self.parse_declaration_qualifiers()

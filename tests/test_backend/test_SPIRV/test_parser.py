@@ -98,6 +98,70 @@ def test_parse_struct_instance_declarator_from_vulkan_compute_samples():
     assert ast.structs[0].members[0].name == "avg[9]"
 
 
+def test_parse_hlsl_attribute_and_semantic_declarations_from_vulkan_samples():
+    code = """
+    struct VSOutput
+    {
+        float4 Pos : SV_POSITION;
+        [[vk::location(0)]] float2 UV : TEXCOORD0;
+    };
+
+    Texture2D textureColor : register(t1);
+    SamplerState samplerColor : register(s1);
+
+    cbuffer UBO : register(b0)
+    {
+        float blurScale;
+    }
+
+    [[vk::constant_id(0)]] const int blurdirection = 0;
+
+    [numthreads(16, 1, 1)]
+    bool frustumCheck(float4 pos)
+    {
+        return true;
+    }
+
+    float4 main([[vk::location(0)]] float2 inUV : TEXCOORD0) : SV_TARGET
+    {
+        VSOutput output = (VSOutput)0;
+        return float4(0.0);
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    output = ast.structs[0]
+    texture, sampler, cbuffer, constant = ast.global_variables
+    main = ast.functions[1]
+
+    assert output.members[0].name == "Pos"
+    assert output.members[0].semantic == "SV_POSITION"
+    assert output.members[1].name == "UV"
+    assert output.members[1].semantic == "TEXCOORD0"
+
+    assert texture.vtype == "Texture2D"
+    assert texture.name == "textureColor"
+    assert texture.semantic == "register(t1)"
+    assert sampler.vtype == "SamplerState"
+    assert sampler.semantic == "register(s1)"
+    assert cbuffer.vtype == "cbuffer"
+    assert cbuffer.name == "UBO"
+    assert cbuffer.semantic == "register(b0)"
+    assert constant.left.name == "blurdirection"
+
+    assert ast.functions[0].name == "frustumCheck"
+    assert main.return_type == "float4"
+    assert main.semantic == "SV_TARGET"
+    assert main.params[0].vtype == "float2"
+    assert main.params[0].name == "inUV"
+    assert main.params[0].semantic == "TEXCOORD0"
+    assert isinstance(main.body[0], AssignmentNode)
+    assert main.body[0].left.vtype == "VSOutput"
+    assert isinstance(main.body[0].right, FunctionCallNode)
+    assert main.body[0].right.name == "VSOutput"
+    assert main.body[0].right.args == ["0"]
+
+
 def test_parse_unsized_array_constructor_from_vulkan_samples():
     code = """
     vec2 triangle_positions[3] = vec2[](

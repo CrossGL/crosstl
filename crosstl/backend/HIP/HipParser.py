@@ -120,6 +120,7 @@ class HipParser:
         "noexcept",
         "__noexcept",
     }
+    TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec"}
     ATOMIC_FUNCTION_NAMES = {
         "atomicAdd",
         "hipAtomicAdd",
@@ -575,6 +576,9 @@ class HipParser:
         self.skip_newlines()
 
         if self.match("__DEVICE__", "__HOST__", "__GLOBAL__", "__LAUNCH_BOUNDS__"):
+            if self.function_name_index_at(self.pos) is None:
+                declarations = self.parse_variable_declaration_list()
+                return declarations if len(declarations) > 1 else declarations[0]
             return self.parse_function_with_qualifier()
         if self.match("STRUCT"):
             return self.parse_struct()
@@ -586,6 +590,9 @@ class HipParser:
             return self.parse_type_alias()
         if self.is_function_declaration():
             return self.parse_simple_function()
+        if self.is_variable_declaration():
+            declarations = self.parse_variable_declaration_list()
+            return declarations if len(declarations) > 1 else declarations[0]
 
         raise SyntaxError(
             f"Expected declaration after template prefix, got {self.current_token.type}"
@@ -709,11 +716,54 @@ class HipParser:
 
         self.consume("ASSIGN")
         self.skip_newlines()
+        attributes = self.parse_type_attribute_prefixes()
         alias_type = self.parse_type()
+        if attributes:
+            alias_type = " ".join([*attributes, alias_type])
         if self.match("SEMICOLON"):
             self.advance()
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
+
+    def parse_type_attribute_prefixes(self):
+        attributes = []
+
+        while (
+            self.match("IDENTIFIER")
+            and self.current_token.value in self.TYPE_ATTRIBUTE_IDENTIFIERS
+        ):
+            attribute_name = self.current_token.value
+            self.advance()
+            attribute_args = ""
+            if self.match("LPAREN"):
+                attribute_args = "".join(
+                    self.consume_balanced_token_values("LPAREN", "RPAREN")
+                )
+            attributes.append(f"{attribute_name}{attribute_args}")
+            self.skip_newlines()
+
+        return attributes
+
+    def consume_balanced_token_values(self, open_token, close_token):
+        values = []
+        depth = 0
+
+        while self.current_token:
+            token = self.current_token
+            values.append(token.value)
+
+            if token.type == open_token:
+                depth += 1
+            elif token.type == close_token:
+                depth -= 1
+                self.advance()
+                if depth == 0:
+                    return values
+                continue
+
+            self.advance()
+
+        self.error(f"Unterminated {open_token}")
 
     def parse_namespace_block(self):
         self.consume("NAMESPACE")
@@ -1771,6 +1821,7 @@ class HipParser:
                 break
 
             param_type = self.parse_type()
+            self.skip_newlines()
 
             param_name = ""
             function_pointer_name = self.parse_function_pointer_parameter_declarator()
@@ -2625,6 +2676,7 @@ class HipParser:
                         "LPAREN",
                         "SCOPE",
                         "DOT",
+                        "LBRACKET",
                         "LBRACE",
                         "KERNEL_LAUNCH_START",
                         "COMMA",
@@ -2648,6 +2700,7 @@ class HipParser:
                         "LPAREN",
                         "SCOPE",
                         "DOT",
+                        "LBRACKET",
                         "LBRACE",
                         "KERNEL_LAUNCH_START",
                         "COMMA",

@@ -476,6 +476,26 @@ def test_parse_metal_namespace_types():
     parse_ok(code)
 
 
+def test_parse_scoped_return_type_prototype_from_msl_examples():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    metal::float2x2 rot(float radian);
+
+    metal::float2x2 make_rot(float radian) {
+        return metal::float2x2(
+            cos(radian), -sin(radian),
+            sin(radian), cos(radian)
+        );
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [func.name for func in ast.functions] == ["make_rot"]
+    assert ast.functions[0].return_type == "metal::float2x2"
+
+
 def test_parse_raytracing_qualifiers_and_types():
     code = """
     #include <metal_stdlib>

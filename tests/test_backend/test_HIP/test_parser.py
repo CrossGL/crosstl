@@ -258,6 +258,65 @@ class TestHipParser:
         assert isinstance(assignment, AssignmentNode)
         assert assignment.right.op == ">>"
 
+    def test_public_hpc_training_template_constant_symbols_parse(self):
+        code = """
+        template <int R> __constant__ float d_dx[2 * R + 1];
+
+        template <int R>
+        __device__ float *scratch;
+
+        using vec = __attribute__((__vector_size__(4 * sizeof(float)))) float;
+
+        __inline__ int ceil(int x, int y) {
+            return (x - 1) / y + 1;
+        }
+
+        template <int R>
+        __global__ void stencil(float* out, int line, int
+                slice) {
+            out[0] = d_dx<R>[threadIdx.x];
+        }
+        """
+        ast = self.parse_code(code)
+
+        constant = ast.statements[0]
+        scratch = ast.statements[1]
+        vec_alias = ast.statements[2]
+        ceil = ast.statements[3]
+        kernel = ast.statements[4]
+        assignment = kernel.body[0]
+
+        assert isinstance(constant, VariableNode)
+        assert constant.name == "d_dx"
+        assert constant.vtype == "float[((2 * R) + 1)]"
+        assert constant.qualifiers == ["__constant__"]
+
+        assert isinstance(scratch, VariableNode)
+        assert scratch.name == "scratch"
+        assert scratch.vtype == "float *"
+        assert scratch.qualifiers == ["__device__"]
+
+        assert isinstance(vec_alias, TypeAliasNode)
+        assert vec_alias.name == "vec"
+        assert (
+            "__attribute__((__vector_size__(4*sizeof(float))))" in vec_alias.alias_type
+        )
+        assert vec_alias.alias_type.endswith("float")
+
+        assert isinstance(ceil, FunctionNode)
+        assert ceil.name == "ceil"
+        assert ceil.qualifiers == ["__inline__"]
+
+        assert isinstance(kernel, KernelNode)
+        assert kernel.params[1] == {"type": "int", "name": "line"}
+        assert kernel.params[2] == {"type": "int", "name": "slice"}
+        assert isinstance(assignment, AssignmentNode)
+        assert isinstance(assignment.right, ArrayAccessNode)
+        assert assignment.right.array == "d_dx<R>"
+        assert isinstance(assignment.right.index, HipBuiltinNode)
+        assert assignment.right.index.builtin_name == "threadIdx"
+        assert assignment.right.index.component == "x"
+
     def test_public_rocm_bandwidth_enum_class_parse_as_top_level_declaration(self):
         code = """
         enum class MemoryMode : unsigned int

@@ -264,12 +264,7 @@ class GLSLParser:
                     global_variables.append(var)
                 continue
 
-            layout = None
-            if self.current_token[0] == "LAYOUT":
-                layout = self.parse_layout_qualifier()
-                self.skip_newlines()
-
-            qualifiers = self.parse_qualifiers()
+            qualifiers, layout = self.parse_declaration_prefix()
 
             if layout is not None and self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
@@ -447,6 +442,38 @@ class GLSLParser:
                 self.eat("COMMA")
         self.eat("RPAREN")
         return qualifiers
+
+    def merge_layout_qualifiers(self, layout, new_layout):
+        if layout is None:
+            return dict(new_layout)
+        merged = dict(layout)
+        merged.update(new_layout)
+        return merged
+
+    def parse_declaration_prefix(self):
+        qualifiers = []
+        layout = None
+
+        while True:
+            consumed = False
+            while self.current_token[0] == "LAYOUT":
+                layout = self.merge_layout_qualifiers(
+                    layout, self.parse_layout_qualifier()
+                )
+                self.skip_newlines()
+                consumed = True
+
+            parsed_qualifiers = self.parse_qualifiers()
+            if parsed_qualifiers:
+                qualifiers.extend(parsed_qualifiers)
+                self.skip_newlines()
+                consumed = True
+                continue
+
+            if not consumed:
+                break
+
+        return qualifiers, layout
 
     def parse_layout_value(self):
         value = self.parse_layout_constant_expression()
@@ -691,11 +718,7 @@ class GLSLParser:
             self.skip_newlines()
             if self.current_token[0] == "RBRACE":
                 break
-            member_layout = None
-            if self.current_token[0] == "LAYOUT":
-                member_layout = self.parse_layout_qualifier()
-                self.skip_newlines()
-            member_qualifiers = self.parse_qualifiers()
+            member_qualifiers, member_layout = self.parse_declaration_prefix()
             member_type = self.parse_type()
             members.extend(
                 self.parse_variable_declarations(
@@ -729,11 +752,7 @@ class GLSLParser:
             self.skip_newlines()
             if self.current_token[0] == "RBRACE":
                 break
-            member_layout = None
-            if self.current_token[0] == "LAYOUT":
-                member_layout = self.parse_layout_qualifier()
-                self.skip_newlines()
-            member_qualifiers = self.parse_qualifiers()
+            member_qualifiers, member_layout = self.parse_declaration_prefix()
             member_type = self.parse_type()
             member_nodes = self.parse_variable_declarations(
                 member_type,
