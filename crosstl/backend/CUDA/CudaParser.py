@@ -896,7 +896,7 @@ class CudaParser:
     def skip_launch_bounds_at_index(self, index):
         return self.skip_function_attribute_at_index(index)
 
-    def skip_template_at_index(self, index):
+    def skip_template_at_index(self, index, allow_assignment=False):
         depth = 0
 
         while index < len(self.tokens):
@@ -919,7 +919,9 @@ class CudaParser:
                     return index + 1
                 if depth < 0:
                     return None
-            elif token_type in {"SEMICOLON", "ASSIGN", "EOF"}:
+            elif token_type in {"SEMICOLON", "EOF"} or (
+                token_type == "ASSIGN" and not allow_assignment
+            ):
                 return None
             index += 1
 
@@ -1654,7 +1656,7 @@ class CudaParser:
 
         index += 1
         if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
-            skipped = self.skip_template_at_index(index)
+            skipped = self.skip_template_at_index(index, allow_assignment=True)
             if skipped is not None:
                 return skipped
         return index

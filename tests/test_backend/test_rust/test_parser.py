@@ -4284,6 +4284,30 @@ def test_qualified_struct_initialization_chains_in_match_arm():
     ]
 
 
+def test_builtin_vector_struct_initialization_in_result_match_arm():
+    code = """
+    fn shade(i: i32, v1: Vec3) {
+        match i {
+            0 => Result::Ok(Vec3{x: v1.x, y: v1.y, z: v1.z}),
+            _ => Result::Err(0),
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    arm_call = ast.functions[0].body[0].arms[0].body[0]
+
+    assert isinstance(arm_call, FunctionCallNode)
+    assert arm_call.name == "Result::Ok"
+    assert isinstance(arm_call.args[0], StructInitializationNode)
+    assert arm_call.args[0].struct_name == "Vec3"
+    assert [field_name for field_name, _ in arm_call.args[0].fields] == [
+        "x",
+        "y",
+        "z",
+    ]
+
+
 def test_lowercase_self_condition_does_not_parse_body_as_struct_literal():
     code = """
     impl FloatExt for f32 {

@@ -2553,6 +2553,29 @@ class TestCudaParser:
         assert ast.structs[1].members == []
         assert ast.kernels[0].name == "reduce"
 
+    def test_cuda_struct_defaulted_template_constructor_from_generated_matrix_helpers(
+        self,
+    ):
+        code = """
+        struct float2x2 {
+            float m[4];
+            static const int CGL_COLUMNS = 2;
+
+            template <typename Matrix, typename = decltype(Matrix::CGL_COLUMNS)>
+            __host__ __device__ explicit float2x2(const Matrix& source) {}
+        };
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.structs[0].name == "float2x2"
+        assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+            ("float[4]", "m"),
+            ("const int", "CGL_COLUMNS"),
+        ]
+
     def test_public_cuda_samples_typedef_typename_inside_template_struct(self):
         code = """
         template <class RNG>

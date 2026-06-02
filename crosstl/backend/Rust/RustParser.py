@@ -2957,6 +2957,13 @@ class RustParser:
             if self.current_token[0] == "DOUBLE_COLON":
                 return self.finish_path_or_call(name)
 
+            if (
+                self.current_token[0] == "LBRACE"
+                and name in ["Vec2", "Vec3", "Vec4", "Mat2", "Mat3", "Mat4"]
+                and not self.expression_stops_at_lbrace
+            ):
+                return self.parse_struct_initialization(name)
+
             return name
         elif self.current_token[0] in self.PRIMITIVE_PATH_SEGMENT_TOKENS:
             name = self.current_token[1]
