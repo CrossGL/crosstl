@@ -2,7 +2,7 @@
 
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
@@ -42,7 +42,7 @@ class _GLSLDirectivePreprocessor(HLSLPreprocessor):
             return len(code)
         return end
 
-    def _skip_block_comment_text(self, code: str, start: int) -> tuple[int, int]:
+    def _skip_block_comment_text(self, code: str, start: int) -> Tuple[int, int]:
         end = code.find("*/", start + 2)
         if end == -1:
             raise SyntaxError("Unterminated block comment")
