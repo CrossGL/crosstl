@@ -47,6 +47,7 @@ class GLSLPreprocessor:
 
         include_paths: List[str] = []
         current_dir = os.path.abspath(os.path.dirname(file_path))
+        include_paths.append(current_dir)
         while True:
             candidate = os.path.join(current_dir, "includes", "glsl")
             if os.path.isdir(candidate):

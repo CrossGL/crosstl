@@ -260,6 +260,16 @@ class SlangToCrossGLConverter:
             code += (
                 f"    typedef {self.map_type(node.original_type)} {node.new_type};\n"
             )
+        for enum in getattr(ast, "enums", []) or []:
+            if isinstance(enum, EnumNode):
+                code += f"    enum {enum.name} {{\n"
+                for member_name, member_value in enum.members:
+                    if member_value is None:
+                        code += f"        {member_name},\n"
+                    else:
+                        value = self.generate_expression(member_value)
+                        code += f"        {member_name} = {value},\n"
+                code += "    }\n"
         for node in ast.structs:
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"

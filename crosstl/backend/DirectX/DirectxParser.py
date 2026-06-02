@@ -156,6 +156,7 @@ class HLSLParser:
         self.current_token = tokens[0] if tokens else ("EOF", "")
         self.synthetic_structs = []
         self.synthetic_cbuffer_names = set()
+        self.synthetic_enum_count = 0
 
     def parse(self):
         structs = []
@@ -345,7 +346,10 @@ class HLSLParser:
             self.eat("SEMICOLON")
 
         parser = HLSLParser(namespace_tokens + [("EOF", "")])
-        return parser.parse()
+        parser.synthetic_enum_count = self.synthetic_enum_count
+        namespace_ast = parser.parse()
+        self.synthetic_enum_count = parser.synthetic_enum_count
+        return namespace_ast
 
     def parse_preprocessor_directive(self):
         token = self.eat("PREPROCESSOR")
@@ -708,12 +712,21 @@ class HLSLParser:
             index += 1
         return f"{base}_{index}"
 
+    def synthetic_enum_name(self):
+        self.synthetic_enum_count += 1
+        return f"AnonymousEnum_{self.synthetic_enum_count}"
+
     def parse_enum(self):
         self.eat("ENUM")
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "class":
             self.eat("IDENTIFIER")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+        elif self.current_token[0] == "IDENTIFIER":
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+        else:
+            name = self.synthetic_enum_name()
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":

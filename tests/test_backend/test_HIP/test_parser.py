@@ -1475,6 +1475,48 @@ class TestHipParser:
         assert body[4].vtype == "Table"
         assert body[5].name == "consume"
 
+    def test_public_rocm_device_query_namespace_block_parsing(self):
+        code = """
+        namespace
+        {
+        constexpr unsigned int col_w = 26;
+
+        double khz_to_mhz(size_t f)
+        {
+            return f / 1000.;
+        }
+        }
+
+        namespace helpers
+        {
+        __device__ float add(float a, float b)
+        {
+            return a + b;
+        }
+        }
+
+        int main()
+        {
+            return 0;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.statements) == 4
+        assert isinstance(ast.statements[0], VariableNode)
+        assert ast.statements[0].name == "col_w"
+        assert ast.statements[0].qualifiers == ["constexpr"]
+        assert isinstance(ast.statements[1], FunctionNode)
+        assert ast.statements[1].name == "khz_to_mhz"
+        assert isinstance(ast.statements[2], FunctionNode)
+        assert ast.statements[2].name == "add"
+        assert "__device__" in ast.statements[2].qualifiers
+        assert isinstance(ast.statements[3], FunctionNode)
+        assert ast.statements[3].name == "main"
+
     def test_typedef_multi_declarator_alias_parsing(self):
         code = """
         typedef float Real, *RealPtr;

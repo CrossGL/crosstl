@@ -1333,9 +1333,12 @@ class TestCudaParser:
         using HostBuffer = std::unique_ptr<float[]>;
         typedef std::vector<std::array<unsigned int, 4>> Table;
         using namespace std;
+        using std::cerr;
+        using std::endl;
 
         void host(int n) {
             using LocalBuffer = std::unique_ptr<float[], HostDeleter>;
+            using std::min;
             HostBuffer h = std::make_unique<float[]>(n);
             HostBuffer* hp = &h;
             LocalBuffer owned(new float[n]);

@@ -788,6 +788,10 @@ class CudaParser:
             return None
 
         name = self.eat("IDENTIFIER")[1]
+        if self.current_token[0] == "SCOPE":
+            self.skip_until_semicolon()
+            return None
+
         self.eat("ASSIGN")
         alias_type = self.parse_type()
         self.eat("SEMICOLON")

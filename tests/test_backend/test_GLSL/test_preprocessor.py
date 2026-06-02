@@ -57,6 +57,27 @@ def test_translate_resolves_quoted_include_from_source_file_dir(tmp_path):
     assert "INCLUDED_SCALE" in directx
 
 
+def test_preprocessor_resolves_angle_include_from_source_file_dir(tmp_path):
+    include_file = tmp_path / "tonemapping.glsl"
+    include_file.write_text("vec3 tone_map(vec3 color) { return color; }\n")
+    shader_file = tmp_path / "pbr.frag"
+    shader_file.write_text("""
+        precision highp float;
+
+        #include <tonemapping.glsl>
+
+        void main()
+        {
+            vec3 color = tone_map(vec3(1.0));
+        }
+        """)
+
+    tokens = GLSLLexer.from_file(str(shader_file)).tokenize()
+    ast = GLSLParser(tokens, "fragment").parse()
+
+    assert any(function.name == "tone_map" for function in ast.functions)
+
+
 def test_preprocessor_resolves_vulkan_samples_shared_glsl_include(tmp_path):
     shader_root = tmp_path / "shaders"
     include_dir = shader_root / "includes" / "glsl"

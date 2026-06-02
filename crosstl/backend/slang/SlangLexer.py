@@ -16,6 +16,7 @@ TOKENS = tuple(
         ("BITWISE_NOT", r"~"),
         ("STRUCT", r"\bstruct\b"),
         ("INTERFACE", r"\binterface\b"),
+        ("ENUM", r"\benum\b"),
         ("CBUFFER", r"\bcbuffer\b"),
         ("SHADER", r"\bshader\b"),
         ("STRING", r'"(?:\\.|[^"\\])*"'),
@@ -112,6 +113,7 @@ TOKENS = tuple(
 KEYWORDS = {
     "struct": "STRUCT",
     "interface": "INTERFACE",
+    "enum": "ENUM",
     "cbuffer": "CBUFFER",
     "Texture2D": "TEXTURE2D",
     "SamplerState": "SAMPLER_STATE",

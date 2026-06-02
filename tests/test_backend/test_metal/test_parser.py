@@ -1028,6 +1028,20 @@ def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
     assert [func.name for func in ast.functions] == ["real_kernel"]
 
 
+def test_parse_member_template_disambiguator_from_mlx_arg_reduce():
+    code = """
+    void reduce(thread Reducer& op) {
+        int best = 0;
+        int vals[2] = {0, 1};
+        best = op.template reduce_many<N_READS>(best, vals, 0);
+    }
+    """
+    ast = parse_ok(code)
+
+    calls = [node for node in iter_ast_nodes(ast) if isinstance(node, MethodCallNode)]
+    assert calls[0].method == "reduce_many<N_READS>"
+
+
 def test_parse_preprocessor_define():
     code = """
     #define FOO 1

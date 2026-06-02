@@ -448,6 +448,29 @@ def test_generic_struct_declaration_after_name_codegen():
     assert "GenericStruct<" not in generated_code
 
 
+def test_enum_declarations_codegen_from_gpu_printing_sample():
+    code = """
+    enum EmptyPrintingOp
+    {
+    };
+
+    enum PrintingOp
+    {
+        PrintLine,
+        PrintF = 2 + 1,
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "enum EmptyPrintingOp" in generated_code
+    assert "enum PrintingOp" in generated_code
+    assert "PrintLine," in generated_code
+    assert "PrintF = 2 + 1," in generated_code
+
+
 def test_reverse_codegen_rejects_interface_and_conformance_constructs():
     code = """
     interface IFoo {

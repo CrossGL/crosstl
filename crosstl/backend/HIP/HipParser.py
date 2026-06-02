@@ -399,6 +399,9 @@ class HipParser:
         if self.is_linkage_specifier_start():
             return self.parse_linkage_specification()
 
+        if self.match("NAMESPACE"):
+            return self.parse_namespace_block()
+
         if self.match("TEMPLATE"):
             return self.parse_template_prefixed_declaration()
 
@@ -581,6 +584,37 @@ class HipParser:
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
 
+    def parse_namespace_block(self):
+        self.consume("NAMESPACE")
+        self.skip_newlines()
+
+        while self.match("IDENTIFIER", "SCOPE"):
+            self.advance()
+            self.skip_newlines()
+
+        if self.match("ASSIGN"):
+            self.skip_until_semicolon()
+            return None
+
+        self.consume("LBRACE")
+        statements = []
+        while self.current_token and not self.match("RBRACE"):
+            if self.match("NEWLINE", "SEMICOLON"):
+                self.advance()
+                continue
+
+            stmt = self.parse_statement()
+            if stmt:
+                if isinstance(stmt, list):
+                    statements.extend(stmt)
+                else:
+                    statements.append(stmt)
+
+        self.consume("RBRACE")
+        if self.match("SEMICOLON"):
+            self.advance()
+        return statements
+
     def skip_until_semicolon(self):
         while self.current_token and not self.match("SEMICOLON"):
             self.advance()
@@ -704,6 +738,7 @@ class HipParser:
         self.consume("LPAREN")
         params = self.parse_parameter_list()
         self.consume("RPAREN")
+        self.skip_newlines()
 
         body = None
         if self.match("LBRACE"):
@@ -761,6 +796,7 @@ class HipParser:
         self.consume("LPAREN")
         params = self.parse_parameter_list()
         self.consume("RPAREN")
+        self.skip_newlines()
 
         body = None
         if self.match("LBRACE"):

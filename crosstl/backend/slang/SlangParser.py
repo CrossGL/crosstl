@@ -97,6 +97,7 @@ class SlangParser:
         interfaces = []
         extensions = []
         typedefs = []
+        enums = []
         cbuffers = []
         global_variables = []
         while self.current_token[0] != "EOF":
@@ -126,6 +127,8 @@ class SlangParser:
                 extensions.append(self.parse_extension())
             elif declaration_token == "CBUFFER":
                 cbuffers.append(self.parse_cbuffer(attributes=pending_attributes))
+            elif declaration_token == "ENUM":
+                enums.append(self.parse_enum())
             elif declaration_token in {"TYPEDEF", "TYPEALIAS"}:
                 typedefs.append(self.parse_typedef())
             elif self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS:
@@ -148,6 +151,7 @@ class SlangParser:
             cbuffers=cbuffers,
             interfaces=interfaces,
             extensions=extensions,
+            enums=enums,
             includes=includes,
             modules=modules,
             implementing_modules=implementing_modules,
@@ -792,6 +796,33 @@ class SlangParser:
                 break
             self.eat("COMMA")
         return conformances
+
+    def parse_enum(self):
+        self.eat("ENUM")
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("LBRACE")
+        members = []
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated enum declaration")
+            member_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            member_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                member_value = self.parse_expression()
+            members.append((member_name, member_value))
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+            elif self.current_token[0] != "RBRACE":
+                raise SyntaxError(
+                    f"Expected comma or closing brace in enum, got {self.current_token[0]}"
+                )
+        self.eat("RBRACE")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+        return EnumNode(name, members)
 
     def parse_typedef(self):
         qualifiers = self.parse_qualifiers()

@@ -463,6 +463,35 @@ def test_parse_enum_and_typedef():
     assert_parses(code)
 
 
+def test_parse_anonymous_enum_constants_inside_namespace_from_directx_samples():
+    code = """
+    namespace SMem
+    {
+        namespace Size
+        {
+            enum {
+                Histogram = NUM_KEYS,
+            };
+        }
+
+        namespace Offset
+        {
+            enum {
+                Histogram = 0,
+                Key8b = Size::Histogram,
+            };
+        }
+    }
+    """
+    ast = parse_code(code)
+
+    assert len(ast.enums) == 2
+    assert ast.enums[0].name == "AnonymousEnum_1"
+    assert ast.enums[1].name == "AnonymousEnum_2"
+    assert [name for name, _ in ast.enums[0].members] == ["Histogram"]
+    assert [name for name, _ in ast.enums[1].members] == ["Histogram", "Key8b"]
+
+
 def test_parse_resource_arrays_and_register_space():
     code = """
     Texture2D textures[4] : register(t0, space1);

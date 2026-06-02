@@ -1704,6 +1704,7 @@ class MetalParser:
                 continue
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
+                self.skip_template_disambiguator()
                 if self.current_token[0] not in [
                     "IDENTIFIER",
                     "READ",
@@ -1719,6 +1720,7 @@ class MetalParser:
                 continue
             if self.current_token[0] == "ARROW":
                 self.eat("ARROW")
+                self.skip_template_disambiguator()
                 if self.current_token[0] not in [
                     "IDENTIFIER",
                     "READ",
@@ -1762,6 +1764,14 @@ class MetalParser:
                 continue
             break
         return node
+
+    def skip_template_disambiguator(self):
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "template"
+            and self.peek(1)[0] in {"IDENTIFIER", "READ", "WRITE", "READ_WRITE"}
+        ):
+            self.eat("IDENTIFIER")
 
     def is_static_cast_template_call(self, node):
         if self.current_token[0] != "LESS_THAN":

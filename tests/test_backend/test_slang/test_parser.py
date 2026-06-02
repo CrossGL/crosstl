@@ -15,6 +15,7 @@ from crosstl.backend.slang.SlangAst import (
     ContinueNode,
     DiscardNode,
     DoWhileNode,
+    EnumNode,
     ExtensionNode,
     ForNode,
     FunctionCallNode,
@@ -758,6 +759,35 @@ def test_typealias_declarations_from_shader_toy_and_mlp_vec_samples():
     assert [(member.vtype, member.name) for member in struct.members] == [
         ("CoopVec<NFloat, N>", "data")
     ]
+
+
+def test_enum_declarations_from_gpu_printing_sample():
+    code = """
+    enum EmptyPrintingOp
+    {
+    };
+
+    enum PrintingOp
+    {
+        PrintLine,
+        PrintF = 2 + 1,
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert len(ast.enums) == 2
+    empty_enum = ast.enums[0]
+    valued_enum = ast.enums[1]
+
+    assert isinstance(empty_enum, EnumNode)
+    assert empty_enum.name == "EmptyPrintingOp"
+    assert empty_enum.members == []
+    assert valued_enum.name == "PrintingOp"
+    assert valued_enum.members[0] == ("PrintLine", None)
+    assert valued_enum.members[1][0] == "PrintF"
+    assert isinstance(valued_enum.members[1][1], BinaryOpNode)
 
 
 def test_function_generic_where_conformance_constraint_parsing():
