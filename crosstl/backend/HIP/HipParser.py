@@ -1844,6 +1844,7 @@ class HipParser:
 
     def parse_parameter_list(self):
         params = []
+        previous_base_type = None
 
         self.skip_newlines()
         if self.match("RPAREN"):
@@ -1857,7 +1858,11 @@ class HipParser:
             if self.match("RPAREN"):
                 break
 
-            param_type = self.parse_type()
+            if previous_base_type and self.is_parameter_declarator_continuation():
+                param_type = self.parse_declarator_prefix(previous_base_type)
+            else:
+                param_type = self.parse_type()
+                previous_base_type = self.strip_declarator_markers(param_type)
             self.skip_newlines()
 
             param_name = ""
@@ -1881,6 +1886,15 @@ class HipParser:
                 break
 
         return params
+
+    def is_parameter_declarator_continuation(self):
+        if self.match("ASTERISK", "STAR", *self.TYPE_REFERENCE_TOKENS):
+            return True
+        return (
+            self.match("LPAREN")
+            and self.peek()
+            and self.peek().type in {"ASTERISK", "STAR"}
+        )
 
     def parse_function_pointer_parameter_declarator(self):
         if not (

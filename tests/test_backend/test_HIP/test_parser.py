@@ -1593,6 +1593,21 @@ class TestHipParser:
         assert ast.statements[1].return_type == "size_t"
         assert ast.statements[1].params[0]["type"] == "const std::vector<float> &"
 
+    def test_pointer_parameter_declarator_reuses_base_type(self):
+        code = """
+        void prepare(__half *d_in1, *d_in2) {
+            sink(d_in1, d_in2);
+        }
+        """
+
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        assert function.params == [
+            {"type": "__half *", "name": "d_in1"},
+            {"type": "__half *", "name": "d_in2"},
+        ]
+
     def test_public_rocm_vulkan_qualified_constructor_parameters_parsing(self):
         code = """
         base_dispatch::base_dispatch(PFN_vkGetInstanceProcAddr loader)
