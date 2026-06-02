@@ -120,6 +120,12 @@ class CudaParser:
         "DEVICE",
         "MANAGED",
     }
+    CUDA_STORAGE_QUALIFIER_TOKENS = {
+        "SHARED",
+        "CONSTANT",
+        "DEVICE",
+        "MANAGED",
+    }
     FUNCTION_ATTRIBUTE_TOKENS = {"LAUNCH_BOUNDS", "CLUSTER_DIMS", "BLOCK_SIZE"}
     FUNCTION_SPECIFIER_TOKENS = {
         "GLOBAL",
@@ -482,15 +488,16 @@ class CudaParser:
     def peek_variable(self):
         saved_index = self.current_index
 
-        while (
-            saved_index < len(self.tokens)
-            and self.tokens[saved_index][0] in self.DECLARATION_PREFIX_TOKENS
-        ):
-            saved_index += 1
+        saved_index = self.skip_declaration_prefixes_at_index(saved_index)
+        saved_index = self.skip_alignment_attributes_at_index(saved_index)
 
         saved_index = self.skip_type_at_index(saved_index)
 
         if saved_index is not None:
+            saved_index = self.skip_interleaved_declaration_qualifiers_at_index(
+                saved_index
+            )
+            saved_index = self.skip_alignment_attributes_at_index(saved_index)
             if (
                 saved_index < len(self.tokens)
                 and self.tokens[saved_index][0] == "IDENTIFIER"
@@ -508,6 +515,52 @@ class CudaParser:
                     return True
 
         return False
+
+    def skip_declaration_prefixes_at_index(self, index):
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type in self.DECLARATION_PREFIX_TOKENS:
+                index += 1
+                continue
+            if (
+                token_type == "VOLATILE"
+                and index + 1 < len(self.tokens)
+                and self.tokens[index + 1][0] in self.CUDA_STORAGE_QUALIFIER_TOKENS
+            ):
+                index += 1
+                continue
+            break
+        return index
+
+    def skip_interleaved_declaration_qualifiers_at_index(self, index):
+        while (
+            index < len(self.tokens)
+            and self.tokens[index][0] in self.DECLARATION_PREFIX_TOKENS
+        ):
+            index += 1
+        return index
+
+    def skip_alignment_attributes_at_index(self, index):
+        while index < len(self.tokens) and self.tokens[index][0] == "ALIGNAS":
+            index += 1
+            if index >= len(self.tokens) or self.tokens[index][0] != "LPAREN":
+                continue
+
+            depth = 0
+            while index < len(self.tokens):
+                token_type = self.tokens[index][0]
+                if token_type == "LPAREN":
+                    depth += 1
+                elif token_type == "RPAREN":
+                    depth -= 1
+                    if depth == 0:
+                        index += 1
+                        break
+                elif token_type == "EOF":
+                    return index
+                index += 1
+
+        return index
 
     def skip_type_at_index(self, index):
         saw_integral_sign = False
@@ -1494,21 +1547,12 @@ class CudaParser:
             target.append(variable)
 
     def parse_variable_declaration(self):
-        qualifiers = []
-
-        while self.current_token[0] in [
-            "SHARED",
-            "CONSTANT",
-            "STATIC",
-            "EXTERN",
-            "CONSTEXPR",
-            "DEVICE",
-            "MANAGED",
-        ]:
-            qualifiers.append(self.current_token[1])
-            self.eat(self.current_token[0])
+        qualifiers = self.parse_declaration_prefixes()
+        self.parse_alignment_attributes()
 
         vtype = self.parse_type()
+        self.parse_interleaved_declaration_qualifiers(qualifiers)
+        self.parse_alignment_attributes()
         name = self.eat("IDENTIFIER")[1]
         vtype += self.parse_array_suffix()
 
@@ -1532,19 +1576,8 @@ class CudaParser:
             return var
 
     def parse_variable_declaration_list(self):
-        qualifiers = []
-
-        while self.current_token[0] in [
-            "SHARED",
-            "CONSTANT",
-            "STATIC",
-            "EXTERN",
-            "CONSTEXPR",
-            "DEVICE",
-            "MANAGED",
-        ]:
-            qualifiers.append(self.current_token[1])
-            self.eat(self.current_token[0])
+        qualifiers = self.parse_declaration_prefixes()
+        self.parse_alignment_attributes()
 
         first_type = self.parse_type()
         base_type = self.strip_declarator_markers(first_type)
@@ -1560,20 +1593,48 @@ class CudaParser:
 
         return declarations
 
+    def parse_declaration_prefixes(self):
+        qualifiers = []
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type in self.DECLARATION_PREFIX_TOKENS:
+                qualifiers.append(self.current_token[1])
+                self.eat(token_type)
+                continue
+            if (
+                token_type == "VOLATILE"
+                and self.current_index + 1 < len(self.tokens)
+                and self.tokens[self.current_index + 1][0]
+                in self.CUDA_STORAGE_QUALIFIER_TOKENS
+            ):
+                qualifiers.append(self.current_token[1])
+                self.eat(token_type)
+                continue
+            break
+        return qualifiers
+
+    def parse_interleaved_declaration_qualifiers(self, qualifiers):
+        while self.current_token[0] in self.DECLARATION_PREFIX_TOKENS:
+            qualifiers.append(self.current_token[1])
+            self.eat(self.current_token[0])
+
     def parse_variable_declarator(self, base_type, qualifiers, allow_prefix):
         vtype = base_type
         if allow_prefix:
             vtype = self.parse_declarator_prefix(vtype)
 
+        declarator_qualifiers = list(qualifiers)
+        self.parse_interleaved_declaration_qualifiers(declarator_qualifiers)
+        self.parse_alignment_attributes()
         name = self.eat("IDENTIFIER")[1]
         vtype += self.parse_array_suffix()
         value = self.parse_variable_initializer(vtype)
 
-        if "__shared__" in qualifiers:
-            return self.create_shared_memory_node(vtype, name, qualifiers)
-        if "__constant__" in qualifiers:
+        if "__shared__" in declarator_qualifiers:
+            return self.create_shared_memory_node(vtype, name, declarator_qualifiers)
+        if "__constant__" in declarator_qualifiers:
             return ConstantMemoryNode(vtype, name, value)
-        return VariableNode(vtype, name, value, list(qualifiers))
+        return VariableNode(vtype, name, value, declarator_qualifiers)
 
     def create_shared_memory_node(self, vtype, name, qualifiers):
         is_extern = "extern" in qualifiers
@@ -1754,15 +1815,16 @@ class CudaParser:
     def is_variable_declaration(self):
         saved_index = self.current_index
 
-        while (
-            saved_index < len(self.tokens)
-            and self.tokens[saved_index][0] in self.DECLARATION_PREFIX_TOKENS
-        ):
-            saved_index += 1
+        saved_index = self.skip_declaration_prefixes_at_index(saved_index)
+        saved_index = self.skip_alignment_attributes_at_index(saved_index)
 
         saved_index = self.skip_type_at_index(saved_index)
 
         if saved_index is not None:
+            saved_index = self.skip_interleaved_declaration_qualifiers_at_index(
+                saved_index
+            )
+            saved_index = self.skip_alignment_attributes_at_index(saved_index)
             if (
                 saved_index < len(self.tokens)
                 and self.tokens[saved_index][0] == "IDENTIFIER"
@@ -2473,20 +2535,22 @@ class CudaParser:
         self.eat("KERNEL_LAUNCH_START")
 
         blocks = self.parse_expression()
-        self.eat("COMMA")
-
-        threads = self.parse_expression()
+        threads = None
 
         shared_mem = None
         stream = None
 
         if self.current_token[0] == "COMMA":
             self.eat("COMMA")
-            shared_mem = self.parse_expression()
+            threads = self.parse_expression()
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
-                stream = self.parse_expression()
+                shared_mem = self.parse_expression()
+
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    stream = self.parse_expression()
 
         self.eat("KERNEL_LAUNCH_END")
 

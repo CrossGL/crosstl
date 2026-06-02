@@ -1001,21 +1001,7 @@ class VulkanParser:
         struct_fields = None
         if layout_type in ["UNIFORM", "BUFFER"]:
             if self.current_token[0] == "LBRACE":
-                self.eat("LBRACE")
-                struct_fields = []
-
-                while self.current_token[0] != "RBRACE":
-                    field_type = self.parse_data_type(
-                        allow_identifier=True,
-                        error_message="Expected some data type before an identifier",
-                    )
-                    field_name = self.current_token[1]
-                    self.eat("IDENTIFIER")
-                    field_name += self.parse_array_suffixes_as_text()
-                    self.eat("SEMICOLON")
-                    struct_fields.append((field_type, field_name))
-
-                self.eat("RBRACE")
+                struct_fields = self.parse_layout_block_fields()
                 data_type = "struct"
             elif self.is_data_type_token(allow_identifier=True):
                 data_type = self.parse_data_type(allow_identifier=True)
@@ -1026,6 +1012,13 @@ class VulkanParser:
         else:
             if layout_type in ["IN", "OUT"] and self.current_token[0] == "SEMICOLON":
                 pass
+            elif (
+                layout_type in ["IN", "OUT"]
+                and block_name
+                and self.current_token[0] == "LBRACE"
+            ):
+                struct_fields = self.parse_layout_block_fields()
+                data_type = "struct"
             elif self.is_data_type_token(allow_identifier=True):
                 data_type = self.parse_data_type(allow_identifier=True)
             else:
@@ -1083,6 +1076,40 @@ class VulkanParser:
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
         return qualifiers
+
+    def parse_layout_block_fields(self):
+        self.eat("LBRACE")
+        struct_fields = []
+
+        while self.current_token[0] != "RBRACE":
+            while self.current_token[0] == "LAYOUT":
+                self.skip_layout_annotation()
+            self.parse_layout_declaration_qualifiers()
+            field_type = self.parse_data_type(
+                allow_identifier=True,
+                error_message="Expected some data type before an identifier",
+            )
+            field_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            field_name += self.parse_array_suffixes_as_text()
+            self.eat("SEMICOLON")
+            struct_fields.append((field_type, field_name))
+
+        self.eat("RBRACE")
+        return struct_fields
+
+    def skip_layout_annotation(self):
+        self.eat("LAYOUT")
+        self.eat("LPAREN")
+        depth = 1
+        while depth and self.current_token[0] != "EOF":
+            if self.current_token[0] == "LPAREN":
+                depth += 1
+            elif self.current_token[0] == "RPAREN":
+                depth -= 1
+            self.eat(self.current_token[0])
+        if depth:
+            raise SyntaxError("Unterminated layout annotation")
 
     def parse_push_constant(self):
         self.eat("PUSH_CONSTANT")
@@ -1505,11 +1532,34 @@ class VulkanParser:
         func_name = self.current_token[1]
         self.eat(self.current_token[0])
 
+        if self.current_token[0] == "LBRACKET" and self.looks_like_array_constructor():
+            func_name += self.parse_array_suffixes_as_text()
+
         if self.current_token[0] == "LPAREN":
             node = self.parse_function_call(func_name)
         else:
             node = VariableNode("", func_name)
         return self.parse_postfix_suffixes(node)
+
+    def looks_like_array_constructor(self):
+        index = self.pos
+        if self.tokens[index][0] != "LBRACKET":
+            return False
+
+        while index < len(self.tokens) and self.tokens[index][0] == "LBRACKET":
+            depth = 1
+            index += 1
+            while index < len(self.tokens) and depth:
+                token_type = self.tokens[index][0]
+                if token_type == "LBRACKET":
+                    depth += 1
+                elif token_type == "RBRACKET":
+                    depth -= 1
+                index += 1
+            if depth:
+                return False
+
+        return index < len(self.tokens) and self.tokens[index][0] == "LPAREN"
 
     def parse_postfix_suffixes(self, node):
         while True:

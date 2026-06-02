@@ -658,6 +658,29 @@ class TestCudaParser:
         assert declaration.is_extern_shared_memory is True
         assert declaration.is_dynamic_shared_memory is True
 
+    def test_public_cuda_samples_shared_memory_qualifier_variants(self):
+        code = """
+        __global__ void kernel() {
+            extern float __shared__ smem[];
+            __shared__ alignas(alignof(float4)) float As[32];
+            volatile __shared__ float scores[16];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        extern_smem, aligned_smem, volatile_smem = ast.kernels[0].body
+        assert isinstance(extern_smem, SharedMemoryNode)
+        assert extern_smem.vtype == "float[]"
+        assert extern_smem.is_extern_shared_memory is True
+        assert extern_smem.is_dynamic_shared_memory is True
+        assert isinstance(aligned_smem, SharedMemoryNode)
+        assert aligned_smem.vtype == "float[32]"
+        assert isinstance(volatile_smem, SharedMemoryNode)
+        assert volatile_smem.vtype == "float[16]"
+
     def test_builtin_variables_parsing(self):
         code = """
         __global__ void kernel() {
@@ -786,6 +809,26 @@ class TestCudaParser:
         assert launch.shared_mem is None
         assert launch.stream is None
         assert launch.args == ["data", "2.0f"]
+
+    def test_single_value_kernel_launch_config_parsing(self):
+        code = """
+        void host(float* d_x) {
+            tileKernel<<<1>>>(d_x);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        launch = ast.functions[0].body[0]
+        assert isinstance(launch, KernelLaunchNode)
+        assert launch.kernel_name == "tileKernel"
+        assert launch.blocks == "1"
+        assert launch.threads is None
+        assert launch.shared_mem is None
+        assert launch.stream is None
+        assert launch.args == ["d_x"]
 
     def test_template_identifier_c_style_cast_parsing(self):
         code = """

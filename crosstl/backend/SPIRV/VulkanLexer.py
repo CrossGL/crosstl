@@ -208,6 +208,7 @@ KEYWORDS = {
     "uimageCubeArray": "UIMAGECUBEARRAY",
     "image2DMS": "IMAGE2DMS",
     "image2DMSArray": "IMAGE2DMSARRAY",
+    "texture2D": "TEXTURE2D",
     "atomic_uint": "ATOMICUINT",
     "mat2": "MAT2",
     "mat3": "MAT3",
@@ -284,6 +285,7 @@ RESOURCE_DATA_TYPES = [
     "imageBuffer",
     "imageCube",
     "imageCubeArray",
+    "texture2D",
     "atomic_uint",
 ]
 

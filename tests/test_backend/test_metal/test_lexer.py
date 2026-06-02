@@ -277,6 +277,15 @@ def test_tokenizes_numeric_literals_and_suffixes():
     assert_literal_present(values, ".25h")
 
 
+def test_tokenizes_char_literals_from_public_metal_samples():
+    code = "constant char pattern[] = { 'M', '\\n' };"
+
+    values = token_values(tokenize_code(code))
+
+    assert "'M'" in values
+    assert "'\\n'" in values
+
+
 def test_tokenizes_advanced_types_and_qualifiers():
     code = """
     struct Types {

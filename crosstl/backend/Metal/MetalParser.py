@@ -1070,7 +1070,16 @@ class MetalParser:
         while self.current_token[0] != "RBRACE":
             member_alignas = self.parse_alignas_specifiers()
             vtype, qualifiers = self.parse_type_specifier()
+            if self.current_token[0] == "OPERATOR":
+                self.skip_struct_method()
+                continue
             var_name, array_sizes = self.parse_declarator()
+            if var_name == "operator":
+                self.skip_struct_method()
+                continue
+            if self.current_token[0] == "LPAREN":
+                self.skip_struct_method()
+                continue
             attributes = self.parse_attributes()
             array_sizes.extend(self.parse_declarator_array_sizes())
             self.eat("SEMICOLON")
@@ -1081,6 +1090,28 @@ class MetalParser:
             var_node.alignas = member_alignas
             members.append(var_node)
         return members
+
+    def skip_struct_method(self):
+        while self.current_token[0] not in {"LBRACE", "SEMICOLON", "EOF"}:
+            self.eat(self.current_token[0])
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return
+        if self.current_token[0] == "LBRACE":
+            self.skip_balanced_block()
+
+    def skip_balanced_block(self):
+        self.eat("LBRACE")
+        depth = 1
+        while depth > 0 and self.current_token[0] != "EOF":
+            if self.current_token[0] == "LBRACE":
+                depth += 1
+            elif self.current_token[0] == "RBRACE":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RBRACE")
+                    break
+            self.eat(self.current_token[0])
 
     def parse_constant_buffer(self):
         self.eat("CONSTANT")
@@ -1459,6 +1490,8 @@ class MetalParser:
         init = None
         if self.current_token[0] != "SEMICOLON":
             init = self.parse_for_init()
+            if self.current_token[0] == "COMMA":
+                init = self.parse_for_tail_items(init, "SEMICOLON")
         self.eat("SEMICOLON")
 
         condition = None
@@ -1469,11 +1502,26 @@ class MetalParser:
         update = None
         if self.current_token[0] != "RPAREN":
             update = self.parse_expression(allow_comma=True)
+            if self.current_token[0] == "COMMA":
+                update = self.parse_for_tail_items(update, "RPAREN")
         self.eat("RPAREN")
 
         body = self.parse_statement_body()
 
         return ForNode(init, condition, update, body)
+
+    def parse_for_tail_items(self, first_item, terminator):
+        items = [first_item]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            if self.current_token[0] == terminator:
+                break
+            items.append(
+                self.parse_for_init()
+                if terminator == "SEMICOLON"
+                else self.parse_expression()
+            )
+        return items
 
     def is_range_for_statement(self):
         idx = self.pos
@@ -1979,6 +2027,17 @@ class MetalParser:
             value = self.current_token[1]
             self.eat(self.current_token[0])
             return value
+        if self.current_token[0] == "CHAR_LITERAL":
+            value = self.current_token[1]
+            self.eat("CHAR_LITERAL")
+            return value
+        if self.current_token[0] == "STRING":
+            value = self.current_token[1]
+            self.eat("STRING")
+            while self.current_token[0] == "STRING":
+                value += self.current_token[1]
+                self.eat("STRING")
+            return value
         if self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
             expr = self.parse_expression(allow_comma=True)
@@ -2090,6 +2149,7 @@ class MetalParser:
             self.eat("SCOPE")
             if (
                 self.current_token[0] not in TYPE_TOKENS
+                and self.current_token[0] not in STAGE_TOKENS
                 and self.current_token[0] != "METAL"
             ):
                 raise SyntaxError(

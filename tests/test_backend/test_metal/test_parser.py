@@ -1029,6 +1029,37 @@ def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
     assert [func.name for func in ast.functions] == ["real_kernel"]
 
 
+def test_parse_metal_mesh_scoped_type_from_public_samples():
+    code = """
+    using TriangleMeshType = metal::mesh<VertexOut, PrimOut, 4, 2, topology::line>;
+
+    kernel void real_kernel(device float* out [[buffer(0)]]) {
+        out[0] = 1.0f;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [func.name for func in ast.functions] == ["real_kernel"]
+
+
+def test_parse_char_literal_initializer_from_public_metal_samples():
+    code = """
+    constant char PATTERNS[][2] = {
+        { 'M', 'S' },
+        { 'S', 'M' }
+    };
+
+    kernel void real_kernel(device float* out [[buffer(0)]]) {
+        out[0] = 1.0f;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert ast.global_variables[0].left.name == "PATTERNS"
+    assert ast.global_variables[0].left.array_sizes == [None, "2"]
+    assert [func.name for func in ast.functions] == ["real_kernel"]
+
+
 def test_parse_member_template_disambiguator_from_mlx_arg_reduce():
     code = """
     void reduce(thread Reducer& op) {

@@ -96,6 +96,73 @@ def test_parse_struct_instance_declarator_from_vulkan_compute_samples():
     assert ast.structs[0].members[0].name == "avg[9]"
 
 
+def test_parse_unsized_array_constructor_from_vulkan_samples():
+    code = """
+    vec2 triangle_positions[3] = vec2[](
+        vec2(0.5, -0.5),
+        vec2(0.5, 0.5),
+        vec2(-0.5, 0.5)
+    );
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assignment = ast.global_variables[0]
+    assert isinstance(assignment, AssignmentNode)
+    assert assignment.left.vtype == "vec2"
+    assert assignment.left.name == "triangle_positions[3]"
+    assert isinstance(assignment.right, FunctionCallNode)
+    assert assignment.right.name == "vec2[]"
+
+
+def test_parse_shader_object_interface_block_from_vulkan_samples():
+    code = """
+    layout (location = 0) in TerrainVertexData {
+        vec2 uv;
+        vec3 pos;
+        vec3 normal;
+        flat uint texture_index;
+    } vertex_in;
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    layout = ast.global_variables[0]
+    assert isinstance(layout, LayoutNode)
+    assert layout.layout_type == "IN"
+    assert layout.block_name == "TerrainVertexData"
+    assert layout.variable_name == "vertex_in"
+    assert layout.struct_fields == [
+        ("vec2", "uv"),
+        ("vec3", "pos"),
+        ("vec3", "normal"),
+        ("uint", "texture_index"),
+    ]
+
+
+def test_parse_layout_qualified_block_members_and_texture_descriptor():
+    code = """
+    layout(set = 0, binding = 0) uniform texture2D Textures[];
+    layout(push_constant) uniform Registers
+    {
+        layout(offset = 4) uint table_offset;
+    } registers;
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    descriptor = ast.global_variables[0]
+    assert isinstance(descriptor, LayoutNode)
+    assert descriptor.data_type == "texture2D"
+    assert descriptor.variable_name == "Textures[]"
+
+    push_constants = ast.global_variables[1]
+    assert isinstance(push_constants, LayoutNode)
+    assert push_constants.block_name == "Registers"
+    assert push_constants.struct_fields == [("uint", "table_offset")]
+    assert push_constants.variable_name == "registers"
+
+
 def test_parse_unbraced_if_body_from_vulkan_compute_samples():
     code = """
     void main() {
