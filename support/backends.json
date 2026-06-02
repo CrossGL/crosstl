@@ -37,11 +37,11 @@
       "docs": [
         {
           "name": "GLSL 4.60 specification",
-          "url": "https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html"
+          "url": "https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/specs/gl/GLSLangSpec.4.60.html"
         },
         {
           "name": "OpenGL registry",
-          "url": "https://registry.khronos.org/OpenGL/"
+          "url": "https://github.com/KhronosGroup/OpenGL-Registry"
         }
       ]
     },
@@ -80,12 +80,12 @@
       ],
       "docs": [
         {
-          "name": "SPIR-V unified specification",
-          "url": "https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html"
+          "name": "SPIR-V unified grammar",
+          "url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/main/include/spirv/unified1/spirv.core.grammar.json"
         },
         {
-          "name": "Khronos SPIR-V registry",
-          "url": "https://registry.khronos.org/SPIR-V/"
+          "name": "Khronos SPIR-V headers",
+          "url": "https://github.com/KhronosGroup/SPIRV-Headers"
         }
       ]
     },
