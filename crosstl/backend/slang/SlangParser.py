@@ -20,6 +20,7 @@ class SlangParser:
         "private",
         "__global",
         "__extern_cpp",
+        "groupshared",
         "no_diff",
         "override",
     }
@@ -30,6 +31,7 @@ class SlangParser:
         "lineadj",
         "triangleadj",
     }
+    MESH_OUTPUT_PARAMETER_QUALIFIERS = {"indices", "vertices", "primitives"}
     BUILTIN_IDENTIFIER_TYPES = {
         "double",
         "double2",
@@ -211,14 +213,21 @@ class SlangParser:
         return qualifiers
 
     def is_geometry_input_primitive_qualifier_at(self, index):
+        return self.is_parameter_role_qualifier_at(
+            index, self.GEOMETRY_INPUT_PRIMITIVE_QUALIFIERS
+        )
+
+    def is_mesh_output_parameter_qualifier_at(self, index):
+        return self.is_parameter_role_qualifier_at(
+            index, self.MESH_OUTPUT_PARAMETER_QUALIFIERS
+        )
+
+    def is_parameter_role_qualifier_at(self, index, qualifier_names):
         if index >= len(self.tokens):
             return False
 
         token_type, token_value = self.tokens[index]
-        if (
-            token_type != "IDENTIFIER"
-            or token_value not in self.GEOMETRY_INPUT_PRIMITIVE_QUALIFIERS
-        ):
+        if token_type != "IDENTIFIER" or token_value not in qualifier_names:
             return False
 
         type_pos = index + 1
@@ -239,6 +248,9 @@ class SlangParser:
     def parse_parameter_qualifiers(self):
         qualifiers = self.parse_qualifiers()
         while self.is_geometry_input_primitive_qualifier_at(self.pos):
+            qualifiers.append(self.current_token[1])
+            self.eat("IDENTIFIER")
+        while self.is_mesh_output_parameter_qualifier_at(self.pos):
             qualifiers.append(self.current_token[1])
             self.eat("IDENTIFIER")
         return qualifiers
@@ -1068,6 +1080,11 @@ class SlangParser:
         while self.current_token[0] == "LBRACKET":
             self.parse_attribute_list()
 
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return []
+        if self.current_token[0] == "LBRACE":
+            return self.parse_block()
         if self.is_variable_declaration_start():
             return self.parse_variable_declaration_or_assignment()
         if self.current_token[0] == "IDENTIFIER" and self.tokens[self.pos + 1][0] in {
@@ -1454,6 +1471,11 @@ class SlangParser:
             self.eat(self.current_token[0])
             operand = self.parse_unary()
             return UnaryOpNode(op, operand)
+        if self.current_token[0] == "MULTIPLY":
+            op = self.current_token[1]
+            self.eat("MULTIPLY")
+            operand = self.parse_unary()
+            return UnaryOpNode(op, operand)
         if self.current_token == ("IDENTIFIER", "no_diff"):
             self.eat("IDENTIFIER")
             return self.parse_unary()
@@ -1471,17 +1493,28 @@ class SlangParser:
 
         token_type, token_value = self.tokens[type_pos]
         if token_type == "IDENTIFIER":
-            if (
-                token_value not in self.BUILTIN_IDENTIFIER_TYPES
-                and self.tokens[type_pos + 1][0] != "LESS_THAN"
-            ):
-                return False
+            is_builtin_identifier_type = token_value in self.BUILTIN_IDENTIFIER_TYPES
+            is_generic_identifier_type = self.tokens[type_pos + 1][0] == "LESS_THAN"
+            if not is_builtin_identifier_type and not is_generic_identifier_type:
+                close_pos = self.skip_pointer_declarator_tokens(type_pos + 1)
+                if (
+                    close_pos >= len(self.tokens)
+                    or self.tokens[close_pos][0] != "RPAREN"
+                ):
+                    return False
+                operand_pos = close_pos + 1
+                if operand_pos >= len(self.tokens):
+                    return False
+                return self.tokens[operand_pos][0] in {"NUMBER", "LBRACE"}
         elif token_type not in (
             self.DECLARATION_TYPE_TOKENS | self.RESOURCE_TYPE_TOKENS | {"VOID"}
         ):
             return False
 
-        close_pos = self.skip_generic_type_suffix_tokens(type_pos + 1)
+        try:
+            close_pos = self.skip_generic_type_suffix_tokens(type_pos + 1)
+        except SyntaxError:
+            return False
         close_pos = self.skip_pointer_declarator_tokens(close_pos)
         if close_pos >= len(self.tokens) or self.tokens[close_pos][0] != "RPAREN":
             return False
@@ -1559,6 +1592,8 @@ class SlangParser:
                         open_token="LBRACE",
                         close_token="RBRACE",
                     )
+                elif self.current_token[0] == "DOT":
+                    return self.parse_postfix_suffixes(VariableNode("", type_name))
             return self.parse_function_call_or_identifier()
 
         if self.current_token[0] == "LBRAKET":

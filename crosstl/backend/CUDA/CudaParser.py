@@ -56,6 +56,7 @@ class CudaParser:
     }
     POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "RESTRICT"}
     TYPE_REFERENCE_TOKENS = {"BITWISE_AND", "LOGICAL_AND"}
+    ELABORATED_TYPE_TOKENS = {"STRUCT", "UNION", "ENUM"}
     CPP_NAMED_CASTS = {"static_cast", "reinterpret_cast", "const_cast", "dynamic_cast"}
     ATOMIC_FUNCTION_TOKENS = {
         "ATOMICADD",
@@ -102,6 +103,15 @@ class CudaParser:
     DECLARATION_QUALIFIER_TOKENS = {
         "CONST",
         "VOLATILE",
+        "STATIC",
+        "EXTERN",
+        "CONSTEXPR",
+        "SHARED",
+        "CONSTANT",
+        "DEVICE",
+        "MANAGED",
+    }
+    DECLARATION_PREFIX_TOKENS = {
         "STATIC",
         "EXTERN",
         "CONSTEXPR",
@@ -174,6 +184,16 @@ class CudaParser:
         "CUDAARRAY",
         "CUDAARRAYT",
         "IDENTIFIER",
+    }
+    NAME_COMPONENT_TOKENS = {
+        "IDENTIFIER",
+        "THREADIDX",
+        "BLOCKIDX",
+        "GRIDDIM",
+        "BLOCKDIM",
+        "WARPSIZE",
+        *TYPE_TOKENS,
+        *ATOMIC_FUNCTION_TOKENS,
     }
     CUDA_IDENTIFIER_TYPE_NAMES = {
         "cudaTextureObject_t",
@@ -402,7 +422,7 @@ class CudaParser:
 
         while (
             saved_index < len(self.tokens)
-            and self.tokens[saved_index][0] in self.DECLARATION_QUALIFIER_TOKENS
+            and self.tokens[saved_index][0] in self.DECLARATION_PREFIX_TOKENS
         ):
             saved_index += 1
 
@@ -429,10 +449,12 @@ class CudaParser:
 
     def skip_type_at_index(self, index):
         saw_integral_sign = False
+        saw_type_qualifier = False
         while (
             index < len(self.tokens)
             and self.tokens[index][0] in self.TYPE_QUALIFIER_TOKENS
         ):
+            saw_type_qualifier = True
             if self.tokens[index][0] in {"SIGNED", "UNSIGNED"}:
                 saw_integral_sign = True
             index += 1
@@ -443,6 +465,18 @@ class CudaParser:
         if self.is_implicit_int_type_at_index(index, saw_integral_sign):
             type_token = "INT"
             type_value = "int"
+        elif self.tokens[index][0] in self.ELABORATED_TYPE_TOKENS:
+            type_token = self.tokens[index][0]
+            type_value = self.tokens[index][1]
+            index += 1
+            if (
+                index < len(self.tokens)
+                and self.tokens[index][0] in self.NAME_COMPONENT_TOKENS
+            ):
+                type_value += f" {self.tokens[index][1]}"
+                index += 1
+            else:
+                return None
         elif self.tokens[index][0] in self.TYPE_TOKENS:
             type_token = self.tokens[index][0]
             type_value = self.tokens[index][1]
@@ -456,7 +490,7 @@ class CudaParser:
         while (
             index + 1 < len(self.tokens)
             and self.tokens[index][0] == "SCOPE"
-            and self.tokens[index + 1][0] == "IDENTIFIER"
+            and self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS
         ):
             has_qualified_suffix = True
             index += 2
@@ -473,6 +507,8 @@ class CudaParser:
             or has_qualified_suffix
             or type_value == "auto"
             or self.is_identifier_type_name(type_value)
+            or type_token in self.ELABORATED_TYPE_TOKENS
+            or saw_type_qualifier
         )
         while (
             can_have_pointer_suffix
@@ -489,6 +525,9 @@ class CudaParser:
             return False
 
         token_type = self.tokens[index][0]
+        if token_type == "RPAREN":
+            return True
+
         if token_type in {"MULTIPLY", *self.TYPE_REFERENCE_TOKENS}:
             return True
 
@@ -728,10 +767,26 @@ class CudaParser:
         if allow_prefix:
             alias_type = self.parse_declarator_prefix(alias_type)
 
+        if self.current_token[0] == "LPAREN":
+            return self.parse_function_pointer_type_alias_declarator(alias_type)
+
         name = self.eat("IDENTIFIER")[1]
         alias_type += self.parse_array_suffix()
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
+
+    def parse_function_pointer_type_alias_declarator(self, return_type):
+        self.eat("LPAREN")
+        pointer_prefix = self.parse_declarator_prefix("")
+        name = self.eat("IDENTIFIER")[1]
+        self.eat("RPAREN")
+        params = self.parse_parameters()
+
+        alias_type = f"{return_type} ({pointer_prefix})".strip()
+        alias = TypeAliasNode(alias_type, name)
+        alias.params = params
+        self.type_aliases.add(name)
+        return alias
 
     def parse_typedef_struct_alias(self):
         self.eat("STRUCT")
@@ -1125,7 +1180,12 @@ class CudaParser:
 
     def parse_parameter(self):
         param_type = self.parse_type()
-        param_name = self.eat("IDENTIFIER")[1]
+        param_type = self.parse_declarator_prefix(param_type)
+        if self.current_token[0] in {"COMMA", "RPAREN"}:
+            self.skip_parameter_default()
+            return VariableNode(param_type, "")
+
+        param_name = self.parse_name_component()
         param_type += self.parse_array_suffix()
         self.skip_parameter_default()
         return VariableNode(param_type, param_name)
@@ -1142,6 +1202,8 @@ class CudaParser:
 
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
+        elif self.current_token[0] in self.ELABORATED_TYPE_TOKENS:
+            type_parts.append(self.parse_elaborated_type_name())
         elif self.current_token[0] in self.TYPE_TOKENS:
             type_parts.append(self.parse_type_name())
 
@@ -1179,6 +1241,8 @@ class CudaParser:
 
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
+        elif self.current_token[0] in self.ELABORATED_TYPE_TOKENS:
+            type_parts.append(self.parse_elaborated_type_name())
         elif self.current_token[0] in self.TYPE_TOKENS:
             type_parts.append(self.parse_type_name())
 
@@ -1223,13 +1287,19 @@ class CudaParser:
 
         while self.current_token[0] == "SCOPE":
             self.eat("SCOPE")
-            member = self.eat("IDENTIFIER")[1]
+            member = self.parse_name_component()
             type_name += f"::{member}"
 
         if self.current_token[0] == "LESS_THAN":
             type_name += self.parse_template_suffix()
 
         return type_name
+
+    def parse_elaborated_type_name(self):
+        type_name = self.current_token[1]
+        self.eat(self.current_token[0])
+        member = self.parse_name_component()
+        return f"{type_name} {member}"
 
     def parse_global_variable(self):
         declarations = self.parse_variable_declaration_list()
@@ -1460,10 +1530,21 @@ class CudaParser:
             declarations = self.parse_variable_declaration_list()
             self.eat("SEMICOLON")
             return declarations if len(declarations) > 1 else declarations[0]
+        elif self.current_token[0] == "ENUM":
+            return self.parse_enum()
         else:
             expr = self.parse_assignment_expression()
+            if self.current_token[0] == "COMMA":
+                expr = self.parse_comma_expression_statement(expr)
             self.eat("SEMICOLON")
             return expr
+
+    def parse_comma_expression_statement(self, first_expr):
+        expressions = [first_expr]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            expressions.append(self.parse_assignment_expression())
+        return expressions
 
     def is_identifier_value(self, value):
         return self.current_token[0] == "IDENTIFIER" and self.current_token[1] == value
@@ -1485,7 +1566,7 @@ class CudaParser:
 
         while (
             saved_index < len(self.tokens)
-            and self.tokens[saved_index][0] in self.DECLARATION_QUALIFIER_TOKENS
+            and self.tokens[saved_index][0] in self.DECLARATION_PREFIX_TOKENS
         ):
             saved_index += 1
 
@@ -1960,7 +2041,7 @@ class CudaParser:
                 left = MemberAccessNode(left, member, False)
             elif self.current_token[0] == "SCOPE":
                 self.eat("SCOPE")
-                member = self.eat("IDENTIFIER")[1]
+                member = self.parse_name_component()
                 left = self.append_qualified_name(left, "::", member)
             elif self.current_token[0] == "LESS_THAN" and self.is_template_suffix():
                 left = self.append_template_suffix(left)
@@ -1993,6 +2074,9 @@ class CudaParser:
                     left = AtomicOperationNode(left, args)
                 else:
                     left = self.parse_function_call_node(left, args)
+            elif self.current_token[0] == "LBRACE" and self.is_braced_constructor(left):
+                initializer = self.parse_initializer_list()
+                left = FunctionCallNode(left, initializer.elements)
             elif self.current_token[0] == "KERNEL_LAUNCH_START":
                 return self.parse_kernel_launch(left)
             elif self.current_token[0] in ["INCREMENT", "DECREMENT"]:
@@ -2005,11 +2089,20 @@ class CudaParser:
         return left
 
     def parse_member_name(self):
-        if self.current_token[0] in {"IDENTIFIER", "WARPSIZE"}:
-            member = self.current_token[1]
-            self.eat(self.current_token[0])
-            return member
+        if self.current_token[0] in self.NAME_COMPONENT_TOKENS:
+            return self.parse_name_component()
         raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
+
+    def parse_name_component(self):
+        if self.current_token[0] not in self.NAME_COMPONENT_TOKENS:
+            raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
+
+        name = self.current_token[1]
+        self.eat(self.current_token[0])
+        return name
+
+    def is_braced_constructor(self, callee):
+        return isinstance(callee, str)
 
     def append_qualified_name(self, base, separator, member):
         if isinstance(base, str):
@@ -2036,6 +2129,7 @@ class CudaParser:
                     )
                     return next_type in {
                         "LPAREN",
+                        "LBRACE",
                         "SCOPE",
                         "DOT",
                         "KERNEL_LAUNCH_START",
@@ -2052,6 +2146,7 @@ class CudaParser:
                     )
                     return next_type in {
                         "LPAREN",
+                        "LBRACE",
                         "SCOPE",
                         "DOT",
                         "KERNEL_LAUNCH_START",
@@ -2180,33 +2275,12 @@ class CudaParser:
         return function_arg
 
     def is_sizeof_type_operand(self):
-        saved_index = self.current_index
-        try:
-            while self.current_token[0] in self.TYPE_QUALIFIER_TOKENS:
-                self.eat(self.current_token[0])
-
-            if (
-                self.current_token[0] not in self.TYPE_TOKENS
-                or self.current_token[0] == "IDENTIFIER"
-            ):
-                return False
-
-            token_type = self.current_token[0]
-            self.eat(token_type)
-            self.consume_composite_scalar_type_suffix(token_type)
-            while self.current_token[0] == "MULTIPLY":
-                self.eat("MULTIPLY")
-
-            while self.current_token[0] == "LBRACKET":
-                self.eat("LBRACKET")
-                while self.current_token[0] not in ["RBRACKET", "EOF"]:
-                    self.eat(self.current_token[0])
-                self.eat("RBRACKET")
-
-            return self.current_token[0] == "RPAREN"
-        finally:
-            self.current_index = saved_index
-            self.current_token = self.tokens[self.current_index]
+        type_end = self.skip_type_at_index(self.current_index)
+        return (
+            type_end is not None
+            and type_end < len(self.tokens)
+            and self.tokens[type_end][0] == "RPAREN"
+        )
 
     def parse_kernel_launch(self, kernel_name):
         self.eat("KERNEL_LAUNCH_START")

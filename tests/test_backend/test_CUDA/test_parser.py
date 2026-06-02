@@ -184,6 +184,173 @@ class TestCudaParser:
         assert isinstance(lane.value.right, CudaBuiltinNode)
         assert lane.value.right.builtin_name == "warpSize"
 
+    def test_public_cuda_samples_builtin_named_members_parse_as_fields(self):
+        code = """
+        void configure() {
+            cudaGraphKernelNodeParams params;
+            params.gridDim = dim3(2, 1, 1);
+            params.blockDim = dim3(128, 1, 1);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        grid_assignment = ast.functions[0].body[1]
+        block_assignment = ast.functions[0].body[2]
+
+        assert isinstance(grid_assignment.left, MemberAccessNode)
+        assert grid_assignment.left.object == "params"
+        assert grid_assignment.left.member == "gridDim"
+        assert isinstance(block_assignment.left, MemberAccessNode)
+        assert block_assignment.left.object == "params"
+        assert block_assignment.left.member == "blockDim"
+
+    def test_public_cuda_samples_unnamed_parameters_and_keyword_names(self):
+        code = """
+        struct Ray { float x; };
+        __global__ void computeAngles_kernel(const Ray, float*, cudaTextureObject_t);
+        __global__ void cuda_kernel_texture_2d(unsigned char* surface,
+                                               int width,
+                                               cudaExternalMemory_t& externalMemory);
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        first_params = ast.kernels[0].params
+        assert [(param.vtype, param.name) for param in first_params] == [
+            ("const Ray", ""),
+            ("float *", ""),
+            ("cudaTextureObject_t", ""),
+        ]
+
+        second_params = ast.kernels[1].params
+        assert [(param.vtype, param.name) for param in second_params] == [
+            ("unsigned char *", "surface"),
+            ("int", "width"),
+            ("cudaExternalMemory_t &", "externalMemory"),
+        ]
+
+    def test_public_cuda_samples_comma_expression_statements_parse_separately(self):
+        code = """
+        void init(int* I, int* J) {
+            I[0] = 0, J[0] = 0, J[1] = 1;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert len(body) == 3
+        assert all(isinstance(stmt, AssignmentNode) for stmt in body)
+        assert body[0].left.array == "I"
+        assert body[1].left.array == "J"
+        assert body[2].left.array == "J"
+
+    def test_public_cuda_samples_braced_template_temporaries_parse_as_calls(self):
+        code = """
+        __global__ void mdspan_kernel(int* smem_storage, __half* X, int idx) {
+            cuda::shared_memory_mdspan smem(
+                smem_storage,
+                cuda::std::dextents<cuda::std::size_t, 2>{8, 8}
+            );
+            X[idx] = __half{float(idx) - 3.5f};
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        smem = ast.kernels[0].body[0]
+        assert smem.vtype == "cuda::shared_memory_mdspan"
+        assert isinstance(smem.value.args[1], FunctionCallNode)
+        assert smem.value.args[1].name == "cuda::std::dextents<cuda::std::size_t, 2>"
+        assert smem.value.args[1].args == ["8", "8"]
+
+        assignment = ast.kernels[0].body[1]
+        assert isinstance(assignment.right, FunctionCallNode)
+        assert assignment.right.name == "__half"
+        assert isinstance(assignment.right.args[0], BinaryOpNode)
+
+    def test_public_cuda_samples_function_pointer_typedef_parsing(self):
+        code = """
+        typedef unsigned char (*blockFunction_t)(
+            unsigned char,
+            unsigned char,
+            unsigned char
+        );
+
+        blockFunction_t choose();
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        alias = ast.typedefs[0]
+        assert isinstance(alias, TypeAliasNode)
+        assert alias.name == "blockFunction_t"
+        assert alias.alias_type == "unsigned char (*)"
+        assert [(param.vtype, param.name) for param in alias.params] == [
+            ("unsigned char", ""),
+            ("unsigned char", ""),
+            ("unsigned char", ""),
+        ]
+        assert ast.functions[0].return_type == "blockFunction_t"
+
+    def test_public_cuda_samples_elaborated_and_qualified_type_declarations(self):
+        code = """
+        void configure(int n) {
+            struct cudaDeviceProp properties;
+            const Real *pointx = points + n;
+            std::size_t count = std::size_t(n) * 4;
+            int bytes = sizeof(unsigned);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert body[0].vtype == "struct cudaDeviceProp"
+        assert body[0].name == "properties"
+        assert body[1].vtype == "const Real *"
+        assert body[1].name == "pointx"
+        assert body[2].vtype == "std::size_t"
+        assert isinstance(body[2].value.left, FunctionCallNode)
+        assert body[2].value.left.name == "std::size_t"
+        assert body[3].value.name == "sizeof"
+        assert body[3].value.args == ["unsigned int"]
+
+    def test_public_cuda_samples_local_anonymous_enum_declaration(self):
+        code = """
+        void configure() {
+            enum {
+                SHMEM_SZ = 16 * 256,
+                BLOCKS = 8,
+            };
+            int size = SHMEM_SZ;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        enum = ast.functions[0].body[0]
+        assert isinstance(enum, EnumNode)
+        assert enum.name is None
+        assert enum.members[0][0] == "SHMEM_SZ"
+        assert isinstance(enum.members[0][1], BinaryOpNode)
+        assert ast.functions[0].body[1].value == "SHMEM_SZ"
+
     def test_public_cuda_samples_device_global_variables_parse_as_globals(self):
         code = """
         __device__ int g_uids = 0;

@@ -252,6 +252,27 @@ def test_parse_brace_initializer_declarations():
     assert payload.value.elements == [0]
 
 
+def test_parse_vulkan_samples_relaxed_instruction_class_method_shader():
+    ast = parse_code(textwrap.dedent("""
+            class A {
+              void foo(uint v) {
+                printf("relaxed-ext-inst demo: value = %u", v);
+              }
+            };
+
+            [numthreads(1, 1, 1)]
+            void main(uint3 gid : SV_DispatchThreadID) {
+              A a;
+              if (all(gid == uint3(0, 0, 0))) { a.foo(1); }
+            }
+            """))
+
+    assert [function.name for function in ast.functions] == ["main"]
+    main = ast.functions[0]
+    assert main.qualifier == "compute"
+    assert any(getattr(stmt, "name", "") == "a" for stmt in main.body)
+
+
 def test_parse_global_static_const_array_initializer():
     ast = parse_code("static const float Weights[2] = { 0.25f, 0.75f };")
 

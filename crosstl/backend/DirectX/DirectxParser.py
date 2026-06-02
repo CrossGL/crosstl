@@ -204,11 +204,19 @@ class HLSLParser:
                 typedefs.append(self.parse_typedef())
                 continue
 
+            if self.is_class_declaration_prefix():
+                self.parse_class_declaration()
+                continue
+
             if self.is_template_declaration_prefix():
                 self.parse_template_declaration_prefix()
                 continue
 
             attributes = self.parse_attribute_list()
+            if self.is_class_declaration_prefix():
+                self.parse_class_declaration()
+                continue
+
             if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
                 cbuffers.append(self.parse_cbuffer(attributes=attributes))
                 continue
@@ -343,6 +351,46 @@ class HLSLParser:
                 self.eat(self.current_token[0])
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
+
+    def is_class_declaration_prefix(self):
+        return self.current_token_is_keyword(
+            "CLASS", "class"
+        ) or self.current_token_is_keyword("INTERFACE", "interface")
+
+    def parse_class_declaration(self):
+        if self.current_token_is_keyword("CLASS", "class"):
+            self.eat_keyword("CLASS", "class")
+        else:
+            self.eat_keyword("INTERFACE", "interface")
+
+        if self.is_identifier_token(self.current_token[0]):
+            self.parse_identifier()
+
+        while self.current_token[0] not in {"LBRACE", "SEMICOLON", "EOF"}:
+            self.eat(self.current_token[0])
+
+        if self.current_token[0] == "LBRACE":
+            self.skip_balanced_brace_block()
+
+        while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+            self.eat(self.current_token[0])
+
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+    def skip_balanced_brace_block(self):
+        self.eat("LBRACE")
+        depth = 1
+        while depth > 0 and self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == "LBRACE":
+                depth += 1
+            elif token_type == "RBRACE":
+                depth -= 1
+            self.eat(token_type)
+
+        if depth != 0:
+            raise SyntaxError("Unterminated brace block")
 
     def parse_namespace_block(self):
         self.eat_keyword("NAMESPACE", "namespace")

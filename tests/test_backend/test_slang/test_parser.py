@@ -569,6 +569,35 @@ def test_switch_rejects_duplicate_default_labels():
         parse_code(tokens)
 
 
+def test_switch_case_braced_blocks_and_empty_statements_parse():
+    code = """
+    int chooseFace(int face)
+    {
+        switch (face)
+        {
+        case 0: {
+            int selected = 1;
+            break;
+        };
+        default: {
+            break;
+        };
+        }
+        return face;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "chooseFace")
+    switch = function.body[0]
+
+    assert isinstance(switch, SwitchNode)
+    assert isinstance(switch.cases[0].body[0], AssignmentNode)
+    assert isinstance(switch.cases[0].body[1], BreakNode)
+    assert isinstance(switch.default_case[0], BreakNode)
+
+
 def test_lambda_expression_parsing():
     code = """
     void main() {
@@ -1370,6 +1399,39 @@ def test_geometry_primitive_array_parameter_parsing():
     ]
 
 
+def test_mesh_output_role_array_parameter_parsing():
+    code = """
+    struct VertexOutput
+    {
+        float4 position : SV_Position;
+    };
+
+    [shader("mesh")]
+    [outputtopology("triangle")]
+    [numthreads(1, 1, 1)]
+    void meshMain(out indices uint3 triangles[1],
+                  out vertices VertexOutput vertices[3],
+                  uint3 DispatchThreadID : SV_DispatchThreadID)
+    {
+        return;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "meshMain")
+
+    assert function.qualifier == "mesh"
+    assert [
+        (param.qualifiers, param.vtype, param.name, param.array_sizes, param.semantic)
+        for param in function.params
+    ] == [
+        (["out", "indices"], "uint3", "triangles", ["1"], None),
+        (["out", "vertices"], "VertexOutput", "vertices", ["3"], None),
+        ([], "uint3", "DispatchThreadID", [], "SV_DispatchThreadID"),
+    ]
+
+
 def test_local_and_parameter_generic_resource_type_parsing():
     code = """
     float4 sample(Sampler2D<float4> tex, Texture2D<float4> image,
@@ -1886,6 +1948,69 @@ def test_c_style_scalar_cast_from_official_select_expr_sample():
     assert cast.expression.member == "x"
 
 
+def test_c_style_user_type_zero_initialization_from_public_samples():
+    code = """
+    struct FragmentState
+    {
+        float4 color;
+    };
+
+    FragmentState makeState()
+    {
+        FragmentState state = (FragmentState)0;
+        return state;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    make_state = find_function(ast, "makeState")
+    assignment = make_state.body[0]
+    cast = assignment.right
+
+    assert isinstance(cast, CastNode)
+    assert cast.target_type == "FragmentState"
+    assert cast.expression == "0"
+
+
+def test_parenthesized_relational_expression_is_not_generic_cast():
+    code = """
+    bool lessThanLimit(float t, float resT)
+    {
+        return (t < resT);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "lessThanLimit")
+    returned = function.body[0].value
+
+    assert isinstance(returned, BinaryOpNode)
+    assert returned.op == "<"
+    assert returned.left.name == "t"
+    assert returned.right.name == "resT"
+
+
+def test_static_type_member_call_from_saschawillems_hdr_sample():
+    code = """
+    float computeSpec(float fresnel, float geoAtt, float NdotV, float NdotL)
+    {
+        return (fresnel * geoAtt) / (NdotV * NdotL * float.getPi());
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "computeSpec")
+    divisor = function.body[0].value.right
+    static_call = divisor.right
+
+    assert isinstance(static_call, MethodCallNode)
+    assert static_call.method == "getPi"
+    assert static_call.object.name == "float"
+
+
 def test_parenthesized_expression_swizzle_from_autodiff_texture_learnmip_sample():
     code = """
     RWTexture2D dstTexture;
@@ -2046,6 +2171,38 @@ def test_mlp_coopvec_array_type_local_and_void_pointer_cast_parsing():
     assert cast.target_type == "void*"
     assert cast.expression.name == "biasesGrad"
     assert override_method.qualifiers == ["public", "override", "static"]
+
+
+def test_groupshared_global_and_pointer_dereference_member_access_parse():
+    code = """
+    groupshared float4 sharedColor[64];
+
+    struct PushConstants
+    {
+        float scale;
+    };
+
+    float readScale(PushConstants* pushConstants)
+    {
+        float scale = *pushConstants.scale;
+        return scale;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    shared_color = ast.global_vars[0]
+    read_scale = find_function(ast, "readScale")
+    assignment = read_scale.body[0]
+    dereference = assignment.right
+
+    assert shared_color.qualifiers == ["groupshared"]
+    assert shared_color.vtype == "float4"
+    assert shared_color.name == "sharedColor"
+    assert isinstance(dereference, UnaryOpNode)
+    assert dereference.op == "*"
+    assert isinstance(dereference.operand, MemberAccessNode)
+    assert dereference.operand.member == "scale"
 
 
 if __name__ == "__main__":
