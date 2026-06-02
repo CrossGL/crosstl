@@ -15,6 +15,7 @@ from crosstl.backend.SPIRV.VulkanAst import (
     DoWhileNode,
     ForNode,
     FunctionCallNode,
+    FunctionNode,
     IfNode,
     LayoutNode,
     MemberAccessNode,
@@ -850,6 +851,27 @@ def test_spirv_assembly_location_decorated_interfaces_parse():
     assert ast.spirv_decorations["%17"] == [("Block", [])]
     assert ast.spirv_member_decorations["%17"] == [("0", "BuiltIn", ["Position"])]
     assert ast.spirv_types["%2"]["name"] == "vec4"
+    assert ast.spirv_types["%21"] == {
+        "kind": "function",
+        "return_type": "%20",
+        "parameter_types": [],
+    }
+    assert len(ast.functions) == 1
+    assert isinstance(ast.functions[0], FunctionNode)
+    assert ast.functions[0].name == "main"
+    assert ast.functions[0].return_type == "void"
+    assert ast.functions[0].params == []
+    assert ast.functions[0].spirv_id == "%22"
+    assert ast.functions[0].spirv_function_control == "None"
+    assert ast.functions[0].spirv_function_type_id == "%21"
+    assert [
+        opcode for _rid, opcode, _ops, _line in ast.functions[0].spirv_instructions
+    ] == [
+        "OpFunction",
+        "OpLabel",
+        "OpReturn",
+        "OpFunctionEnd",
+    ]
     assert len(ast.global_variables) == 3
     assert isinstance(input_layout, LayoutNode)
     assert input_layout.spirv_id == "%4"
@@ -1080,7 +1102,7 @@ def test_spirv_assembly_forward_pointer_structs_parse():
     ]
 
 
-def test_spirv_assembly_without_location_interface_is_rejected():
+def test_spirv_assembly_function_only_module_is_preserved():
     code = """
     OpCapability Shader
     OpMemoryModel Logical GLSL450
@@ -1089,6 +1111,60 @@ def test_spirv_assembly_without_location_interface_is_rejected():
     %fn = OpTypeFunction %void
     %main = OpFunction %void None %fn
     OpFunctionEnd
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.spirv_assembly is True
+    assert ast.global_variables == []
+    assert ast.structs == []
+    assert ast.spirv_entry_points == [
+        {
+            "execution_model": "Vertex",
+            "id": "%main",
+            "name": "main",
+            "interface_ids": [],
+        }
+    ]
+    assert [function.name for function in ast.functions] == ["main"]
+    assert ast.functions[0].return_type == "void"
+    assert ast.functions[0].spirv_raw_instructions[-1]["opcode"] == "OpFunctionEnd"
+
+
+def test_spirv_assembly_function_parameters_parse():
+    code = """
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpName %scale "scale"
+    %float = OpTypeFloat 32
+    %fn = OpTypeFunction %float %float
+    %helper = OpFunction %float None %fn
+    %scale = OpFunctionParameter %float
+    %label = OpLabel
+    OpReturnValue %scale
+    OpFunctionEnd
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = ast.functions[0]
+
+    assert function.return_type == "float"
+    assert [
+        (param.vtype, param.name, param.spirv_id, param.spirv_type_id)
+        for param in function.params
+    ] == [("float", "scale", "%scale", "%float")]
+    assert "OpFunctionParameter" in [
+        opcode for _rid, opcode, _ops, _line in function.spirv_instructions
+    ]
+
+
+def test_spirv_assembly_type_only_module_is_rejected():
+    code = """
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    %void = OpTypeVoid
     """
 
     tokens = tokenize_code(code)

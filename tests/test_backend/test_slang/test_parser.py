@@ -220,6 +220,52 @@ def test_visibility_qualified_struct_from_mlp_training_adam_sample():
     ]
 
 
+def test_struct_property_declaration_parses_as_property_member():
+    code = """
+    struct Box {
+        public property int value;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    member = ast.structs[0].members[0]
+
+    assert member.name == "value"
+    assert member.vtype == "int"
+    assert member.qualifiers == ["public"]
+    assert member.is_property is True
+    assert member.property_accessors == {}
+
+
+def test_struct_property_getter_and_setter_preserve_accessor_bodies():
+    code = """
+    struct Box {
+        int _v;
+        property int value {
+            get { return _v; }
+            set { _v = newValue * 2; }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    prop = ast.structs[0].members[1]
+
+    assert prop.name == "value"
+    assert prop.vtype == "int"
+    assert prop.is_property is True
+    assert set(prop.property_accessors) == {"get", "set"}
+    getter = prop.property_accessors["get"][0]
+    setter = prop.property_accessors["set"][0]
+
+    assert isinstance(getter, ReturnNode)
+    assert getter.value.name == "_v"
+    assert isinstance(setter, AssignmentNode)
+    assert setter.operator == "="
+    assert setter.left.name == "_v"
+    assert setter.right.left.name == "newValue"
+
+
 def test_struct_method_body_parsing_from_official_example():
     code = """
     struct Primitive {

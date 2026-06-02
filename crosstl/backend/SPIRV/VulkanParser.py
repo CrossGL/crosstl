@@ -464,6 +464,12 @@ class VulkanParser:
                     "storage_class": operands[0],
                     "type_id": operands[1],
                 }
+            elif result_id and opcode == "OpTypeFunction" and operands:
+                types[result_id] = {
+                    "kind": "function",
+                    "return_type": operands[0],
+                    "parameter_types": operands[1:],
+                }
             elif result_id and opcode in {"OpConstant", "OpSpecConstant"}:
                 if len(operands) >= 2:
                     constant_types[result_id] = operands[0]
@@ -520,11 +526,14 @@ class VulkanParser:
             )
             + global_variables
         )
-        if not global_variables and not structs:
+        functions = self.spirv_assembly_functions(
+            instructions, names, types, entry_points
+        )
+        if not global_variables and not structs and not functions:
             raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
 
         return ShaderNode(
-            functions=[],
+            functions=functions,
             structs=structs,
             global_variables=global_variables,
             spirv_assembly=True,
@@ -535,6 +544,91 @@ class VulkanParser:
             spirv_member_names=member_names,
             spirv_types=types,
         )
+
+    def spirv_assembly_functions(self, instructions, names, types, entry_points):
+        functions = []
+        entry_point_names = {entry["id"]: entry["name"] for entry in entry_points}
+        entry_instruction = None
+        raw_instructions = []
+        for result_id, opcode, operands, line_number in instructions:
+            if opcode == "OpFunction":
+                entry_instruction = (result_id, opcode, operands, line_number)
+                raw_instructions = [entry_instruction]
+                continue
+
+            if entry_instruction is None:
+                continue
+
+            raw_instructions.append((result_id, opcode, operands, line_number))
+            if opcode != "OpFunctionEnd":
+                continue
+
+            function_id, _opcode, function_operands, _start_line = entry_instruction
+            return_type_id = function_operands[0] if function_operands else None
+            function_control = (
+                function_operands[1] if len(function_operands) >= 2 else None
+            )
+            function_type_id = (
+                function_operands[2] if len(function_operands) >= 3 else None
+            )
+            function_type = types.get(function_type_id, {})
+            parameter_records = [
+                (raw_result_id, raw_operands[0] if raw_operands else None)
+                for raw_result_id, raw_opcode, raw_operands, _raw_line_number in (
+                    raw_instructions
+                )
+                if raw_opcode == "OpFunctionParameter"
+            ]
+            if not parameter_records:
+                parameter_records = [
+                    (None, parameter_type_id)
+                    for parameter_type_id in function_type.get("parameter_types", [])
+                ]
+            params = []
+            for index, (parameter_id, parameter_type_id) in enumerate(
+                parameter_records
+            ):
+                param = VariableNode(
+                    self.spirv_type_name(parameter_type_id, types) or parameter_type_id,
+                    names.get(
+                        parameter_id,
+                        parameter_id.lstrip("%") if parameter_id else f"param{index}",
+                    ),
+                    spirv_id=parameter_id,
+                    spirv_type_id=parameter_type_id,
+                )
+                params.append(param)
+            node = FunctionNode(
+                self.spirv_type_name(return_type_id, types) or return_type_id or "void",
+                names.get(
+                    function_id,
+                    entry_point_names.get(
+                        function_id, function_id.lstrip("%") if function_id else ""
+                    ),
+                ),
+                params,
+                body=[],
+            )
+            node.spirv_id = function_id
+            node.spirv_return_type_id = return_type_id
+            node.spirv_function_control = function_control
+            node.spirv_function_type_id = function_type_id
+            node.spirv_instructions = list(raw_instructions)
+            node.spirv_raw_instructions = [
+                {
+                    "result_id": raw_result_id,
+                    "opcode": raw_opcode,
+                    "operands": raw_operands,
+                    "line_number": raw_line_number,
+                }
+                for raw_result_id, raw_opcode, raw_operands, raw_line_number in (
+                    raw_instructions
+                )
+            ]
+            functions.append(node)
+            entry_instruction = None
+            raw_instructions = []
+        return functions
 
     def parse_spirv_assembly_instructions(self, code):
         instructions = []

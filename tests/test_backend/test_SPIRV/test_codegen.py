@@ -776,11 +776,7 @@ def test_translate_api_rejects_unsupported_spirv_assembly_with_clear_error(tmp_p
         """
         OpCapability Shader
         OpMemoryModel Logical GLSL450
-        OpEntryPoint Vertex %main "main"
         %void = OpTypeVoid
-        %fn = OpTypeFunction %void
-        %main = OpFunction %void None %fn
-        OpFunctionEnd
         """,
         encoding="utf-8",
     )

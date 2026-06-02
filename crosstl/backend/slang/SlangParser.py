@@ -1133,6 +1133,11 @@ class SlangParser:
                     )
                 )
                 continue
+            if self.is_property_declaration_start():
+                members.append(
+                    self.parse_property_member(attributes=pending_attributes)
+                )
+                continue
             members.extend(
                 self.parse_struct_field_members(attributes=pending_attributes)
             )
@@ -1181,6 +1186,61 @@ class SlangParser:
             self.eat("COMMA")
         self.eat("SEMICOLON")
         return members
+
+    def is_property_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(self.pos)
+        return current_pos < len(self.tokens) and self.tokens[current_pos] == (
+            "IDENTIFIER",
+            "property",
+        )
+
+    def parse_property_member(self, attributes=None):
+        attributes = attributes or []
+        qualifiers = self.parse_qualifiers()
+        self.eat("IDENTIFIER")
+        vtype = self.parse_type_name(allow_array_suffix=True)
+        vtype += self.parse_pointer_suffix()
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        array_sizes = self.parse_array_suffixes()
+        semantic = None
+        if self.current_token[0] == "COLON":
+            semantic = self.parse_semantic_annotations()
+
+        accessors = {}
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+        else:
+            self.eat("LBRACE")
+            while self.current_token[0] != "RBRACE":
+                if self.current_token[0] == "SEMICOLON":
+                    self.eat("SEMICOLON")
+                    continue
+                accessor_name = self.current_token[1]
+                self.eat(self.current_token[0])
+                if self.current_token[0] == "LPAREN":
+                    self.parse_balanced_parenthesized_tokens("property accessor")
+                if self.current_token[0] == "LBRACE":
+                    accessors[accessor_name] = self.parse_block()
+                elif self.current_token[0] == "SEMICOLON":
+                    self.eat("SEMICOLON")
+                    accessors[accessor_name] = []
+                else:
+                    raise SyntaxError(
+                        f"Expected property accessor body, got {self.current_token[0]}"
+                    )
+            self.eat("RBRACE")
+
+        return VariableNode(
+            vtype,
+            name,
+            qualifiers=qualifiers,
+            attributes=attributes,
+            array_sizes=array_sizes,
+            semantic=semantic,
+            is_property=True,
+            property_accessors=accessors,
+        )
 
     def is_constructor(self):
         current_pos = self.skip_declaration_prefix_tokens(self.pos)
