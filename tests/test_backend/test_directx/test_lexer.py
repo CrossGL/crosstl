@@ -360,6 +360,24 @@ def test_invalid_character_raises():
         tokenize_code(code)
 
 
+def test_hex_escape_char_literals_tokenization_from_dxc_rewriter():
+    code = r"""
+    void expressions() {
+        int local_i;
+        local_i = 'c';
+        local_i = '\xff';
+        local_i = '\x94';
+        local_i = '\123';
+    }
+    """
+    tokens = tokenize_code(code)
+
+    assert ("CHAR_LITERAL", "'c'") in tokens
+    assert ("CHAR_LITERAL", r"'\xff'") in tokens
+    assert ("CHAR_LITERAL", r"'\x94'") in tokens
+    assert ("CHAR_LITERAL", r"'\123'") in tokens
+
+
 def test_preprocessor_directives_tokenization():
     code = """
     #define USE_LIGHTING 1

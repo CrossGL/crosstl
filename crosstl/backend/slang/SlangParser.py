@@ -23,6 +23,9 @@ class SlangParser:
         "groupshared",
         "globallycoherent",
         "flat",
+        "highp",
+        "mediump",
+        "lowp",
         "no_diff",
         "nointerpolation",
         "noperspective",
@@ -173,6 +176,8 @@ class SlangParser:
                 modules.append(self.parse_module_declaration())
             elif self.current_token[0] == "IMPLEMENTING":
                 implementing_modules.append(self.parse_implementing_declaration())
+            elif self.is_glsl_precision_declaration_start():
+                self.parse_glsl_precision_declaration()
             elif self.current_token[0] == "EXPORT":
                 exports.append(self.parse_export(attributes=pending_attributes))
             elif declaration_token == "INTERFACE":
@@ -302,6 +307,21 @@ class SlangParser:
         self.eat("IDENTIFIER")
         self.eat("IDENTIFIER")
         self.skip_balanced_block()
+
+    def is_glsl_precision_declaration_start(self):
+        return (
+            self.current_token == ("IDENTIFIER", "precision")
+            and self.pos + 2 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "IDENTIFIER"
+            and self.tokens[self.pos + 1][1] in {"highp", "mediump", "lowp"}
+            and self.tokens[self.pos + 2][0] in self.TYPE_NAME_TOKENS
+        )
+
+    def parse_glsl_precision_declaration(self):
+        self.eat("IDENTIFIER")
+        self.eat("IDENTIFIER")
+        self.parse_type_name()
+        self.eat("SEMICOLON")
 
     def skip_balanced_block(self):
         self.eat("LBRACE")

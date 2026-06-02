@@ -239,6 +239,10 @@ class MojoParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         base_classes = []
+        generic_parameters = None
+
+        if self.current_token[0] == "LBRACKET":
+            generic_parameters = self.parse_generic_type_suffix()
 
         if self.current_token[0] == "LPAREN":
             base_classes = self.parse_base_class_list()
@@ -280,6 +284,7 @@ class MojoParser:
         node = StructNode(name, members, attributes=initial_attributes)
         node.methods = methods
         node.base_classes = base_classes
+        node.generic_parameters = generic_parameters
         return node
 
     def parse_base_class_list(self):
@@ -1559,8 +1564,12 @@ class MojoParser:
                 depth -= 1
                 self.eat("RBRACKET")
             elif token_type == "COMMA":
-                suffix += ", "
                 self.eat("COMMA")
+                self.skip_layout_tokens()
+                if self.current_token[0] != "RBRACKET":
+                    suffix += ", "
+            elif token_type in {"NEWLINE", "INDENT", "DEDENT"}:
+                self.eat(token_type)
             else:
                 suffix += token_value
                 self.eat(token_type)

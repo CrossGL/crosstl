@@ -310,7 +310,7 @@ class HLSLParser:
         return ("EOF", "")
 
     def is_type_token(self, token_type):
-        return token_type in TYPE_TOKENS
+        return token_type == "STRUCT" or token_type in TYPE_TOKENS
 
     def is_identifier_token(self, token_type):
         return token_type == "IDENTIFIER" or token_type in CONTEXTUAL_IDENTIFIER_TOKENS
@@ -590,6 +590,14 @@ class HLSLParser:
         if not self.is_type_token(self.current_token[0]):
             raise SyntaxError(f"Expected type, got {self.current_token[0]}")
 
+        if self.current_token[0] == "STRUCT":
+            self.eat("STRUCT")
+            if not self.is_identifier_token(self.current_token[0]):
+                raise SyntaxError(
+                    f"Expected struct type name, got {self.current_token[0]}"
+                )
+            return self.parse_identifier()
+
         base = self.current_token[1]
         self.eat(self.current_token[0])
         type_name = base
@@ -718,6 +726,23 @@ class HLSLParser:
         self.eat("RPAREN")
         return "".join(str(part) for part in parts).strip()
 
+    def parse_struct_base_list(self):
+        self.eat("COLON")
+        base_classes = []
+        while True:
+            if not self.is_identifier_token(self.current_token[0]):
+                raise SyntaxError(
+                    f"Expected struct base identifier, got {self.current_token[0]}"
+                )
+            base_name = self.parse_identifier()
+            if self.current_token_is_double_colon():
+                base_name = self.parse_scoped_name(base_name)
+            base_classes.append(base_name)
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+        return base_classes
+
     def parse_struct(self):
         self.eat("STRUCT")
         struct_attributes = self.parse_attribute_list()
@@ -726,8 +751,9 @@ class HLSLParser:
             name = self.parse_identifier()
 
         semantic = None
+        base_classes = []
         if name is not None and self.current_token[0] == "COLON":
-            semantic, _, _ = self.parse_semantic_or_register()
+            base_classes = self.parse_struct_base_list()
 
         self.eat("LBRACE")
         members = []
@@ -799,6 +825,7 @@ class HLSLParser:
         struct_node.variables = variables
         struct_node.variable_declarations = variable_declarations
         struct_node.semantic = semantic
+        struct_node.base_classes = base_classes
         struct_node.methods = methods
         return struct_node
 
@@ -1364,8 +1391,14 @@ class HLSLParser:
         return idx
 
     def skip_type_name_at(self, idx):
-        if idx >= len(self.tokens) or self.tokens[idx][0] not in TYPE_TOKENS:
+        if idx >= len(self.tokens) or not self.is_type_token(self.tokens[idx][0]):
             return None
+
+        if self.tokens[idx][0] == "STRUCT":
+            idx += 1
+            if not self.is_identifier_token_at(idx):
+                return None
+            return idx + 1
 
         base = self.tokens[idx][1]
         idx += 1
@@ -1550,10 +1583,21 @@ class HLSLParser:
         self.eat("RBRACE")
         return state
 
+    def parse_condition_expression(self):
+        if self.looks_like_declaration():
+            qualifiers = self.parse_qualifiers()
+            return self.parse_variable_declaration(
+                qualifiers=qualifiers,
+                attributes=[],
+                allow_semantic=False,
+                consume_semicolon=False,
+            )
+        return self.parse_expression()
+
     def parse_if_statement(self):
         self.eat("IF")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        condition = self.parse_condition_expression()
         self.eat("RPAREN")
 
         if_body = self.parse_statement_or_block()
@@ -1576,7 +1620,7 @@ class HLSLParser:
     def parse_else_if_statement(self):
         self.eat("ELSE_IF")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        condition = self.parse_condition_expression()
         self.eat("RPAREN")
         if_body = self.parse_statement_or_block()
 
@@ -1639,7 +1683,7 @@ class HLSLParser:
     def parse_while_loop(self):
         self.eat("WHILE")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        condition = self.parse_condition_expression()
         self.eat("RPAREN")
         body = self.parse_statement_or_block()
         return WhileNode(condition, body)
@@ -1649,7 +1693,7 @@ class HLSLParser:
         body = self.parse_statement_or_block()
         self.eat("WHILE")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        condition = self.parse_condition_expression()
         self.eat("RPAREN")
         self.eat("SEMICOLON")
         return DoWhileNode(body, condition)
@@ -1657,7 +1701,7 @@ class HLSLParser:
     def parse_switch_statement(self):
         self.eat("SWITCH")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        condition = self.parse_condition_expression()
         self.eat("RPAREN")
         self.eat("LBRACE")
 

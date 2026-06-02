@@ -4,6 +4,7 @@ import textwrap
 import pytest
 
 from crosstl.backend.common_ast import (
+    AssignmentNode,
     CastNode,
     FunctionCallNode,
     FunctionNode,
@@ -13,7 +14,13 @@ from crosstl.backend.common_ast import (
     TextureSampleNode,
     VectorConstructorNode,
 )
-from crosstl.backend.DirectX.DirectxAst import ForNode, IfNode, StructNode, VariableNode
+from crosstl.backend.DirectX.DirectxAst import (
+    ForNode,
+    IfNode,
+    StructNode,
+    VariableNode,
+    WhileNode,
+)
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 
@@ -298,6 +305,116 @@ def test_parse_class_qualified_method_definition_from_sdk_samples():
     method = ast.functions[0]
     assert method.return_type == "float3"
     assert [param.name for param in method.params] == ["normal"]
+
+
+def test_parse_struct_base_lists_from_dxc_rewriter():
+    ast = parse_code(textwrap.dedent("""
+            interface my_interface {
+            };
+
+            class my_class {
+            };
+
+            struct my_struct_4 : my_interface {
+            };
+
+            struct my_struct_5 : my_class, my_interface {
+            };
+            """))
+
+    structs = {struct.name: struct for struct in ast.structs}
+
+    assert structs["my_struct_4"].base_classes == ["my_interface"]
+    assert structs["my_struct_5"].base_classes == ["my_class", "my_interface"]
+
+
+def test_parse_elaborated_struct_declarations_from_dxc_rewriter():
+    ast = parse_code(textwrap.dedent("""
+            struct my_struct_type_decl {
+                int a;
+            };
+
+            const struct my_struct_type_decl my_struct_var_decl;
+
+            struct my_struct_type_init {
+                int a;
+            };
+
+            const struct my_struct_type_init my_struct_type_init_one = { 1 };
+            """))
+
+    globals_by_name = {variable.name: variable for variable in ast.global_variables}
+
+    assert globals_by_name["my_struct_var_decl"].vtype == "my_struct_type_decl"
+    assert globals_by_name["my_struct_var_decl"].qualifiers == ["const"]
+    assert globals_by_name["my_struct_type_init_one"].vtype == "my_struct_type_init"
+    assert isinstance(
+        globals_by_name["my_struct_type_init_one"].value, InitializerListNode
+    )
+
+
+def test_parse_control_flow_declaration_conditions_from_dxc_rewriter():
+    ast = parse_code(textwrap.dedent("""
+            int global_fn() {
+                return 1;
+            }
+
+            void statements() {
+                int local_i = 1;
+
+                if (int my_if_local = global_fn()) {
+                    my_if_local++;
+                } else {
+                    my_if_local--;
+                }
+
+                switch (int my_switch_local = global_fn()) {
+                case 0:
+                    my_switch_local--;
+                    return;
+                }
+
+                while (int my_while_local = global_fn()) {
+                    my_while_local--;
+                }
+            }
+            """))
+
+    body = ast.functions[1].body
+    if_node = next(statement for statement in body if isinstance(statement, IfNode))
+    switch_node = next(
+        statement for statement in body if isinstance(statement, SwitchNode)
+    )
+    while_node = next(
+        statement for statement in body if isinstance(statement, WhileNode)
+    )
+
+    assert if_node.condition.name == "my_if_local"
+    assert switch_node.expression.name == "my_switch_local"
+    assert while_node.condition.name == "my_while_local"
+
+
+def test_parse_hex_escape_char_literals_from_dxc_rewriter():
+    ast = parse_code(r"""
+        void expressions() {
+            int local_i;
+            local_i = 'c';
+            local_i = '\xff';
+            local_i = '\x94';
+        }
+    """)
+
+    assignments = [
+        statement
+        for statement in ast.functions[0].body
+        if isinstance(statement, AssignmentNode)
+    ]
+
+    assert [assignment.right for assignment in assignments] == [
+        "'c'",
+        r"'\xff'",
+        r"'\x94'",
+    ]
 
 
 def test_parse_global_static_const_array_initializer():

@@ -1428,7 +1428,23 @@ class CudaParser:
 
     def is_out_of_class_member_definition_start(self):
         index = self.current_index
+        index = self.skip_optional_template_declaration_at_index(index)
+        index = self.skip_struct_method_specifiers_at_index(index)
 
+        if self.is_scoped_member_name_at_index(index):
+            return True
+
+        return_type_end = self.skip_type_at_index(
+            index, allow_unknown_identifier_declarator=True
+        )
+        if return_type_end is None:
+            return False
+
+        return_type_end = self.skip_return_pointer_suffix_at_index(return_type_end)
+        return_type_end = self.skip_struct_method_specifiers_at_index(return_type_end)
+        return self.is_scoped_member_name_at_index(return_type_end)
+
+    def is_scoped_member_name_at_index(self, index):
         if (
             index >= len(self.tokens)
             or self.tokens[index][0] not in self.NAME_COMPONENT_TOKENS
@@ -1603,6 +1619,7 @@ class CudaParser:
         )
         if name_index is None or name_index >= len(self.tokens):
             return False
+        name_index = self.skip_return_pointer_suffix_at_index(name_index)
 
         while name_index < len(self.tokens) and (
             self.tokens[name_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS
@@ -1621,6 +1638,15 @@ class CudaParser:
             and name_index + 1 < len(self.tokens)
             and self.tokens[name_index + 1][0] == "LPAREN"
         )
+
+    def skip_return_pointer_suffix_at_index(self, index):
+        while index < len(self.tokens) and self.tokens[index][0] in {
+            "MULTIPLY",
+            *self.TYPE_REFERENCE_TOKENS,
+        }:
+            index += 1
+            index = self.skip_postfix_type_qualifiers_at_index(index)
+        return index
 
     def skip_optional_template_declaration_at_index(self, index):
         if index >= len(self.tokens) or self.tokens[index][0] != "TEMPLATE":

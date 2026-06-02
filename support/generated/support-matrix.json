@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 842
+        "test_count": 847
       },
       "translator_codegen": {
         "exists": true,
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 546
+        "test_count": 549
       },
       "translator_codegen": {
         "exists": true,
@@ -811,7 +811,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 617
+        "test_count": 618
       },
       "translator_codegen": {
         "exists": true,
@@ -925,7 +925,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 726
+        "test_count": 727
       },
       "translator_codegen": {
         "exists": true,
@@ -1039,7 +1039,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 595
+        "test_count": 596
       },
       "translator_codegen": {
         "exists": true,

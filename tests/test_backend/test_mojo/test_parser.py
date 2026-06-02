@@ -207,6 +207,46 @@ def test_struct_base_list_parsing_from_modular_corpus():
     ]
 
 
+def test_struct_generic_parameter_list_parsing_from_modular_corpus():
+    code = """
+    struct AddConstant[value: Int]:
+        var input: Int
+
+    struct SplatList[
+        T: ImplicitlyCopyable & ImplicitlyDestructible,
+        *,
+        fill: T,
+        length: Int = 5,
+    ]:
+        var items: List[Self.T]
+
+    struct Grid[rows: Int, cols: Int](Copyable, Writable):
+        var cells: InlineArray[Int, Self.rows * Self.cols]
+    """
+    ast = parse_code(tokenize_code(code))
+    add_constant = find_struct(ast, "AddConstant")
+    splat_list = find_struct(ast, "SplatList")
+    grid = find_struct(ast, "Grid")
+
+    assert add_constant.generic_parameters == "[value:Int]"
+    assert [(member.vtype, member.name) for member in add_constant.members] == [
+        ("Int", "input")
+    ]
+
+    assert splat_list.generic_parameters == (
+        "[T:ImplicitlyCopyable&ImplicitlyDestructible, *, fill:T, " "length:Int=5]"
+    )
+    assert [(member.vtype, member.name) for member in splat_list.members] == [
+        ("List[Self.T]", "items")
+    ]
+
+    assert grid.generic_parameters == "[rows:Int, cols:Int]"
+    assert grid.base_classes == ["Copyable", "Writable"]
+    assert [(member.vtype, member.name) for member in grid.members] == [
+        ("InlineArray[Int, Self.rows*Self.cols]", "cells")
+    ]
+
+
 def test_parenthesized_import_items_and_floor_divide_parsing():
     code = """
     from std.gpu import (

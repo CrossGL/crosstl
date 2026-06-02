@@ -4291,6 +4291,36 @@ def test_impl_trait_parameter_type_parsing():
     assert ast.functions[0].params[0].name == "shape"
 
 
+def test_impl_callable_trait_parameter_type_parsing_from_rust_gpu():
+    code = """
+    fn setup_shader_crate_with_cargo_toml(
+        f: impl FnOnce(&mut dyn rspirv::binary::Consumer) -> std::io::Result<()>,
+        mut before_pass: impl FnMut(&'static str, &Module) -> P,
+        display: &dyn DifferenceDisplay,
+    ) {
+        return;
+    }
+
+    fn visit<F: FnMut(Value) -> Option<Value>>(f: F) {
+        return;
+    }
+    """
+
+    ast = parse_code(code)
+
+    setup_params = ast.functions[0].params
+    assert (
+        setup_params[0].vtype
+        == "impl FnOnce(&mut dyn rspirv::binary::Consumer) -> std::io::Result<()>"
+    )
+    assert setup_params[0].name == "f"
+    assert setup_params[1].vtype == "impl FnMut(&str, &Module) -> P"
+    assert setup_params[1].name == "before_pass"
+    assert setup_params[2].vtype == "&dyn DifferenceDisplay"
+
+    assert ast.functions[1].generics == ["F: FnMut(Value) -> Option<Value>"]
+
+
 def test_trait_default_method_body_parsing():
     code = """
     trait ShaderMath {

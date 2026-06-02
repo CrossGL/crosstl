@@ -1143,6 +1143,10 @@ class RustParser:
         return generics
 
     def parse_type(self):
+        if self.current_token[1] == "dyn":
+            self.eat(self.current_token[0])
+            return f"dyn {self.parse_type()}"
+
         if self.current_token[0] == "IMPL":
             self.eat("IMPL")
             return f"impl {self.parse_type()}"
@@ -1194,6 +1198,10 @@ class RustParser:
                 type_parts.append(self.parse_type_macro_suffix())
             elif self.current_token[0] == "LESS_THAN":
                 type_parts.append(self.parse_generic_argument_suffix())
+            elif self.current_token[0] == "LPAREN" and self.is_callable_trait_type(
+                type_parts
+            ):
+                type_parts.append(self.parse_callable_trait_suffix())
             else:
                 break
 
@@ -1207,6 +1215,29 @@ class RustParser:
             self.eat("RBRACKET")
 
         return "".join(type_parts)
+
+    def is_callable_trait_type(self, type_parts):
+        return type_parts[-1] in {"Fn", "FnMut", "FnOnce"}
+
+    def parse_callable_trait_suffix(self):
+        self.eat("LPAREN")
+
+        parameters = []
+        while self.current_token[0] != "RPAREN":
+            parameters.append(self.parse_type())
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            break
+
+        self.eat("RPAREN")
+
+        suffix = f"({', '.join(parameters)})"
+        if self.current_token[0] == "ARROW":
+            self.eat("ARROW")
+            suffix = f"{suffix} -> {self.parse_type()}"
+
+        return suffix
 
     def parse_function_pointer_type(self):
         self.eat("FN")

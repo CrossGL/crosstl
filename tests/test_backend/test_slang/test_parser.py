@@ -2813,5 +2813,46 @@ def test_flat_interpolation_outputs_from_libretro_shaders_parse_as_qualifiers():
     assert main.params[1].vtype == "float"
 
 
+def test_glsl_precision_qualifiers_from_corpus_parse():
+    code = """
+    precision highp float;
+    precision mediump int;
+
+    layout(location = 0) out mediump vec4 FragColor;
+
+    layout(std140, set = 0, binding = 0) uniform Params
+    {
+        mediump int ui_zero;
+        highp vec4 tint;
+    } params;
+
+    float4 shade(lowp in float delta : COLOR0, highp vec3 normal)
+    {
+        highp vec4 color = vec4(delta);
+        return color;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    frag_color = ast.global_vars[0]
+    params = ast.cbuffers[0]
+    shade = find_function(ast, "shade")
+
+    assert frag_color.qualifiers == ["layout(location=0)", "out", "mediump"]
+    assert frag_color.vtype == "vec4"
+    assert params.qualifiers == ["layout(std140,set=0,binding=0)", "uniform"]
+    assert params.members[0].qualifiers == ["mediump"]
+    assert params.members[0].vtype == "int"
+    assert params.members[1].qualifiers == ["highp"]
+    assert params.members[1].vtype == "vec4"
+    assert shade.params[0].qualifiers == ["lowp", "in"]
+    assert shade.params[0].vtype == "float"
+    assert shade.params[1].qualifiers == ["highp"]
+    assert shade.params[1].vtype == "vec3"
+    assert shade.body[0].left.qualifiers == ["highp"]
+    assert shade.body[0].left.vtype == "vec4"
+
+
 if __name__ == "__main__":
     pytest.main()

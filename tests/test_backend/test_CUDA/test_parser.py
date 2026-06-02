@@ -304,6 +304,83 @@ class TestCudaParser:
         assert ast.kernels[0].name == "estimate"
         assert ast.global_variables == []
 
+    def test_public_cuda_samples_specifier_prefixed_template_constructor_is_skipped(
+        self,
+    ):
+        code = """
+        template <class T>
+        class interval_gpu {
+        public:
+            __device__ __host__ interval_gpu();
+        };
+
+        template <class T>
+        inline __device__ __host__ interval_gpu<T>::interval_gpu() {
+        }
+
+        void host() {
+            int value = 1;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.structs) == 1
+        assert ast.structs[0].name == "interval_gpu"
+        assert ast.functions[0].name == "host"
+
+    def test_public_cuda_samples_return_type_scoped_template_member_is_skipped(
+        self,
+    ):
+        code = """
+        template <class T>
+        class interval_gpu {
+        public:
+            __device__ __host__ T const& lower() const;
+        };
+
+        template <class T>
+        inline __device__ __host__ T const& interval_gpu<T>::lower() const {
+            return low;
+        }
+
+        void host() {
+            int value = 1;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.structs) == 1
+        assert ast.structs[0].name == "interval_gpu"
+        assert ast.functions[0].name == "host"
+
+    def test_public_cuda_samples_virtual_operator_members_are_skipped(self):
+        code = """
+        template <typename T>
+        struct SharedMemory {
+            virtual __device__ T& operator*() = 0;
+            virtual __device__ T& operator[](int i) = 0;
+        };
+
+        __global__ void kernel(float* output) {
+            output[threadIdx.x] = 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.structs) == 1
+        assert ast.structs[0].name == "SharedMemory"
+        assert ast.structs[0].members == []
+        assert ast.kernels[0].name == "kernel"
+
     def test_public_cuda_samples_braced_template_temporaries_parse_as_calls(self):
         code = """
         __global__ void mdspan_kernel(int* smem_storage, __half* X, int idx) {
