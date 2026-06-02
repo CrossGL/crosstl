@@ -1386,6 +1386,9 @@ class CudaParser:
         return statements
 
     def parse_statement(self):
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return None
         if self.current_token[0] == "PREPROCESSOR":
             return self.parse_preprocessor()
         if self.current_token[0] == "IF":

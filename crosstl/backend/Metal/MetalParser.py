@@ -96,6 +96,7 @@ STAGE_TOKENS = {
 
 UNARY_KEYWORDS = {"SIZEOF", "ALIGNOF"}
 MACRO_QUALIFIERS = {"METAL_FUNC"}
+TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
 CONSTRUCTOR_TYPE_TOKENS = TYPE_TOKENS - {
     "VOID",
@@ -545,8 +546,15 @@ class MetalParser:
         if idx >= len(self.tokens):
             return False
         tok_type, value = self.tokens[idx]
-        return tok_type in QUALIFIER_TOKENS or (
+        if tok_type in QUALIFIER_TOKENS or (
             tok_type == "IDENTIFIER" and value in MACRO_QUALIFIERS
+        ):
+            return True
+        return (
+            tok_type == "IDENTIFIER"
+            and value in TYPE_QUALIFIER_FUNCTIONS
+            and idx + 1 < len(self.tokens)
+            and self.tokens[idx + 1][0] == "LPAREN"
         )
 
     def parse_preprocessor_directive(self):
@@ -789,12 +797,8 @@ class MetalParser:
 
     def parse_type_specifier(self):
         qualifiers = []
-        while self.current_token[0] in QUALIFIER_TOKENS or (
-            self.current_token[0] == "IDENTIFIER"
-            and self.current_token[1] in MACRO_QUALIFIERS
-        ):
-            qualifiers.append(self.current_token[1])
-            self.eat(self.current_token[0])
+        while self.is_type_qualifier_start():
+            qualifiers.append(self.parse_type_qualifier())
 
         if self.current_token[0] not in TYPE_TOKENS:
             raise SyntaxError(f"Expected type, got {self.current_token[0]}")
@@ -846,29 +850,69 @@ class MetalParser:
             base_type = f"{base_type}<{self.format_generic_type_tokens(inner)}>"
 
         pointer_suffix = ""
-        while (
-            self.current_token[0] in QUALIFIER_TOKENS
-            or (
-                self.current_token[0] == "IDENTIFIER"
-                and self.current_token[1] in MACRO_QUALIFIERS
-            )
-            or self.current_token[0]
-            in [
-                "MULTIPLY",
-                "BITWISE_AND",
-            ]
-        ):
-            if self.current_token[0] in QUALIFIER_TOKENS or (
-                self.current_token[0] == "IDENTIFIER"
-                and self.current_token[1] in MACRO_QUALIFIERS
-            ):
-                qualifiers.append(self.current_token[1])
-                self.eat(self.current_token[0])
+        while self.is_type_qualifier_start() or self.current_token[0] in [
+            "MULTIPLY",
+            "BITWISE_AND",
+        ]:
+            if self.is_type_qualifier_start():
+                qualifiers.append(self.parse_type_qualifier())
                 continue
             pointer_suffix += "*" if self.current_token[0] == "MULTIPLY" else "&"
             self.eat(self.current_token[0])
 
         return base_type + pointer_suffix, qualifiers
+
+    def is_type_qualifier_start(self):
+        if self.current_token[0] in QUALIFIER_TOKENS:
+            return True
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in MACRO_QUALIFIERS
+        ):
+            return True
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in TYPE_QUALIFIER_FUNCTIONS
+            and self.peek(1)[0] == "LPAREN"
+        )
+
+    def parse_type_qualifier(self):
+        if self.current_token[0] in QUALIFIER_TOKENS or (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in MACRO_QUALIFIERS
+        ):
+            qualifier = self.current_token[1]
+            self.eat(self.current_token[0])
+            return qualifier
+
+        qualifier_name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        args = self.parse_balanced_token_text("LPAREN", "RPAREN")
+        return f"{qualifier_name}({args})"
+
+    def parse_balanced_token_text(self, open_token, close_token):
+        self.eat(open_token)
+        depth = 1
+        tokens = []
+        while depth > 0 and self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if token_type == open_token:
+                depth += 1
+                tokens.append(token_value)
+                self.eat(token_type)
+            elif token_type == close_token:
+                depth -= 1
+                if depth == 0:
+                    self.eat(close_token)
+                    break
+                tokens.append(token_value)
+                self.eat(token_type)
+            else:
+                tokens.append(token_value)
+                self.eat(token_type)
+        if depth != 0:
+            raise SyntaxError("Unterminated type qualifier")
+        return self.format_generic_type_tokens(tokens)
 
     def format_generic_type_tokens(self, tokens):
         text = ""
@@ -910,7 +954,7 @@ class MetalParser:
         return specs
 
     def is_type_start(self):
-        if self.current_token[0] in QUALIFIER_TOKENS:
+        if self.is_type_qualifier_start():
             return True
         if self.current_token[0] in TYPE_TOKENS:
             if self.current_token[0] == "IDENTIFIER":
@@ -1142,7 +1186,7 @@ class MetalParser:
     def is_declaration_start(self):
         if self.current_token[0] == "ALIGNAS":
             return True
-        if self.current_token[0] in QUALIFIER_TOKENS:
+        if self.is_type_qualifier_start():
             return True
         if self.current_token[0] in TYPE_TOKENS:
             if self.current_token[0] == "IDENTIFIER":

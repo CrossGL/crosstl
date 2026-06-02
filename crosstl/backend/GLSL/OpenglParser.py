@@ -287,14 +287,19 @@ class GLSLParser:
             ):
                 struct_node, block_vars = self.parse_interface_block(qualifiers, layout)
                 structs.append(struct_node)
-                for var in block_vars:
-                    lowered = {q.lower() for q in var.qualifiers or []}
-                    if "uniform" in lowered:
-                        uniforms.append(var)
-                    elif "in" in lowered or "out" in lowered or "inout" in lowered:
-                        io_variables.append(var)
-                    else:
-                        global_variables.append(var)
+                self.append_interface_block_vars(
+                    block_vars, uniforms, io_variables, global_variables
+                )
+                continue
+
+            if self.is_extension_interface_block_start():
+                qualifiers.append(self.current_token[1])
+                self.eat("IDENTIFIER")
+                struct_node, block_vars = self.parse_interface_block(qualifiers, layout)
+                structs.append(struct_node)
+                self.append_interface_block_vars(
+                    block_vars, uniforms, io_variables, global_variables
+                )
                 continue
 
             if self.current_token[0] == "STRUCT":
@@ -368,6 +373,26 @@ class GLSLParser:
             layouts=layouts,
         )
         return shader
+
+    def append_interface_block_vars(
+        self, block_vars, uniforms, io_variables, global_variables
+    ):
+        for var in block_vars:
+            lowered = {q.lower() for q in var.qualifiers or []}
+            if "uniform" in lowered:
+                uniforms.append(var)
+            elif "in" in lowered or "out" in lowered or "inout" in lowered:
+                io_variables.append(var)
+            else:
+                global_variables.append(var)
+
+    def is_extension_interface_block_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and str(self.current_token[1]).startswith("__")
+            and self.peek_non_newline()[0] == "IDENTIFIER"
+            and self.peek_non_newline(2)[0] == "LBRACE"
+        )
 
     def parse_preprocessor(self):
         self.eat("HASH")

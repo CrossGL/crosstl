@@ -177,6 +177,34 @@ def test_parse_interface_block_with_newline_brace_and_instance():
     assert ast.uniforms[0].layout == {"push_constant": None}
 
 
+def test_parse_extension_storage_interface_block_from_arm_translucency_sample():
+    code = textwrap.dedent("""
+        #extension GL_EXT_shader_pixel_local_storage : require
+        precision highp float;
+
+        __pixel_localEXT FragDataLocal {
+            layout(rgb10_a2) vec4 lighting;
+            layout(rg16f) vec2 minMaxDepth;
+        } storage;
+
+        void main()
+        {
+            storage.lighting = vec4(1.0);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    block = ast.structs[0]
+
+    assert block.name == "FragDataLocal"
+    assert block.interface_block is True
+    assert block.interface_qualifiers == ["__pixel_localEXT"]
+    assert [member.name for member in block.members] == ["lighting", "minMaxDepth"]
+    assert ast.global_variables[0].name == "storage"
+    assert ast.global_variables[0].vtype == "FragDataLocal"
+    assert ast.global_variables[0].qualifiers == ["__pixel_localEXT"]
+
+
 def test_parse_uniform_struct_specifier_preserves_uniform_qualifier():
     code = textwrap.dedent("""
         precision mediump float;

@@ -170,6 +170,27 @@ def test_parse_resource_bindings_and_address_spaces():
     parse_ok(code)
 
 
+def test_parse_coherent_memory_qualifier_from_mlx_fence_kernel():
+    code = """
+    [[kernel]] void input_coherent(
+        volatile coherent(system) device uint* input [[buffer(0)]],
+        const constant uint& size [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      if (index < size) {
+        input[index] = input[index];
+      }
+    }
+    """
+    ast = parse_ok(code)
+    param = ast.functions[0].params[0]
+
+    assert param.vtype == "uint*"
+    assert param.name == "input"
+    assert param.qualifiers == ["volatile", "coherent(system)", "device"]
+    assert param.attributes[0].name == "buffer"
+    assert param.attributes[0].args == ["0"]
+
+
 def test_parse_arrays_and_indexing():
     code = """
     struct Data {

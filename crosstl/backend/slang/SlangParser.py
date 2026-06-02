@@ -647,6 +647,14 @@ class SlangParser:
             if declaration_token in {"TYPEDEF", "TYPEALIAS"}:
                 typedefs.append(self.parse_typedef())
                 continue
+            if self.is_constructor():
+                methods.append(
+                    self.parse_constructor(
+                        attributes=pending_attributes,
+                        allow_signature=True,
+                    )
+                )
+                continue
             if self.is_function():
                 methods.append(
                     self.parse_function(
@@ -702,6 +710,50 @@ class SlangParser:
             self.eat("COMMA")
         self.eat("SEMICOLON")
         return members
+
+    def is_constructor(self):
+        current_pos = self.skip_declaration_prefix_tokens(self.pos)
+        if current_pos + 1 >= len(self.tokens):
+            return False
+        return (
+            self.tokens[current_pos][0] == "IDENTIFIER"
+            and self.tokens[current_pos][1] == "__init"
+            and self.tokens[current_pos + 1][0] == "LPAREN"
+        )
+
+    def parse_constructor(self, attributes=None, allow_signature=False):
+        attributes = attributes or []
+        qualifiers, is_generic = self.parse_declaration_prefixes()
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("LPAREN")
+        params = self.parse_parameters()
+        self.eat("RPAREN")
+        generic_constraints = []
+        if self.current_token[0] == "WHERE":
+            generic_constraints = self.parse_generic_constraints()
+
+        if self.current_token[0] == "SEMICOLON":
+            if not allow_signature:
+                raise SyntaxError("Expected constructor body, got SEMICOLON")
+            self.eat("SEMICOLON")
+            body = []
+            is_declaration = True
+        else:
+            body = self.parse_block()
+            is_declaration = False
+
+        return FunctionNode(
+            "void",
+            name,
+            params,
+            body,
+            qualifiers=qualifiers,
+            is_generic=is_generic,
+            generic_constraints=generic_constraints,
+            is_declaration=is_declaration,
+            attributes=attributes,
+        )
 
     def parse_extension(self):
         qualifiers = self.parse_qualifiers()

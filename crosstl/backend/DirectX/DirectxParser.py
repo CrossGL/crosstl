@@ -1077,9 +1077,28 @@ class HLSLParser:
         idx = self.current_index
         while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
             idx += 1
-        if idx >= len(self.tokens) or self.tokens[idx][0] not in TYPE_TOKENS:
+
+        idx = self.skip_type_name_at(idx)
+        if idx is None:
             return False
+
+        if idx >= len(self.tokens) or not self.is_identifier_token_at(idx):
+            return False
+        return True
+
+    def skip_type_name_at(self, idx):
+        if idx >= len(self.tokens) or self.tokens[idx][0] not in TYPE_TOKENS:
+            return None
+
         idx += 1
+        while (
+            idx + 2 < len(self.tokens)
+            and self.tokens[idx][0] == "COLON"
+            and self.tokens[idx + 1][0] == "COLON"
+            and self.tokens[idx + 2][0] == "IDENTIFIER"
+        ):
+            idx += 3
+
         if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
             depth = 0
             while idx < len(self.tokens):
@@ -1091,9 +1110,10 @@ class HLSLParser:
                         idx += 1
                         break
                 idx += 1
-        if idx >= len(self.tokens) or not self.is_identifier_token_at(idx):
-            return False
-        return True
+            else:
+                return None
+
+        return idx
 
     def parse_variable_declaration(
         self,
@@ -1512,47 +1532,32 @@ class HLSLParser:
     def looks_like_cast(self):
         if self.current_token[0] != "LPAREN":
             return False
-        if not self.is_type_token(self.peek()[0]):
+
+        idx = self.skip_type_name_at(self.current_index + 1)
+        if idx is None or idx >= len(self.tokens) or self.tokens[idx][0] != "RPAREN":
             return False
-        idx = self.current_index + 1
-        if idx < len(self.tokens) and self.tokens[idx][0] in TYPE_TOKENS:
-            idx += 1
-            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
-                depth = 0
-                while idx < len(self.tokens):
-                    if self.tokens[idx][0] == "LESS_THAN":
-                        depth += 1
-                    elif self.tokens[idx][0] == "GREATER_THAN":
-                        depth -= 1
-                        if depth == 0:
-                            idx += 1
-                            break
-                    idx += 1
-            if idx < len(self.tokens) and self.tokens[idx][0] == "RPAREN":
-                next_token = (
-                    self.tokens[idx + 1] if idx + 1 < len(self.tokens) else ("EOF", "")
-                )
-                return next_token[0] in {
-                    "IDENTIFIER",
-                    "NUMBER",
-                    "HEX_NUMBER",
-                    "BINARY_NUMBER",
-                    "OCT_NUMBER",
-                    "TRUE",
-                    "FALSE",
-                    "STRING",
-                    "CHAR_LITERAL",
-                    "LPAREN",
-                    "LBRACE",
-                    "PLUS",
-                    "MINUS",
-                    "LOGICAL_NOT",
-                    "BITWISE_NOT",
-                    "INCREMENT",
-                    "DECREMENT",
-                    *TYPE_TOKENS,
-                }
-        return False
+
+        next_token = self.tokens[idx + 1] if idx + 1 < len(self.tokens) else ("EOF", "")
+        return next_token[0] in {
+            "IDENTIFIER",
+            "NUMBER",
+            "HEX_NUMBER",
+            "BINARY_NUMBER",
+            "OCT_NUMBER",
+            "TRUE",
+            "FALSE",
+            "STRING",
+            "CHAR_LITERAL",
+            "LPAREN",
+            "LBRACE",
+            "PLUS",
+            "MINUS",
+            "LOGICAL_NOT",
+            "BITWISE_NOT",
+            "INCREMENT",
+            "DECREMENT",
+            *TYPE_TOKENS,
+        }
 
     def parse_postfix_expression(self):
         expr = self.parse_primary_expression()

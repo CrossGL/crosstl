@@ -201,6 +201,36 @@ def test_struct_method_body_parsing_from_official_example():
     assert method.body[0].value.member == "xyz"
 
 
+def test_struct_init_method_parsing_from_shader_toy_sample():
+    code = """
+    struct mat2
+    {
+        float2x2 data;
+
+        __init(float e00, float e01, float e10, float e11)
+        {
+            data = float2x2(e00, e01, e10, e11);
+        }
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+    constructor = struct.methods[0]
+
+    assert constructor.name == "__init"
+    assert constructor.return_type == "void"
+    assert not constructor.is_declaration
+    assert [(param.vtype, param.name) for param in constructor.params] == [
+        ("float", "e00"),
+        ("float", "e01"),
+        ("float", "e10"),
+        ("float", "e11"),
+    ]
+    assert isinstance(constructor.body[0], AssignmentNode)
+
+
 def test_if_parsing():
     code = """
     [shader("vertex")]

@@ -14,6 +14,7 @@ from crosstl.backend.CUDA.CudaAst import (
     EnumNode,
     ForNode,
     FunctionCallNode,
+    IfNode,
     InitializerListNode,
     KernelLaunchNode,
     MemberAccessNode,
@@ -86,6 +87,31 @@ class TestCudaParser:
         call = ast.functions[0].body[0]
         assert isinstance(call, FunctionCallNode)
         assert call.args == ['"first second\\n"']
+
+    def test_empty_statements_in_public_sample_patterns_are_skipped(self):
+        code = """
+        void host() {
+            int value = 0;
+            value = value + 1;;
+            if (value > 0) {
+                value = value - 1;
+            };
+            for (value = 0; value < 4; value++);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+
+        assert len(body) == 4
+        assert isinstance(body[0], VariableNode)
+        assert isinstance(body[1], AssignmentNode)
+        assert isinstance(body[2], IfNode)
+        assert isinstance(body[3], ForNode)
+        assert body[3].body is None
 
     def test_device_function_parsing(self):
         code = """

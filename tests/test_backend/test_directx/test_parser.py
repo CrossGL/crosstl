@@ -4,6 +4,7 @@ import textwrap
 import pytest
 
 from crosstl.backend.common_ast import (
+    CastNode,
     FunctionCallNode,
     InitializerListNode,
     MemberAccessNode,
@@ -1505,6 +1506,37 @@ def test_parse_scoped_enum_parameter_type_from_directx_graphics_samples():
     assert function.is_prototype is True
     assert function.params[1].vtype == "SignedDistancePrimitive::Enum"
     assert function.params[1].name == "sdPrimitive"
+
+
+def test_parse_scoped_local_variable_type_from_directx_graphics_samples():
+    ast = parse_code("""
+    struct AabbCB {
+        uint primitiveType;
+    };
+
+    float ResolvePrimitive(AabbCB cb) {
+        AnalyticPrimitive::Enum primitiveType =
+            (AnalyticPrimitive::Enum) cb.primitiveType;
+        CrossBilateral::BilinearDepthNormal::Parameters params;
+        params.Depth.Sigma = 1.0;
+        return params.Depth.Sigma + primitiveType;
+    }
+    """)
+
+    function = ast.functions[0]
+    primitive_decl = next(
+        stmt for stmt in function.body if getattr(stmt, "name", "") == "primitiveType"
+    )
+    params_decl = next(
+        stmt for stmt in function.body if getattr(stmt, "name", "") == "params"
+    )
+
+    assert primitive_decl.vtype == "AnalyticPrimitive::Enum"
+    assert primitive_decl.name == "primitiveType"
+    assert isinstance(primitive_decl.value, CastNode)
+    assert primitive_decl.value.target_type == "AnalyticPrimitive::Enum"
+    assert params_decl.vtype == "CrossBilateral::BilinearDepthNormal::Parameters"
+    assert params_decl.name == "params"
 
 
 def test_parse_sample_contextual_identifier_from_directx_graphics_samples():
