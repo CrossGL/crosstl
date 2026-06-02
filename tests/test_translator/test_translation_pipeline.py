@@ -115,6 +115,19 @@ def test_native_sources_translate_to_parseable_crossgl(tmp_path, source_name):
     crosstl.translator.parse(generated)
 
 
+def test_translate_decodes_legacy_hlsl_comment_bytes_with_replacement(tmp_path):
+    source_path = tmp_path / "legacy-comment.hlsl"
+    source_path.write_bytes(
+        b"// Matthias M\xfcller\n"
+        b"float4 main(float4 pos : SV_Position) : SV_Target { return pos; }\n"
+    )
+
+    generated = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    crosstl.translator.parse(generated)
+
+
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
 @pytest.mark.parametrize("target_backend", codegen.backend_names())
 def test_native_source_to_registered_target_pipeline_is_total(

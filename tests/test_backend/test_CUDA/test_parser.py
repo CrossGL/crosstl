@@ -252,6 +252,25 @@ class TestCudaParser:
         assert body[1].left.array == "J"
         assert body[2].left.array == "J"
 
+    def test_parenthesized_comma_expression_statement_from_hpc_training(self):
+        code = """
+        void swap_arrays(float* x, float* xnew) {
+            float* xtmp;
+            (xtmp = xnew, xnew = x, x = xtmp);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert len(body) == 4
+        assert all(isinstance(stmt, AssignmentNode) for stmt in body[1:])
+        assert body[1].left == "xtmp"
+        assert body[2].left == "xnew"
+        assert body[3].left == "x"
+
     def test_public_cuda_samples_macro_expanded_empty_call_arguments_are_skipped(self):
         code = """
         void report() {

@@ -127,6 +127,16 @@ class GenericConstraintNode(ASTNode):
         )
 
 
+class ParenthesizedCommaNode(ASTNode):
+    """Node representing a parenthesized comma expression."""
+
+    def __init__(self, expressions):
+        self.expressions = expressions
+
+    def __repr__(self):
+        return f"ParenthesizedCommaNode(expressions={self.expressions})"
+
+
 class AssociatedTypeNode(ASTNode):
     """Node representing a Slang interface associated type requirement."""
 

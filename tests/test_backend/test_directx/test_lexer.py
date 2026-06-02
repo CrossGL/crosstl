@@ -481,5 +481,30 @@ def test_register_and_packoffset_tokenization():
     assert_values_present(values, expected, case_insensitive=True)
 
 
+def test_hlsl_define_is_enabled_for_default_preprocessing():
+    code = """
+    #ifndef HLSL
+    struct float2 { float x, y; };
+    #endif
+    float main() { return 0.0; }
+    """
+
+    tokens = tokenize_code(code)
+    values = token_values(tokens)
+
+    assert "struct" not in values
+    assert_values_present(values, ["float", "main", "return"])
+
+
+def test_from_file_decodes_legacy_comment_bytes_with_replacement(tmp_path):
+    source = tmp_path / "legacy_comment.hlsl"
+    source.write_bytes(b"// Matthias M\xfcller\nfloat main() { return 0.0; }\n")
+
+    tokens = HLSLLexer.from_file(str(source)).tokenize()
+    values = token_values(tokens)
+
+    assert_values_present(values, ["float", "main", "return"])
+
+
 if __name__ == "__main__":
     pytest.main()

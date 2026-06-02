@@ -9,6 +9,7 @@ from .preprocessor import HLSLPreprocessor
 
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
+DEFAULT_PREPROCESSOR_DEFINES = {"HLSL": "1"}
 
 # Token definitions - order matters! More specific patterns should come first
 TOKENS = tuple(
@@ -546,9 +547,12 @@ class HLSLLexer:
         self.file_path = file_path
         self.include_paths = include_paths or []
         if preprocess:
+            preprocessor_defines = dict(DEFAULT_PREPROCESSOR_DEFINES)
+            if defines:
+                preprocessor_defines.update(defines)
             preprocessor = HLSLPreprocessor(
                 include_paths=self.include_paths,
-                defines=defines,
+                defines=preprocessor_defines,
                 strict=strict_preprocessor,
             )
             code = preprocessor.preprocess(code, file_path=file_path)
@@ -602,7 +606,7 @@ class HLSLLexer:
     @classmethod
     def from_file(cls, filepath: str) -> "HLSLLexer":
         """Create a lexer instance from a source file."""
-        with open(filepath, encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8", errors="replace") as f:
             base_dir = os.path.dirname(filepath)
             return cls(f.read(), file_path=filepath, include_paths=[base_dir])
 

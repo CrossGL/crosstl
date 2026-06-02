@@ -1801,7 +1801,11 @@ class SlangParser:
     def parse_for_update(self):
         if self.current_token[0] == "RPAREN":
             return None
-        return self.parse_expression()
+        updates = [self.parse_expression()]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            updates.append(self.parse_expression())
+        return updates if len(updates) > 1 else updates[0]
 
     def parse_while_statement(self):
         self.eat("WHILE")
@@ -2188,6 +2192,13 @@ class SlangParser:
                 return self.parse_lambda_expression()
             self.eat("LPAREN")
             expr = self.parse_expression()
+            if self.current_token[0] == "COMMA":
+                expressions = [expr]
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    expressions.append(self.parse_expression())
+                self.eat("RPAREN")
+                return self.parse_postfix_suffixes(ParenthesizedCommaNode(expressions))
             self.eat("RPAREN")
             return self.parse_postfix_suffixes(expr)
         else:
@@ -2420,6 +2431,8 @@ class SlangParser:
             return False
         if suffix_end >= len(self.tokens):
             return False
+        if self.generic_expression_suffix_crosses_boundary(suffix_end):
+            return False
         if self.tokens[suffix_end][0] == "COLON":
             return (
                 suffix_end + 1 < len(self.tokens)
@@ -2432,6 +2445,13 @@ class SlangParser:
             "RPAREN",
             "SEMICOLON",
         }
+
+    def generic_expression_suffix_crosses_boundary(self, suffix_end):
+        boundary_tokens = {"SEMICOLON", "LBRACE", "RBRACE", "LPAREN", "RPAREN"}
+        for index in range(self.pos + 1, suffix_end - 1):
+            if self.tokens[index][0] in boundary_tokens:
+                return True
+        return False
 
     def parse_call_arguments(self):
         self.eat("LPAREN")

@@ -26,6 +26,7 @@ from crosstl.backend.slang.SlangAst import (
     InterfaceNode,
     MemberAccessNode,
     MethodCallNode,
+    ParenthesizedCommaNode,
     ReturnNode,
     SwitchNode,
     TernaryOpNode,
@@ -2545,6 +2546,93 @@ def test_parenthesized_relational_expression_is_not_generic_cast():
     assert returned.op == "<"
     assert returned.left.name == "t"
     assert returned.right.name == "resT"
+
+
+def test_parenthesized_relational_before_greater_than_if_is_not_generic_suffix():
+    code = """
+    bool formatDigit(float fValue, float fDigitIndex)
+    {
+        bool bNeg = (fValue < 0.0);
+        if (fDigitIndex > 1.0)
+        {
+            return bNeg;
+        }
+        return false;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "formatDigit")
+    declaration = function.body[0]
+    if_stmt = function.body[1]
+
+    assert isinstance(declaration.right, BinaryOpNode)
+    assert declaration.right.op == "<"
+    assert isinstance(if_stmt, IfNode)
+    assert isinstance(if_stmt.condition, BinaryOpNode)
+    assert if_stmt.condition.op == ">"
+
+
+def test_parenthesized_comma_expression_from_slang_shaders():
+    code = """
+    float reduce(float3 v)
+    {
+        return max((v.x, v.y), v.z);
+    }
+
+    float2 choose(bool invert)
+    {
+        return float2(invert ? (0.75, 1.0) : (1.0, 0.75));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    reduce = find_function(ast, "reduce")
+    choose = find_function(ast, "choose")
+
+    max_call = reduce.body[0].value
+    assert isinstance(max_call.args[0], ParenthesizedCommaNode)
+    assert [expr.member for expr in max_call.args[0].expressions] == ["x", "y"]
+
+    constructor = choose.body[0].value
+    ternary = constructor.args[0]
+    assert isinstance(ternary, TernaryOpNode)
+    assert isinstance(ternary.true_expr, ParenthesizedCommaNode)
+    assert isinstance(ternary.false_expr, ParenthesizedCommaNode)
+
+    generated = SlangCrossGLCodeGen.SlangToCrossGLConverter().generate(ast)
+    assert "max((v.x, v.y), v.z)" in generated
+    assert "(0.75, 1.0)" in generated
+
+
+def test_for_update_list_from_slang_shaders():
+    code = """
+    void scan(float factorX)
+    {
+        float x = 1.0;
+        for (int n = 0; n < 7; n++, x -= factorX * 0.5)
+        {
+            x += 1.0;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "scan")
+    loop = function.body[1]
+
+    assert isinstance(loop, ForNode)
+    assert len(loop.update) == 2
+    assert isinstance(loop.update[0], UnaryOpNode)
+    assert loop.update[0].op == "POST_INCREMENT"
+    assert isinstance(loop.update[1], AssignmentNode)
+    assert loop.update[1].operator == "-="
+
+    generated = SlangCrossGLCodeGen.SlangToCrossGLConverter().generate(ast)
+    assert "for (int n = 0; n < 7; n++, x -= factorX * 0.5)" in generated
 
 
 def test_static_type_member_call_from_saschawillems_hdr_sample():

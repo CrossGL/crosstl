@@ -510,6 +510,8 @@ class SlangToCrossGLConverter:
     def generate_for_clause(self, clause, is_main):
         if clause is None:
             return ""
+        if isinstance(clause, list):
+            return ", ".join(self.generate_expression(item, is_main) for item in clause)
         return self.generate_expression(clause, is_main)
 
     def generate_while_loop(self, node, indent, is_main):
@@ -735,6 +737,11 @@ class SlangToCrossGLConverter:
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             return f"{self.map_type(expr.type_name)}({args})"
+        elif isinstance(expr, ParenthesizedCommaNode):
+            expressions = ", ".join(
+                self.generate_expression(item, is_main) for item in expr.expressions
+            )
+            return f"({expressions})"
         else:
             return str(expr)
 

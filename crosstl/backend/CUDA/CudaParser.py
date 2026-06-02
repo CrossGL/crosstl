@@ -2351,6 +2351,8 @@ class CudaParser:
             return declarations if len(declarations) > 1 else declarations[0]
         elif self.current_token[0] == "ENUM":
             return self.parse_enum()
+        elif self.is_parenthesized_comma_expression_statement():
+            return self.parse_parenthesized_comma_expression_statement()
         else:
             expr = self.parse_assignment_expression()
             if self.current_token[0] == "COMMA":
@@ -2363,6 +2365,42 @@ class CudaParser:
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
             expressions.append(self.parse_assignment_expression())
+        return expressions
+
+    def is_parenthesized_comma_expression_statement(self):
+        if self.current_token[0] != "LPAREN":
+            return False
+
+        depth = 0
+        saw_comma = False
+        index = self.current_index
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    next_index = index + 1
+                    return (
+                        saw_comma
+                        and next_index < len(self.tokens)
+                        and self.tokens[next_index][0] == "SEMICOLON"
+                    )
+            elif token_type == "COMMA" and depth == 1:
+                saw_comma = True
+            elif token_type == "EOF":
+                return False
+            index += 1
+
+        return False
+
+    def parse_parenthesized_comma_expression_statement(self):
+        self.eat("LPAREN")
+        first_expr = self.parse_assignment_expression()
+        expressions = self.parse_comma_expression_statement(first_expr)
+        self.eat("RPAREN")
+        self.eat("SEMICOLON")
         return expressions
 
     def parse_try_statement(self):

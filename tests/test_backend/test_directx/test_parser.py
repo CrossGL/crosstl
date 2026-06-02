@@ -2336,6 +2336,23 @@ def test_parse_top_level_anonymous_struct_variable_from_dxc_rewriter_samples():
     assert isinstance(anonymous.variable_declarations[0].value, InitializerListNode)
 
 
+def test_hlsl_define_skips_cpp_compatibility_branch_from_directx_samples():
+    code = textwrap.dedent("""
+        #ifndef HLSL
+        struct float2 { float x, y; };
+        #endif
+
+        float main() {
+            return 0.0;
+        }
+        """)
+
+    ast = parse_code(code)
+
+    assert [function.name for function in ast.functions] == ["main"]
+    assert ast.structs == []
+
+
 @pytest.mark.parametrize(
     "code",
     [
