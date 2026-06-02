@@ -2054,12 +2054,16 @@ class CudaParser:
             self.eat("CONTINUE")
             self.eat("SEMICOLON")
             return ContinueNode()
+        elif self.current_token[0] == "GOTO":
+            return self.parse_goto_statement()
         elif self.current_token[0] in ["SYNCTHREADS", "SYNCWARP"]:
             return self.parse_sync_statement()
         elif self.current_token[0] == "ASM":
             return self.parse_asm_statement()
         elif self.current_token[0] == "LBRACE":
             return self.parse_block()
+        elif self.is_label_statement_start():
+            return self.parse_label_statement()
         elif self.is_type_alias_start():
             return self.parse_type_alias()
         elif self.is_identifier_value("delete"):
@@ -2216,6 +2220,34 @@ class CudaParser:
 
         expression = self.parse_unary_expression()
         return DeleteNode(expression, is_array)
+
+    def is_label_statement_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_index + 1 < len(self.tokens)
+            and self.tokens[self.current_index + 1][0] == "COLON"
+        )
+
+    def parse_label_statement(self):
+        self.eat("IDENTIFIER")
+        self.eat("COLON")
+
+        if self.current_token[0] in {"RBRACE", "EOF"}:
+            return None
+        return self.parse_statement()
+
+    def parse_goto_statement(self):
+        self.eat("GOTO")
+
+        if self.current_token[0] in self.NAME_COMPONENT_TOKENS:
+            self.eat(self.current_token[0])
+        else:
+            while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+                self.eat(self.current_token[0])
+
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+        return None
 
     def is_variable_declaration(self):
         saved_index = self.current_index
@@ -3045,6 +3077,10 @@ class CudaParser:
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             return name
+        elif self.current_token[0] == "SCOPE":
+            self.eat("SCOPE")
+            name = self.parse_name_component()
+            return f"::{name}"
         elif self.current_token[0] in self.ATOMIC_FUNCTION_TOKENS:
             name = self.current_token[1]
             self.eat(self.current_token[0])

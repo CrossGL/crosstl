@@ -715,6 +715,31 @@ def test_generic_struct_declaration_after_name_parsing():
     assert struct.members[1].array_sizes[0].name == "N"
 
 
+def test_generic_declaration_prefix_with_associated_type_defaults():
+    code = """
+    interface IData {}
+    interface IElement
+    {
+        associatedtype DataType : IData;
+    }
+
+    __generic<T : IElement, U : IData = T.DataType>
+    U getDefaultAssociatedType()
+    {
+        return U();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = ast.functions[0]
+
+    assert function.name == "getDefaultAssociatedType"
+    assert function.return_type == "U"
+    assert function.is_generic
+    assert isinstance(function.body[0], ReturnNode)
+
+
 def test_interface_struct_and_extension_conformance_metadata_parsing():
     code = """
     interface IFoo {
@@ -780,6 +805,40 @@ def test_interface_associated_type_requirement_from_model_viewer_sample():
     assert interface.methods[0].name == "prepare"
 
 
+def test_interface_conformance_and_attributed_methods_parse():
+    code = """
+    interface IDifferentiable {}
+
+    interface IParams : IDifferentiable
+    {
+        [Differentiable]
+        float get();
+    }
+
+    interface IFoo
+    {
+        associatedtype Params : IParams;
+
+        [BackwardDifferentiable]
+        static Params decode<let N : uint>(no_diff float x);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    params = ast.interfaces[1]
+    foo = ast.interfaces[2]
+    method = foo.methods[0]
+
+    assert params.conformances == ["IDifferentiable"]
+    assert params.methods[0].attributes == [{"name": "Differentiable", "arguments": []}]
+    assert foo.associated_types[0].constraint_type == "IParams"
+    assert method.qualifiers == ["static"]
+    assert method.generic_parameters == "<letN:uint>"
+    assert method.attributes == [{"name": "BackwardDifferentiable", "arguments": []}]
+    assert method.params[0].qualifiers == ["no_diff"]
+
+
 def test_typealias_declarations_from_shader_toy_and_mlp_vec_samples():
     code = """
     typealias vec2 = float2;
@@ -805,6 +864,126 @@ def test_typealias_declarations_from_shader_toy_and_mlp_vec_samples():
     assert [(member.vtype, member.name) for member in struct.members] == [
         ("CoopVec<NFloat, N>", "data")
     ]
+
+
+def test_qualified_type_paths_parse_in_typedefs_structs_and_locals():
+    code = """
+    namespace example {
+        struct Example {}
+    }
+
+    typedef float.Differential dfloat;
+
+    struct Payload {
+        example::Example value;
+    };
+
+    void computeMain() {
+        A.Differential tangent = {0.2};
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    typedef = ast.typedefs[0]
+    payload = ast.structs[0]
+    local = ast.functions[0].body[0]
+
+    assert typedef.original_type == "float.Differential"
+    assert typedef.new_type == "dfloat"
+    assert payload.members[0].vtype == "example::Example"
+    assert payload.members[0].name == "value"
+    assert isinstance(local, AssignmentNode)
+    assert local.left.vtype == "A.Differential"
+    assert local.left.name == "tangent"
+    assert isinstance(local.right, InitializerListNode)
+
+
+def test_type_test_and_cast_expression_operators_parse():
+    code = """
+    struct MyInst {};
+
+    MyInst get_inst() {
+        return MyInst();
+    }
+
+    bool is_my_inst() {
+        return get_inst() is MyInst;
+    }
+
+    MyInst cast_my_inst() {
+        return get_inst() as MyInst;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    is_expr = find_function(ast, "is_my_inst").body[0].value
+    as_expr = find_function(ast, "cast_my_inst").body[0].value
+
+    assert isinstance(is_expr, BinaryOpNode)
+    assert is_expr.op == "is"
+    assert is_expr.right == "MyInst"
+    assert isinstance(as_expr, BinaryOpNode)
+    assert as_expr.op == "as"
+    assert as_expr.right == "MyInst"
+
+
+def test_nested_enum_class_in_generic_struct_parses():
+    code = """
+    struct GenericContainer<T>
+    {
+        [UnscopedEnum]
+        enum class NestedEnum
+        {
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert struct.generic_parameters == "<T>"
+    assert len(struct.enums) == 1
+    assert struct.enums[0].name == "NestedEnum"
+    assert struct.enums[0].kind == "class"
+
+
+def test_nested_struct_declaration_in_struct_parses():
+    code = """
+    interface IAssoc
+    {
+        int getInner();
+    }
+
+    struct Impl
+    {
+        struct Assoc : IAssoc
+        {
+            int getInner() { return 1; }
+        }
+
+        Assoc getValue()
+        {
+            Assoc r;
+            return r;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+    nested = struct.structs[0]
+
+    assert nested.name == "Assoc"
+    assert nested.conformances == ["IAssoc"]
+    assert nested.methods[0].name == "getInner"
+    assert struct.methods[0].return_type == "Assoc"
+    assert struct.methods[0].name == "getValue"
 
 
 def test_enum_declarations_from_gpu_printing_sample():
@@ -1191,6 +1370,34 @@ def test_generic_resource_global_parsing():
         ("Texture2D<float4>", "albedo"),
         ("SamplerState", "linearSampler"),
     ]
+
+
+def test_globallycoherent_resource_global_and_generic_method_call_parse():
+    code = """
+    globallycoherent RWByteAddressBuffer bab;
+    RWStructuredBuffer<uint> output;
+    in uint3 gid : SV_GroupID;
+
+    void computeMain()
+    {
+        output[0] = bab.Load<uint>(0) + gid.x;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    bab = ast.global_vars[0]
+    gid = ast.global_vars[2]
+    assignment = find_function(ast, "computeMain").body[0]
+
+    assert bab.qualifiers == ["globallycoherent"]
+    assert bab.vtype == "RWByteAddressBuffer"
+    assert bab.name == "bab"
+    assert gid.qualifiers == ["in"]
+    assert gid.semantic == "SV_GroupID"
+    assert isinstance(assignment.right, BinaryOpNode)
+    assert isinstance(assignment.right.left, MethodCallNode)
+    assert assignment.right.left.method == "Load<uint>"
 
 
 def test_nested_parameter_block_resource_wrapper_parsing():

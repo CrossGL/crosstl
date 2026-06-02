@@ -2257,6 +2257,49 @@ class TestHipParser:
         assert isinstance(function.body[0], ReturnNode)
         assert function.body[0].value == "x"
 
+    def test_template_prefixed_using_alias_with_dependent_type_parsing(self):
+        code = """
+        template <std::uint32_t WarpSize>
+        using lane_mask_t = typename std::conditional<
+            WarpSize == 32,
+            std::uint32_t,
+            std::uint64_t
+        >::type;
+
+        template <std::uint32_t WarpSize>
+        __global__ void block_reduce(lane_mask_t<WarpSize> mask) {
+        }
+        """
+        ast = self.parse_code(code)
+
+        alias = ast.statements[0]
+        kernel = ast.statements[1]
+
+        assert isinstance(alias, TypeAliasNode)
+        assert alias.name == "lane_mask_t"
+        assert alias.alias_type == (
+            "std::conditional<WarpSize==32, std::uint32_t, std::uint64_t>::type"
+        )
+        assert isinstance(kernel, KernelNode)
+        assert kernel.params == [{"type": "lane_mask_t<WarpSize>", "name": "mask"}]
+
+    def test_template_explicit_specialization_function_name_suffix_parsing(self):
+        code = """
+        template <>
+        auto get_elimit<ck_tile::bf16_t>() {
+            return 1;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "auto"
+        assert function.name == "get_elimit<ck_tile::bf16_t>"
+        assert isinstance(function.body[0], ReturnNode)
+        assert function.body[0].value == "1"
+
     def test_explicit_template_instantiation_parsing(self):
         code = """
         template float moe_smoothquant_<

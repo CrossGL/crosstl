@@ -57,6 +57,7 @@ class HipParser:
     """Parse HIP tokens into the HIP backend AST."""
 
     FUNCTION_SPECIFIER_TOKENS = {"STATIC", "INLINE", "EXTERN", "CONSTEXPR"}
+    TYPE_PREFIX_TOKENS = {"TYPENAME"}
     TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "UNSIGNED", "SIGNED", "__RESTRICT__"}
     POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "__RESTRICT__"}
     TYPE_REFERENCE_TOKENS = {"AMPERSAND", "AND"}
@@ -329,6 +330,8 @@ class HipParser:
 
         name = self.current_token.value
         self.advance()
+        if self.match("LT"):
+            name += self.parse_template_suffix()
         while self.match("SCOPE"):
             self.advance()
             if self.match("TILDE"):
@@ -341,6 +344,8 @@ class HipParser:
                 self.error(f"Expected function name after scope, got {token_type}")
             name += f"::{self.current_token.value}"
             self.advance()
+            if self.match("LT"):
+                name += self.parse_template_suffix()
         return name
 
     def is_declarator_name_token(self):
@@ -546,6 +551,8 @@ class HipParser:
             return self.parse_enum()
         if self.match("CLASS"):
             return self.parse_class()
+        if self.is_type_alias_start():
+            return self.parse_type_alias()
         if self.is_function_declaration():
             return self.parse_simple_function()
 
@@ -1526,6 +1533,9 @@ class HipParser:
         type_parts = []
         saw_integral_sign = False
 
+        while self.match(*self.TYPE_PREFIX_TOKENS):
+            self.advance()
+
         while self.match(*self.TYPE_QUALIFIER_TOKENS):
             if self.current_token.type in {"SIGNED", "UNSIGNED"}:
                 saw_integral_sign = True
@@ -1571,6 +1581,9 @@ class HipParser:
     def parse_type_without_array_suffix(self):
         type_parts = []
         saw_integral_sign = False
+
+        while self.match(*self.TYPE_PREFIX_TOKENS):
+            self.advance()
 
         while self.match(*self.TYPE_QUALIFIER_TOKENS):
             if self.current_token.type in {"SIGNED", "UNSIGNED"}:
@@ -1622,13 +1635,15 @@ class HipParser:
         if token_type == "LONG" and self.match("INT"):
             self.advance()
 
+        if self.match("LT"):
+            type_name += self.parse_template_suffix()
+
         while self.match("SCOPE"):
             self.consume("SCOPE")
             member = self.consume_qualified_name_member()
             type_name += f"::{member}"
-
-        if self.match("LT"):
-            type_name += self.parse_template_suffix()
+            if self.match("LT"):
+                type_name += self.parse_template_suffix()
 
         return type_name
 
@@ -2571,6 +2586,8 @@ class HipParser:
         previous = None
 
         for part in parts:
+            if part == "\n":
+                continue
             if part == ",":
                 formatted.append(", ")
             else:
@@ -3320,6 +3337,11 @@ class HipParser:
             return None
 
         index += 1
+        if index < len(self.tokens) and self.tokens[index].type == "LT":
+            index = self.skip_template_at_pos(index)
+            if index is None:
+                return None
+
         while index < len(self.tokens) and self.tokens[index].type == "SCOPE":
             index += 1
             if index < len(self.tokens) and self.tokens[index].type == "TILDE":
@@ -3329,6 +3351,10 @@ class HipParser:
             ):
                 return None
             index += 1
+            if index < len(self.tokens) and self.tokens[index].type == "LT":
+                index = self.skip_template_at_pos(index)
+                if index is None:
+                    return None
 
         if index < len(self.tokens) and self.tokens[index].type == "LPAREN":
             return index
@@ -3380,6 +3406,12 @@ class HipParser:
         saw_integral_sign = False
         while (
             index < len(self.tokens)
+            and self.tokens[index].type in self.TYPE_PREFIX_TOKENS
+        ):
+            index += 1
+
+        while (
+            index < len(self.tokens)
             and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS
         ):
             if self.tokens[index].type in {"SIGNED", "UNSIGNED"}:
@@ -3406,6 +3438,12 @@ class HipParser:
 
         has_qualified_suffix = False
 
+        if index < len(self.tokens) and self.tokens[index].type == "LT":
+            has_qualified_suffix = True
+            index = self.skip_template_at_pos(index)
+            if index is None:
+                return None
+
         while (
             index + 1 < len(self.tokens)
             and self.tokens[index].type == "SCOPE"
@@ -3413,12 +3451,10 @@ class HipParser:
         ):
             has_qualified_suffix = True
             index += 2
-
-        if index < len(self.tokens) and self.tokens[index].type == "LT":
-            has_qualified_suffix = True
-            index = self.skip_template_at_pos(index)
-            if index is None:
-                return None
+            if index < len(self.tokens) and self.tokens[index].type == "LT":
+                index = self.skip_template_at_pos(index)
+                if index is None:
+                    return None
 
         index = self.skip_postfix_type_qualifiers_at_pos(index)
         can_have_pointer_suffix = (

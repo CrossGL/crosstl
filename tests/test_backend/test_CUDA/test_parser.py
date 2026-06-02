@@ -499,6 +499,48 @@ class TestCudaParser:
         assert isinstance(enum.members[0][1], BinaryOpNode)
         assert ast.functions[0].body[1].value == "SHMEM_SZ"
 
+    def test_public_cuda_samples_goto_and_labels_are_skipped(self):
+        code = """
+        int host(int *p) {
+            int rc = -1;
+            if (p == NULL)
+                goto Exit;
+            rc = 0;
+        Exit:
+            rc += 1;
+            return rc;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert isinstance(body[1], IfNode)
+        assert body[1].if_body is None
+        assert isinstance(body[3], AssignmentNode)
+        assert body[3].left == "rc"
+        assert body[3].operator == "+="
+        assert isinstance(body[4], ReturnNode)
+
+    def test_public_cuda_samples_global_qualified_braced_temporaries(self):
+        code = """
+        void host(int ordinal) {
+            s.device = ::DLDevice{::kDLCUDA, ordinal};
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assignment = ast.functions[0].body[0]
+        assert isinstance(assignment.left, MemberAccessNode)
+        assert isinstance(assignment.right, FunctionCallNode)
+        assert assignment.right.name == "::DLDevice"
+        assert assignment.right.args == ["::kDLCUDA", "ordinal"]
+
     def test_public_cuda_samples_device_global_variables_parse_as_globals(self):
         code = """
         __device__ int g_uids = 0;
