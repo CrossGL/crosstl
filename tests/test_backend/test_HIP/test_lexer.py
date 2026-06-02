@@ -223,6 +223,22 @@ class TestHipLexer:
         ]
         assert ("CHAR", "char") in [(token.type, token.value) for token in tokens]
 
+    def test_raw_string_literal_tokenization(self):
+        code = """
+        constexpr const char* shader = R"(
+        #version 330 core
+        void main() {}
+        )";
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+
+        strings = [token.value for token in tokens if token.type == "STRING"]
+
+        assert len(strings) == 1
+        assert strings[0].startswith('R"(')
+        assert "#version 330 core" in strings[0]
+
     def test_preprocessor_directives(self):
         code = """
         #include <hip/hip_runtime.h>

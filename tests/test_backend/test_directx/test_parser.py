@@ -1474,6 +1474,38 @@ def test_parse_function_prototype_declaration():
     assert ast.functions[0].is_prototype is True
 
 
+def test_parse_ray_payload_struct_attributes_from_directx_graphics_samples():
+    ast = parse_code("""
+    struct [raypayload] RayPayload {
+        float4 color : write(caller, closesthit, miss) : read(caller);
+        uint iterations : write(caller) : read(closesthit);
+    };
+    """)
+
+    payload = ast.structs[0]
+
+    assert payload.name == "RayPayload"
+    assert [attribute.name for attribute in payload.attributes] == ["raypayload"]
+    assert (
+        payload.members[0].semantic == "write(caller, closesthit, miss): read(caller)"
+    )
+    assert payload.members[1].semantic == "write(caller): read(closesthit)"
+
+
+def test_parse_scoped_enum_parameter_type_from_directx_graphics_samples():
+    ast = parse_code("""
+    float GetDistanceFromSignedDistancePrimitive(
+        in float3 position,
+        in SignedDistancePrimitive::Enum sdPrimitive);
+    """)
+
+    function = ast.functions[0]
+
+    assert function.is_prototype is True
+    assert function.params[1].vtype == "SignedDistancePrimitive::Enum"
+    assert function.params[1].name == "sdPrimitive"
+
+
 @pytest.mark.parametrize(
     "code",
     [

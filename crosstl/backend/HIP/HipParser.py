@@ -259,7 +259,7 @@ class HipParser:
             index = self.skip_newlines_at_pos(index)
 
         index = self.skip_newlines_at_pos(index)
-        index = self.skip_type_at_pos(index)
+        index = self.skip_type_at_pos(index, allow_unknown_identifier_pointers=True)
         if index is None:
             return None
 
@@ -779,6 +779,7 @@ class HipParser:
             self.advance()
             self.type_aliases.add(name)
 
+        self.skip_newlines()
         members = []
         if self.match("LBRACE"):
             self.consume("LBRACE")
@@ -859,18 +860,61 @@ class HipParser:
                 self.advance()
                 continue
 
+            saved_pos = self.pos
             try:
                 declarations = self.parse_variable_declaration_list(
                     consume_semicolon=True
                 )
                 members.extend(declarations)
             except Exception:
-                while self.current_token and not self.match("SEMICOLON", "RBRACE"):
-                    self.advance()
-                if self.match("SEMICOLON"):
-                    self.advance()
+                self.pos = saved_pos
+                self.current_token = self.tokens[self.pos]
+                self.skip_unsupported_struct_member()
 
         return members
+
+    def skip_unsupported_struct_member(self):
+        paren_depth = 0
+        bracket_depth = 0
+
+        while self.current_token:
+            if self.match("LPAREN"):
+                paren_depth += 1
+                self.advance()
+                continue
+            if self.match("RPAREN"):
+                paren_depth = max(0, paren_depth - 1)
+                self.advance()
+                continue
+            if self.match("LBRACKET"):
+                bracket_depth += 1
+                self.advance()
+                continue
+            if self.match("RBRACKET"):
+                bracket_depth = max(0, bracket_depth - 1)
+                self.advance()
+                continue
+            if self.match("LBRACE") and paren_depth == 0 and bracket_depth == 0:
+                self.skip_balanced_brace_block()
+                return
+            if self.match("SEMICOLON") and paren_depth == 0 and bracket_depth == 0:
+                self.advance()
+                return
+            if self.match("RBRACE") and paren_depth == 0 and bracket_depth == 0:
+                return
+            self.advance()
+
+    def skip_balanced_brace_block(self):
+        depth = 0
+        while self.current_token:
+            if self.match("LBRACE"):
+                depth += 1
+            elif self.match("RBRACE"):
+                depth -= 1
+
+            self.advance()
+            if depth == 0:
+                return
 
     def parse_class(self):
         self.consume("CLASS")
@@ -1610,10 +1654,38 @@ class HipParser:
     def parse_expression_statement(self):
         expr = self.parse_expression()
 
+        if self.match("SEMICOLON"):
+            self.advance()
+            return expr
+        if self.is_optional_semicolon_macro_statement(expr):
+            self.skip_newlines()
+            if self.match("SEMICOLON"):
+                self.advance()
+            return expr
+
         self.skip_newlines()
         self.consume("SEMICOLON")
 
         return expr
+
+    def is_optional_semicolon_macro_statement(self, expr):
+        if not self.is_expression_statement_boundary():
+            return False
+        if not isinstance(expr, FunctionCallNode):
+            return False
+        name = expr.name
+        return (
+            isinstance(name, str)
+            and name.isupper()
+            and any(char.isalpha() for char in name)
+        )
+
+    def is_expression_statement_boundary(self):
+        if self.match("NEWLINE", "RBRACE"):
+            return True
+        if self.pos > 0 and self.tokens[self.pos - 1].type == "NEWLINE":
+            return True
+        return False
 
     def parse_expression(self):
         return self.parse_assignment_expression()
@@ -2152,7 +2224,10 @@ class HipParser:
             self.advance()
             return name
 
-        elif self.match("INTEGER", "FLOAT_NUM", "FLOAT", "STRING"):
+        elif self.match("STRING"):
+            return self.parse_string_literal_sequence()
+
+        elif self.match("INTEGER", "FLOAT_NUM", "FLOAT"):
             value = self.current_token.value
             self.advance()
             return value
@@ -2570,6 +2645,20 @@ class HipParser:
             return self.parse_designated_initializer()
         return self.parse_expression()
 
+    def parse_string_literal_sequence(self):
+        value = self.consume("STRING").value
+        self.skip_newlines()
+
+        while self.match("STRING"):
+            next_value = self.consume("STRING").value
+            if value.endswith('"') and next_value.startswith('"'):
+                value = value[:-1] + next_value[1:]
+            else:
+                value += next_value
+            self.skip_newlines()
+
+        return value
+
     def parse_designated_initializer(self):
         designators = []
 
@@ -2671,8 +2760,11 @@ class HipParser:
         ):
             index += 1
 
-        index = self.skip_type_at_pos(index)
+        index = self.skip_type_at_pos(
+            index, allow_unknown_identifier_pointers=self.block_depth == 0
+        )
         if index is not None:
+            index = self.skip_newlines_at_pos(index)
             if (
                 index + 1 < len(self.tokens)
                 and self.is_function_name_token(self.tokens[index])
@@ -2717,7 +2809,7 @@ class HipParser:
 
         return False
 
-    def skip_type_at_pos(self, index):
+    def skip_type_at_pos(self, index, allow_unknown_identifier_pointers=False):
         saw_integral_sign = False
         while (
             index < len(self.tokens)
@@ -2763,10 +2855,12 @@ class HipParser:
 
         index = self.skip_postfix_type_qualifiers_at_pos(index)
         can_have_pointer_suffix = (
-            type_token != "IDENTIFIER"
+            allow_unknown_identifier_pointers
+            or type_token != "IDENTIFIER"
             or has_qualified_suffix
             or type_value == "auto"
             or self.is_identifier_type_name(type_value)
+            or self.is_probable_identifier_type_name(type_value)
         )
         while (
             can_have_pointer_suffix
@@ -2819,6 +2913,9 @@ class HipParser:
             or type_name in self.HIP_IDENTIFIER_TYPE_NAMES
             or self.is_hip_opaque_handle_type(type_name)
         )
+
+    def is_probable_identifier_type_name(self, type_name):
+        return isinstance(type_name, str) and type_name[:1].isupper()
 
     def skip_postfix_type_qualifiers_at_pos(self, index):
         while (

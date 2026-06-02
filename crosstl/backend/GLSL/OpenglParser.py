@@ -1262,6 +1262,7 @@ class GLSLParser:
     def parse_postfix(self):
         expr = self.parse_primary()
         while True:
+            self.skip_newlines()
             if self.is_array_constructor_suffix(expr):
                 while self.current_token[0] == "LBRACKET":
                     self.eat("LBRACKET")

@@ -20,6 +20,7 @@ class SlangParser:
         "private",
         "__global",
         "__extern_cpp",
+        "no_diff",
     }
     BUILTIN_IDENTIFIER_TYPES = {
         "double",
@@ -159,6 +160,8 @@ class SlangParser:
 
         current_pos += 1
         current_pos = self.skip_generic_type_suffix_tokens(current_pos)
+        current_pos = self.skip_type_array_suffix_tokens(current_pos)
+        current_pos = self.skip_pointer_declarator_tokens(current_pos)
         if self.tokens[current_pos][0] != "IDENTIFIER":
             return False
         current_pos += 1
@@ -226,6 +229,34 @@ class SlangParser:
                     raise SyntaxError("Unterminated generic type suffix")
             current_pos += 1
         raise SyntaxError("Unterminated generic type suffix")
+
+    def skip_type_array_suffix_tokens(self, current_pos):
+        while (
+            current_pos < len(self.tokens) and self.tokens[current_pos][0] == "LBRACKET"
+        ):
+            depth = 0
+            while (
+                current_pos < len(self.tokens) and self.tokens[current_pos][0] != "EOF"
+            ):
+                token_type = self.tokens[current_pos][0]
+                if token_type == "LBRACKET":
+                    depth += 1
+                elif token_type == "RBRACKET":
+                    depth -= 1
+                    if depth == 0:
+                        current_pos += 1
+                        break
+                current_pos += 1
+            else:
+                raise SyntaxError("Unterminated array type suffix")
+        return current_pos
+
+    def skip_pointer_declarator_tokens(self, current_pos):
+        while (
+            current_pos < len(self.tokens) and self.tokens[current_pos][0] == "MULTIPLY"
+        ):
+            current_pos += 1
+        return current_pos
 
     def parse_attribute_list(self):
         attributes = []
@@ -339,12 +370,45 @@ class SlangParser:
             if str(attribute.get("name", "")).lower() != "shader"
         ]
 
-    def parse_type_name(self):
+    def parse_type_name(self, allow_array_suffix=False):
         type_name = self.current_token[1]
         self.eat(self.current_token[0])
         if self.current_token[0] == "LESS_THAN":
             type_name += self.parse_generic_type_suffix()
+        if allow_array_suffix and self.current_token[0] == "LBRACKET":
+            type_name += self.parse_type_array_suffixes()
         return type_name
+
+    def parse_type_array_suffixes(self):
+        suffix = ""
+        while self.current_token[0] == "LBRACKET":
+            suffix += "["
+            self.eat("LBRACKET")
+            depth = 1
+            while depth > 0:
+                token_type, token_value = self.current_token
+                if token_type == "EOF":
+                    raise SyntaxError("Unterminated array type suffix")
+                if token_type == "LBRACKET":
+                    depth += 1
+                    suffix += "["
+                    self.eat("LBRACKET")
+                    continue
+                if token_type == "RBRACKET":
+                    depth -= 1
+                    suffix += "]"
+                    self.eat("RBRACKET")
+                    continue
+                suffix += str(token_value)
+                self.eat(token_type)
+        return suffix
+
+    def parse_pointer_suffix(self):
+        suffix = ""
+        while self.current_token[0] == "MULTIPLY":
+            suffix += "*"
+            self.eat("MULTIPLY")
+        return suffix
 
     def parse_generic_type_suffix(self):
         parts = ["<"]
@@ -431,6 +495,7 @@ class SlangParser:
         attributes = attributes or []
         qualifiers = self.parse_qualifiers()
         var_type = self.parse_type_name()
+        var_type += self.parse_pointer_suffix()
         var_name = self.current_token[1]
         self.eat("IDENTIFIER")
         array_sizes = self.parse_array_suffixes()
@@ -557,10 +622,25 @@ class SlangParser:
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 continue
-            if self.is_function():
-                methods.append(self.parse_function(allow_signature=True))
+            pending_attributes = []
+            while self.current_token[0] == "LBRACKET":
+                pending_attributes.extend(self.parse_attribute_list())
+            if self.current_token[0] == "RBRACE":
+                break
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
                 continue
-            members.extend(self.parse_struct_field_members())
+            if self.is_function():
+                methods.append(
+                    self.parse_function(
+                        attributes=pending_attributes,
+                        allow_signature=True,
+                    )
+                )
+                continue
+            members.extend(
+                self.parse_struct_field_members(attributes=pending_attributes)
+            )
         self.eat("RBRACE")
         node = StructNode(name, members)
         node.methods = methods
@@ -569,10 +649,12 @@ class SlangParser:
         node.qualifiers = qualifiers
         return node
 
-    def parse_struct_field_members(self):
+    def parse_struct_field_members(self, attributes=None):
+        attributes = attributes or []
         members = []
         qualifiers = self.parse_qualifiers()
         vtype = self.parse_type_name()
+        vtype += self.parse_pointer_suffix()
         while True:
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -582,11 +664,17 @@ class SlangParser:
                 self.eat("COLON")
                 semantic = self.current_token[1]
                 self.eat(self.current_token[0])
+            value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                value = self.parse_expression()
             members.append(
                 VariableNode(
                     vtype,
                     var_name,
+                    value=value,
                     qualifiers=qualifiers,
+                    attributes=attributes,
                     array_sizes=array_sizes,
                     semantic=semantic,
                 )
@@ -649,7 +737,8 @@ class SlangParser:
         shader_type = shader_type or self.get_shader_attribute(attributes)
         attributes = self.filter_function_attributes(attributes)
         qualifiers, is_generic = self.parse_declaration_prefixes()
-        return_type = self.parse_type_name()
+        return_type = self.parse_type_name(allow_array_suffix=True)
+        return_type += self.parse_pointer_suffix()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         generic_parameters = None
@@ -721,7 +810,8 @@ class SlangParser:
         while self.current_token[0] != "RPAREN":
             struct_def = ""
             qualifiers = self.parse_qualifiers()
-            vtype = self.parse_type_name()
+            vtype = self.parse_type_name(allow_array_suffix=True)
+            vtype += self.parse_pointer_suffix()
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             array_sizes = self.parse_array_suffixes()
@@ -760,10 +850,14 @@ class SlangParser:
         return [self.parse_statement()]
 
     def parse_statement(self):
+        while self.current_token[0] == "LBRACKET":
+            self.parse_attribute_list()
+
         if self.current_token[0] == "IDENTIFIER" and self.tokens[self.pos + 1][0] in {
             "LPAREN",
             "LBRACKET",
             "DOT",
+            "COLON",
         }:
             return self.parse_expression_statement()
         if self.is_variable_declaration_start():
@@ -806,11 +900,14 @@ class SlangParser:
             return False
 
         next_pos = self.skip_generic_type_suffix_tokens(current_pos + 1)
+        next_pos = self.skip_type_array_suffix_tokens(next_pos)
+        next_pos = self.skip_pointer_declarator_tokens(next_pos)
         return next_pos < len(self.tokens) and self.tokens[next_pos][0] == "IDENTIFIER"
 
     def parse_variable_declaration_or_assignment(self):
         qualifiers = self.parse_qualifiers()
         var_type = self.parse_type_name()
+        var_type += self.parse_pointer_suffix()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         array_sizes = self.parse_array_suffixes()
@@ -1139,6 +1236,9 @@ class SlangParser:
             self.eat(self.current_token[0])
             operand = self.parse_unary()
             return UnaryOpNode(op, operand)
+        if self.current_token == ("IDENTIFIER", "no_diff"):
+            self.eat("IDENTIFIER")
+            return self.parse_unary()
         if self.current_token[0] == "LPAREN" and self.is_c_style_cast_start():
             return self.parse_c_style_cast()
         return self.parse_primary()
@@ -1438,6 +1538,17 @@ class SlangParser:
     def parse_function_call_or_identifier(self):
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        while (
+            self.current_token[0] == "COLON"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "COLON"
+            and self.pos + 2 < len(self.tokens)
+            and self.tokens[self.pos + 2][0] == "IDENTIFIER"
+        ):
+            self.eat("COLON")
+            self.eat("COLON")
+            name += f"::{self.current_token[1]}"
+            self.eat("IDENTIFIER")
         if self.current_token[0] == "LESS_THAN" and self.is_generic_expression_suffix():
             name += self.parse_generic_type_suffix()
         if self.current_token[0] == "LPAREN":

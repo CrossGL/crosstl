@@ -150,6 +150,7 @@ TOKENS = tuple(
             "NUMBER",
             r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFdDlLuU]*",
         ),
+        ("STRING", r'(?:u8|u|U|L)?R"([^\s()\\]{0,16})\([\s\S]*?\)\1"'),
         ("STRING", r'"([^"\\]|\\.)*"'),
         ("CHAR_LIT", r"(?:u8|u|U|L)?'(?:[^'\\\n]|\\.)+'"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),

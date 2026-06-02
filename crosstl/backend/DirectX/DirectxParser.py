@@ -453,10 +453,19 @@ class HLSLParser:
         base = self.current_token[1]
         self.eat(self.current_token[0])
         type_name = base
+        while self.current_token[0] == "COLON" and self.peek()[0] == "COLON":
+            self.eat("COLON")
+            self.eat("COLON")
+            if self.current_token[0] != "IDENTIFIER":
+                raise SyntaxError(
+                    f"Expected identifier after scoped type, got {self.current_token[0]}"
+                )
+            type_name += f"::{self.current_token[1]}"
+            self.eat("IDENTIFIER")
 
         if self.current_token[0] == "LESS_THAN":
             args = self.parse_generic_arguments()
-            type_name = f"{base}<{', '.join(args)}>"
+            type_name = f"{type_name}<{', '.join(args)}>"
 
         return type_name
 
@@ -492,20 +501,52 @@ class HLSLParser:
         register = None
         packoffset = None
 
-        if self.current_token[0] != "COLON":
-            return semantic, register, packoffset
+        semantics = []
+        while self.current_token[0] == "COLON":
+            self.eat("COLON")
+            if self.current_token[0] == "REGISTER":
+                register = self.parse_register_binding("REGISTER")
+                continue
+            if self.current_token[0] == "PACKOFFSET":
+                packoffset = self.parse_register_binding("PACKOFFSET")
+                continue
 
-        self.eat("COLON")
-        if self.current_token[0] == "REGISTER":
-            register = self.parse_register_binding("REGISTER")
-            return semantic, register, packoffset
-        if self.current_token[0] == "PACKOFFSET":
-            packoffset = self.parse_register_binding("PACKOFFSET")
-            return semantic, register, packoffset
+            if self.current_token[0] != "IDENTIFIER":
+                raise SyntaxError(
+                    f"Expected semantic identifier, got {self.current_token[0]}"
+                )
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            if self.current_token[0] == "LPAREN":
+                args = self.parse_semantic_argument_list()
+                name = f"{name}({args})"
+            semantics.append(name)
 
-        semantic = self.current_token[1]
-        self.eat("IDENTIFIER")
+        if semantics:
+            semantic = ": ".join(semantics)
         return semantic, register, packoffset
+
+    def parse_semantic_argument_list(self):
+        self.eat("LPAREN")
+        parts = []
+        depth = 1
+        while depth > 0 and self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RPAREN")
+                    break
+            if token_type == "COMMA":
+                parts.append(", ")
+            else:
+                parts.append(str(token_value))
+            self.eat(token_type)
+        if depth != 0:
+            raise SyntaxError("Unterminated semantic argument list")
+        return "".join(parts).strip()
 
     def parse_register_binding(self, token_type):
         self.eat(token_type)
@@ -523,6 +564,7 @@ class HLSLParser:
 
     def parse_struct(self):
         self.eat("STRUCT")
+        struct_attributes = self.parse_attribute_list()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
@@ -571,6 +613,7 @@ class HLSLParser:
             self.eat("SEMICOLON")
 
         struct_node = StructNode(name, members)
+        struct_node.attributes = struct_attributes
         struct_node.variables = variables
         struct_node.semantic = semantic
         return struct_node

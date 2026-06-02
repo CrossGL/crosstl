@@ -247,6 +247,164 @@ class TestHipParser:
         assert function.params[0]["type"] == "const MemoryMode"
         assert function.params[0]["name"] == "memory_mode"
 
+    def test_public_rocm_bandwidth_multiline_vector_return_type_parsing(self):
+        code = """
+        std::vector<double>
+            run_bandwidth_host_device(const std::vector<size_t>& sizes,
+                                      const unsigned int trails) {
+            const size_t size_in_bytes = 256;
+            const double bandwidth_achieved
+                = ((size_in_bytes * trails) / 1e9) / elapsed;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        body = function.body
+
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "std::vector<double>"
+        assert function.name == "run_bandwidth_host_device"
+        assert body[1].vtype == "const double"
+        assert body[1].name == "bandwidth_achieved"
+        assert isinstance(body[1].value, BinaryOpNode)
+
+    def test_public_rocm_runtime_compilation_adjacent_raw_kernel_string_parsing(self):
+        code = r"""
+        static constexpr auto saxpy_kernel{
+            "#include \"test_header.h\"\n"
+            "#include \"test_header1.h\"\n"
+            R"(
+        extern "C" __global__ void saxpy_kernel()
+        {
+        }
+        )"};
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0]
+        initializer = declaration.value
+
+        assert isinstance(declaration, VariableNode)
+        assert isinstance(initializer, InitializerListNode)
+        assert len(initializer.elements) == 1
+        assert "test_header1.h" in initializer.elements[0]
+        assert 'extern "C" __global__ void saxpy_kernel' in initializer.elements[0]
+
+    def test_public_rocm_opengl_interop_raw_shader_string_parsing(self):
+        code = """
+        constexpr const char* vertex_shader = R"(
+        #version 330 core
+
+        in float in_height;
+
+        void main()
+        {
+            gl_Position = vec4(in_height, 0, 1, 1);
+        }
+        )";
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.name == "vertex_shader"
+        assert declaration.vtype == "const char *"
+        assert declaration.value.startswith('R"(')
+        assert "#version 330 core" in declaration.value
+
+    def test_public_rocm_opengl_interop_unknown_pointer_return_type_parsing(self):
+        code = """
+        GLFWwindow* create_window(const int initial_width, const int initial_height)
+        {
+            return nullptr;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "GLFWwindow *"
+        assert function.name == "create_window"
+        assert function.params[0] == {"type": "const int", "name": "initial_width"}
+
+    def test_public_rocm_opengl_interop_unknown_pointer_local_declaration(self):
+        code = """
+        void host() {
+            GLFWwindow* const window = create_window(initial_width, initial_height);
+            foo * bar;
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0].body[0]
+        expression = ast.statements[0].body[1]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "GLFWwindow * const"
+        assert declaration.name == "window"
+        assert isinstance(declaration.value, FunctionCallNode)
+        assert isinstance(expression, BinaryOpNode)
+        assert expression.op == "*"
+
+    def test_public_rocm_opengl_interop_struct_constructor_body_skips_balanced(self):
+        code = """
+        struct renderer
+        {
+            GLuint vao;
+
+            renderer()
+            {
+                glGenVertexArrays(1, &this->vao);
+            }
+
+            renderer(const renderer&) = delete;
+        };
+
+        int main() {
+            return 0;
+        }
+        """
+        ast = self.parse_code(code)
+
+        struct = ast.statements[0]
+        function = ast.statements[1]
+
+        assert isinstance(struct, StructNode)
+        assert struct.name == "renderer"
+        assert len(struct.members) == 1
+        assert struct.members[0].name == "vao"
+        assert isinstance(function, FunctionNode)
+        assert function.name == "main"
+
+    def test_public_rocm_macro_call_statement_can_omit_semicolon(self):
+        code = """
+        void host(int num_streams, hipStream_t* streams) {
+            HIP_CHECK(hipGetLastError())
+            HIP_CHECK(hipMemcpy(dst, src, size, hipMemcpyDeviceToHost));
+            for(int i = 0; i < num_streams; i++)
+            {
+                HIP_CHECK(hipStreamDestroy(streams[i]))
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        first_call = ast.statements[0].body[0]
+        second_call = ast.statements[0].body[1]
+        loop = ast.statements[0].body[2]
+        statement = loop.body[0]
+
+        assert isinstance(first_call, FunctionCallNode)
+        assert first_call.name == "HIP_CHECK"
+        assert isinstance(second_call, FunctionCallNode)
+        assert second_call.name == "HIP_CHECK"
+        assert isinstance(loop, ForNode)
+        assert isinstance(statement, FunctionCallNode)
+        assert statement.name == "HIP_CHECK"
+
     def test_dynamic_shared_memory_parsing_marks_extern_unsized_array(self):
         code = """
         __global__ void kernel() {

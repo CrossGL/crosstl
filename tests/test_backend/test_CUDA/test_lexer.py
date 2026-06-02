@@ -202,3 +202,19 @@ class TestCudaLexer:
 
         assert values == ["'c'", "'\\n'", "'\\x7f'", "'\\377'", "u8'a'", "L'b'"]
         assert ("CHAR", "char") in tokens
+
+    def test_raw_string_literal_tokenization(self):
+        code = """
+        constexpr const char* shader = R"(
+        #version 330 core
+        void main() {}
+        )";
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        strings = [value for token_type, value in tokens if token_type == "STRING"]
+
+        assert len(strings) == 1
+        assert strings[0].startswith('R"(')
+        assert "#version 330 core" in strings[0]

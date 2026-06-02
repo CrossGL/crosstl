@@ -759,10 +759,15 @@ class SlangToCrossGLConverter:
         """Map a Slang type name to the closest CrossGL type name."""
         if slang_type:
             slang_type = slang_type.strip()
+            pointer_suffix = ""
+            while slang_type.endswith("*"):
+                pointer_suffix += "*"
+                slang_type = slang_type[:-1].strip()
             base_type = slang_type.split("<", 1)[0].strip()
-            return self.type_map.get(
+            mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
+            return f"{mapped_type}{pointer_suffix}"
         return slang_type
 
     def collect_sampleable_resources(self, ast):

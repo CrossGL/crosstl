@@ -237,6 +237,28 @@ def test_rust_gpu_compute_shader_method_turbofish_codegen():
     assert "collect<Vec<_>>();" in result
 
 
+def test_rust_gpu_compute_shader_is_multiple_of_method_codegen():
+    code = """
+    pub fn collatz(mut n: u32) -> Option<u32> {
+        let mut i = 0;
+        while n != 1 {
+            n = if n.is_multiple_of(2) {
+                n / 2
+            } else {
+                3 * n + 1
+            };
+            i += 1;
+        }
+        Some(i)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "(((n % 2) == 0) ? (n / 2) : ((3 * n) + 1))" in result
+    assert "is_multiple_of" not in result
+
+
 def test_rust_gpu_path_qualified_attribute_codegen():
     code = r"""
     #[spirv_std_macros::gpu_only]

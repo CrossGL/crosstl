@@ -3651,6 +3651,9 @@ class RustToCrossGLConverter:
                 f"({obj}, {args[0]}, {args[1]})"
             )
 
+        if method_name == "is_multiple_of" and len(args) == 1:
+            return f"(({obj} % {args[0]}) == 0)"
+
         if method_name == "length" and not args:
             return f"length({obj})"
 

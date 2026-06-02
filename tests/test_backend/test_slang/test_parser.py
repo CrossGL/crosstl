@@ -1673,5 +1673,92 @@ def test_parenthesized_expression_swizzle_from_autodiff_texture_learnmip_sample(
     assert isinstance(swizzle.object.left, ArrayAccessNode)
 
 
+def test_struct_method_attributes_and_no_diff_from_autodiff_texture_train_sample():
+    code = """
+    Texture2D texRef;
+
+    struct DifferentiableTexture
+    {
+        Texture2D texture;
+
+        [BackwardDerivative(bwd_LoadTexel)]
+        float4 LoadTexel(int3 location, constexpr int2 offset)
+        {
+            return texture.Load(location, offset);
+        }
+    }
+
+    [BackwardDifferentiable]
+    float3 loss(no_diff float2 uv, no_diff float4 screenPos)
+    {
+        float3 refColor = (no_diff texRef.Load(int3(int2(screenPos.xy), 0))).xyz;
+        return refColor;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    texture = ast.structs[0]
+    method = texture.methods[0]
+    loss = find_function(ast, "loss")
+    ref_color = loss.body[0]
+
+    assert method.attributes == [
+        {"name": "BackwardDerivative", "arguments": ["bwd_LoadTexel"]}
+    ]
+    assert method.params[1].qualifiers == ["constexpr"]
+    assert [param.qualifiers for param in loss.params] == [["no_diff"], ["no_diff"]]
+    assert isinstance(ref_color.right, MemberAccessNode)
+    assert ref_color.right.member == "xyz"
+
+
+def test_pointer_and_statement_attribute_syntax_from_mlp_training_samples():
+    code = """
+    public struct AdamOptimizer
+    {
+        public static const NFloat beta1 = 0.9h;
+    }
+
+    public struct FeedForwardLayer<int InputSize, int OutputSize>
+    {
+        public NFloat* weights;
+        public NFloat* weightsGrad;
+    }
+
+    [numthreads(256, 1, 1)]
+    void adjustParameters(
+        uint32_t tid : SV_DispatchThreadID,
+        uniform AdamState* states,
+        uniform NFloat* params,
+        uniform NFloat* gradients,
+        uniform uint32_t count)
+    {
+        [ForceUnroll]
+        for (int i = 0; i < 1; i++)
+            AdamOptimizer::step(states[tid], params[tid], gradients[tid]);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    optimizer = ast.structs[0]
+    layer = ast.structs[1]
+    adjust_parameters = find_function(ast, "adjustParameters")
+    loop = adjust_parameters.body[0]
+    call = loop.body[0]
+
+    assert optimizer.members[0].qualifiers == ["public", "static", "const"]
+    assert optimizer.members[0].value == "0.9h"
+    assert [member.vtype for member in layer.members] == ["NFloat*", "NFloat*"]
+    assert [param.vtype for param in adjust_parameters.params[1:4]] == [
+        "AdamState*",
+        "NFloat*",
+        "NFloat*",
+    ]
+    assert isinstance(loop, ForNode)
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "AdamOptimizer::step"
+
+
 if __name__ == "__main__":
     pytest.main()

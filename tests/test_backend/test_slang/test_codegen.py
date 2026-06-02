@@ -1661,5 +1661,30 @@ def test_parenthesized_unary_swizzle_codegen_preserves_receiver_grouping():
     assert "float x = -value.x;" not in generated_code
 
 
+def test_pointer_declarator_codegen_from_mlp_training_samples():
+    code = """
+    public struct FeedForwardLayer<int InputSize, int OutputSize>
+    {
+        public NFloat* weights;
+    }
+
+    void learnGradient(
+        uniform MyNetwork* network,
+        uniform Atomic<uint32_t>* lossBuffer,
+        uniform float2* inputs)
+    {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "NFloat* weights;" in generated_code
+    assert "MyNetwork* network" in generated_code
+    assert "Atomic<uint32_t>* lossBuffer" in generated_code
+    assert "vec2* inputs" in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()

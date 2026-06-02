@@ -165,6 +165,7 @@ TOKENS = tuple(
             r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFdDlL]*|\d+[eE][+-]?\d+[fFdDlL]*|\d+[fFdD]",
         ),
         ("INTEGER", r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[lLuU]*"),
+        ("STRING", r'(?:u8|u|U|L)?R"([^\s()\\]{0,16})\([\s\S]*?\)\1"'),
         ("STRING", r'"([^"\\]|\\.)*"'),
         ("CHAR_LIT", r"(?:u8|u|U|L)?'(?:[^'\\\n]|\\.)+'"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),

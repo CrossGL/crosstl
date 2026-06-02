@@ -799,6 +799,24 @@ def test_parse_swizzle_and_constructors():
     parse_ok(code, "vertex")
 
 
+def test_parse_constructor_call_split_across_newline_from_gltf_sample_renderer():
+    code = textwrap.dedent("""
+        #version 450 core
+        const mat3 ACESInputMat = mat3
+        (
+            0.59719, 0.07600, 0.02840,
+            0.35458, 0.90834, 0.13383,
+            0.04823, 0.01566, 0.83777
+        );
+
+        void main() { }
+        """)
+
+    ast = parse_ok(code, "fragment")
+
+    assert ast.constant[0].name == "ACESInputMat"
+
+
 @pytest.mark.parametrize(
     "code",
     [
