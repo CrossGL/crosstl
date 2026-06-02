@@ -12,6 +12,7 @@ from ..common_ast import (
     DeleteNode,
     DesignatedInitializerNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -45,6 +46,7 @@ _COMMON_NODES = (
     DesignatedInitializerNode,
     DeleteNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -120,6 +122,48 @@ class HipBuiltinNode(ASTNode):
         return f"HipBuiltinNode(builtin_name={self.builtin_name})"
 
 
+class HipAsmOperandNode(ASTNode):
+    """Node representing one inline HIP assembly operand."""
+
+    def __init__(self, constraint, expression=None, symbolic_name=None):
+        self.constraint = constraint
+        self.expression = expression
+        self.symbolic_name = symbolic_name
+
+    def __repr__(self):
+        return (
+            "HipAsmOperandNode("
+            f"constraint={self.constraint}, expression={self.expression}, "
+            f"symbolic_name={self.symbolic_name})"
+        )
+
+
+class HipAsmNode(ASTNode):
+    """Node representing a HIP inline assembly statement."""
+
+    def __init__(
+        self,
+        template,
+        outputs=None,
+        inputs=None,
+        clobbers=None,
+        is_volatile=False,
+    ):
+        self.template = template
+        self.outputs = outputs or []
+        self.inputs = inputs or []
+        self.clobbers = clobbers or []
+        self.is_volatile = is_volatile
+
+    def __repr__(self):
+        return (
+            "HipAsmNode("
+            f"template={self.template}, outputs={self.outputs}, "
+            f"inputs={self.inputs}, clobbers={self.clobbers}, "
+            f"is_volatile={self.is_volatile})"
+        )
+
+
 class TextureAccessNode(ASTNode):
     """Node representing texture memory access"""
 
@@ -134,9 +178,18 @@ class TextureAccessNode(ASTNode):
 class SharedMemoryNode(VariableNode):
     """Node representing shared memory variable declaration"""
 
-    def __init__(self, vtype, name, size=None):
+    def __init__(
+        self,
+        vtype,
+        name,
+        size=None,
+        is_extern=False,
+        is_dynamic=False,
+    ):
         super().__init__(vtype, name, qualifiers=["__shared__"])
         self.size = size
+        self.is_extern_shared_memory = is_extern
+        self.is_dynamic_shared_memory = is_dynamic
 
     def __repr__(self):
         return (

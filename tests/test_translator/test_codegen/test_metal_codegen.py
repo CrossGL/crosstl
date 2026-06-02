@@ -54,6 +54,24 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_metal_codegen_skips_resource_array_hint_walk_without_resource_arrays():
+    shader = """
+    shader MetalBlendOverloadShape {
+        fragment {
+            vec4 blend(vec4 backdrop, vec4 source, float intensity) {
+                vec4 blendedColor = blend(backdrop, source);
+                return mix(backdrop, blendedColor, intensity);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float4 blendedColor = blend(backdrop, source);" in generated_code
+    assert "return mix(backdrop, blendedColor, intensity);" in generated_code
+
+
 def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
     shader = """
     shader SynchronizationBuiltins {

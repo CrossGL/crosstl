@@ -86,8 +86,9 @@ TOKENS = tuple(
             r"(0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|"
             r"0[bB][01](?:_?[01])*|"
             r"0[oO][0-7](?:_?[0-7])*|"
-            r"\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d(?:_?\d)*)?)"
-            r"((i|u)(8|16|32|64|128|size)|f(32|64))?",
+            r"\d(?:_?\d)*(?:(?:\.\d(?:_?\d)*)|\.(?![._A-Za-z0-9]))?"
+            r"(?:[eE][+-]?\d(?:_?\d)*)?)"
+            r"_?((i|u)(8|16|32|64|128|size)|f(32|64))?",
         ),
         # Underscore must come before identifier to match wildcard patterns
         ("UNDERSCORE", r"_"),
@@ -374,6 +375,7 @@ class RustLexer:
     """Tokenize Rust source for the Rust backend parser."""
 
     def __init__(self, code: str):
+        code = code.lstrip("\ufeff")
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)

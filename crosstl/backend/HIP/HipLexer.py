@@ -41,6 +41,7 @@ TOKENS = tuple(
         ("__NOINLINE__", r"\b__noinline__\b"),
         ("__FORCEINLINE__", r"\b__forceinline__\b"),
         ("__LAUNCH_BOUNDS__", r"\b__launch_bounds__\b"),
+        ("ASM", r"\b(?:asm|__asm__)\b"),
         # HIP built-in variables
         ("THREADIDX", r"\bthreadIdx\b"),
         ("BLOCKIDX", r"\bblockIdx\b"),
@@ -77,9 +78,10 @@ TOKENS = tuple(
         ("TYPENAME", r"\btypename\b"),
         ("EXTERN", r"\bextern\b"),
         ("STATIC", r"\bstatic\b"),
+        ("CONSTEXPR", r"\bconstexpr\b"),
         ("INLINE", r"\binline\b"),
         ("CONST", r"\bconst\b"),
-        ("VOLATILE", r"\bvolatile\b"),
+        ("VOLATILE", r"\b(?:volatile|__volatile__)\b"),
         ("MUTABLE", r"\bmutable\b"),
         ("VIRTUAL", r"\bvirtual\b"),
         ("PUBLIC", r"\bpublic\b"),
@@ -158,14 +160,18 @@ TOKENS = tuple(
         ("NULL", r"\bNULL\b"),
         ("NULLPTR", r"\bnullptr\b"),
         # Identifiers and literals (must come after keywords)
-        ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         (
             "FLOAT",
             r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFdDlL]*|\d+[eE][+-]?\d+[fFdDlL]*|\d+[fFdD]",
         ),
-        ("INTEGER", r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[lLuU]*"),
+        (
+            "INTEGER",
+            r"(?:0[xX][0-9a-fA-F](?:'?[0-9a-fA-F])*|0[bB][01](?:'?[01])*|\d(?:'?\d)*)[lLuU]*",
+        ),
+        ("STRING", r'(?:u8|u|U|L)?R"([^\s()\\]{0,16})\([\s\S]*?\)\1"'),
         ("STRING", r'"([^"\\]|\\.)*"'),
-        ("CHAR", r"'([^'\\]|\\.)'"),
+        ("CHAR_LIT", r"(?:u8|u|U|L)?'(?:[^'\\\n]|\\.)+'"),
+        ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         # Preprocessor
         ("HASH", r"#"),
         # Operators (multi-character first)
@@ -235,6 +241,10 @@ KEYWORDS = {
     "__noinline__": "__NOINLINE__",
     "__forceinline__": "__FORCEINLINE__",
     "__launch_bounds__": "__LAUNCH_BOUNDS__",
+    "asm": "ASM",
+    "__asm__": "ASM",
+    "__volatile__": "VOLATILE",
+    "constexpr": "CONSTEXPR",
     "threadIdx": "THREADIDX",
     "blockIdx": "BLOCKIDX",
     "gridDim": "GRIDDIM",
@@ -257,6 +267,7 @@ class HipLexer:
         file_path: Optional[str] = None,
     ):
         """Initialize the lexer and optionally preprocess HIP source text."""
+        code = code.lstrip("\ufeff")
         if preprocess:
             preprocessor = HipPreprocessor(
                 include_paths=include_paths,

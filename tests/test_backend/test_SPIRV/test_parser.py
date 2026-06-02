@@ -45,6 +45,539 @@ def tokenize_code(code: str) -> List:
     return lexer.tokenize()
 
 
+SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY = """
+; Reduced from Khronos SPIRV-Tools test/diff/diff_files/basic_src.spvasm.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %22 "main" %4 %14 %19
+OpName %4 "_ua_position"
+OpName %14 "ANGLEXfbPosition"
+OpName %19 ""
+OpDecorate %4 Location 0
+OpDecorate %14 Location 0
+OpMemberDecorate %17 0 BuiltIn Position
+OpDecorate %17 Block
+%1 = OpTypeFloat 32
+%2 = OpTypeVector %1 4
+%17 = OpTypeStruct %2
+%20 = OpTypeVoid
+%3 = OpTypePointer Input %2
+%13 = OpTypePointer Output %2
+%18 = OpTypePointer Output %17
+%21 = OpTypeFunction %20
+%4 = OpVariable %3 Input
+%14 = OpVariable %13 Output
+%19 = OpVariable %18 Output
+%22 = OpFunction %20 None %21
+%23 = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_MATRIX_INTERFACE_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %model
+OpName %model "model"
+OpDecorate %model Location 0
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%mat4 = OpTypeMatrix %v4float 4
+%void = OpTypeVoid
+%ptr_input_mat4 = OpTypePointer Input %mat4
+%fn = OpTypeFunction %void
+%model = OpVariable %ptr_input_mat4 Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_PUSH_CONSTANT_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main"
+OpName %PushConstants "PushConstants"
+OpName %pc "pc"
+OpMemberName %PushConstants 0 "model"
+OpMemberName %PushConstants 1 "tint"
+OpDecorate %PushConstants Block
+OpMemberDecorate %PushConstants 0 Offset 0
+OpMemberDecorate %PushConstants 1 Offset 64
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%mat4 = OpTypeMatrix %v4float 4
+%PushConstants = OpTypeStruct %mat4 %v4float
+%ptr_pc = OpTypePointer PushConstant %PushConstants
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%pc = OpVariable %ptr_pc PushConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_UNIFORM_BLOCK_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main"
+OpName %Camera "Camera"
+OpName %camera "camera"
+OpMemberName %Camera 0 "viewProj"
+OpMemberName %Camera 1 "tint"
+OpDecorate %Camera Block
+OpDecorate %camera DescriptorSet 0
+OpDecorate %camera Binding 2
+OpMemberDecorate %Camera 0 Offset 0
+OpMemberDecorate %Camera 1 Offset 64
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%mat4 = OpTypeMatrix %v4float 4
+%Camera = OpTypeStruct %mat4 %v4float
+%ptr_camera = OpTypePointer Uniform %Camera
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%camera = OpVariable %ptr_camera Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_BUFFER_BLOCK_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %Data "Data"
+OpName %data "data"
+OpMemberName %Data 0 "value"
+OpDecorate %Data BufferBlock
+OpDecorate %data DescriptorSet 0
+OpDecorate %data Binding 1
+OpMemberDecorate %Data 0 Offset 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%Data = OpTypeStruct %v4float
+%ptr_data = OpTypePointer Uniform %Data
+%data = OpVariable %ptr_data Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_READONLY_BUFFER_BLOCK_ASSEMBLY = """
+; Reduced from readonly storage-buffer SPIR-V decoration patterns.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %Data "Data"
+OpName %data "data"
+OpMemberName %Data 0 "value"
+OpDecorate %Data BufferBlock
+OpDecorate %data DescriptorSet 0
+OpDecorate %data Binding 1
+OpDecorate %data NonWritable
+OpMemberDecorate %Data 0 Offset 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%Data = OpTypeStruct %v4float
+%ptr_data = OpTypePointer Uniform %Data
+%data = OpVariable %ptr_data Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_RUNTIME_ARRAY_BUFFER_BLOCK_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %StorageBuffer "StorageBuffer"
+OpName %storage "storage"
+OpMemberName %StorageBuffer 0 "header"
+OpMemberName %StorageBuffer 1 "payload"
+OpDecorate %StorageBuffer BufferBlock
+OpDecorate %storage DescriptorSet 0
+OpDecorate %storage Binding 4
+OpMemberDecorate %StorageBuffer 0 Offset 0
+OpMemberDecorate %StorageBuffer 1 Offset 4
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%runtimearr_uint = OpTypeRuntimeArray %uint
+%StorageBuffer = OpTypeStruct %uint %runtimearr_uint
+%ptr_storage = OpTypePointer Uniform %StorageBuffer
+%storage = OpVariable %ptr_storage Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_SPEC_CONSTANT_ASSEMBLY = """
+; Reduced from common Vulkan specialization constant assembly output.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpName %max_lights "MAX_LIGHTS"
+OpName %enable_shadows "ENABLE_SHADOWS"
+OpDecorate %max_lights SpecId 0
+OpDecorate %enable_shadows SpecId 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%bool = OpTypeBool
+%max_lights = OpSpecConstant %uint 4
+%enable_shadows = OpSpecConstantTrue %bool
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_NUMERIC_ID_SPEC_CONSTANT_ASSEMBLY = """
+; Reduced from Vulkan-Samples compute_nbody/glsl/particle_calculate.comp.spv.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpDecorate %104 SpecId 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%104 = OpSpecConstant %uint 1
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
+; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main"
+OpName %combined "combinedTex"
+OpName %linear_sampler "linearSampler"
+OpDecorate %combined DescriptorSet 0
+OpDecorate %combined Binding 0
+OpDecorate %linear_sampler DescriptorSet 0
+OpDecorate %linear_sampler Binding 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%img = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %img
+%sampler = OpTypeSampler
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%ptr_sampler = OpTypePointer UniformConstant %sampler
+%combined = OpVariable %ptr_sampled UniformConstant
+%linear_sampler = OpVariable %ptr_sampler UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_STORAGE_IMAGE_FORMAT_ASSEMBLY = """
+; Reduced from Vulkan storage-image SPIR-V mapping examples.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpName %storage_image "storageImage"
+OpDecorate %storage_image DescriptorSet 0
+OpDecorate %storage_image Binding 0
+OpDecorate %storage_image NonWritable
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%image = OpTypeImage %uint 2D 0 0 0 2 R32ui
+%ptr_storage_image = OpTypePointer UniformConstant %image
+%storage_image = OpVariable %ptr_storage_image UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_TOOLS_FLAT_LOCATION_ASSEMBLY = """
+; Reduced from Khronos SPIRV-Tools test/val/val_image_test.cpp CommonTypes.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_flat_u32
+OpExecutionMode %main OriginUpperLeft
+OpName %input_flat_u32 "input_flat_u32"
+OpDecorate %input_flat_u32 Flat
+OpDecorate %input_flat_u32 Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%u32 = OpTypeInt 32 0
+%ptr_input_u32 = OpTypePointer Input %u32
+%input_flat_u32 = OpVariable %ptr_input_u32 Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+
+def test_spirv_assembly_location_decorated_interfaces_parse():
+    tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    input_layout = ast.global_variables[0]
+    output_layout = ast.global_variables[1]
+    builtin_layout = ast.global_variables[2]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_entry_points == [
+        {
+            "execution_model": "Vertex",
+            "id": "%22",
+            "name": "main",
+            "interface_ids": ["%4", "%14", "%19"],
+        }
+    ]
+    assert ast.spirv_names["%4"] == "_ua_position"
+    assert ast.spirv_decorations["%17"] == [("Block", [])]
+    assert ast.spirv_member_decorations["%17"] == [("0", "BuiltIn", ["Position"])]
+    assert ast.spirv_types["%2"]["name"] == "vec4"
+    assert len(ast.global_variables) == 3
+    assert isinstance(input_layout, LayoutNode)
+    assert input_layout.spirv_id == "%4"
+    assert input_layout.spirv_storage_class == "Input"
+    assert input_layout.spirv_decorations == [("Location", ["0"])]
+    assert input_layout.layout_type == "IN"
+    assert input_layout.data_type == "vec4"
+    assert input_layout.variable_name == "_ua_position"
+    assert input_layout.qualifiers == [("location", "0")]
+
+    assert isinstance(output_layout, LayoutNode)
+    assert output_layout.spirv_id == "%14"
+    assert output_layout.spirv_storage_class == "Output"
+    assert output_layout.layout_type == "OUT"
+    assert output_layout.data_type == "vec4"
+    assert output_layout.variable_name == "ANGLEXfbPosition"
+    assert output_layout.qualifiers == [("location", "0")]
+
+    assert isinstance(builtin_layout, LayoutNode)
+    assert builtin_layout.spirv_id == "%19.0"
+    assert builtin_layout.spirv_storage_class == "Output"
+    assert builtin_layout.layout_type == "OUT"
+    assert builtin_layout.data_type == "vec4"
+    assert builtin_layout.variable_name == "gl_Position"
+    assert builtin_layout.qualifiers == [("builtin", "Position")]
+    assert builtin_layout.spirv_decorations == [("BuiltIn", ["Position"])]
+
+
+def test_spirv_assembly_matrix_interface_parse():
+    tokens = tokenize_code(SPIRV_MATRIX_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    input_layout = ast.global_variables[0]
+
+    assert ast.spirv_types["%mat4"]["kind"] == "matrix"
+    assert ast.spirv_types["%mat4"]["name"] == "mat4"
+    assert input_layout.spirv_id == "%model"
+    assert input_layout.layout_type == "IN"
+    assert input_layout.data_type == "mat4"
+    assert input_layout.variable_name == "model"
+    assert input_layout.qualifiers == [("location", "0")]
+
+
+def test_spirv_assembly_push_constant_block_parse():
+    tokens = tokenize_code(SPIRV_PUSH_CONSTANT_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert layout.layout_type == "UNIFORM"
+    assert layout.push_constant is True
+    assert layout.block_name == "PushConstants"
+    assert layout.variable_name == "pc"
+    assert layout.struct_fields == [("mat4", "model"), ("vec4", "tint")]
+    assert layout.spirv_storage_class == "PushConstant"
+
+
+def test_spirv_assembly_uniform_block_parse():
+    tokens = tokenize_code(SPIRV_UNIFORM_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert layout.layout_type == "UNIFORM"
+    assert layout.push_constant is False
+    assert layout.block_name == "Camera"
+    assert layout.variable_name == "camera"
+    assert layout.struct_fields == [("mat4", "viewProj"), ("vec4", "tint")]
+    assert layout.qualifiers == [("set", "0"), ("binding", "2")]
+    assert layout.spirv_storage_class == "Uniform"
+
+
+def test_spirv_assembly_buffer_block_parse():
+    tokens = tokenize_code(SPIRV_BUFFER_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert layout.layout_type == "BUFFER"
+    assert layout.push_constant is False
+    assert layout.block_name == "Data"
+    assert layout.variable_name == "data"
+    assert layout.struct_fields == [("vec4", "value")]
+    assert layout.qualifiers == [("set", "0"), ("binding", "1")]
+    assert layout.spirv_storage_class == "Uniform"
+
+
+def test_spirv_assembly_readonly_buffer_block_parse():
+    tokens = tokenize_code(SPIRV_READONLY_BUFFER_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert layout.layout_type == "BUFFER"
+    assert layout.variable_name == "data"
+    assert layout.declaration_qualifiers == ["readonly"]
+    assert layout.spirv_decorations == [
+        ("BufferBlock", []),
+        ("DescriptorSet", ["0"]),
+        ("Binding", ["1"]),
+        ("NonWritable", []),
+    ]
+
+
+def test_spirv_assembly_runtime_array_buffer_block_parse():
+    tokens = tokenize_code(SPIRV_RUNTIME_ARRAY_BUFFER_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert layout.layout_type == "BUFFER"
+    assert layout.block_name == "StorageBuffer"
+    assert layout.variable_name == "storage"
+    assert layout.struct_fields == [("uint", "header"), ("uint", "payload[]")]
+    assert layout.qualifiers == [("set", "0"), ("binding", "4")]
+    assert layout.spirv_storage_class == "Uniform"
+
+
+def test_spirv_assembly_specialization_constants_parse():
+    tokens = tokenize_code(SPIRV_SPEC_CONSTANT_ASSEMBLY)
+    ast = parse_code(tokens)
+    max_lights = ast.global_variables[0]
+    enable_shadows = ast.global_variables[1]
+
+    assert ast.spirv_assembly is True
+    assert max_lights.layout_type == "CONST"
+    assert max_lights.qualifiers == [("constant_id", "0")]
+    assert max_lights.spirv_id == "%max_lights"
+    assert max_lights.spirv_decorations == [("SpecId", ["0"])]
+    assert max_lights.declaration.left.vtype == "const uint"
+    assert max_lights.declaration.left.name == "MAX_LIGHTS"
+    assert max_lights.declaration.right == "4"
+
+    assert enable_shadows.layout_type == "CONST"
+    assert enable_shadows.qualifiers == [("constant_id", "1")]
+    assert enable_shadows.declaration.left.vtype == "const bool"
+    assert enable_shadows.declaration.left.name == "ENABLE_SHADOWS"
+    assert enable_shadows.declaration.right == "true"
+
+
+def test_spirv_assembly_numeric_id_specialization_constant_parse():
+    tokens = tokenize_code(SPIRV_NUMERIC_ID_SPEC_CONSTANT_ASSEMBLY)
+    ast = parse_code(tokens)
+    constant = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert constant.layout_type == "CONST"
+    assert constant.qualifiers == [("constant_id", "0")]
+    assert constant.spirv_id == "%104"
+    assert constant.declaration.left.vtype == "const uint"
+    assert constant.declaration.left.name == "spec_constant_0"
+    assert constant.declaration.right == "1"
+
+
+def test_spirv_assembly_uniform_constant_resources_parse():
+    tokens = tokenize_code(SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY)
+    ast = parse_code(tokens)
+    combined = ast.global_variables[0]
+    linear_sampler = ast.global_variables[1]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_types["%img"]["kind"] == "image"
+    assert ast.spirv_types["%img"]["name"] == "sampler2D"
+    assert ast.spirv_types["%sampled"]["kind"] == "sampled_image"
+    assert ast.spirv_types["%sampled"]["name"] == "sampler2D"
+    assert ast.spirv_types["%sampler"]["name"] == "sampler"
+
+    assert combined.layout_type == "UNIFORM"
+    assert combined.data_type == "sampler2D"
+    assert combined.variable_name == "combinedTex"
+    assert combined.qualifiers == [("set", "0"), ("binding", "0")]
+    assert combined.spirv_storage_class == "UniformConstant"
+
+    assert linear_sampler.layout_type == "UNIFORM"
+    assert linear_sampler.data_type == "sampler"
+    assert linear_sampler.variable_name == "linearSampler"
+    assert linear_sampler.qualifiers == [("set", "0"), ("binding", "1")]
+    assert linear_sampler.spirv_storage_class == "UniformConstant"
+
+
+def test_spirv_assembly_storage_image_format_parse():
+    tokens = tokenize_code(SPIRV_STORAGE_IMAGE_FORMAT_ASSEMBLY)
+    ast = parse_code(tokens)
+    storage_image = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_types["%image"]["format"] == "R32ui"
+    assert storage_image.layout_type == "UNIFORM"
+    assert storage_image.data_type == "uimage2D"
+    assert storage_image.variable_name == "storageImage"
+    assert storage_image.qualifiers == [
+        ("set", "0"),
+        ("binding", "0"),
+        ("r32ui", None),
+    ]
+    assert storage_image.declaration_qualifiers == ["readonly"]
+    assert storage_image.spirv_storage_class == "UniformConstant"
+
+
+def test_spirv_assembly_flat_location_interface_parse():
+    tokens = tokenize_code(SPIRV_TOOLS_FLAT_LOCATION_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert layout.layout_type == "IN"
+    assert layout.data_type == "uint"
+    assert layout.variable_name == "input_flat_u32"
+    assert layout.qualifiers == [("location", "0")]
+    assert layout.declaration_qualifiers == ["flat"]
+    assert layout.spirv_decorations == [("Flat", []), ("Location", ["0"])]
+
+
+def test_spirv_assembly_without_location_interface_is_rejected():
+    code = """
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint Vertex %main "main"
+    %void = OpTypeVoid
+    %fn = OpTypeFunction %void
+    %main = OpFunction %void None %fn
+    OpFunctionEnd
+    """
+
+    tokens = tokenize_code(code)
+    with pytest.raises(SyntaxError, match="only partially supported"):
+        parse_code(tokens)
+
+
 def test_mod_parsing():
     code = """
 
@@ -73,6 +606,30 @@ def test_bitwise_not_parsing():
         pytest.fail("Bitwise NOT operator parsing not implemented")
 
 
+def test_float_suffix_literals_parse_as_numbers():
+    code = """
+    void main() {
+        float direct = 2.0f;
+        float bare_fraction = 1.f;
+        float leading_dot = .5F;
+        float exponent = 2.3283064365386963e-10;
+        float suffixed_exponent = 6.0e+3f;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    values = [assignment.right for assignment in ast.functions[0].body]
+
+    assert values == [
+        "2.0",
+        "1.",
+        ".5",
+        "2.3283064365386963e-10",
+        "6.0e+3",
+    ]
+
+
 def test_function_parameter_qualifiers_parse():
     code = """
     void accumulate(in vec3 normal, inout float weight, out vec4 color) {
@@ -89,6 +646,24 @@ def test_function_parameter_qualifiers_parse():
         ("float", "weight", ["inout"]),
         ("vec4", "color", ["out"]),
     ]
+
+
+def test_void_parameter_list_parses_as_empty_parameters():
+    # Khronos glslang Test/spv.debuginfo.glsl.geom uses this entry point form.
+    code = """
+    void main(void) {
+        return;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = ast.functions[0]
+
+    assert function.return_type == "void"
+    assert function.name == "main"
+    assert function.params == []
+    assert isinstance(function.body[0], ReturnNode)
 
 
 def test_function_parameter_array_suffixes_parse():
@@ -902,6 +1477,35 @@ def test_layout_identifier_qualifier_values_parse():
     assert layout.variable_name == "albedoTex"
 
 
+def test_specialization_constant_layout_parsing():
+    code = """
+    layout(constant_id = 0) const uint a = 1;
+    layout(constant_id = 1) const float scale = 3.0;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    first_layout = ast.global_variables[0]
+    second_layout = ast.global_variables[1]
+
+    assert isinstance(first_layout, LayoutNode)
+    assert first_layout.qualifiers == [("constant_id", "0")]
+    assert first_layout.layout_type == "CONST"
+    assert isinstance(first_layout.declaration, AssignmentNode)
+    assert isinstance(first_layout.declaration.left, VariableNode)
+    assert first_layout.declaration.left.vtype == "const uint"
+    assert first_layout.declaration.left.name == "a"
+    assert first_layout.declaration.right == "1"
+
+    assert isinstance(second_layout, LayoutNode)
+    assert second_layout.qualifiers == [("constant_id", "1")]
+    assert isinstance(second_layout.declaration, AssignmentNode)
+    assert isinstance(second_layout.declaration.left, VariableNode)
+    assert second_layout.declaration.left.vtype == "const float"
+    assert second_layout.declaration.left.name == "scale"
+    assert second_layout.declaration.right == "3.0"
+
+
 def test_compute_local_size_layout_parsing():
     code = """
     layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
@@ -917,6 +1521,24 @@ def test_compute_local_size_layout_parsing():
         ("local_size_y", "4"),
         ("local_size_z", "1"),
     ]
+    assert layout.layout_type == "IN"
+    assert layout.data_type is None
+    assert layout.variable_name is None
+
+
+def test_fragment_early_tests_layout_parsing():
+    code = """
+    layout(early_fragment_tests) in;
+    void main() {
+        gl_FragColor = vec4(1.0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert isinstance(layout, LayoutNode)
+    assert layout.qualifiers == [("early_fragment_tests", None)]
     assert layout.layout_type == "IN"
     assert layout.data_type is None
     assert layout.variable_name is None

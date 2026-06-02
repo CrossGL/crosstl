@@ -263,6 +263,7 @@ class TraitNode(ASTNode):
         visibility=None,
         where_clauses=None,
         associated_types=None,
+        supertraits=None,
         *args,
         **kwargs,
     ):
@@ -272,6 +273,7 @@ class TraitNode(ASTNode):
         self.visibility = visibility
         self.where_clauses = where_clauses or []
         self.associated_types = associated_types or []
+        self.supertraits = supertraits or []
 
         for key, value in kwargs.items():
             if not hasattr(self, key):

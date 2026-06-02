@@ -3,7 +3,10 @@ from crosstl.backend.CUDA.CudaLexer import CudaLexer
 
 class TestCudaLexer:
     def test_cuda_keywords(self):
-        code = "__global__ __device__ __shared__ __constant__"
+        code = (
+            "__global__ __device__ __shared__ __constant__ "
+            "__launch_bounds__ __grid_constant__"
+        )
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
 
@@ -12,10 +15,55 @@ class TestCudaLexer:
             ("DEVICE", "__device__"),
             ("SHARED", "__shared__"),
             ("CONSTANT", "__constant__"),
+            ("LAUNCH_BOUNDS", "__launch_bounds__"),
+            ("GRID_CONSTANT", "__grid_constant__"),
             ("EOF", ""),
         ]
 
         assert tokens == expected_tokens
+
+    def test_cuda_function_attributes_and_inline_asm_tokens(self):
+        code = "__cluster_dims__ __block_size__ asm __asm__ __volatile__ volatile"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        assert tokens == [
+            ("CLUSTER_DIMS", "__cluster_dims__"),
+            ("BLOCK_SIZE", "__block_size__"),
+            ("ASM", "asm"),
+            ("ASM", "__asm__"),
+            ("VOLATILE", "__volatile__"),
+            ("VOLATILE", "volatile"),
+            ("EOF", ""),
+        ]
+
+    def test_cuda_alignment_attribute_tokens(self):
+        code = "__align__(8) alignas(16)"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        assert tokens == [
+            ("ALIGNAS", "__align__"),
+            ("LPAREN", "("),
+            ("NUMBER", "8"),
+            ("RPAREN", ")"),
+            ("ALIGNAS", "alignas"),
+            ("LPAREN", "("),
+            ("NUMBER", "16"),
+            ("RPAREN", ")"),
+            ("EOF", ""),
+        ]
+
+    def test_restrict_qualifier_spellings(self):
+        code = "__restrict__ __restrict"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        assert tokens == [
+            ("RESTRICT", "__restrict__"),
+            ("RESTRICT", "__restrict"),
+            ("EOF", ""),
+        ]
 
     def test_device_lambda_capture_tokenization(self):
         code = "[&] __device__ (int x) { return x; }"
@@ -144,3 +192,29 @@ class TestCudaLexer:
         values = [value for token_type, value in tokens if token_type == "NUMBER"]
 
         assert values == ["0xffu", "0XCAFEull", "0b1010u", "0777u", "1e-3f", ".5f"]
+
+    def test_character_literal_tokenization(self):
+        code = r"'c' '\n' '\x7f' '\377' u8'a' L'b' char"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        values = [value for token_type, value in tokens if token_type == "CHAR_LIT"]
+
+        assert values == ["'c'", "'\\n'", "'\\x7f'", "'\\377'", "u8'a'", "L'b'"]
+        assert ("CHAR", "char") in tokens
+
+    def test_raw_string_literal_tokenization(self):
+        code = """
+        constexpr const char* shader = R"(
+        #version 330 core
+        void main() {}
+        )";
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        strings = [value for token_type, value in tokens if token_type == "STRING"]
+
+        assert len(strings) == 1
+        assert strings[0].startswith('R"(')
+        assert "#version 330 core" in strings[0]

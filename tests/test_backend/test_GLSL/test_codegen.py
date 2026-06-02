@@ -273,6 +273,151 @@ def test_codegen_texture_intrinsics_use_canonical_crossgl_resources():
     assert "textureGather(tex, uv)" in glsl
 
 
+def test_codegen_array_of_arrays_return_type_from_glslang_spv_aofa():
+    code = textwrap.dedent("""
+        #version 430
+
+        in float infloat;
+        out float outfloat;
+
+        float[4][7] foo(float a[5][7])
+        {
+            float r[7];
+            r = a[2];
+            return float[4][7](a[0], a[1], r, a[3]);
+        }
+
+        void main()
+        {
+            float u[][7];
+            u[2][2] = infloat;
+            outfloat = foo(u)[1][2];
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float[4][7] foo(float a[5][7])" in crossgl
+    assert "return { a[0], a[1], r, a[3] };" in crossgl
+    assert "float u[][7];" in crossgl
+
+
+def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
+    code = textwrap.dedent("""
+        #version 450
+        #extension GL_EXT_nonuniform_qualifier : require
+
+        layout(set = 0, binding = 0) uniform texture2D Textures[];
+        layout(set = 1, binding = 0) uniform sampler ImmutableSampler;
+
+        layout(location = 0) in vec2 in_uv;
+        layout(location = 0) out vec4 out_frag_color;
+
+        void main() {
+            out_frag_color = texture(sampler2D(Textures[0], ImmutableSampler), in_uv);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "texture2D Textures[] @binding(0);" in crossgl
+    assert "sampler ImmutableSampler @binding(0);" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+
+
+def test_codegen_vulkan_subpass_inputs_are_resources():
+    code = textwrap.dedent("""
+        #version 450
+        layout(input_attachment_index = 0, set = 0, binding = 0)
+        uniform subpassInput colorInput;
+        layout(input_attachment_index = 1, set = 0, binding = 1)
+        uniform usubpassInputMS idInput;
+        layout(location = 0) out vec4 outColor;
+
+        void main() {
+            outColor = subpassLoad(colorInput) + vec4(subpassLoad(idInput, 0));
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "subpassInput colorInput @binding(0) @input_attachment_index(0);" in crossgl
+    assert "usubpassInputMS idInput @binding(1) @input_attachment_index(1);" in crossgl
+    assert "subpassLoad(colorInput)" in crossgl
+    assert "subpassLoad(idInput, 0)" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+
+
+def test_codegen_comma_separated_for_updates():
+    code = textwrap.dedent("""
+        #version 460
+        void main() {
+            uint plane_index = 0;
+            for (uint i = 0; i < 3; ++i, ++plane_index) {
+                plane_index += i;
+            }
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "for (uint i = 0; (i < 3); (++i), (++plane_index))" in crossgl
+
+
+def test_codegen_logical_xor_normalizes_to_boolean_inequality():
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            bool a = true;
+            bool b = false;
+            bool c = a ^^ b;
+            fragColor = c ? vec4(1.0) : vec4(0.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "bool c = (a != b)" in crossgl
+    assert "^^" not in crossgl
+
+
+def test_codegen_parenthesized_comma_assignment_expression():
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            int a = 0;
+            int b = (a = 1, a + 2);
+            fragColor = vec4(float((a = 3, b)));
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "int b = (a = 1, (a + 2));" in crossgl
+    assert "float((a = 3, b))" in crossgl
+
+
+def test_codegen_unnamed_function_parameters_get_stable_names():
+    code = textwrap.dedent("""
+        #version 400 core
+
+        void ftd(int, float, double) {}
+
+        void main() {
+            ftd(1, 1.0, 2.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "void ftd(int _param0, float _param1, double _param2)" in crossgl
+    assert "ftd(1, 1.0, 2.0)" in crossgl
+
+
 def test_codegen_query_intrinsics_use_resource_descriptors():
     code = textwrap.dedent("""
         #version 450 core
@@ -446,6 +591,39 @@ def test_codegen_const_gather_offset_arrays_roundtrip():
     assert "ivec2 selected = nested[1][0];" in glsl
 
 
+def test_codegen_global_array_type_constants_roundtrip_parse():
+    code = textwrap.dedent("""
+        #version 450
+        const vec2[3] positions = vec2[]
+        (
+            vec2(-1, -1),
+            vec2(-1,  3),
+            vec2( 3, -1)
+        );
+
+        const vec2[3] uv = vec2[]
+        (
+            vec2(0, 0),
+            vec2(0, 2),
+            vec2(2, 0)
+        );
+
+        layout(location = 0) out vec2 outUV;
+
+        void main() {
+            gl_Position = vec4(positions[gl_VertexIndex], 0.0f, 1.0f);
+            outUV = uv[gl_VertexIndex];
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "vertex")
+
+    assert "const vec2[3] positions = {" in crossgl
+    assert "const vec2[3] uv = {" in crossgl
+    assert "const vec2 positions[3]" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_compute_roundtrip():
     output = assert_roundtrip(COMPUTE_GLSL, "compute", ShaderStage.COMPUTE)
     lowered = output.lower()
@@ -465,6 +643,73 @@ def test_codegen_interface_block_roundtrip():
     assert "struct VertexOut" in output
     assert "struct Globals" in output
     assert "cbuffer Uniforms" in output
+
+
+def test_codegen_uniform_struct_specifier_uses_uniform_buffer():
+    code = textwrap.dedent("""
+        precision mediump float;
+        uniform struct S {
+            float field;
+        } s;
+
+        void main() {
+            gl_FragColor = vec4(0.0, s.field, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "struct S" in crossgl
+    assert "cbuffer Uniforms" in crossgl
+    assert "S s;" in crossgl
+    assert "\n    S s;\n\n    fragment" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_local_struct_with_mixed_array_declarators_from_khronos_webgl():
+    code = textwrap.dedent("""
+        precision mediump float;
+        void main() {
+            struct S {
+                float field;
+            };
+            S s1[2], s2;
+            s1[0].field = 1.0;
+            gl_FragColor = vec4(0.0, s1[0].field, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "struct S" in crossgl
+    assert "S s1[2];" in crossgl
+    assert "S s2;" in crossgl
+    assert "s1[0].field = 1.0;" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_push_constant_interface_block_preserves_attribute():
+    code = textwrap.dedent("""
+        #version 450
+        layout(push_constant, std430) uniform MVPUniform {
+            mat4 model;
+            mat4 view_proj;
+        } mvp_uniform;
+
+        void main() {
+            gl_Position = mvp_uniform.view_proj * vec4(1.0);
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(code, "vertex")
+
+    assert "cbuffer MVPUniform @push_constant {" in crossgl
+    assert "mat4 model;" in crossgl
+    assert "mat4 view_proj;" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert "mvp_uniform.view_proj" not in crossgl
+    assert "gl_Position = (view_proj * vec4(1.0));" in crossgl
+    parse_crossgl(crossgl)
 
 
 def test_codegen_multidimensional_interface_and_parameter_arrays_roundtrip():

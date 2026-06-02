@@ -146,6 +146,16 @@ def test_assignment_ops_tokenization():
         pytest.fail("Assignment operators tokenization not implemented.")
 
 
+def test_power_operator_tokenization():
+    code = """
+    fn my_pow(base: Int, exp: Int = 2) -> Int:
+        return base ** exp
+    """
+    tokens = tokenize_code(code)
+
+    assert ("POWER", "**") in tokens
+
+
 def test_bitwise_ops_tokenization():
     code = """
     fn main():

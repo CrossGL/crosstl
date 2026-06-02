@@ -8,6 +8,25 @@ from .preprocessor import VulkanPreprocessor
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI", "PREPROCESSOR"}
 
+SPIRV_ASSEMBLY_PATTERN = re.compile(
+    r"(?m)^\s*(?:"
+    r"OpCapability\s+\w+\b"
+    r"|OpMemoryModel\s+\w+\s+\w+\b"
+    r"|OpEntryPoint\s+\w+\s+%[A-Za-z0-9_]+\b"
+    r"|OpDecorate\s+%[A-Za-z0-9_]+\s+\w+\b"
+    r"|OpMemberDecorate\s+%[A-Za-z0-9_]+\s+\d+\s+\w+\b"
+    r"|OpName\s+%[A-Za-z0-9_]+\b"
+    r"|%[A-Za-z0-9_]+\s*=\s*Op[A-Za-z0-9_]+\b"
+    r")"
+)
+
+SPIRV_ASSEMBLY_ERROR = (
+    "SPIR-V assembly input is only partially supported by the Vulkan backend "
+    "parser; supported assembly must expose location-decorated Input/Output "
+    "OpVariable declarations, push-constant blocks, or descriptor-decorated "
+    "Uniform blocks."
+)
+
 TOKENS = tuple(
     [
         ("COMMENT_SINGLE", r"//.*"),
@@ -21,7 +40,13 @@ TOKENS = tuple(
         ("POST_INCREMENT", r"(?<=[\w\]])\+\+"),
         ("POST_DECREMENT", r"(?<=[\w\]])--"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-        ("NUMBER", r"0[xX][0-9a-fA-F]+[uU]?|\d+(\.\d*)?[uU]?|\.\d+[uU]?"),
+        (
+            "NUMBER",
+            r"0[xX][0-9a-fA-F]+[uU]?"
+            r"|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fF]?"
+            r"|\d+[eE][+-]?\d+[fF]?"
+            r"|\d+[uU]?",
+        ),
         ("SEMICOLON", r";"),
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),
@@ -301,6 +326,7 @@ class VulkanLexer:
         file_path: Optional[str] = None,
     ):
         """Initialize the lexer and optionally preprocess Vulkan source text."""
+        code = code.lstrip("\ufeff")
         if preprocess:
             preprocessor = VulkanPreprocessor(
                 include_paths=include_paths,
@@ -309,9 +335,19 @@ class VulkanLexer:
                 max_expansion_depth=max_expansion_depth,
             )
             code = preprocessor.preprocess(code, file_path=file_path)
+        self.is_spirv_assembly = self._looks_like_spirv_assembly(code)
+        if self.is_spirv_assembly:
+            self._token_patterns = []
+            self.code = code
+            self._length = len(code)
+            return
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
+
+    def _looks_like_spirv_assembly(self, code: str) -> bool:
+        """Return whether ``code`` starts using SPIR-V assembly instructions."""
+        return bool(SPIRV_ASSEMBLY_PATTERN.search(code))
 
     def tokenize(self) -> List[Tuple[str, str]]:
         """Return the full token stream as ``(token_type, text)`` tuples."""
@@ -319,6 +355,11 @@ class VulkanLexer:
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
         """Yield Vulkan/SPIR-V tokens while skipping whitespace and comments."""
+        if self.is_spirv_assembly:
+            yield ("SPIRV_ASSEMBLY", self.code)
+            yield ("EOF", "")
+            return
+
         pos = 0
         while pos < self._length:
             token = self._next_token(pos)

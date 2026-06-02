@@ -244,12 +244,47 @@ def test_numeric_literals_tokenization():
     assert_values_present(values, expected)
 
 
+def test_scalar_literal_swizzle_keeps_dot_token():
+    tokens = tokenize_code("float4 clear = 0.xxxx; float a = 1.; float b = 1.f;")
+
+    assert tokens[3:6] == [("NUMBER", "0"), ("DOT", "."), ("IDENTIFIER", "xxxx")]
+    assert ("NUMBER", "0.") not in tokens
+    assert ("NUMBER", "1.") in tokens
+    assert ("NUMBER", "1.f") in tokens
+
+
+def test_legacy_special_float_literal_from_directx_graphics_samples():
+    tokens = tokenize_code("const float FLT_INFINITY = 1.#INF;")
+
+    assert ("NUMBER", "1.#INF") in tokens
+    assert ("PREPROCESSOR", "#INF;") not in tokens
+
+
 def test_min_precision_types_tokenization():
     code = "min16float a; min10float b; min16int c; min12int d; min16uint e;"
     tokens = tokenize_code(code)
     values = token_values(tokens)
     expected = ["min16float", "min10float", "min16int", "min12int", "min16uint"]
     assert_values_present(values, expected, case_insensitive=True)
+
+
+def test_interpolation_modifiers_tokenization():
+    code = """
+    struct PSInput {
+        linear float2 uv0 : TEXCOORD0;
+        centroid noperspective float2 uv1 : TEXCOORD1;
+        nointerpolation uint id : TEXCOORD2;
+        sample float4 color : COLOR0;
+    };
+    """
+    tokens = tokenize_code(code)
+
+    assert ("LINEAR", "linear") in tokens
+    assert ("CENTROID", "centroid") in tokens
+    assert ("NOPERSPECTIVE", "noperspective") in tokens
+    assert ("NOINTERPOLATION", "nointerpolation") in tokens
+    assert ("SAMPLE", "sample") in tokens
+    assert ("IDENTIFIER", "noperspective") not in tokens
 
 
 def test_min_precision_vector_and_matrix_types_tokenization():

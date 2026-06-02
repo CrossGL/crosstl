@@ -191,6 +191,7 @@ def test_boolean_literals_tokenize(literal):
         ("<=", "void main() { bool c = 1 <= 2; }"),
         (">=", "void main() { bool c = 1 >= 2; }"),
         ("&&", "void main() { bool c = true && false; }"),
+        ("^^", "void main() { bool c = true ^^ false; }"),
         ("||", "void main() { bool c = true || false; }"),
         ("<<", "void main() { int a = 1 << 2; }"),
         (">>", "void main() { int a = 4 >> 1; }"),
@@ -225,6 +226,17 @@ def test_assignment_and_equality_tokens_are_distinct():
     assert token_type_for_value(assign_tokens, "=") != token_type_for_value(
         eq_tokens, "=="
     )
+
+
+def test_logical_and_bitwise_xor_tokens_are_distinct():
+    tokens = strip_ignored(
+        normalize_tokens(
+            tokenize_code("void main() { bool c = true ^^ false; int x = 1 ^ 2; }")
+        )
+    )
+
+    assert token_type_for_value(tokens, "^^") == "LOGICAL_XOR"
+    assert token_type_for_value(tokens, "^") == "BITWISE_XOR"
 
 
 def test_comments_are_ignored():

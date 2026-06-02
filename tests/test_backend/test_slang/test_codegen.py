@@ -43,6 +43,25 @@ def test_struct_codegen():
         pytest.fail("Struct parsing or code generation not implemented.")
 
 
+def test_import_and_include_paths_codegen():
+    code = """
+    import MyApp.Shadowing;
+    import "dir/file-name.slang";
+    __include "scene-helpers";
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "import MyApp.Shadowing;" in generated_code
+    assert 'import "dir/file-name.slang";' in generated_code
+    assert 'import "scene-helpers";' in generated_code
+    assert "dir/file-name.slang;" not in generated_code.replace(
+        '"dir/file-name.slang"', ""
+    )
+
+
 def test_struct_array_member_codegen():
     code = """
     struct Cluster {
@@ -56,6 +75,91 @@ def test_struct_array_member_codegen():
 
     assert "float weights[4];" in generated_code
     assert "vec4 colors[2][3]" in generated_code
+
+
+def test_struct_comma_member_declarators_codegen():
+    code = """
+    struct Uniforms {
+        float screenWidth, screenHeight;
+        float focalLength, frameHeight;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float screenWidth;" in generated_code
+    assert "float screenHeight;" in generated_code
+    assert "float focalLength;" in generated_code
+    assert "float frameHeight;" in generated_code
+    assert "screenWidth, screenHeight" not in generated_code
+
+
+def test_typealias_codegen():
+    code = """
+    typealias Color = float4;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "typedef vec4 Color;" in generated_code
+
+
+def test_visibility_qualified_struct_codegen_from_mlp_training_adam_sample():
+    code = """
+    public struct AdamState
+    {
+        internal NFloat mean;
+        internal NFloat variance;
+        internal int iteration;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct AdamState" in generated_code
+    assert "NFloat mean;" in generated_code
+    assert "NFloat variance;" in generated_code
+    assert "int iteration;" in generated_code
+    assert "public" not in generated_code
+    assert "internal" not in generated_code
+
+
+def test_struct_methods_do_not_break_field_codegen():
+    code = """
+    struct Primitive {
+        float4 data0;
+
+        float3 getNormal() {
+            return data0.xyz;
+        }
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct Primitive" in generated_code
+    assert "vec4 data0;" in generated_code
+    assert "FunctionNode(" not in generated_code
+
+
+def test_ray_payload_access_semantics_codegen_from_ray_tracing_sample():
+    code = """
+    [raypayload] struct RayPayload
+    {
+        float4 color : read(caller) : write(caller, closesthit, miss);
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 color @ read(caller):write(caller,closesthit,miss);" in generated_code
 
 
 def test_if_codegen():
@@ -298,6 +402,135 @@ def test_lambda_expression_codegen():
         in generated_code
     )
     assert "=>" not in generated_code
+
+
+def test_generic_type_receiver_expression_codegen():
+    code = """
+    [TorchEntryPoint]
+    export __extern_cpp int main() {
+        var result = TorchTensor<float>.alloc(Shape(1));
+        let count = result.numel();
+        let vec = coopVecLoad<4>(input);
+        let rs = f.eval<DataTrait0>(1.0);
+        return 0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var result = TorchTensor<float>.alloc(Shape(1));" in generated_code
+    assert "let count = result.numel();" in generated_code
+    assert "let vec = coopVecLoad<4>(input);" in generated_code
+    assert "let rs = f.eval<DataTrait0>(1.0);" in generated_code
+    assert "return 0;" in generated_code
+
+
+def test_generic_function_declaration_after_name_codegen():
+    code = """
+    float GetRayT<let RAY_QUERY_FLAGS: uint>(uint rayInlineFlags)
+    {
+        return 0.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float GetRayT(uint rayInlineFlags)" in generated_code
+    assert "return 0.0;" in generated_code
+    assert "<let" not in generated_code
+
+
+def test_generic_struct_declaration_after_name_codegen():
+    code = """
+    struct GenericStruct<T, let N: int>
+    {
+        T value;
+        float weights[N];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct GenericStruct" in generated_code
+    assert "T value;" in generated_code
+    assert "float weights[N];" in generated_code
+    assert "GenericStruct<" not in generated_code
+
+
+def test_enum_declarations_codegen_from_gpu_printing_sample():
+    code = """
+    enum EmptyPrintingOp
+    {
+    };
+
+    enum PrintingOp
+    {
+        PrintLine,
+        PrintF = 2 + 1,
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "enum EmptyPrintingOp" in generated_code
+    assert "enum PrintingOp" in generated_code
+    assert "PrintLine," in generated_code
+    assert "PrintF = 2 + 1," in generated_code
+
+
+def test_reverse_codegen_rejects_interface_and_conformance_constructs():
+    code = """
+    interface IFoo {
+        int foo();
+    }
+
+    struct MyType : IFoo {
+        int value;
+    };
+
+    extension MyType : IBar {
+        int bar();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(
+        NotImplementedError,
+        match="interface/conformance constructs",
+    ) as exc:
+        generate_code(ast)
+
+    message = str(exc.value)
+    assert "interface IFoo" in message
+    assert "struct MyType : IFoo" in message
+    assert "extension MyType : IBar" in message
+
+
+def test_reverse_codegen_rejects_generic_where_conformance_constraint():
+    code = """
+    int useFoo<T>(T value) where T : IFoo {
+        return value.foo();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(
+        NotImplementedError,
+        match="function useFoo where T : IFoo",
+    ):
+        generate_code(ast)
 
 
 def test_for_array_assignment_update_codegen():
@@ -647,6 +880,30 @@ def test_generic_resource_global_codegen():
     assert "sampler linearSampler;" in generated_code
 
 
+def test_nested_parameter_block_resource_wrapper_codegen():
+    code = """
+    struct S
+    {
+        ConstantBuffer<RWStructuredBuffer<int>> cb;
+    }
+
+    ParameterBlock<RWStructuredBuffer<int>> rwBuffer;
+    ParameterBlock<ConstantBuffer<int>> constBuffer;
+    ParameterBlock<ConstantBuffer<RWStructuredBuffer<int>>> nestedBuffer;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "ConstantBuffer<RWStructuredBuffer<int>> cb;" in generated_code
+    assert "ParameterBlock<RWStructuredBuffer<int>> rwBuffer;" in generated_code
+    assert "ParameterBlock<ConstantBuffer<int>> constBuffer;" in generated_code
+    assert (
+        "ParameterBlock<ConstantBuffer<RWStructuredBuffer<int>>> nestedBuffer;"
+        in generated_code
+    )
+
+
 def test_line_texture_resource_global_codegen():
     code = """
     Texture1D<float4> line;
@@ -727,6 +984,22 @@ def test_bound_generic_resource_global_codegen():
     assert "sampler linearSampler;" in generated_code
 
 
+def test_vulkan_binding_attribute_global_resource_codegen():
+    code = """
+    [[vk::binding(0, 1)]]
+    Texture2D<float4> albedo : register(t0);
+
+    [[vk::binding(2)]]
+    SamplerState linearSampler;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D albedo @set(1) @binding(0);" in generated_code
+    assert "sampler linearSampler @binding(2);" in generated_code
+
+
 def test_bound_cbuffer_codegen():
     code = """
     cbuffer Camera : register(b0) {
@@ -746,6 +1019,22 @@ def test_bound_cbuffer_codegen():
     assert "vec4 tint[2];" in generated_code
     assert "float weights[];" in generated_code
     assert "mat4 transforms[2][3];" in generated_code
+
+
+def test_vulkan_attributes_on_cbuffer_codegen():
+    code = """
+    [[vk::binding(0, 1)]]
+    [[vk::push_constant]]
+    cbuffer Camera : register(b0) {
+        float4x4 viewProj;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "cbuffer Camera @set(1) @binding(0) @push_constant {" in generated_code
+    assert "mat4 viewProj;" in generated_code
 
 
 def test_global_resource_array_codegen():
@@ -1305,6 +1594,146 @@ def test_numeric_literal_codegen_normalizes_crossgl_float_forms():
     assert "1e-3f" not in generated_code
     assert ".5f" not in generated_code
     assert "1f" not in generated_code
+
+
+def test_generic_struct_member_and_uniform_parameter_codegen_from_official_sample():
+    code = """
+    struct ImageProcessingOptions
+    {
+        float3 tintColor;
+        float blurRadius;
+        bool useLookupTable;
+        StructuredBuffer<float4> lookupTable;
+    }
+
+    [shader("compute")]
+    [numthreads(8, 8)]
+    void processImage(
+        uint3 threadID : SV_DispatchThreadID,
+        uniform Texture2D inputImage,
+        uniform RWTexture2D outputImage,
+        uniform ImageProcessingOptions options)
+    {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;"
+        in generated_code
+    )
+    assert "StructuredBuffer<float4> lookupTable;" in generated_code
+    assert "uvec3 threadID @ SV_DispatchThreadID" in generated_code
+    assert "sampler2D inputImage" in generated_code
+    assert "RWTexture2D outputImage" in generated_code
+    assert "ImageProcessingOptions options" in generated_code
+
+
+def test_export_extern_cpp_function_codegen():
+    code = """
+    [TorchEntryPoint]
+    export __extern_cpp int main()
+    {
+        return 0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int main()" in generated_code
+    assert "return 0;" in generated_code
+    assert "FunctionNode(" not in generated_code
+
+
+def test_c_style_scalar_cast_codegen_from_official_select_expr_sample():
+    code = """
+    int test(int input)
+    {
+        return input > 1 ? -input : input;
+    }
+
+    RWStructuredBuffer<int> outputBuffer;
+
+    [numthreads(4, 1, 1)]
+    void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+    {
+        outputBuffer[dispatchThreadID.x] = test((int) dispatchThreadID.x);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "outputBuffer[dispatchThreadID.x] = test(int(dispatchThreadID.x));"
+        in generated_code
+    )
+
+
+def test_parenthesized_expression_swizzle_codegen_from_autodiff_texture_learnmip_sample():
+    code = """
+    RWTexture2D dstTexture;
+
+    void computeMain(uint2 p)
+    {
+        var val = float4(1.0);
+        float4 color = float4((dstTexture[p] - val).xyz, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 color = vec4((dstTexture[p] - val).xyz, 1.0);" in generated_code
+    assert "dstTexture[p] - val.xyz" not in generated_code
+
+
+def test_parenthesized_unary_swizzle_codegen_preserves_receiver_grouping():
+    code = """
+    void computeMain(float4 value)
+    {
+        float x = (-value).x;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float x = (-value).x;" in generated_code
+    assert "float x = -value.x;" not in generated_code
+
+
+def test_pointer_declarator_codegen_from_mlp_training_samples():
+    code = """
+    public struct FeedForwardLayer<int InputSize, int OutputSize>
+    {
+        public NFloat* weights;
+    }
+
+    void learnGradient(
+        uniform MyNetwork* network,
+        uniform Atomic<uint32_t>* lossBuffer,
+        uniform float2* inputs)
+    {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "NFloat* weights;" in generated_code
+    assert "MyNetwork* network" in generated_code
+    assert "Atomic<uint32_t>* lossBuffer" in generated_code
+    assert "vec2* inputs" in generated_code
 
 
 if __name__ == "__main__":

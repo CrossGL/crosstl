@@ -5,7 +5,7 @@ import pytest
 from crosstl.backend.DirectX import DirectxCrossGLCodeGen
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
-from crosstl.translator.ast import ShaderStage
+from crosstl.translator.ast import ArrayLiteralNode, ArrayType, ShaderStage
 from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
@@ -256,6 +256,20 @@ TEXTURE_SAMPLE_HLSL = textwrap.dedent("""
     }
     """).strip()
 
+SAMPLER_STATE_BLOCK_HLSL = textwrap.dedent("""
+    Texture2D tex : register(t0);
+    SamplerState MeshTextureSampler
+    {
+        Filter = MIN_MAG_MIP_LINEAR;
+        AddressU = Wrap;
+        AddressV = Wrap;
+    };
+
+    float4 PSMain(float2 uv : TEXCOORD0) : SV_Target0 {
+        return tex.Sample(MeshTextureSampler, uv);
+    }
+    """).strip()
+
 REGISTER_BINDINGS_HLSL = textwrap.dedent("""
     cbuffer FrameData : register(b0, space1) {
         float4x4 viewProj : packoffset(c0);
@@ -335,9 +349,11 @@ BYTE_ADDRESS_VECTOR_OPS_HLSL = textwrap.dedent("""
     RWByteAddressBuffer rawOutput : register(u4);
 
     uint4 main(uint offset : TEXCOORD0) : SV_Target0 {
+        uint scalar = rawInput.Load<uint>(offset + 48u);
         uint2 pair = rawInput.Load2(offset);
         uint3 triple = rawOutput.Load3(offset + 16u);
         uint4 quad = rawOutput.Load4(offset + 32u);
+        rawOutput.Store<uint>(offset + 48u, scalar);
         rawOutput.Store2(offset, pair);
         rawOutput.Store3(offset + 16u, triple);
         rawOutput.Store4(offset + 32u, quad);
@@ -492,6 +508,169 @@ def test_hlsl_psize_roundtrips_to_gl_point_size():
     assert "@ PointSize" not in crossgl
 
 
+def test_codegen_preserves_interpolation_modifiers_as_crossgl_metadata():
+    crossgl = generate_crossgl("""
+        struct PSInput {
+            centroid noperspective float2 uv : TEXCOORD0;
+            nointerpolation uint id : TEXCOORD1;
+            sample float4 color : COLOR0;
+        };
+
+        float4 PSMain(noperspective float4 color : COLOR0) : SV_Target0 {
+            return color;
+        }
+    """)
+
+    assert "vec2 uv @ TexCoord0 @ noperspective @ centroid;" in crossgl
+    assert "uint id @ TexCoord1 @ flat;" in crossgl
+    assert "vec4 color @ Color0 @ sample;" in crossgl
+    assert "vec4 color @ Color0 @ noperspective" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_preserves_contextual_shared_storage_modifier():
+    crossgl = generate_crossgl("""
+        shared float cachedWeight;
+        Texture2D<float> shared : register(t0);
+
+        float4 PSMain(float2 uv : TEXCOORD0) : SV_Target0 {
+            return shared.SampleLevel(samplerState, uv, 0.0);
+        }
+    """)
+
+    assert "shared float cachedWeight;" in crossgl
+    assert "sampler2D shared;" in crossgl
+    assert "shared sampler2D shared;" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_clip_intrinsic_imports_to_parseable_crossgl():
+    crossgl = generate_crossgl("""
+        float4 PSMain(float4 color : COLOR0) : SV_Target {
+            clip(color.a < 0.1f ? -1 : 1);
+            return color;
+        }
+    """)
+
+    assert "clip(color.a < 0.1 ? -1 : 1);" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_sampler_state_initializer_block_imports_to_crossgl():
+    crossgl = generate_crossgl(SAMPLER_STATE_BLOCK_HLSL)
+
+    assert "sampler MeshTextureSampler" in crossgl
+    assert "Filter = MIN_MAG_MIP_LINEAR" not in crossgl
+    assert "texture(tex, MeshTextureSampler, uv)" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_export_function_specifier_imports_to_crossgl():
+    crossgl = generate_crossgl("export void LogTraceRayStart() { }")
+
+    assert "void LogTraceRayStart()" in crossgl
+    assert "export" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_namespace_block_scoped_call_imports_to_parseable_crossgl():
+    crossgl = generate_crossgl("""
+        using namespace dx;
+
+        namespace CrossBilateral {
+            float Weight(float value) {
+                return value;
+            }
+        }
+
+        float UseWeight(float value) {
+            return CrossBilateral::Weight(value);
+        }
+    """)
+
+    assert "float Weight(float value)" in crossgl
+    assert "CrossBilateral::Weight(value)" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_anonymous_nested_struct_member_roundtrip():
+    hlsl = textwrap.dedent("""
+        struct NRCPathState {
+            float energy;
+            struct {
+                float3 origin;
+                float pdf;
+            } path;
+        };
+    """)
+
+    crossgl = generate_crossgl(hlsl)
+
+    assert "struct NRCPathState_path {" in crossgl
+    assert "vec3 origin;" in crossgl
+    assert "float pdf;" in crossgl
+    assert "struct NRCPathState {" in crossgl
+    assert "NRCPathState_path path;" in crossgl
+
+
+def test_brace_initializer_declarations_generate_crossgl():
+    output = generate_crossgl(textwrap.dedent("""
+            struct MyPayload {
+                int val;
+            };
+
+            struct RayDesc {
+                float3 Origin;
+                float TMin;
+                float3 Direction;
+                float TMax;
+            };
+
+            void RayGen() {
+                float3 origin = float3(0.0, 0.0, 0.0);
+                float3 rayDir = float3(0.0, 0.0, 1.0);
+                RayDesc myRay = { origin, 0.0f, rayDir, 10000.0f };
+                MyPayload payload = { 0 };
+            }
+
+            [shader("miss")]
+            void Miss(inout MyPayload payload) {
+                payload.val = 1;
+            }
+
+            [shader("closesthit")]
+            void Hit(
+                inout MyPayload payload,
+                in BuiltInTriangleIntersectionAttributes attr
+            ) {
+                payload.val = 2;
+            }
+            """))
+
+    assert "RayDesc myRay = {origin, 0.0, rayDir, 10000.0};" in output
+    assert "MyPayload payload = {0};" in output
+    assert "void main(MyPayload payload @ payload)" in output
+    assert "BuiltInTriangleIntersectionAttributes attr @ hit_attribute" in output
+    parse_crossgl(output)
+
+
+def test_global_static_const_array_initializer_generates_crossgl():
+    output = generate_crossgl("static const float Weights[2] = { 0.25f, 0.75f };")
+
+    assert "static const float Weights[2] = {0.25, 0.75};" in output
+
+    shader_ast = parse_crossgl(output)
+    weights = shader_ast.global_variables[0]
+    assert weights.name == "Weights"
+    assert weights.qualifiers == ["static", "const"]
+    assert isinstance(weights.var_type, ArrayType)
+    assert getattr(weights.var_type.size, "value", None) == 2
+    assert isinstance(weights.initial_value, ArrayLiteralNode)
+    assert [
+        getattr(element, "value", None) for element in weights.initial_value.elements
+    ] == [0.25, 0.75]
+
+
 def test_codegen_vertex_fragment_roundtrip():
     output = generate_crossgl(VERTEX_PIXEL_HLSL)
     assert isinstance(output, str)
@@ -563,6 +742,36 @@ def test_codegen_min_precision_vector_and_matrix_types():
     assert ShaderStage.FRAGMENT in shader_ast.stages
 
 
+def test_codegen_template_style_vector_matrix_types_and_constructors():
+    hlsl = textwrap.dedent("""
+        struct TemplateTypes {
+            vector<float, 3> normal : NORMAL;
+            matrix<float, 3, 3> basis;
+        };
+
+        vector<double, 4> MakeTemplateVector(
+            vector<float, 3> input : TEXCOORD0
+        ) : SV_Target0 {
+            matrix<float, 2, 3> localBasis;
+            vector<float> defaultWidth = vector<float>(1.0, 2.0, 3.0, 4.0);
+            return vector<double, 4>(input.x, input.y, input.z, 1.0);
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "vec3 normal @ Normal;" in output
+    assert "mat3 basis;" in output
+    assert "dvec4 MakeTemplateVector(vec3 input @ TexCoord0) @ gl_FragData[0]" in output
+    assert "mat2x3 localBasis;" in output
+    assert "vec4 defaultWidth = vec4(1.0, 2.0, 3.0, 4.0);" in output
+    assert "return dvec4(input.x, input.y, input.z, 1.0);" in output
+    assert "vector<" not in output
+    assert "matrix<" not in output
+
+    parse_crossgl(output)
+
+
 def test_codegen_compute_roundtrip():
     output = generate_crossgl(COMPUTE_HLSL)
     lowered = output.lower()
@@ -597,6 +806,35 @@ def test_codegen_mesh_task_stages():
     lowered = output.lower()
     assert "mesh" in lowered
     assert "task" in lowered
+
+
+def test_codegen_pascal_case_mesh_attributes_infer_stage():
+    code = textwrap.dedent("""
+        struct VertexOut {
+            float4 position : SV_Position;
+        };
+
+        [NumThreads(128, 1, 1)]
+        [OutputTopology("triangle")]
+        void main(
+            out indices uint3 tris[1],
+            out vertices VertexOut verts[1]
+        ) {
+            SetMeshOutputCounts(1, 1);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "mesh {" in crossgl
+    assert "@ NumThreads(128, 1, 1)" in crossgl
+    assert '@ OutputTopology("triangle")' in crossgl
+    assert "@ indices out uvec3 tris[1]" in crossgl
+    assert "@ vertices out VertexOut verts[1]" in crossgl
+    assert "SetMeshOutputCounts(1, 1);" in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    assert ShaderStage.MESH in shader_ast.stages
 
 
 def test_codegen_mesh_payload_parameters_roundtrip():
@@ -809,6 +1047,139 @@ def test_codegen_extra_attributes_emitted():
     assert "@ allow_uav_condition" in lowered
 
 
+def test_codegen_cxx11_namespaced_resource_attribute_passthrough():
+    hlsl = textwrap.dedent("""
+        [[vk::binding(3, 1)]]
+        Texture2D<float4> texture2 : register(t0, space0);
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ vk::binding(3, 1)" in output
+    assert "@ register(t0, space0)" in output
+    assert "sampler2D texture2;" in output
+
+
+def test_codegen_cxx11_namespaced_cbuffer_attribute_passthrough():
+    hlsl = textwrap.dedent("""
+        [[vk::push_constant]]
+        cbuffer PushConstants : register(b0, space1) {
+            float4 tint : packoffset(c0);
+        };
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ vk::push_constant" in output
+    assert "@ register(b0, space1)" in output
+    assert "cbuffer PushConstants" in output
+    assert "vec4 tint;" in output
+
+
+def test_codegen_anonymous_old_style_cbuffer_uses_synthetic_name():
+    hlsl = textwrap.dedent("""
+        cbuffer : register(b1)
+        {
+            float4 a;
+            int2 b;
+        };
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ register(b1)" in output
+    assert "cbuffer AnonymousCBuffer_b1" in output
+    assert "vec4 a;" in output
+    assert "ivec2 b;" in output
+
+
+def test_codegen_cbuffer_member_layout_metadata_passthrough():
+    hlsl = textwrap.dedent("""
+        cbuffer Material : register(b0) {
+            row_major float4x4 transform : packoffset(c0);
+            float roughness : packoffset(c4.x);
+        };
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ row_major" in output
+    assert "@ packoffset(c0)" in output
+    assert "@ packoffset(c4.x)" in output
+    assert "mat4 transform;" in output
+    assert "float roughness;" in output
+
+    shader_ast = parse_crossgl(output)
+    cbuffer = shader_ast.cbuffers[0]
+    transform, roughness = cbuffer.members
+    assert [attr.name for attr in transform.attributes] == [
+        "row_major",
+        "packoffset",
+    ]
+    assert transform.attributes[1].arguments[0].name == "c0"
+    assert [attr.name for attr in roughness.attributes] == ["packoffset"]
+    roughness_offset = roughness.attributes[0].arguments[0]
+    assert roughness_offset.object.name == "c4"
+    assert roughness_offset.member == "x"
+
+
+def test_codegen_hlsl_tbuffer_roundtrips_with_texture_register():
+    hlsl = textwrap.dedent("""
+        tbuffer LookupData : register(t3, space2) {
+            float4 values[4] : packoffset(c0);
+            float scale : packoffset(c4.x);
+        };
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ tbuffer" in output
+    assert "@ register(t3, space2)" in output
+    assert "cbuffer LookupData" in output
+    assert "vec4 values[4];" in output
+    assert "@ packoffset(c4.x)" in output
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+
+    assert "tbuffer LookupData : register(t3, space2)" in regenerated_hlsl
+    assert "float4 values[4];" in regenerated_hlsl
+    assert "float scale;" in regenerated_hlsl
+
+
+def test_codegen_object_style_constant_and_texture_buffers_roundtrip():
+    hlsl = textwrap.dedent("""
+        struct FrameConstants {
+            float4 tint;
+        };
+
+        ConstantBuffer<FrameConstants> frame : register(b2, space1);
+        TextureBuffer<FrameConstants> lookup : register(t5, space3);
+
+        float4 main() : SV_Target0 {
+            return frame.tint + lookup.tint;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "ConstantBuffer<FrameConstants> frame;" in output
+    assert "@ register(b2, space1)" in output
+    assert "TextureBuffer<FrameConstants> lookup;" in output
+    assert "@ register(t5, space3)" in output
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+
+    assert (
+        "ConstantBuffer<FrameConstants> frame : register(b2, space1);"
+        in regenerated_hlsl
+    )
+    assert (
+        "TextureBuffer<FrameConstants> lookup : register(t5, space3);"
+        in regenerated_hlsl
+    )
+    assert "return (frame.tint + lookup.tint);" in regenerated_hlsl
+
+
 def test_codegen_waveops_include_helper_lanes_attribute_passthrough():
     hlsl = textwrap.dedent("""
         [WaveOpsIncludeHelperLanes]
@@ -853,21 +1224,27 @@ def test_codegen_byte_address_vector_method_mapping():
     assert "RWByteAddressBuffer rawOutput;" in output
     assert "@ register(t3)" in output
     assert "@ register(u4)" in output
+    assert "uint scalar = buffer_load(rawInput, offset + 48);" in output
     assert "uvec2 pair = buffer_load2(rawInput, offset);" in output
     assert "uvec3 triple = buffer_load3(rawOutput, offset + 16);" in output
     assert "uvec4 quad = buffer_load4(rawOutput, offset + 32);" in output
+    assert "buffer_store(rawOutput, offset + 48, scalar);" in output
     assert "buffer_store2(rawOutput, offset, pair);" in output
     assert "buffer_store3(rawOutput, offset + 16, triple);" in output
     assert "buffer_store4(rawOutput, offset + 32, quad);" in output
+    assert ".Load<uint>(" not in output
+    assert ".Store<uint>(" not in output
     assert ".Load2(" not in output
     assert ".Store4(" not in output
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
     assert "ByteAddressBuffer rawInput : register(t3);" in regenerated_hlsl
     assert "RWByteAddressBuffer rawOutput : register(u4);" in regenerated_hlsl
+    assert "uint scalar = rawInput.Load((offset + 48));" in regenerated_hlsl
     assert "uint2 pair = rawInput.Load2(offset);" in regenerated_hlsl
     assert "uint3 triple = rawOutput.Load3((offset + 16));" in regenerated_hlsl
     assert "uint4 quad = rawOutput.Load4((offset + 32));" in regenerated_hlsl
+    assert "rawOutput.Store((offset + 48), scalar);" in regenerated_hlsl
     assert "rawOutput.Store2(offset, pair);" in regenerated_hlsl
     assert "rawOutput.Store3((offset + 16), triple);" in regenerated_hlsl
     assert "rawOutput.Store4((offset + 32), quad);" in regenerated_hlsl
@@ -4010,6 +4387,49 @@ def test_codegen_interlocked_typed_buffer_resource_array_roundtrip():
     assert "InterlockedMax(signedValues[dtid.x], -1, oldSigned);" in regenerated_hlsl
     assert "atomicAdd(counterBuffers" not in regenerated_hlsl
     assert "atomicMax(signedValues" not in regenerated_hlsl
+
+
+def test_codegen_upstream_declarations_defaults_and_for_update_sequences():
+    code = textwrap.dedent("""
+        cbuffer CSConstants : register(b0) {
+            uint ViewportWidth, ViewportHeight;
+        };
+
+        float4 ToRGBM(float3 rgb, float PeakValue = 255.0 / 16.0) {
+            return float4(rgb, PeakValue);
+        }
+
+        float main(uint count) : SV_Target0 {
+            uint tileLightLoadOffset = 0;
+            float sum = 0.0;
+            [unroll]
+            for (uint n = 0; n < count; n++, tileLightLoadOffset += 4) {
+                sum += n;
+            }
+            return sum;
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "uint ViewportWidth;" in output
+    assert "uint ViewportHeight;" in output
+    assert "vec4 ToRGBM(vec3 rgb, float PeakValue)" in output
+    assert "255.0 / 16.0" not in output
+    assert "for (uint n = 0; n < count; n++, tileLightLoadOffset += 4)" in output
+
+
+def test_codegen_unnamed_hlsl_parameters_get_synthetic_crossgl_names():
+    code = textwrap.dedent("""
+        float4 Rand4(inout uint4 ctx, uint) {
+            return float4(ctx);
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "uint _param1" in output
+    parse_crossgl(output)
 
 
 def test_codegen_invalid_hlsl_raises():

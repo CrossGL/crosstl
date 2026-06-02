@@ -6,16 +6,24 @@ from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 from crosstl.backend.slang.SlangAst import (
     ArrayAccessNode,
     AssignmentNode,
+    AssociatedTypeNode,
     BinaryOpNode,
     BreakNode,
     CallNode,
     CaseNode,
+    CastNode,
     ContinueNode,
     DiscardNode,
     DoWhileNode,
+    EnumNode,
+    ExtensionNode,
     ForNode,
     FunctionCallNode,
+    FunctionNode,
+    GenericConstraintNode,
+    IfNode,
     InitializerListNode,
+    InterfaceNode,
     MemberAccessNode,
     MethodCallNode,
     ReturnNode,
@@ -75,6 +83,32 @@ def test_compound_import_parsing():
     assert [node.module_name for node in ast.imports] == ["MyApp.Shadowing"]
 
 
+def test_string_import_path_parsing():
+    code = 'import "dir/file-name.slang";\n'
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert [node.module_name for node in ast.imports] == ["dir/file-name.slang"]
+    assert ast.global_vars == []
+
+
+def test_module_include_declarations_do_not_parse_as_globals():
+    code = """
+    module scene;
+    __include "scene-helpers";
+    implementing scene;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.modules == ["scene"]
+    assert ast.includes == ["scene-helpers"]
+    assert ast.implementing_modules == ["scene"]
+    assert ast.global_vars == []
+
+
 def test_struct_array_member_declarator_parsing():
     code = """
     struct Cluster {
@@ -95,6 +129,126 @@ def test_struct_array_member_declarator_parsing():
     ]
 
 
+def test_struct_comma_member_declarators_from_ray_tracing_example():
+    code = """
+    struct Uniforms {
+        float screenWidth, screenHeight;
+        float focalLength, frameHeight;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    members = ast.structs[0].members
+
+    assert [(member.vtype, member.name) for member in members] == [
+        ("float", "screenWidth"),
+        ("float", "screenHeight"),
+        ("float", "focalLength"),
+        ("float", "frameHeight"),
+    ]
+
+
+def test_visibility_qualified_struct_from_mlp_training_adam_sample():
+    code = """
+    public struct AdamState
+    {
+        internal NFloat mean;
+        internal NFloat variance;
+        internal int iteration;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert struct.name == "AdamState"
+    assert struct.qualifiers == ["public"]
+    assert [
+        (member.qualifiers, member.vtype, member.name) for member in struct.members
+    ] == [
+        (["internal"], "NFloat", "mean"),
+        (["internal"], "NFloat", "variance"),
+        (["internal"], "int", "iteration"),
+    ]
+
+
+def test_struct_method_body_parsing_from_official_example():
+    code = """
+    struct Primitive {
+        float4 data0;
+
+        float3 getNormal() {
+            return data0.xyz;
+        }
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert [(member.vtype, member.name) for member in struct.members] == [
+        ("float4", "data0")
+    ]
+    assert len(struct.methods) == 1
+
+    method = struct.methods[0]
+    assert isinstance(method, FunctionNode)
+    assert method.return_type == "float3"
+    assert method.name == "getNormal"
+    assert method.params == []
+    assert not method.is_declaration
+    assert isinstance(method.body[0], ReturnNode)
+    assert isinstance(method.body[0].value, MemberAccessNode)
+    assert method.body[0].value.member == "xyz"
+
+
+def test_struct_init_method_parsing_from_shader_toy_sample():
+    code = """
+    struct mat2
+    {
+        float2x2 data;
+
+        __init(float e00, float e01, float e10, float e11)
+        {
+            data = float2x2(e00, e01, e10, e11);
+        }
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+    constructor = struct.methods[0]
+
+    assert constructor.name == "__init"
+    assert constructor.return_type == "void"
+    assert not constructor.is_declaration
+    assert [(param.vtype, param.name) for param in constructor.params] == [
+        ("float", "e00"),
+        ("float", "e01"),
+        ("float", "e10"),
+        ("float", "e11"),
+    ]
+    assert isinstance(constructor.body[0], AssignmentNode)
+
+
+def test_ray_payload_access_semantics_from_ray_tracing_sample():
+    code = """
+    [raypayload] struct RayPayload
+    {
+        float4 color : read(caller) : write(caller, closesthit, miss);
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    payload = ast.structs[0]
+    color = payload.members[0]
+
+    assert color.name == "color"
+    assert color.semantic == "read(caller):write(caller,closesthit,miss)"
+
+
 def test_if_parsing():
     code = """
     [shader("vertex")]
@@ -112,6 +266,25 @@ def test_if_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("if parsing not implemented.")
+
+
+def test_string_literals_and_braceless_if_parsing():
+    code = r"""
+    void computeMain(uint tid) {
+        if (tid > 0)
+            return;
+        println("hello from thread", tid);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "computeMain").body
+
+    assert isinstance(body[0], IfNode)
+    assert isinstance(body[0].if_body[0], ReturnNode)
+    assert isinstance(body[1], FunctionCallNode)
+    assert body[1].args[0] == '"hello from thread"'
 
 
 def test_for_parsing():
@@ -424,6 +597,233 @@ def test_lambda_expression_parsing():
     assert mapped_lambda.args[0].vtype == "float3"
     assert mapped_lambda.args[0].name == "color"
     assert mapped_lambda.args[1] == "{ return color; }"
+
+
+def test_generic_type_receiver_expression_parsing():
+    code = """
+    [TorchEntryPoint]
+    export __extern_cpp int main() {
+        var result = TorchTensor<float>.alloc(Shape(1));
+        let count = result.numel();
+        let vec = coopVecLoad<4>(input);
+        let rs = f.eval<DataTrait0>(1.0);
+        return 0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = ast.exports[0].item
+    result = function.body[0]
+    count = function.body[1]
+    vector_load = function.body[2]
+    generic_method = function.body[3]
+
+    assert isinstance(result, AssignmentNode)
+    assert result.left.vtype == "var"
+    assert result.left.name == "result"
+    assert isinstance(result.right, MethodCallNode)
+    assert result.right.object.name == "TorchTensor<float>"
+    assert result.right.method == "alloc"
+    assert result.right.args[0].name == "Shape"
+
+    assert isinstance(count, AssignmentNode)
+    assert count.left.vtype == "let"
+    assert count.left.name == "count"
+    assert isinstance(count.right, MethodCallNode)
+    assert count.right.object.name == "result"
+    assert count.right.method == "numel"
+
+    assert isinstance(vector_load.right, FunctionCallNode)
+    assert vector_load.right.name == "coopVecLoad<4>"
+    assert vector_load.right.args[0].name == "input"
+
+    assert isinstance(generic_method.right, MethodCallNode)
+    assert generic_method.right.object.name == "f"
+    assert generic_method.right.method == "eval<DataTrait0>"
+    assert generic_method.right.args[0] == "1.0"
+
+
+def test_generic_function_declaration_after_name_parsing():
+    code = """
+    float GetRayT<let RAY_QUERY_FLAGS: uint>(uint rayInlineFlags)
+    {
+        return 0.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "GetRayT")
+
+    assert function.return_type == "float"
+    assert getattr(function, "is_generic", False)
+    assert function.generic_parameters == "<letRAY_QUERY_FLAGS:uint>"
+    assert function.params[0].vtype == "uint"
+    assert function.params[0].name == "rayInlineFlags"
+    assert isinstance(function.body[0], ReturnNode)
+
+
+def test_generic_struct_declaration_after_name_parsing():
+    code = """
+    struct GenericStruct<T, let N: int>
+    {
+        T value;
+        float weights[N];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert struct.name == "GenericStruct"
+    assert struct.generic_parameters == "<T, letN:int>"
+    assert [(member.vtype, member.name) for member in struct.members] == [
+        ("T", "value"),
+        ("float", "weights"),
+    ]
+    assert struct.members[1].array_sizes[0].name == "N"
+
+
+def test_interface_struct_and_extension_conformance_metadata_parsing():
+    code = """
+    interface IFoo {
+        int foo();
+    }
+
+    struct MyType : IFoo {
+        int value;
+    };
+
+    extension MyType : IBar {
+        int bar() {
+            return 1;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    interface = ast.interfaces[0]
+    assert isinstance(interface, InterfaceNode)
+    assert interface.name == "IFoo"
+    assert len(interface.methods) == 1
+    assert interface.methods[0].return_type == "int"
+    assert interface.methods[0].name == "foo"
+    assert interface.methods[0].is_declaration
+
+    struct = ast.structs[0]
+    assert struct.name == "MyType"
+    assert struct.conformances == ["IFoo"]
+
+    extension = ast.extensions[0]
+    assert isinstance(extension, ExtensionNode)
+    assert extension.extended_type == "MyType"
+    assert extension.conformances == ["IBar"]
+    assert len(extension.methods) == 1
+    assert extension.methods[0].name == "bar"
+    assert not extension.methods[0].is_declaration
+
+
+def test_interface_associated_type_requirement_from_model_viewer_sample():
+    code = """
+    interface IMaterial
+    {
+        associatedtype BRDF : IBRDF;
+        BRDF prepare(SurfaceGeometry geometry);
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    interface = ast.interfaces[0]
+
+    assert len(interface.associated_types) == 1
+    associated_type = interface.associated_types[0]
+    assert isinstance(associated_type, AssociatedTypeNode)
+    assert associated_type.name == "BRDF"
+    assert associated_type.constraint_type == "IBRDF"
+    assert associated_type.target_type is None
+    assert len(interface.methods) == 1
+    assert interface.methods[0].return_type == "BRDF"
+    assert interface.methods[0].name == "prepare"
+
+
+def test_typealias_declarations_from_shader_toy_and_mlp_vec_samples():
+    code = """
+    typealias vec2 = float2;
+
+    public struct MLVec<int N> : IDifferentiable
+    {
+        public typealias Differential = MLVec<N>;
+        public CoopVec<NFloat, N> data;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    typedef = ast.typedefs[0]
+    struct = ast.structs[0]
+    struct_typedef = struct.typedefs[0]
+
+    assert typedef.original_type == "float2"
+    assert typedef.new_type == "vec2"
+    assert struct_typedef.original_type == "MLVec<N>"
+    assert struct_typedef.new_type == "Differential"
+    assert struct_typedef.qualifiers == ["public"]
+    assert [(member.vtype, member.name) for member in struct.members] == [
+        ("CoopVec<NFloat, N>", "data")
+    ]
+
+
+def test_enum_declarations_from_gpu_printing_sample():
+    code = """
+    enum EmptyPrintingOp
+    {
+    };
+
+    enum PrintingOp
+    {
+        PrintLine,
+        PrintF = 2 + 1,
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert len(ast.enums) == 2
+    empty_enum = ast.enums[0]
+    valued_enum = ast.enums[1]
+
+    assert isinstance(empty_enum, EnumNode)
+    assert empty_enum.name == "EmptyPrintingOp"
+    assert empty_enum.members == []
+    assert valued_enum.name == "PrintingOp"
+    assert valued_enum.members[0] == ("PrintLine", None)
+    assert valued_enum.members[1][0] == "PrintF"
+    assert isinstance(valued_enum.members[1][1], BinaryOpNode)
+
+
+def test_function_generic_where_conformance_constraint_parsing():
+    code = """
+    int useFoo<T>(T value) where T : IFoo {
+        return value.foo();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "useFoo")
+
+    assert function.generic_parameters == "<T>"
+    assert len(function.generic_constraints) == 1
+    constraint = function.generic_constraints[0]
+    assert isinstance(constraint, GenericConstraintNode)
+    assert constraint.parameter == "T"
+    assert constraint.constraint_type == "IFoo"
 
 
 def test_for_update_parses_array_and_member_assignment_targets():
@@ -764,6 +1164,31 @@ def test_generic_resource_global_parsing():
     ]
 
 
+def test_nested_parameter_block_resource_wrapper_parsing():
+    code = """
+    struct S
+    {
+        ConstantBuffer<RWStructuredBuffer<int>> cb;
+    }
+
+    ParameterBlock<RWStructuredBuffer<int>> rwBuffer;
+    ParameterBlock<ConstantBuffer<int>> constBuffer;
+    ParameterBlock<ConstantBuffer<RWStructuredBuffer<int>>> nestedBuffer;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.structs[0].members[0].vtype == "ConstantBuffer<RWStructuredBuffer<int>>"
+    assert [(var.vtype, var.name) for var in ast.global_vars] == [
+        ("ParameterBlock<RWStructuredBuffer<int>>", "rwBuffer"),
+        ("ParameterBlock<ConstantBuffer<int>>", "constBuffer"),
+        (
+            "ParameterBlock<ConstantBuffer<RWStructuredBuffer<int>>>",
+            "nestedBuffer",
+        ),
+    ]
+
+
 def test_bound_generic_resource_global_parsing():
     code = """
     Texture2D<float4> albedo : register(t0);
@@ -776,6 +1201,29 @@ def test_bound_generic_resource_global_parsing():
     assert [(var.vtype, var.name, var.register) for var in ast.global_vars] == [
         ("Texture2D<float4>", "albedo", "t0"),
         ("SamplerState", "linearSampler", "s0"),
+    ]
+
+
+def test_vulkan_binding_attribute_global_resource_parsing():
+    code = """
+    [[vk::binding(0, 1)]]
+    Texture2D<float4> albedo : register(t0);
+
+    [[vk::binding(2)]]
+    SamplerState linearSampler;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    albedo = ast.global_vars[0]
+    linear_sampler = ast.global_vars[1]
+
+    assert albedo.attributes == [{"name": "vk::binding", "arguments": ["0", "1"]}]
+    assert albedo.register == "t0"
+    assert linear_sampler.attributes == [{"name": "vk::binding", "arguments": ["2"]}]
+    assert [(var.vtype, var.name) for var in ast.global_vars] == [
+        ("Texture2D<float4>", "albedo"),
+        ("SamplerState", "linearSampler"),
     ]
 
 
@@ -802,6 +1250,46 @@ def test_bound_cbuffer_parsing():
         ("float", "weights", [None]),
         ("float4x4", "transforms", ["2", "3"]),
     ]
+
+
+def test_cbuffer_comma_member_declarators_parsing():
+    code = """
+    cbuffer Camera {
+        float exposure, gamma;
+        float4 offsets[2], tint;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    members = ast.cbuffers[0].members
+
+    assert [(member.vtype, member.name, member.array_sizes) for member in members] == [
+        ("float", "exposure", []),
+        ("float", "gamma", []),
+        ("float4", "offsets", ["2"]),
+        ("float4", "tint", []),
+    ]
+
+
+def test_vulkan_attributes_on_cbuffer_parsing():
+    code = """
+    [[vk::binding(0, 1)]]
+    [[vk::push_constant]]
+    cbuffer Camera : register(b0) {
+        float4x4 viewProj;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    cbuffer = ast.cbuffers[0]
+
+    assert cbuffer.name == "Camera"
+    assert cbuffer.register == "b0"
+    assert cbuffer.attributes == [
+        {"name": "vk::binding", "arguments": ["0", "1"]},
+        {"name": "vk::push_constant", "arguments": []},
+    ]
+    assert cbuffer.members[0].name == "viewProj"
 
 
 def test_global_resource_array_parsing():
@@ -846,6 +1334,40 @@ def test_local_and_parameter_array_declarator_parsing():
     assert function.body[1].name == "grid"
     assert function.body[1].array_sizes == ["2", "3"]
     assert isinstance(function.body[2].value, ArrayAccessNode)
+
+
+def test_geometry_primitive_array_parameter_parsing():
+    code = """
+    struct VSOutput {
+        float4 Pos : POSITION0;
+    };
+
+    struct GSOutput {
+        float4 Pos : SV_POSITION;
+    };
+
+    [shader("geometry")]
+    [maxvertexcount(3)]
+    void geometryMain(triangle VSOutput input[3],
+                      inout TriangleStream<GSOutput> outStream,
+                      uint PrimitiveID : SV_PrimitiveID) {
+        return;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "geometryMain")
+
+    assert function.qualifier == "geometry"
+    assert function.attributes == [{"name": "maxvertexcount", "arguments": ["3"]}]
+    assert [
+        (param.qualifiers, param.vtype, param.name, param.array_sizes, param.semantic)
+        for param in function.params
+    ] == [
+        (["triangle"], "VSOutput", "input", ["3"], None),
+        (["inout"], "TriangleStream<GSOutput>", "outStream", [], None),
+        ([], "uint", "PrimitiveID", [], "SV_PrimitiveID"),
+    ]
 
 
 def test_local_and_parameter_generic_resource_type_parsing():
@@ -985,6 +1507,61 @@ def test_initialized_top_level_global_parsing():
     assert isinstance(gain, AssignmentNode)
     assert gain.left.register == "c0"
     assert gain.right == "1f"
+
+
+def test_comma_separated_global_declarations_parsing():
+    code = """
+    static float exposure, gamma = 2.2, weights[2];
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    exposure = ast.global_vars[0]
+    gamma = ast.global_vars[1]
+    weights = ast.global_vars[2]
+
+    assert isinstance(exposure, VariableNode)
+    assert exposure.vtype == "float"
+    assert exposure.name == "exposure"
+    assert exposure.qualifiers == ["static"]
+
+    assert isinstance(gamma, AssignmentNode)
+    assert gamma.left.vtype == "float"
+    assert gamma.left.name == "gamma"
+    assert gamma.left.qualifiers == ["static"]
+    assert gamma.right == "2.2"
+
+    assert isinstance(weights, VariableNode)
+    assert weights.name == "weights"
+    assert weights.array_sizes == ["2"]
+
+
+def test_comma_separated_local_declarations_from_public_corpus():
+    code = """
+    void main() {
+        float3 a, b, c;
+        float4x4 mx, my = float4x4(1.0), mz;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "main").body
+
+    assert [(stmt.vtype, stmt.name) for stmt in body[:3]] == [
+        ("float3", "a"),
+        ("float3", "b"),
+        ("float3", "c"),
+    ]
+    assert isinstance(body[3], VariableNode)
+    assert body[3].vtype == "float4x4"
+    assert body[3].name == "mx"
+    assert isinstance(body[4], AssignmentNode)
+    assert body[4].left.vtype == "float4x4"
+    assert body[4].left.name == "my"
+    assert isinstance(body[4].right, VectorConstructorNode)
+    assert isinstance(body[5], VariableNode)
+    assert body[5].vtype == "float4x4"
+    assert body[5].name == "mz"
 
 
 def test_initializer_list_declaration_parsing():
@@ -1211,6 +1788,264 @@ def test_numeric_literal_parsing():
         "0xffu",
         "123u",
     ]
+
+
+def test_generic_struct_member_and_uniform_parameters_from_official_sample():
+    code = """
+    static const uint THREADGROUP_SIZE_X = 8;
+    static const uint THREADGROUP_SIZE_Y = THREADGROUP_SIZE_X;
+
+    struct ImageProcessingOptions
+    {
+        float3 tintColor;
+        float blurRadius;
+        bool useLookupTable;
+        StructuredBuffer<float4> lookupTable;
+    }
+
+    [shader("compute")]
+    [numthreads(THREADGROUP_SIZE_X, THREADGROUP_SIZE_Y)]
+    void processImage(
+        uint3 threadID : SV_DispatchThreadID,
+        uniform Texture2D inputImage,
+        uniform RWTexture2D outputImage,
+        uniform ImageProcessingOptions options)
+    {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    options = ast.structs[0]
+    process_image = find_function(ast, "processImage")
+
+    assert options.members[-1].vtype == "StructuredBuffer<float4>"
+    assert options.members[-1].name == "lookupTable"
+    assert process_image.numthreads == (
+        "THREADGROUP_SIZE_X",
+        "THREADGROUP_SIZE_Y",
+        "1",
+    )
+    params = [
+        (param.qualifiers, param.vtype, param.name) for param in process_image.params
+    ]
+    assert params == [
+        ([], "uint3", "threadID"),
+        (["uniform"], "Texture2D", "inputImage"),
+        (["uniform"], "RWTexture2D", "outputImage"),
+        (["uniform"], "ImageProcessingOptions", "options"),
+    ]
+
+
+def test_export_extern_cpp_function_parsing():
+    code = """
+    [TorchEntryPoint]
+    export __extern_cpp int main()
+    {
+        return 0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    exported = ast.exports[0].item
+
+    assert exported.name == "main"
+    assert exported.return_type == "int"
+    assert "__extern_cpp" in exported.qualifiers
+    assert exported.attributes == [{"name": "TorchEntryPoint", "arguments": []}]
+    assert isinstance(exported.body[0], ReturnNode)
+
+
+def test_c_style_scalar_cast_from_official_select_expr_sample():
+    code = """
+    int test(int input)
+    {
+        return input > 1 ? -input : input;
+    }
+
+    RWStructuredBuffer<int> outputBuffer;
+
+    [numthreads(4, 1, 1)]
+    void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+    {
+        outputBuffer[dispatchThreadID.x] = test((int) dispatchThreadID.x);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    compute_main = find_function(ast, "computeMain")
+    assignment = compute_main.body[0]
+    call = assignment.right
+    cast = call.args[0]
+
+    assert isinstance(cast, CastNode)
+    assert cast.target_type == "int"
+    assert isinstance(cast.expression, MemberAccessNode)
+    assert cast.expression.member == "x"
+
+
+def test_parenthesized_expression_swizzle_from_autodiff_texture_learnmip_sample():
+    code = """
+    RWTexture2D dstTexture;
+
+    void computeMain(uint2 p)
+    {
+        var val = float4(1.0);
+        float4 color = float4((dstTexture[p] - val).xyz, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    compute_main = find_function(ast, "computeMain")
+    color_assignment = compute_main.body[1]
+    constructor = color_assignment.right
+    swizzle = constructor.args[0]
+
+    assert isinstance(swizzle, MemberAccessNode)
+    assert swizzle.member == "xyz"
+    assert isinstance(swizzle.object, BinaryOpNode)
+    assert isinstance(swizzle.object.left, ArrayAccessNode)
+
+
+def test_struct_method_attributes_and_no_diff_from_autodiff_texture_train_sample():
+    code = """
+    Texture2D texRef;
+
+    struct DifferentiableTexture
+    {
+        Texture2D texture;
+
+        [BackwardDerivative(bwd_LoadTexel)]
+        float4 LoadTexel(int3 location, constexpr int2 offset)
+        {
+            return texture.Load(location, offset);
+        }
+    }
+
+    [BackwardDifferentiable]
+    float3 loss(no_diff float2 uv, no_diff float4 screenPos)
+    {
+        float3 refColor = (no_diff texRef.Load(int3(int2(screenPos.xy), 0))).xyz;
+        return refColor;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    texture = ast.structs[0]
+    method = texture.methods[0]
+    loss = find_function(ast, "loss")
+    ref_color = loss.body[0]
+
+    assert method.attributes == [
+        {"name": "BackwardDerivative", "arguments": ["bwd_LoadTexel"]}
+    ]
+    assert method.params[1].qualifiers == ["constexpr"]
+    assert [param.qualifiers for param in loss.params] == [["no_diff"], ["no_diff"]]
+    assert isinstance(ref_color.right, MemberAccessNode)
+    assert ref_color.right.member == "xyz"
+
+
+def test_pointer_and_statement_attribute_syntax_from_mlp_training_samples():
+    code = """
+    public struct AdamOptimizer
+    {
+        public static const NFloat beta1 = 0.9h;
+    }
+
+    public struct FeedForwardLayer<int InputSize, int OutputSize>
+    {
+        public NFloat* weights;
+        public NFloat* weightsGrad;
+    }
+
+    [numthreads(256, 1, 1)]
+    void adjustParameters(
+        uint32_t tid : SV_DispatchThreadID,
+        uniform AdamState* states,
+        uniform NFloat* params,
+        uniform NFloat* gradients,
+        uniform uint32_t count)
+    {
+        [ForceUnroll]
+        for (int i = 0; i < 1; i++)
+            AdamOptimizer::step(states[tid], params[tid], gradients[tid]);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    optimizer = ast.structs[0]
+    layer = ast.structs[1]
+    adjust_parameters = find_function(ast, "adjustParameters")
+    loop = adjust_parameters.body[0]
+    call = loop.body[0]
+
+    assert optimizer.members[0].qualifiers == ["public", "static", "const"]
+    assert optimizer.members[0].value == "0.9h"
+    assert [member.vtype for member in layer.members] == ["NFloat*", "NFloat*"]
+    assert [param.vtype for param in adjust_parameters.params[1:4]] == [
+        "AdamState*",
+        "NFloat*",
+        "NFloat*",
+    ]
+    assert isinstance(loop, ForNode)
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "AdamOptimizer::step"
+
+
+def test_mlp_coopvec_array_type_local_and_void_pointer_cast_parsing():
+    code = """
+    public struct FeedForwardLayer<int InputSize, int OutputSize>
+    {
+        internal void* biasesGrad;
+
+        internal static NFloat[N] coopVecToArray(CoopVec<NFloat, N> v)
+        {
+            NFloat[N] arr;
+            return arr;
+        }
+
+        public void evalBwd(MLVec<OutputSize> resultGrad)
+        {
+            coopVecReduceSumAccumulate(resultGrad.data, (void*)biasesGrad);
+        }
+
+        public override static Differential dzero()
+        {
+            return {};
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+    array_method = next(
+        method for method in struct.methods if method.name == "coopVecToArray"
+    )
+    backward_method = next(
+        method for method in struct.methods if method.name == "evalBwd"
+    )
+    override_method = next(
+        method for method in struct.methods if method.name == "dzero"
+    )
+    array_decl = array_method.body[0]
+    call = backward_method.body[0]
+    cast = call.args[1]
+
+    assert array_method.return_type == "NFloat[N]"
+    assert isinstance(array_decl, VariableNode)
+    assert array_decl.vtype == "NFloat[N]"
+    assert array_decl.name == "arr"
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(cast, CastNode)
+    assert cast.target_type == "void*"
+    assert cast.expression.name == "biasesGrad"
+    assert override_method.qualifiers == ["public", "override", "static"]
 
 
 if __name__ == "__main__":

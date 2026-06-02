@@ -4,6 +4,7 @@ from .CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
     CastNode,
+    EnumNode,
     FunctionCallNode,
     InitializerListNode,
     MemberAccessNode,
@@ -16,7 +17,16 @@ from .CudaAst import (
 class CudaToCrossGLConverter:
     """Serialize CUDA backend AST nodes back into CrossGL source."""
 
+    CUDA_RUNTIME_ERROR_WRAPPER_NAMES = {
+        "CHECK_CUDA",
+        "CUDA_CHECK",
+        "checkCuda",
+        "checkCudaErrors",
+        "gpuErrchk",
+    }
+
     VECTOR_TYPE_MAPPING = {
+        "half2": "vec2<f16>",
         "float2": "vec2<f32>",
         "float3": "vec3<f32>",
         "float4": "vec4<f32>",
@@ -572,6 +582,13 @@ class CudaToCrossGLConverter:
         if self.is_user_defined_function(stmt.name):
             return False
 
+        runtime_wrapper = self.format_cuda_runtime_wrapper_expression(stmt)
+        if runtime_wrapper is not None:
+            comments, _ = runtime_wrapper
+            for comment in comments:
+                self.emit(comment)
+            return True
+
         runtime_value = self.format_cuda_runtime_value_expression(stmt)
         if runtime_value is not None:
             comments, _ = runtime_value
@@ -592,6 +609,10 @@ class CudaToCrossGLConverter:
             return None
         if self.is_user_defined_function(value.name):
             return None
+
+        wrapped_runtime = self.format_cuda_runtime_wrapper_expression(value)
+        if wrapped_runtime is not None:
+            return wrapped_runtime
 
         comments = self.format_cuda_runtime_call(value)
         if comments is None:
@@ -621,6 +642,17 @@ class CudaToCrossGLConverter:
         if name == "cudaGetCurrentGraphExec" and not value.args:
             return ["// CUDA device graph get current exec"], "0"
         return None
+
+    def format_cuda_runtime_wrapper_expression(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+        if self.is_user_defined_function(value.name):
+            return None
+        if value.name not in self.CUDA_RUNTIME_ERROR_WRAPPER_NAMES:
+            return None
+        if len(getattr(value, "args", []) or []) != 1:
+            return None
+        return self.format_cuda_runtime_expression(value.args[0])
 
     def format_cuda_runtime_inline_expression(self, value):
         runtime_expression = self.format_cuda_runtime_expression(value)
@@ -3483,12 +3515,16 @@ class CudaToCrossGLConverter:
 
         if hasattr(node, "functions") and node.functions:
             for func in node.functions:
+                if getattr(func, "body", None) is None:
+                    continue
                 self.emit(f"// Function: {func.name}")
                 self.visit(func)
                 self.emit("")
 
         if hasattr(node, "kernels") and node.kernels:
             for kernel in node.kernels:
+                if getattr(kernel, "body", None) is None:
+                    continue
                 self.emit(f"// Kernel: {kernel.name}")
                 self.visit_kernel_as_compute_shader(kernel)
                 self.emit("")
@@ -3513,6 +3549,32 @@ class CudaToCrossGLConverter:
                 node.name, member.vtype, member.name
             )
             self.emit(f"{member_type} {member.name};")
+
+        self.indent_level -= 1
+        self.emit("};")
+
+    def visit_EnumNode(self, node):
+        name = node.name or ""
+        underlying = getattr(node, "underlying_type", None)
+        suffix = (
+            f" : {self.convert_cuda_type_to_crossgl(underlying)}" if underlying else ""
+        )
+        self.emit(f"enum {name}{suffix} {{")
+        self.indent_level += 1
+
+        members = getattr(node, "members", None) or getattr(node, "variants", [])
+        for member in members:
+            if isinstance(member, tuple):
+                member_name, member_value = member
+            else:
+                member_name = getattr(member, "name", str(member))
+                member_value = getattr(member, "value", None)
+
+            if member_value is not None:
+                value = self.visit(member_value)
+                self.emit(f"{member_name} = {value},")
+            else:
+                self.emit(f"{member_name},")
 
         self.indent_level -= 1
         self.emit("};")
@@ -3562,6 +3624,21 @@ class CudaToCrossGLConverter:
         self.emit("}")
 
     def visit_kernel_as_compute_shader(self, kernel):
+        for attribute in getattr(kernel, "attributes", []) or []:
+            attribute_text = str(attribute)
+            if attribute_text.startswith("__launch_bounds__"):
+                bounds = attribute_text[len("__launch_bounds__") :]
+                self.emit(f"// CUDA launch bounds: {bounds}")
+            elif attribute_text.startswith("__cluster_dims__"):
+                dims = attribute_text[len("__cluster_dims__") :]
+                self.emit(f"// CUDA cluster dims: {dims}")
+            elif attribute_text.startswith("__block_size__"):
+                size = attribute_text[len("__block_size__") :]
+                self.emit(f"// CUDA block size: {size}")
+        for param in kernel.params:
+            if "__grid_constant__" in str(param.vtype).split():
+                self.emit(f"// CUDA grid constant parameter: {param.name}")
+
         self.emit("@compute")
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
@@ -3849,6 +3926,11 @@ class CudaToCrossGLConverter:
 
         # Convert to workgroup memory in CrossGL
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
+        if getattr(node, "is_dynamic_shared_memory", False):
+            self.emit(
+                f"// CUDA dynamic shared memory: {node.name} uses launch-time "
+                "shared memory size"
+            )
         if node.size:
             size = self.visit(node.size)
             self.emit(f"var<workgroup> {node.name}: array<{var_type}, {size}>;")
@@ -3927,12 +4009,35 @@ class CudaToCrossGLConverter:
         if self.is_user_defined_function(raw_name):
             return f"{raw_name}({args_str})"
 
+        fp16_intrinsic = self.format_cuda_fp16_intrinsic_call(raw_name, args)
+        if fp16_intrinsic is not None:
+            return fp16_intrinsic
+
         resource_call = self.format_cuda_resource_call(raw_name, args)
         if resource_call is not None:
             return resource_call
 
         func_name = self.convert_cuda_builtin_function(raw_name)
         return f"{func_name}({args_str})"
+
+    def format_cuda_fp16_intrinsic_call(self, function_name, args):
+        if function_name == "__float2half2_rn" and len(args) == 1:
+            return self.format_vector_constructor("vec2", [args[0], args[0]], "f16")
+        if function_name == "__low2float" and len(args) == 1:
+            return f"f32({self.format_vector_component_access(args[0], 'x')})"
+        if function_name == "__hadd2" and len(args) == 2:
+            return f"({args[0]} + {args[1]})"
+        if function_name == "__hmul2" and len(args) == 2:
+            return f"({args[0]} * {args[1]})"
+        if function_name == "__hfma2" and len(args) == 3:
+            return f"fma({args[0]}, {args[1]}, {args[2]})"
+        return None
+
+    def format_vector_component_access(self, expression, component):
+        text = str(expression).strip()
+        if text and all(char.isalnum() or char in "_." for char in text):
+            return f"{text}.{component}"
+        return f"({text}).{component}"
 
     def format_cooperative_group_call(self, node):
         if isinstance(node.name, MemberAccessNode):
@@ -4586,6 +4691,39 @@ class CudaToCrossGLConverter:
         else:
             self.emit(f"// {node.sync_type}();")
 
+    def visit_CudaAsmNode(self, node):
+        volatility = " volatile" if node.is_volatile else ""
+        self.emit(f"// CUDA inline PTX{volatility}: {node.template}")
+        if node.outputs:
+            self.emit(
+                f"// CUDA inline PTX outputs: {self.format_cuda_asm_operands(node.outputs)}"
+            )
+        if node.inputs:
+            self.emit(
+                f"// CUDA inline PTX inputs: {self.format_cuda_asm_operands(node.inputs)}"
+            )
+        if node.clobbers:
+            self.emit(f"// CUDA inline PTX clobbers: {', '.join(node.clobbers)}")
+
+    def format_cuda_asm_operands(self, operands):
+        formatted = []
+        for operand in operands:
+            prefix = (
+                f"[{operand.symbolic_name}] "
+                if operand.symbolic_name is not None
+                else ""
+            )
+            expression = (
+                self.visit(operand.expression)
+                if operand.expression is not None
+                else None
+            )
+            if expression is None:
+                formatted.append(f"{prefix}{operand.constraint}")
+            else:
+                formatted.append(f"{prefix}{operand.constraint}({expression})")
+        return ", ".join(formatted)
+
     def visit_CudaBuiltinNode(self, node):
         builtin_map = {
             "threadIdx": "gl_LocalInvocationID",
@@ -4885,6 +5023,17 @@ class CudaToCrossGLConverter:
             "long long": "i64",
             "signed long long": "i64",
             "unsigned long long": "u64",
+            "int8_t": "i8",
+            "uint8_t": "u8",
+            "int16_t": "i16",
+            "uint16_t": "u16",
+            "int32_t": "i32",
+            "uint32_t": "u32",
+            "int64_t": "i64",
+            "uint64_t": "u64",
+            "half": "f16",
+            "__half": "f16",
+            "__half2": "vec2<f16>",
             "float": "f32",
             "double": "f64",
             "size_t": "u32",
@@ -5008,7 +5157,17 @@ class CudaToCrossGLConverter:
         return mapped_type
 
     def strip_type_qualifiers(self, type_name):
-        qualifiers = {"const", "volatile", "__restrict__", "restrict", "&", "&&"}
+        qualifiers = {
+            "const",
+            "volatile",
+            "__restrict__",
+            "__restrict",
+            "restrict",
+            "__grid_constant__",
+            "typename",
+            "&",
+            "&&",
+        }
         return " ".join(
             part for part in str(type_name).split() if part not in qualifiers
         )
@@ -5086,6 +5245,9 @@ class CudaToCrossGLConverter:
             "short": "i16",
             "int": "i32",
             "long": "i64",
+            "half": "f16",
+            "__half": "f16",
+            "__half2": "vec2<f16>",
             "float": "f32",
             "double": "f64",
             "size_t": "u32",

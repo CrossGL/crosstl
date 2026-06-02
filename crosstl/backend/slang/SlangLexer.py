@@ -15,6 +15,8 @@ TOKENS = tuple(
         ("PREPROCESSOR", r"#[^\r\n]*"),
         ("BITWISE_NOT", r"~"),
         ("STRUCT", r"\bstruct\b"),
+        ("INTERFACE", r"\binterface\b"),
+        ("ENUM", r"\benum\b"),
         ("CBUFFER", r"\bcbuffer\b"),
         ("SHADER", r"\bshader\b"),
         ("STRING", r'"(?:\\.|[^"\\])*"'),
@@ -41,6 +43,7 @@ TOKENS = tuple(
         ("CONTINUE", r"\bcontinue\b"),
         ("DISCARD", r"\bdiscard\b"),
         ("REGISTER", r"\bregister\b"),
+        ("WHERE", r"\bwhere\b"),
         ("STRING", r'"[^"]*"'),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         (
@@ -97,6 +100,8 @@ TOKENS = tuple(
         ("GENERIC", r"\b__generic\b"),
         ("EXTENSION", r"\bextension\b"),
         ("TYPEDEF", r"\btypedef\b"),
+        ("TYPEALIAS", r"\btypealias\b"),
+        ("ASSOCIATEDTYPE", r"\bassociatedtype\b"),
         ("CONST", r"\bconst\b"),
         ("CONSTEXPR", r"\bconstexpr\b"),
         ("STATIC", r"\bstatic\b"),
@@ -107,6 +112,8 @@ TOKENS = tuple(
 
 KEYWORDS = {
     "struct": "STRUCT",
+    "interface": "INTERFACE",
+    "enum": "ENUM",
     "cbuffer": "CBUFFER",
     "Texture2D": "TEXTURE2D",
     "SamplerState": "SAMPLER_STATE",
@@ -131,11 +138,17 @@ KEYWORDS = {
     "continue": "CONTINUE",
     "discard": "DISCARD",
     "register": "REGISTER",
+    "where": "WHERE",
     "import": "IMPORT",
     "export": "EXPORT",
+    "module": "MODULE",
+    "implementing": "IMPLEMENTING",
+    "__include": "INCLUDE",
     "__generic": "GENERIC",
     "extension": "EXTENSION",
     "typedef": "TYPEDEF",
+    "typealias": "TYPEALIAS",
+    "associatedtype": "ASSOCIATEDTYPE",
     "const": "CONST",
     "constexpr": "CONSTEXPR",
     "static": "STATIC",
@@ -157,6 +170,7 @@ class SlangLexer:
         file_path: Optional[str] = None,
     ):
         """Initialize the lexer and optionally preprocess Slang source text."""
+        code = code.lstrip("\ufeff")
         if preprocess:
             preprocessor = SlangPreprocessor(
                 include_paths=include_paths,

@@ -2,7 +2,21 @@ from typing import List
 
 import pytest
 
-from crosstl.backend.common_ast import MethodCallNode, TextureSampleNode
+from crosstl.backend.common_ast import (
+    AssignmentNode,
+    BinaryOpNode,
+    CastNode,
+    DiscardNode,
+    ForNode,
+    FunctionCallNode,
+    IfNode,
+    MemberAccessNode,
+    MethodCallNode,
+    RangeForNode,
+    TextureSampleNode,
+    VectorConstructorNode,
+)
+from crosstl.backend.Metal.MetalAst import BlockNode
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 
@@ -118,6 +132,24 @@ def test_parse_control_flow_constructs():
     parse_ok(code)
 
 
+def test_parse_nested_unbraced_for_loops_from_public_msl_example():
+    code = """
+    fragment float4 shader_day53(float4 pixPos [[position]]) {
+        const float PIXEL_SIZE = 40.0;
+        float4 col = float4(0.0);
+        for (int i = 0; i < int(PIXEL_SIZE); i++)
+            for (int j = 0; j < int(PIXEL_SIZE); j++)
+                col += float4(float(i + j));
+        return col;
+    }
+    """
+    ast = parse_ok(code)
+    loops = [node for node in iter_ast_nodes(ast) if isinstance(node, ForNode)]
+
+    assert len(loops) == 2
+    assert isinstance(loops[0].body[0], ForNode)
+
+
 def test_parse_resource_bindings_and_address_spaces():
     code = """
     #include <metal_stdlib>
@@ -139,6 +171,27 @@ def test_parse_resource_bindings_and_address_spaces():
     parse_ok(code)
 
 
+def test_parse_coherent_memory_qualifier_from_mlx_fence_kernel():
+    code = """
+    [[kernel]] void input_coherent(
+        volatile coherent(system) device uint* input [[buffer(0)]],
+        const constant uint& size [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      if (index < size) {
+        input[index] = input[index];
+      }
+    }
+    """
+    ast = parse_ok(code)
+    param = ast.functions[0].params[0]
+
+    assert param.vtype == "uint*"
+    assert param.name == "input"
+    assert param.qualifiers == ["volatile", "coherent(system)", "device"]
+    assert param.attributes[0].name == "buffer"
+    assert param.attributes[0].args == ["0"]
+
+
 def test_parse_arrays_and_indexing():
     code = """
     struct Data {
@@ -153,6 +206,42 @@ def test_parse_arrays_and_indexing():
     }
     """
     parse_ok(code)
+
+
+def test_parse_imageblock_member_array_after_attribute_from_apple_sample():
+    code = """
+    struct TransparentFragmentValues {
+        rgba8unorm<half4> colors [[raster_order_group(0)]] [kNumLayers];
+        half depths [[raster_order_group(0)]] [kNumLayers];
+    };
+    """
+    ast = parse_ok(code)
+    members = ast.structs[0].members
+
+    assert members[0].vtype == "rgba8unorm<half4>"
+    assert members[0].array_sizes[0].name == "kNumLayers"
+    assert members[1].array_sizes[0].name == "kNumLayers"
+
+
+def test_parse_argument_buffer_array_of_device_pointers_from_apple_sample():
+    code = """
+    struct FragmentShaderArguments {
+        array<texture2d<float>, AAPLNumTextureArguments> exampleTextures
+            [[id(AAPLArgumentBufferIDExampleTextures)]];
+        array<device float *, AAPLNumBufferArguments> exampleBuffers
+            [[id(AAPLArgumentBufferIDExampleBuffers)]];
+        array<uint32_t, AAPLNumBufferArguments> exampleConstants
+            [[id(AAPLArgumentBufferIDExampleConstants)]];
+    };
+    """
+    ast = parse_ok(code)
+    members = ast.structs[0].members
+
+    assert members[0].vtype == "array<texture2d<float>,AAPLNumTextureArguments>"
+    assert members[1].vtype == "array<device float*,AAPLNumBufferArguments>"
+    assert members[1].attributes[0].name == "id"
+    assert members[1].attributes[0].args == ["AAPLArgumentBufferIDExampleBuffers"]
+    assert members[2].vtype == "array<uint32_t,AAPLNumBufferArguments>"
 
 
 def test_parse_ternary_and_bitwise_expressions():
@@ -191,6 +280,75 @@ def test_parse_argument_buffers_and_function_constants():
     }
     """
     parse_ok(code)
+
+
+def test_parse_argument_buffer_reference_array_parameter():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment float4 my_fragment(
+        constant texture2d<float> & texturesAB1 [[buffer(0)]],
+        constant texture2d<float> & texturesAB2[10] [[buffer(1)]],
+        array<texture2d<float>, 10> texturesArray [[texture(0)]]) {
+        return float4(1.0);
+    }
+    """
+    ast = parse_ok(code)
+    params = ast.functions[0].params
+
+    assert params[0].vtype == "texture2d<float>&"
+    assert params[0].qualifiers == ["constant"]
+    assert params[1].vtype == "texture2d<float>&"
+    assert params[1].name == "texturesAB2"
+    assert params[1].array_sizes == ["10"]
+    assert params[1].attributes[0].name == "buffer"
+    assert params[1].attributes[0].args == ["1"]
+    assert params[2].vtype == "array<texture2d<float>,10>"
+    assert params[2].name == "texturesArray"
+
+
+def test_parse_defaulted_function_constant_preserves_attribute():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constant bool useFastPath [[function_constant(3)]] = true;
+
+    fragment float4 fragment_main() {
+        if (useFastPath) {
+            return float4(1.0);
+        }
+        return float4(0.0);
+    }
+    """
+    ast = parse_ok(code)
+    constant = ast.global_variables[0]
+    assert isinstance(constant, AssignmentNode)
+    assert constant.left.name == "useFastPath"
+    assert constant.left.vtype == "bool"
+    assert "constant" in constant.left.qualifiers
+    assert constant.left.attributes[0].name == "function_constant"
+    assert constant.left.attributes[0].args == ["3"]
+    assert constant.right == "true"
+
+
+def test_parse_fragment_early_tests_attribute():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    [[early_fragment_tests]]
+    fragment float4 fragment_main() {
+        return float4(1.0);
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+
+    assert function.qualifier == "fragment"
+    assert function.attributes[0].name == "early_fragment_tests"
+    assert function.attributes[0].args == []
 
 
 def test_parse_access_qualified_textures_and_methods():
@@ -358,6 +516,40 @@ def test_parse_sizeof_and_cast():
     parse_ok(code)
 
 
+def test_parse_pointer_member_access():
+    code = """
+    struct Uniforms {
+        float4x4 mvp;
+    };
+
+    void main(constant Uniforms* uniforms) {
+        float4 position = uniforms->mvp * float4(1.0);
+    }
+    """
+    ast = parse_ok(code)
+    member_accesses = [
+        node for node in iter_ast_nodes(ast) if isinstance(node, MemberAccessNode)
+    ]
+
+    assert any(node.member == "mvp" and node.is_pointer for node in member_accesses)
+
+
+def test_parse_single_statement_if_with_discard_fragment():
+    code = """
+    fragment half4 fragment_main(float4 color) {
+        if (color.a < 0.5)
+            discard_fragment();
+
+        return half4(color);
+    }
+    """
+    ast = parse_ok(code)
+    if_nodes = [node for node in iter_ast_nodes(ast) if isinstance(node, IfNode)]
+
+    assert len(if_nodes) == 1
+    assert isinstance(if_nodes[0].if_body[0], DiscardNode)
+
+
 def test_parse_alignas_and_static_assert():
     code = """
     alignas(16) float4 alignedValue;
@@ -376,6 +568,100 @@ def test_parse_using_alias():
     using Index = uint;
     void main() {
         Index i = 0;
+    }
+    """
+    parse_ok(code)
+
+
+def test_parse_gpuimage_typedef_struct_and_parenthesized_identifier_expression():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef struct {
+        float reductionFactor;
+    } LuminanceUniform;
+
+    fragment half4 luminanceRangeReduction(
+        texture2d<half> inputTexture [[texture(0)]],
+        constant LuminanceUniform& uniform [[buffer(1)]]
+    ) {
+        half4 color;
+        half luminanceRatio;
+        return half4(half3((color.rgb) + (luminanceRatio)), color.w);
+    }
+    """
+    parse_ok(code)
+
+
+def test_parse_stage_attributes_and_trailing_const_pointer_qualifiers():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct ShaderVertex {
+        float4 position [[position]];
+        float4 color;
+    };
+
+    [[vertex]] ShaderVertex main_vertex(
+        device ShaderVertex const* const vertices [[buffer(0)]],
+        uint vid [[vertex_id]]
+    ) {
+        return vertices[vid];
+    }
+    """
+    ast = parse_ok(code)
+
+    assert ast.functions[0].qualifier == "vertex"
+
+
+def test_parse_function_prototypes_macro_expanded_empty_statements_and_comma_update():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    half lum(half3 c);
+
+    half lum(half3 c) {
+        return dot(c, half3(0.3, 0.59, 0.11));
+    }
+
+    kernel void reduce(device uint* values [[buffer(0)]], uint histSize) {
+        uint residual = 4;
+        uint residualStep = 2;
+        for (uint i = 0; i < histSize && residual > 0; i += residualStep, residual--) {
+            ; ;
+            values[i]++;
+        }
+    }
+    """
+    parse_ok(code)
+
+
+def test_parse_metalpetal_namespace_macro_qualifier_and_unsigned_int():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    namespace metalpetal {
+        namespace yuv2rgbconvert {
+            typedef struct {
+                packed_float2 position;
+            } Vertex;
+
+            METAL_FUNC float helper(float value) {
+                using namespace metalpetal::yuv2rgbconvert;
+                return value;
+            }
+
+            vertex float4 colorConversionVertex(
+                const device Vertex * vertices [[buffer(0)]],
+                unsigned int vid [[vertex_id]]
+            ) {
+                return float4(float2(vertices[vid].position), helper(1.0), 1.0);
+            }
+        }
     }
     """
     parse_ok(code)
@@ -478,6 +764,356 @@ def test_parse_atomic_operations():
     }
     """
     parse_ok(code)
+
+
+def test_parse_leading_decimal_float_literals_in_constexpr_arrays():
+    code = """
+    constexpr constant static float kvalues_mxfp4_f[4] = {0, .5f, 1.f, -.5f};
+    """
+    parse_ok(code)
+
+
+def test_parse_as_type_template_call():
+    code = """
+    static inline float fp32_from_bits(uint32_t bits) {
+        return as_type<float>(bits);
+    }
+    """
+    ast = parse_ok(code)
+    calls = [node for node in iter_ast_nodes(ast) if isinstance(node, FunctionCallNode)]
+
+    assert any(node.name == "as_type<float>" for node in calls)
+
+
+def test_parse_static_cast_from_apple_compute_sample():
+    code = """
+    kernel void process(uint2 gid [[thread_position_in_grid]]) {
+        float2 p0 = static_cast<float2>(gid);
+    }
+    """
+    ast = parse_ok(code)
+    casts = [node for node in iter_ast_nodes(ast) if isinstance(node, CastNode)]
+
+    assert len(casts) == 1
+    assert casts[0].target_type == "float2"
+
+
+def test_parse_template_dequantize_helper_from_llama_cpp():
+    code = """
+    template <typename type4x4>
+    void dequantize_f32(device const float4x4 * src, short il, thread type4x4 & reg) {
+        reg = (type4x4)(*src);
+    }
+    """
+    ast = parse_ok(code)
+    casts = [node for node in iter_ast_nodes(ast) if isinstance(node, CastNode)]
+
+    assert [func.name for func in ast.functions] == ["dequantize_f32"]
+    assert ast.functions[0].generics == ["type4x4"]
+    assert ast.functions[0].params[0].vtype == "float4x4*"
+    assert ast.functions[0].params[0].qualifiers == ["device", "const"]
+    assert ast.functions[0].params[2].vtype == "type4x4&"
+    assert ast.functions[0].params[2].qualifiers == ["thread"]
+    assert any(node.target_type == "type4x4" for node in casts)
+
+
+def test_parse_template_kernel_typename_without_space_from_llama_cpp():
+    code = """
+    template<typename T>
+    kernel void kernel_memset(
+            constant ggml_metal_kargs_memset & args,
+            device T * dst,
+            uint tpig [[thread_position_in_grid]]) {
+        dst[tpig] = args.val;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [func.name for func in ast.functions] == ["kernel_memset"]
+    assert ast.functions[0].qualifier == "kernel"
+    assert ast.functions[0].generics == ["T"]
+    assert ast.functions[0].params[1].vtype == "T*"
+    assert ast.functions[0].params[1].qualifiers == ["device"]
+
+
+def test_parse_function_body_pragma_from_llama_cpp():
+    code = """
+    void quantize_q4_0(device const float* src, device block_q4_0& dst) {
+        #pragma METAL fp math_mode(safe)
+        float amax = 0.0f;
+        dst.d = amax;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [func.name for func in ast.functions] == ["quantize_q4_0"]
+    assert len(ast.functions[0].body) == 2
+
+
+def test_parse_comma_assignment_statement_from_llama_cpp():
+    code = """
+    void dequantize(device const float* values) {
+        float dl = 0.0f;
+        float ml = 0.0f;
+        dl = values[0], ml = values[1];
+    }
+    """
+    ast = parse_ok(code)
+    statement = ast.functions[0].body[2]
+
+    assert isinstance(statement, BinaryOpNode)
+    assert statement.op == ","
+    assert isinstance(statement.left, AssignmentNode)
+    assert isinstance(statement.right, AssignmentNode)
+    assert statement.left.left.name == "dl"
+    assert statement.right.left.name == "ml"
+
+
+def test_parse_braced_uchar_vector_constructor_from_llama_cpp():
+    code = """
+    static inline uchar2 get_scale_min_k4_just2(int j, int k, device const uchar * q) {
+        return j < 4 ? uchar2{uchar(q[j+0+k] & 63), uchar(q[j+4+k] & 63)}
+                     : uchar2{uchar((q[j+4+k] & 0xF) | ((q[j-4+k] & 0xc0) >> 2)),
+                              uchar((q[j+4+k] >> 4) | ((q[j-0+k] & 0xc0) >> 2))};
+    }
+    """
+    ast = parse_ok(code)
+    braced_constructors = [
+        node
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, FunctionCallNode)
+        and node.name == "uchar2"
+        and getattr(node, "is_braced_constructor", False)
+    ]
+    scalar_constructors = [
+        node
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, VectorConstructorNode) and node.type_name == "uchar"
+    ]
+
+    assert len(braced_constructors) == 2
+    assert len(scalar_constructors) == 4
+
+
+def test_parse_standalone_scoped_block_from_llama_cpp():
+    code = """
+    void FC_unary_op(device const float* src0, device float* dst, uint i0) {
+        {
+            if (i0 >= 4) {
+                return;
+            }
+
+            const float x = src0[i0];
+            dst[i0] = x;
+        }
+    }
+    """
+    ast = parse_ok(code)
+    block = ast.functions[0].body[0]
+
+    assert isinstance(block, BlockNode)
+    assert len(block.statements) == 3
+    assert isinstance(block.statements[0], IfNode)
+    assert isinstance(block.statements[2], AssignmentNode)
+
+
+def test_parse_decltype_template_typedef_and_explicit_instantiations_from_llama_cpp():
+    code = """
+    template [[host_name("kernel_unary_f32_f32")]]
+    kernel void kernel_unary_impl(device const float* src, device float* dst) {
+        dst[0] = erf_approx<float>(src[0]);
+    }
+
+    typedef decltype(kernel_unary_impl<float>) kernel_unary_t;
+    template [[host_name("kernel_unary_f32_f32")]]
+    kernel kernel_unary_t kernel_unary_impl<float>;
+    """
+    ast = parse_ok(code)
+
+    assert ast.typedefs[0].name == "kernel_unary_t"
+    assert ast.typedefs[0].alias_type == "decltype(kernel_unary_impl<float>)"
+    assert len(ast.functions) == 1
+    assert ast.functions[0].name == "kernel_unary_impl"
+
+
+def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
+    code = """
+    void reduce(uint j, uint limit, device float* dst_row) {
+        for (int i = 0; i < limit; i++) {
+            _Pragma("clang loop unroll(full)")
+            dst_row[i] = erf_approx<float>(dst_row[i]);
+        }
+
+        if (is_same<float4, T0>::value) {
+            dst_row[0] = 0.0f;
+        }
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert isinstance(body[0], ForNode)
+    assert len(body[0].body) == 1
+    assert isinstance(body[1], IfNode)
+
+
+def test_parse_qualified_casts_and_range_designator_from_llama_cpp():
+    code = """
+    void load_block(device const void* src0, uint offset0, short r1ptg) {
+        device const block_q1_0* block =
+            (device const block_q1_0*)((device char*)src0 + offset0);
+        float sumf[8] = {[0 ... r1ptg - 1] = 0.0f};
+    }
+    """
+    ast = parse_ok(code)
+    cast_assignment = ast.functions[0].body[0]
+    range_assignment = ast.functions[0].body[1]
+    initializer = range_assignment.right
+    designator = initializer.elements[0]
+
+    assert isinstance(cast_assignment.right, CastNode)
+    assert cast_assignment.right.target_type == "block_q1_0*"
+    assert designator.designators[0][0] == "range"
+    assert designator.designators[0][1] == "0"
+    assert designator.designators[0][2] == "r1ptg-1"
+
+
+def test_parse_function_pointer_typedef_from_llama_cpp():
+    code = """
+    typedef void (im2col_t)(constant ggml_metal_kargs_im2col& args,
+                            device const float* x,
+                            device char* dst,
+                            uint3 tgpig [[threadgroup_position_in_grid]]);
+    """
+    ast = parse_ok(code)
+
+    assert ast.typedefs[0].name == "im2col_t"
+    assert ast.typedefs[0].alias_type == "void"
+
+
+def test_parse_struct_forward_declaration_from_mlx_complex_header():
+    code = """
+    struct complex64_t;
+
+    void use_complex(thread complex64_t& value) {
+        return;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert ast.structs == []
+    assert ast.functions[0].params[0].vtype == "complex64_t&"
+
+
+def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
+    code = """
+    #define instantiate_metal_math_funcs(itype, otype, ctype, mfast) \\
+      METAL_FUNC otype abs(itype x) { \\
+        return static_cast<otype>(__metal_fabs(static_cast<ctype>(x), mfast)); \\
+      }
+
+    namespace metal {
+    instantiate_metal_math_funcs(
+        bfloat16_t,
+        bfloat16_t,
+        float,
+        __METAL_MAYBE_FAST_MATH__);
+    }
+
+    kernel void real_kernel(device float* out [[buffer(0)]]) {
+        out[0] = 1.0f;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [func.name for func in ast.functions] == ["real_kernel"]
+
+
+def test_parse_member_template_disambiguator_from_mlx_arg_reduce():
+    code = """
+    void reduce(thread Reducer& op) {
+        int best = 0;
+        int vals[2] = {0, 1};
+        best = op.template reduce_many<N_READS>(best, vals, 0);
+    }
+    """
+    ast = parse_ok(code)
+
+    calls = [node for node in iter_ast_nodes(ast) if isinstance(node, MethodCallNode)]
+    assert calls[0].method == "reduce_many<N_READS>"
+
+
+def test_parse_standalone_for_loop_macro_prefix_from_mlx_conv():
+    code = """
+    void load_tile(device float* out) {
+        MLX_MTL_PRAGMA_UNROLL
+        for (int cc = 0; cc < 4; ++cc) {
+            out[cc] = float(cc);
+        }
+    }
+    """
+    ast = parse_ok(code)
+
+    loops = [node for node in iter_ast_nodes(ast) if isinstance(node, ForNode)]
+    assert len(loops) == 1
+
+
+def test_parse_template_qualified_static_member_declaration_from_mlx_conv():
+    code = """
+    constant constexpr const float WinogradTransforms<6, 3, 8>::wt_transform[8][8];
+    """
+    ast = parse_ok(code)
+
+    variable = ast.global_variables[0]
+    assert variable.name == "WinogradTransforms<6,3,8>::wt_transform"
+    assert len(variable.array_sizes) == 2
+
+
+def test_parse_typename_qualified_threadgroup_type_from_mlx_gemv():
+    code = """
+    void load_tile() {
+        threadgroup typename gemv_kernel::acc_type tgp_memory[4];
+    }
+    """
+    ast = parse_ok(code)
+
+    variable = ast.functions[0].body[0]
+    assert variable.vtype == "gemv_kernel::acc_type"
+    assert variable.name == "tgp_memory"
+    assert variable.qualifiers == ["threadgroup"]
+
+
+def test_parse_union_declaration_from_mlx_random():
+    code = """
+    union rbits {
+        uint2 val;
+        uchar4 bytes[2];
+    };
+
+    rbits make_bits() {
+        rbits v;
+        for (auto r : rotations[0]) {
+            v.val.x += r;
+        }
+        return v;
+    }
+    """
+    ast = parse_ok(code)
+
+    union = ast.structs[0]
+    assert union.name == "rbits"
+    assert getattr(union, "aggregate_kind", None) == "union"
+    assert [(member.vtype, member.name) for member in union.members] == [
+        ("uint2", "val"),
+        ("uchar4", "bytes"),
+    ]
+    assert union.members[1].array_sizes == ["2"]
+    assert ast.functions[0].return_type == "rbits"
+    assert ast.functions[0].body[0].vtype == "rbits"
+    loop = ast.functions[0].body[1]
+    assert isinstance(loop, RangeForNode)
+    assert loop.vtype == "auto"
+    assert loop.name == "r"
 
 
 def test_parse_preprocessor_define():

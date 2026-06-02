@@ -3,7 +3,13 @@ from typing import List
 
 import pytest
 
-from crosstl.backend.GLSL.OpenglAst import InitializerListNode, VariableNode
+from crosstl.backend.GLSL.OpenglAst import (
+    BinaryOpNode,
+    InitializerListNode,
+    ReturnNode,
+    StructNode,
+    VariableNode,
+)
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
 
@@ -64,6 +70,265 @@ def test_parse_fragment_shader_with_discard():
     parse_ok(code, "fragment")
 
 
+def test_parse_function_body_with_brace_on_next_line():
+    code = textwrap.dedent("""
+        #version 320 es
+        precision mediump float;
+        layout(location = 0) in vec3 in_color;
+        layout(location = 0) out vec4 out_color;
+
+        void main()
+        {
+            out_color = vec4(in_color, 1.0);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+
+    assert any(function.name == "main" for function in ast.functions)
+
+
+def test_parse_main_with_void_parameter_list():
+    code = textwrap.dedent("""
+        #version 320 es
+        precision highp float;
+
+        void main(void)
+        {
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert main.params == []
+
+
+def test_parse_function_parameters_without_names():
+    code = textwrap.dedent("""
+        #version 400 core
+
+        void ftd(int, float, double) {}
+        void itf(int, double, int);
+
+        void main()
+        {
+            ftd(1, 1.0, 2.0);
+        }
+        """)
+
+    ast = parse_ok(code, "vertex")
+    ftd = next(function for function in ast.functions if function.name == "ftd")
+    itf = next(function for function in ast.functions if function.name == "itf")
+
+    assert [(param.vtype, param.name) for param in ftd.params] == [
+        ("int", "_param0"),
+        ("float", "_param1"),
+        ("double", "_param2"),
+    ]
+    assert [(param.vtype, param.name) for param in itf.params] == [
+        ("int", "_param0"),
+        ("double", "_param1"),
+        ("int", "_param2"),
+    ]
+
+
+def test_parse_struct_with_brace_on_next_line():
+    code = textwrap.dedent("""
+        #version 450
+        struct Particle
+        {
+            vec4 pos;
+            vec4 vel;
+        };
+
+        void main()
+        {
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+
+    assert ast.structs[0].name == "Particle"
+    assert [member.name for member in ast.structs[0].members] == ["pos", "vel"]
+
+
+def test_parse_interface_block_with_newline_brace_and_instance():
+    code = textwrap.dedent("""
+        #version 450
+        layout(push_constant) uniform Registers
+        {
+            uvec2 resolution;
+            vec2 inv_resolution;
+        }
+        registers;
+
+        void main()
+        {
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+
+    assert ast.structs[0].name == "Registers"
+    assert ast.structs[0].interface_block is True
+    assert ast.structs[0].interface_layout == {"push_constant": None}
+    assert ast.uniforms[0].name == "registers"
+    assert ast.uniforms[0].layout == {"push_constant": None}
+
+
+def test_parse_extension_storage_interface_block_from_arm_translucency_sample():
+    code = textwrap.dedent("""
+        #extension GL_EXT_shader_pixel_local_storage : require
+        precision highp float;
+
+        __pixel_localEXT FragDataLocal {
+            layout(rgb10_a2) vec4 lighting;
+            layout(rg16f) vec2 minMaxDepth;
+        } storage;
+
+        void main()
+        {
+            storage.lighting = vec4(1.0);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    block = ast.structs[0]
+
+    assert block.name == "FragDataLocal"
+    assert block.interface_block is True
+    assert block.interface_qualifiers == ["__pixel_localEXT"]
+    assert [member.name for member in block.members] == ["lighting", "minMaxDepth"]
+    assert ast.global_variables[0].name == "storage"
+    assert ast.global_variables[0].vtype == "FragDataLocal"
+    assert ast.global_variables[0].qualifiers == ["__pixel_localEXT"]
+
+
+def test_parse_uniform_struct_specifier_preserves_uniform_qualifier():
+    code = textwrap.dedent("""
+        precision mediump float;
+        uniform struct S {
+            float field;
+        } s;
+
+        void main() {
+            gl_FragColor = vec4(0.0, s.field, 0.0, 1.0);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+
+    assert ast.structs[0].name == "S"
+    assert ast.uniforms[0].name == "s"
+    assert ast.uniforms[0].vtype == "S"
+    assert ast.uniforms[0].qualifiers == ["uniform"]
+    assert not any(var.name == "s" for var in ast.global_variables)
+
+
+def test_parse_local_struct_with_mixed_array_declarators_from_khronos_webgl():
+    code = textwrap.dedent("""
+        precision mediump float;
+        void main() {
+            struct S {
+                float field;
+            };
+            S s1[2], s2;
+            s1[0].field = 1.0;
+            gl_FragColor = vec4(0.0, s1[0].field, 0.0, 1.0);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    body = ast.functions[0].body
+
+    assert isinstance(body[0], StructNode)
+    assert body[0].name == "S"
+    assert [member.name for member in body[0].members] == ["field"]
+    assert [(var.name, var.is_array, len(var.array_sizes)) for var in body[1:3]] == [
+        ("s1", True, 1),
+        ("s2", False, 0),
+    ]
+
+
+def test_parse_array_of_arrays_return_type_from_glslang_spv_aofa():
+    code = textwrap.dedent("""
+        #version 430
+
+        in float infloat;
+        out float outfloat;
+
+        float[4][7] foo(float a[5][7])
+        {
+            float r[7];
+            r = a[2];
+            return float[4][7](a[0], a[1], r, a[3]);
+        }
+
+        void main()
+        {
+            float u[][7];
+            u[2][2] = infloat;
+            outfloat = foo(u)[1][2];
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    foo = next(function for function in ast.functions if function.name == "foo")
+    return_stmt = next(stmt for stmt in foo.body if isinstance(stmt, ReturnNode))
+
+    assert foo.return_type == "float[4][7]"
+    assert foo.params[0].vtype == "float"
+    assert [
+        size.value if size is not None else None for size in foo.params[0].array_sizes
+    ] == [
+        "5",
+        "7",
+    ]
+    assert isinstance(return_stmt.value, InitializerListNode)
+
+
+def test_parse_control_flow_with_brace_on_next_line():
+    code = textwrap.dedent("""
+        #version 450
+
+        void main()
+        {
+            if (true)
+            {
+                int value = 1;
+            }
+        }
+        """)
+
+    parse_ok(code, "fragment")
+
+
+def test_parse_single_statement_control_bodies():
+    code = textwrap.dedent("""
+        #version 450
+
+        void main()
+        {
+            int value = 0;
+            if (value == 0)
+                return;
+            else if (value == 1)
+                value = 2;
+            else
+                value = 3;
+
+            for (int i = 0; i < 4; i++)
+                value += i;
+
+            while (value < 8)
+                value++;
+        }
+        """)
+
+    parse_ok(code, "compute")
+
+
 def test_parse_structs_and_arrays():
     code = textwrap.dedent("""
         #version 450 core
@@ -84,6 +349,19 @@ def test_parse_structs_and_arrays():
         }
     """)
     parse_ok(code, "vertex")
+
+
+def test_parse_float_suffix_literals():
+    code = textwrap.dedent("""
+        #version 450
+        void main(void)
+        {
+            float normalLength = 0.1f;
+            vec3 pos = vec3(1.0f, 0.0f, 0.0f) / 3.0f;
+        }
+        """)
+
+    parse_ok(code, "geometry")
 
 
 def test_parse_const_array_initializers():
@@ -142,6 +420,123 @@ def test_parse_const_array_initializers():
     )
 
 
+def test_parse_vulkan_block_member_layouts_and_multiline_declarators():
+    code = textwrap.dedent("""
+        #version 450
+        layout(binding = 2) buffer FrequencyInformation
+        {
+            uvec4 settings;
+            uvec2 rates[];
+        }
+        params;
+
+        layout(push_constant) uniform PushConsts {
+            layout(offset = 12) float roughness;
+            layout(offset = 16) float metallic;
+        } material;
+
+        void main() {
+            const uint x0 = gl_GlobalInvocationID.x,
+                       y0 = gl_GlobalInvocationID.y,
+                       output_width = params.settings[2];
+            const float min_rate = 1,
+                        max_rate = max(params.settings.x, params.settings.y);
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+    push_consts = next(struct for struct in ast.structs if struct.name == "PushConsts")
+
+    assert [member.name for member in push_consts.members] == [
+        "roughness",
+        "metallic",
+    ]
+    assert push_consts.members[0].layout == {"offset": "12"}
+    assert push_consts.members[1].layout == {"offset": "16"}
+
+    main = next(function for function in ast.functions if function.name == "main")
+    declarations = [stmt for stmt in main.body if isinstance(stmt, VariableNode)]
+    assert [decl.name for decl in declarations] == [
+        "x0",
+        "y0",
+        "output_width",
+        "min_rate",
+        "max_rate",
+    ]
+
+
+def test_parse_array_type_declarators_and_newline_array_constructors():
+    code = textwrap.dedent("""
+        #version 450
+        const vec2[3] positions = vec2[]
+        (
+            vec2(-1, -1),
+            vec2(-1,  3),
+            vec2( 3, -1)
+        );
+
+        float conv(in float[9] kernel, in float[9] data) {
+            float[9] local;
+            return kernel[0] + data[0] + local[0];
+        }
+
+        void main() {
+            gl_Position = vec4(positions[0], 0.0, 1.0);
+        }
+        """)
+
+    ast = parse_ok(code, "vertex")
+
+    positions = next(var for var in ast.constant if var.name == "positions")
+    assert [size.value for size in positions.array_sizes] == ["3"]
+    assert isinstance(positions.value, InitializerListNode)
+
+    conv = next(function for function in ast.functions if function.name == "conv")
+    assert [size.value for size in conv.params[0].array_sizes] == ["9"]
+    assert [size.value for size in conv.params[1].array_sizes] == ["9"]
+    local = next(stmt for stmt in conv.body if isinstance(stmt, VariableNode))
+    assert [size.value for size in local.array_sizes] == ["9"]
+
+
+def test_parse_vulkan_extension_types_suffixes_and_qualifiers():
+    code = textwrap.dedent("""
+        #version 460
+        #extension GL_ARM_tensors : enable
+        #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+        layout(set = 0, binding = 0) writeonly uniform tensorARM<float, 4> output_tensor;
+        layout(location = 0) in pervertexEXT vec3 inColor[];
+
+        void main() {
+            vec3 sample[9];
+            f16vec4 rg_offset = f16vec4(0.95hf, 1.0hf, 0.95hf, 1.0hf);
+            sample[0] = inColor[0];
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+
+    tensor = next(var for var in ast.uniforms if var.name == "output_tensor")
+    assert tensor.vtype == "tensorARM<float, 4>"
+
+    in_color = next(var for var in ast.io_variables if var.name == "inColor")
+    assert "pervertexEXT" in in_color.qualifiers
+    assert in_color.is_array is True
+
+
+def test_parse_empty_statement_after_control_block():
+    code = textwrap.dedent("""
+        #version 450
+        void main() {
+            if (gl_FrontFacing) {
+                gl_FragDepth = 1.0;
+            };
+        }
+        """)
+
+    parse_ok(code, "fragment")
+
+
 def test_parse_control_flow_constructs():
     code = textwrap.dedent("""
         #version 450 core
@@ -198,6 +593,65 @@ def test_parse_ternary_and_bitwise_expressions():
         }
         """)
     parse_ok(code, "vertex")
+
+
+def test_parse_logical_xor_precedence():
+    code = textwrap.dedent("""
+        #version 450 core
+        void main() {
+            bool a = true;
+            bool b = false;
+            bool c = true;
+            bool d = false;
+            bool result = a || b ^^ c && d;
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    main = next(function for function in ast.functions if function.name == "main")
+    result = next(
+        stmt
+        for stmt in main.body
+        if isinstance(stmt, VariableNode) and stmt.name == "result"
+    )
+
+    assert isinstance(result.value, BinaryOpNode)
+    assert result.value.op == "||"
+    assert isinstance(result.value.right, BinaryOpNode)
+    assert result.value.right.op == "^^"
+    assert isinstance(result.value.right.right, BinaryOpNode)
+    assert result.value.right.right.op == "&&"
+
+
+def test_parse_parenthesized_comma_assignment_expression():
+    code = textwrap.dedent("""
+        #version 450 core
+        void main() {
+            int a = 0;
+            int b = (a = 1, a + 2);
+            sink((a = 3, b), b);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    main = next(function for function in ast.functions if function.name == "main")
+    b_decl = next(
+        stmt
+        for stmt in main.body
+        if isinstance(stmt, VariableNode) and stmt.name == "b"
+    )
+    call = main.body[2]
+
+    assert isinstance(b_decl.value, BinaryOpNode)
+    assert b_decl.value.op == ","
+    assert b_decl.value.left.operator == "="
+    assert isinstance(b_decl.value.right, BinaryOpNode)
+    assert b_decl.value.right.op == "+"
+
+    assert call.name.name == "sink"
+    assert len(call.args) == 2
+    assert isinstance(call.args[0], BinaryOpNode)
+    assert call.args[0].op == ","
 
 
 def test_parse_matrix_vector_operations():
@@ -334,6 +788,31 @@ def test_parse_subroutine_declaration():
     parse_ok(code, "fragment")
 
 
+def test_parse_vulkan_subpass_input_uniforms():
+    code = textwrap.dedent("""
+        #version 450
+        layout(input_attachment_index = 0, set = 0, binding = 0)
+        uniform subpassInput colorInput;
+        layout(input_attachment_index = 1, set = 0, binding = 1)
+        uniform isubpassInputMS idInput;
+        layout(location = 0) out vec4 outColor;
+
+        void main() {
+            outColor = subpassLoad(colorInput) + vec4(subpassLoad(idInput, 0));
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+
+    color_input, id_input = ast.uniforms
+    assert color_input.vtype == "subpassInput"
+    assert color_input.layout["input_attachment_index"] == "0"
+    assert color_input.layout["binding"] == "0"
+    assert id_input.vtype == "isubpassInputMS"
+    assert id_input.layout["input_attachment_index"] == "1"
+    assert id_input.layout["binding"] == "1"
+
+
 def test_parse_swizzle_and_constructors():
     code = textwrap.dedent("""
         #version 450 core
@@ -346,6 +825,24 @@ def test_parse_swizzle_and_constructors():
         }
         """)
     parse_ok(code, "vertex")
+
+
+def test_parse_constructor_call_split_across_newline_from_gltf_sample_renderer():
+    code = textwrap.dedent("""
+        #version 450 core
+        const mat3 ACESInputMat = mat3
+        (
+            0.59719, 0.07600, 0.02840,
+            0.35458, 0.90834, 0.13383,
+            0.04823, 0.01566, 0.83777
+        );
+
+        void main() { }
+        """)
+
+    ast = parse_ok(code, "fragment")
+
+    assert ast.constant[0].name == "ACESInputMat"
 
 
 @pytest.mark.parametrize(

@@ -13,6 +13,15 @@ def test_object_like_macro_expansion():
     assert "3.14" in output
 
 
+def test_macro_definition_strips_trailing_comment_before_expansion():
+    code = """
+    #define FLT_MIN 1.175494351e-38F // min positive value
+    float value = max(range, FLT_MIN);
+    """
+    output = HLSLPreprocessor().preprocess(code)
+    assert "float value = max(range, 1.175494351e-38F);" in output
+
+
 def test_function_like_macro_expansion():
     code = """
     #define MUL(a, b) ((a) * (b))
@@ -46,6 +55,18 @@ def test_include_with_search_path(tmp_path):
         code, file_path=str(tmp_path / "main.hlsl")
     )
     assert "includedValue" in output
+
+
+def test_include_decodes_non_utf8_bytes_with_replacement(tmp_path):
+    header = tmp_path / "legacy_comment.hlsl"
+    header.write_bytes(b"#define VALUE 7 // legacy dash: \x96\n")
+    code = '#include "legacy_comment.hlsl"\nint value = VALUE;\n'
+
+    output = HLSLPreprocessor(include_paths=[str(tmp_path)]).preprocess(
+        code, file_path=str(tmp_path / "main.hlsl")
+    )
+
+    assert "int value = 7;" in output
 
 
 def test_nested_include_resolves_relative_to_included_file(tmp_path):

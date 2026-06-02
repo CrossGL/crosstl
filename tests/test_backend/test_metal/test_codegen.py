@@ -180,8 +180,41 @@ def test_codegen_texture_and_sampler_translation():
     """
     result = convert(code)
     assert re.search(r"sampler2d", result, re.IGNORECASE)
-    assert "texture(albedo, samp, in.uv)" in result
+    assert "texture(albedo, samp, in_.uv)" in result
     assert "albedo" in result
+
+
+def test_codegen_gpuimage_typedef_struct_and_nested_constructor_expression():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef struct
+    {
+        float rangeReduction;
+    } RangeReductionUniform;
+
+    struct SingleInputVertexIO {
+        float4 position [[position]];
+        float2 textureCoordinate;
+    };
+
+    fragment half4 luminanceRangeFragment(SingleInputVertexIO fragmentInput [[stage_in]],
+                                          texture2d<half> inputTexture [[texture(0)]],
+                                          constant RangeReductionUniform& uniform [[buffer(1)]]) {
+        constexpr sampler quadSampler;
+        half4 color = inputTexture.sample(quadSampler, fragmentInput.textureCoordinate);
+        half luminanceRatio = ((0.5 - color.r) * uniform.rangeReduction);
+        return half4(half3((color.rgb) + (luminanceRatio)), color.w);
+    }
+    """
+    result = convert(code)
+
+    assert "struct RangeReductionUniform" in result
+    assert "f16vec3(color.rgb + luminanceRatio)" in result
+    assert (
+        "float16 luminanceRatio = (0.5 - color.r) * uniform_.rangeReduction;" in result
+    )
 
 
 def test_codegen_texture_sample_preserves_explicit_sampler_roundtrip():
@@ -215,6 +248,27 @@ def test_codegen_texture_sample_preserves_explicit_sampler_roundtrip():
     assert "sampler linearSampler" in metal
     assert "albedo.sample(linearSampler, uv)" in metal
     assert "albedo.sample(linearSampler, uv, level(lod))" in metal
+
+
+def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    [[early_fragment_tests]]
+    fragment float4 fragment_main() {
+        return float4(1.0);
+    }
+    """
+    result = convert(code)
+
+    assert "fragment {" in result
+    assert "layout(early_fragment_tests) in;" in result
+    assert "@early_fragment_tests" not in result
+    assert result.index("layout(early_fragment_tests) in;") < result.index(
+        "vec4 fragment_main"
+    )
+    parse_crossgl(result)
 
 
 def test_codegen_texture_sample_level_option_roundtrip():
@@ -398,6 +452,26 @@ def test_codegen_texture_sample_bias_and_gradient_options_roundtrip():
     assert "tex.sample(samp, uv, gradient2d(ddx, ddy))" in metal
     assert "level(bias(" not in metal
     assert "level(gradient2d(" not in metal
+
+
+def test_codegen_texture_sample_min_lod_clamp_option_roundtrip():
+    code = """
+    float4 sparseSample(texture2d<float> colorMap,
+                        sampler colorSampler,
+                        float2 uv,
+                        float firstTailMip) {
+        return colorMap.sample(colorSampler, uv, min_lod_clamp(firstTailMip));
+    }
+    """
+    crossgl = convert(code)
+
+    assert "textureMinLodClamp(colorMap, colorSampler, uv, firstTailMip)" in crossgl
+    assert "textureLod(colorMap" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "colorMap.sample(colorSampler, uv, min_lod_clamp(firstTailMip))" in metal
+    assert "level(min_lod_clamp(" not in metal
 
 
 def test_codegen_texture_sample_offset_options_roundtrip():
@@ -609,6 +683,39 @@ def test_codegen_control_flow_and_ops():
     assert ">>" in result
 
 
+def test_codegen_nested_unbraced_for_loops_from_public_msl_example():
+    code = """
+    fragment float4 shader_day53(float4 pixPos [[position]]) {
+        const float PIXEL_SIZE = 40.0;
+        float4 col = float4(0.0);
+        for (int i = 0; i < int(PIXEL_SIZE); i++)
+            for (int j = 0; j < int(PIXEL_SIZE); j++)
+                col += float4(float(i + j));
+        return col;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "for (int i = 0; i < int(PIXEL_SIZE); i++)" in crossgl
+    assert "for (int j = 0; j < int(PIXEL_SIZE); j++)" in crossgl
+    assert "col += vec4(float(i + j));" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_range_for_loop_from_mlx_random():
+    code = """
+    void mix_values() {
+        for (auto r : rotations[0]) {
+            value += r;
+        }
+    }
+    """
+    crossgl = convert(code)
+
+    assert "for r in rotations[0] {" in crossgl
+    assert "value += r;" in crossgl
+
+
 def test_codegen_ternary_expression():
     code = """
     void main() {
@@ -695,6 +802,28 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     assert "data[tid] = value * 2.0;" in metal
 
 
+def test_roundtrip_scalar_thread_position_in_grid_from_apple_compute_sample():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void main(device const float* inA [[buffer(0)]],
+                     device float* result [[buffer(1)]],
+                     uint index [[thread_position_in_grid]]) {
+        result[index] = inA[index];
+    }
+    """
+    crossgl = convert(code)
+
+    assert "uint index @gl_GlobalInvocationID" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+
+    assert "uint index [[thread_position_in_grid]]" in metal
+    assert "result[index] = inA[index];" in metal
+
+
 def test_codegen_preserves_literals_and_swizzles():
     code = """
     #include <metal_stdlib>
@@ -715,6 +844,113 @@ def test_codegen_preserves_literals_and_swizzles():
     assert "3.14159" in result
     assert "2.71828" in result
     assert "1.61803" in result
+
+
+def test_codegen_preserves_leading_decimal_float_literals():
+    code = """
+    constexpr constant static float kvalues_mxfp4_f[4] = {0, .5f, 1.f, -.5f};
+    """
+    result = convert(code)
+
+    assert ".5f" in result
+    assert "1.f" in result
+    assert "(-.5f)" in result
+
+
+def test_codegen_lowers_as_type_float_template_call():
+    code = """
+    static inline float fp32_from_bits(uint32_t bits) {
+        return as_type<float>(bits);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "asfloat(bits)" in crossgl
+    assert "as_type<float>" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_lowers_static_cast_from_apple_compute_sample():
+    code = """
+    kernel void process(uint2 gid [[thread_position_in_grid]]) {
+        float2 p0 = static_cast<float2>(gid);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "vec2 p0 = (vec2)gid;" in crossgl
+    assert "static_cast" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_ignores_function_body_pragma_from_llama_cpp():
+    code = """
+    void quantize_q4_0(device const float* src, device block_q4_0& dst) {
+        #pragma METAL fp math_mode(safe)
+        float amax = 0.0f;
+        dst.d = amax;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "#pragma" not in crossgl
+    assert "float amax = 0.0f;" in crossgl
+    assert "dst.d = amax;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_comma_assignment_statement_from_llama_cpp():
+    code = """
+    void dequantize(device const float* values) {
+        float dl = 0.0f;
+        float ml = 0.0f;
+        dl = values[0], ml = values[1];
+    }
+    """
+    crossgl = convert(code)
+
+    assert "dl = values[0] , ml = values[1];" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_braced_uchar_vector_constructor_from_llama_cpp():
+    code = """
+    static inline uchar2 get_scale_min_k4_just2(int j, int k, device const uchar * q) {
+        return j < 4 ? uchar2{uchar(q[j+0+k] & 63), uchar(q[j+4+k] & 63)}
+                     : uchar2{uchar((q[j+4+k] & 0xF) | ((q[j-4+k] & 0xc0) >> 2)),
+                              uchar((q[j+4+k] >> 4) | ((q[j-0+k] & 0xc0) >> 2))};
+    }
+    """
+    crossgl = convert(code)
+    normalized = normalize(crossgl)
+
+    assert "u8vec2 get_scale_min_k4_just2" in crossgl
+    assert "u8vec2(uint8(q[j + 0 + k] & 63), uint8(q[j + 4 + k] & 63))" in crossgl
+    assert "uchar2{" not in crossgl
+    assert "return j < 4 ?" in normalized
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_standalone_scoped_block_from_llama_cpp():
+    code = """
+    void FC_unary_op(device const float* src0, device float* dst, uint i0) {
+        {
+            if (i0 >= 4) {
+                return;
+            }
+
+            const float x = src0[i0];
+            dst[i0] = x;
+        }
+    }
+    """
+    crossgl = convert(code)
+
+    assert "void FC_unary_op" in crossgl
+    assert re.search(r"\n\s+\{\n\s+if \(i0 >= 4\)", crossgl)
+    assert "float x = src0[i0];" in crossgl
+    assert "dst[i0] = x;" in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_preserves_binding_attributes():
@@ -792,6 +1028,38 @@ def test_codegen_texture_read_write_and_compare():
     assert "texture(tex" not in result
     assert "textureCompare" not in result
     assert "textureGather" not in result
+
+
+def test_codegen_metal_namespace_access_qualifiers_for_storage_textures():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct ImagePack {
+        metal::texture2d<uint, metal::access::read_write> image;
+        metal::array<metal::texture2d<uint, metal::access::read>, 2> inputs;
+    };
+
+    kernel void compute_main(
+        metal::texture2d<float, metal::access::read_write> image [[texture(0)]],
+        constant ImagePack& pack [[buffer(0)]],
+        uint2 tid [[thread_position_in_grid]]) {
+        float4 color = image.read(tid);
+        image.write(color, tid);
+        uint oldValue = pack.image.read(tid).x;
+        float4 inputValue = float4(pack.inputs[1].read(tid));
+    }
+    """
+    result = convert(code)
+
+    assert "image2D image @texture(0) @readwrite" in result
+    assert "uimage2D image @readwrite" in result
+    assert "uimage2D[2] inputs @readonly" in result
+    assert "imageLoad(image, tid)" in result
+    assert "imageStore(image, tid, color);" in result
+    assert "uint oldValue = imageLoad(pack.image, tid).x;" in result
+    assert "vec4 inputValue = vec4(imageLoad(pack.inputs[1], tid));" in result
+    assert "unsupported Metal sampled texture write" not in result
 
 
 def test_codegen_sampled_texture_write_emits_diagnostic():
@@ -1149,6 +1417,167 @@ def test_codegen_function_constants_and_argument_buffers():
     assert "@id(3)" in result
     assert "@argument_buffer" in result
     assert "@function_constant(0)" in result
+
+
+def test_codegen_argument_buffer_array_of_device_pointers_from_apple_sample():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct FragmentShaderArguments {
+        array<texture2d<float>, AAPLNumTextureArguments> exampleTextures
+            [[id(AAPLArgumentBufferIDExampleTextures)]];
+        array<device float *, AAPLNumBufferArguments> exampleBuffers
+            [[id(AAPLArgumentBufferIDExampleBuffers)]];
+        array<uint32_t, AAPLNumBufferArguments> exampleConstants
+            [[id(AAPLArgumentBufferIDExampleConstants)]];
+    };
+    """
+    crossgl = convert(code)
+
+    assert "sampler2D[AAPLNumTextureArguments] exampleTextures" in crossgl
+    assert "device float*[AAPLNumBufferArguments] exampleBuffers" in crossgl
+    assert "@id(AAPLArgumentBufferIDExampleBuffers)" in crossgl
+    assert "uint[AAPLNumBufferArguments] exampleConstants" in crossgl
+    assert "devicefloat" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_argument_buffer_reference_array_parameter_roundtrips():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment float4 my_fragment(
+        constant texture2d<float> & texturesAB1 [[buffer(0)]],
+        constant texture2d<float> & texturesAB2[10] [[buffer(1)]],
+        array<texture2d<float>, 10> texturesArray [[texture(0)]]) {
+        return float4(1.0);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "constant sampler2D& texturesAB1 @buffer(0)" in crossgl
+    assert "constant sampler2D& texturesAB2[10] @buffer(1)" in crossgl
+    assert "sampler2D[10] texturesArray @texture(0)" in crossgl
+    assert "sampler2D&[10] texturesAB2" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_defaulted_function_constant_preserves_attribute():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constant bool useFastPath [[function_constant(3)]] = true;
+
+    fragment float4 fragment_main() {
+        if (useFastPath) {
+            return float4(1.0);
+        }
+        return float4(0.0);
+    }
+    """
+    result = convert(code)
+    assert "constant bool useFastPath @function_constant(3) = true;" in result
+    assert "if (useFastPath)" in result
+
+
+def test_codegen_sanitizes_crossgl_keyword_identifiers_from_real_msl():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef struct {
+        float brightness;
+    } BrightnessUniform;
+
+    fragment half4 brightnessFragment(VertexOut in [[stage_in]],
+                                      texture2d<half> texture [[texture(0)]],
+                                      constant BrightnessUniform& uniform [[buffer(1)]]) {
+        half4 color = texture.sample(linearSampler, in.textureCoordinate);
+        return half4(color.rgb + uniform.brightness, color.a);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "VertexOut in_" in crossgl
+    assert "sampler2D texture_" in crossgl
+    assert "BrightnessUniform& uniform_" in crossgl
+    assert "in.textureCoordinate" not in crossgl
+    assert "uniform.brightness" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    assert ast is not None
+
+
+def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constexpr sampler sampler2d(coord::normalized, filter::linear);
+
+    fragment half4 second_passthrough(QuadVertexOut in [[stage_in]],
+                                      texture2d<float, access::sample> texture [[texture(0)]]) {
+        float4 const color = texture.sample(sampler2d, in.texCoords);
+        return half4(half3(color.rgb), 1);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "texture(texture_, in_.texCoords)" in crossgl
+    assert "sampler2d" not in crossgl
+    assert "texture(texture_, sampler2d" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "texture_.sample(sampler(" in metal
+
+
+def test_roundtrip_local_constexpr_sampler_options_from_apple_texture_sample():
+    code = """
+    struct RasterizerData {
+        float4 position [[position]];
+        float2 textureCoordinate;
+    };
+
+    fragment float4 samplingShader(RasterizerData in [[stage_in]],
+                                   texture2d<half> colorTexture [[texture(0)]]) {
+        constexpr sampler textureSampler (mag_filter::linear, min_filter::linear);
+        const half4 colorSample = colorTexture.sample(textureSampler, in.textureCoordinate);
+        return float4(colorSample);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "_u3a_u3a" not in crossgl
+    assert "sampler(mag_filter::linear, min_filter::linear)" in crossgl
+    assert "@ stage_entry" in crossgl
+    assert "vec4 samplingShader" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "_u3a_u3a" not in metal
+    assert "mag_filter::linear" in metal
+    assert "min_filter::linear" in metal
+    assert "fragment float4 samplingShader(" in metal
+    assert "texture2d<float> colorTexture [[texture(0)]]" in metal
+    assert "fragment void fragment_main()" not in metal
+
+
+def test_codegen_sanitizes_unicode_identifiers_for_crossgl_parse():
+    code = """
+    void main() {
+        float const 𝛂 = 1.0;
+        float value = 𝛂;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "_u1d6c2" in crossgl
+    assert "𝛂" not in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_metal_namespace_types():

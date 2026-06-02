@@ -16,11 +16,13 @@ TOKENS = tuple(
         ("VAR", r"\bvar\b"),
         ("FN", r"\bfn\b"),
         ("RETURN", r"\breturn\b"),
+        ("RAISE", r"\braise\b"),
         ("IF", r"\bif\b"),
         ("ELIF", r"\belif\b"),
         ("ELSE", r"\belse\b"),
         ("FOR", r"\bfor\b"),
         ("WHILE", r"\bwhile\b"),
+        ("WITH", r"\bwith\b"),
         ("SWITCH", r"\bswitch\b"),
         ("CASE", r"\bcase\b"),
         ("DEFAULT", r"\bdefault\b"),
@@ -33,6 +35,8 @@ TOKENS = tuple(
         ("PASS", r"\bpass\b"),
         ("DEF", r"\bdef\b"),
         ("CLASS", r"\bclass\b"),
+        ("COMPTIME", r"\bcomptime\b"),
+        ("ALIAS", r"\balias\b"),
         ("CONSTANT", r"\bconstant\b"),
         ("INT", r"\bInt\b"),
         ("FLOAT", r"\bFloat\b"),
@@ -70,6 +74,8 @@ TOKENS = tuple(
         ("MINUS_EQUALS", r"-="),
         ("MULTIPLY_EQUALS", r"\*="),
         ("DIVIDE_EQUALS", r"/="),
+        ("FLOOR_DIVIDE", r"//"),
+        ("POWER", r"\*\*"),
         ("ASSIGN_XOR", r"\^="),
         ("ASSIGN_OR", r"\|="),
         ("ASSIGN_AND", r"\&="),
@@ -98,11 +104,13 @@ KEYWORDS = {
     "var": "VAR",
     "fn": "FN",
     "return": "RETURN",
+    "raise": "RAISE",
     "if": "IF",
     "elif": "ELIF",
     "else": "ELSE",
     "for": "FOR",
     "while": "WHILE",
+    "with": "WITH",
     "switch": "SWITCH",
     "case": "CASE",
     "default": "DEFAULT",
@@ -122,6 +130,8 @@ KEYWORDS = {
     "pass": "PASS",
     "def": "DEF",
     "class": "CLASS",
+    "comptime": "COMPTIME",
+    "alias": "ALIAS",
     "constant": "CONSTANT",
     "Int": "INT",
     "Float": "FLOAT",
@@ -134,6 +144,7 @@ class MojoLexer:
     """Tokenize Mojo source for the Mojo backend parser."""
 
     def __init__(self, code: str):
+        code = code.lstrip("\ufeff")
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
 

@@ -3661,7 +3661,7 @@ class MetalCodeGen:
 
     def validate_compute_builtin_parameter_types(self, parameters):
         expected_types = {
-            "thread_position_in_grid": "uint3",
+            "thread_position_in_grid": ("uint", "uint2", "uint3"),
             "thread_position_in_threadgroup": "uint3",
             "threadgroup_position_in_grid": "uint3",
             "thread_index_in_threadgroup": "uint",
@@ -3677,12 +3677,20 @@ class MetalCodeGen:
             if expected_type is None:
                 continue
             actual_type = self.map_type(self.parameter_raw_type(parameter))
-            if actual_type != expected_type:
+            expected_values = (
+                expected_type if isinstance(expected_type, tuple) else (expected_type,)
+            )
+            if actual_type not in expected_values:
                 name = getattr(parameter, "name", "<anonymous>")
+                expected_label = (
+                    expected_values[0]
+                    if len(expected_values) == 1
+                    else "one of " + ", ".join(expected_values)
+                )
                 raise ValueError(
                     f"Metal compute semantic '{semantic}' maps to "
                     f"'{metal_semantic}' and requires parameter '{name}' to "
-                    f"have type {expected_type}, got {actual_type}"
+                    f"have type {expected_label}, got {actual_type}"
                 )
 
     def collect_function_metal_wave_lane_dependencies(self, functions):
@@ -6810,6 +6818,12 @@ class MetalCodeGen:
             if mesh_output_call is not None:
                 return mesh_output_call
 
+            min_lod_clamp_call = self.generate_texture_min_lod_clamp_call(
+                func_name, expr.args
+            )
+            if min_lod_clamp_call is not None:
+                return min_lod_clamp_call
+
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
                 return texture_call
@@ -7053,7 +7067,7 @@ class MetalCodeGen:
             self.validate_function_resource_argument_types(func_name, expr.args)
             self.validate_function_image_access_arguments(func_name, expr.args)
             args = self.generate_function_call_arguments(argument_func_name, expr.args)
-            if func_name in self.user_function_names:
+            if self.function_call_matches_known_signature(func_name, expr.args):
                 args.extend(
                     self.required_function_stage_parameter_argument_names(func_name)
                 )
@@ -11296,11 +11310,23 @@ class MetalCodeGen:
         )
 
     def collect_resource_array_size_hints(self, ast):
+        global_arrays = self.collect_unsized_resource_globals(ast)
+        function_arrays = self.collect_unsized_resource_parameters(ast)
+        fixed_global_array_sizes = self.collect_fixed_resource_global_sizes(ast)
+        fixed_function_array_sizes = self.collect_fixed_resource_parameter_sizes(ast)
+        if not (
+            global_arrays
+            or function_arrays
+            or fixed_global_array_sizes
+            or fixed_function_array_sizes
+        ):
+            return {}, {}
+
         return collect_resource_array_size_hints(
-            global_arrays=self.collect_unsized_resource_globals(ast),
-            function_arrays=self.collect_unsized_resource_parameters(ast),
-            fixed_global_array_sizes=self.collect_fixed_resource_global_sizes(ast),
-            fixed_function_array_sizes=self.collect_fixed_resource_parameter_sizes(ast),
+            global_arrays=global_arrays,
+            function_arrays=function_arrays,
+            fixed_global_array_sizes=fixed_global_array_sizes,
+            fixed_function_array_sizes=fixed_function_array_sizes,
             functions=self.all_functions(ast),
             walk_nodes=self.iter_ast_nodes,
             expression_name=self.expression_name,
@@ -11516,6 +11542,8 @@ class MetalCodeGen:
 
     def stage_entry_base_name(self, stage_name, func):
         func_name = getattr(func, "name", None) or "main"
+        if self.function_has_explicit_stage_entry_attribute(func):
+            return func_name
         if stage_name == "vertex":
             return f"vertex_{func_name}"
         if stage_name == "fragment":
@@ -11548,6 +11576,14 @@ class MetalCodeGen:
         if stage_keyword:
             return f"{stage_keyword}_{func_name}"
         return func_name
+
+    def function_has_explicit_stage_entry_attribute(self, func):
+        if getattr(func, "preserve_stage_entry_name", False):
+            return True
+        return any(
+            str(getattr(attr, "name", "")).lower() == "stage_entry"
+            for attr in getattr(func, "attributes", []) or []
+        )
 
     def stage_entry_names(self, ast, target_stage=None):
         stage_entry_types = self.stage_entry_types()
@@ -13760,6 +13796,14 @@ class MetalCodeGen:
     def function_call_arguments(self, call):
         return getattr(call, "arguments", getattr(call, "args", []))
 
+    def function_call_matches_known_signature(self, func_name, args):
+        if func_name not in self.user_function_names:
+            return False
+        parameter_nodes = self.function_parameter_nodes.get(func_name)
+        if parameter_nodes is None:
+            return False
+        return len(args or []) == len(parameter_nodes)
+
     def collect_function_structured_buffer_length_dependencies(self, functions):
         parameter_types = {
             getattr(func, "name", None): self.structured_buffer_parameter_type_map(func)
@@ -14704,7 +14748,10 @@ class MetalCodeGen:
         ]
 
     def generate_function_call_arguments(self, func_name, call_args):
+        call_args = list(call_args or [])
         parameter_infos = self.function_parameter_infos.get(func_name, [])
+        if len(call_args) != len(parameter_infos):
+            parameter_infos = []
         args = []
         for index, arg in enumerate(call_args):
             param_name, param_type = (
@@ -16633,6 +16680,8 @@ class MetalCodeGen:
         callee_requirements = self.function_image_access_requirements.get(func_name)
         if not callee_requirements:
             return
+        if not self.function_call_matches_known_signature(func_name, args):
+            return
         param_names = self.function_parameter_names.get(func_name, [])
         for index, param_name in enumerate(param_names):
             required_access = callee_requirements.get(param_name)
@@ -16801,6 +16850,8 @@ class MetalCodeGen:
     def validate_function_resource_argument_types(self, func_name, args):
         parameter_nodes = self.function_parameter_nodes.get(func_name)
         if not parameter_nodes:
+            return
+        if not self.function_call_matches_known_signature(func_name, args):
             return
 
         for index, parameter in enumerate(parameter_nodes):
@@ -19160,6 +19211,34 @@ class MetalCodeGen:
             return f"{texture_name}.read(({coord} + {offset}), {lod})"
 
         return None
+
+    def generate_texture_min_lod_clamp_call(self, func_name, args):
+        if func_name not in {"textureMinLodClamp", "textureMinLodClampOffset"}:
+            return None
+
+        parts = self.texture_call_parts(args)
+        if parts is None:
+            return None
+
+        texture_name, sampler_arg, coord, extra_args = parts
+        expected_extra_args = 2 if func_name == "textureMinLodClampOffset" else 1
+        if len(extra_args) != expected_extra_args:
+            return None
+
+        texture_type = self.texture_argument_resource_type(args[0])
+        sample_args = [sampler_arg]
+        if self.is_array_texture_resource(texture_type):
+            coord_xy, layer = self.texture_coordinate_parts(texture_type, coord)
+            sample_args.extend([coord_xy, layer])
+        else:
+            sample_args.append(coord)
+
+        min_lod = self.generate_expression(extra_args[0])
+        sample_args.append(f"min_lod_clamp({min_lod})")
+        if expected_extra_args == 2:
+            sample_args.append(self.generate_expression(extra_args[1]))
+
+        return f"{texture_name}.sample({', '.join(sample_args)})"
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""

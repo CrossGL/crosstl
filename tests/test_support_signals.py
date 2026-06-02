@@ -804,6 +804,7 @@ def test_build_report_maps_opengl_builtin_candidates_to_catalog_features():
                     {"term": "gl_Position", "count": 1},
                     {"term": "gl_WorkGroupSize", "count": 1},
                     {"term": "gl_FragCoord", "count": 1},
+                    {"term": "Descriptors", "count": 1},
                     {"term": "DescriptorSet", "count": 1},
                 ],
             }
@@ -812,6 +813,62 @@ def test_build_report_maps_opengl_builtin_candidates_to_catalog_features():
 
     report = module.build_report(backends, features, docs_report=docs_report)
 
+    descriptor_match = module.candidate_feature_matches(
+        "Descriptors", features["features"]
+    )
+    assert descriptor_match[0]["feature_id"] == "resources.bindings"
+    assert report["issues"] == []
+
+
+def test_build_report_maps_metal_descriptors_candidate_to_resource_bindings():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "metal",
+                "name": "Metal",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "resources.bindings",
+                "category": "resources",
+                "name": "Explicit and automatic resource bindings",
+                "description": (
+                    "Resource binding/register/location assignment and "
+                    "collision avoidance."
+                ),
+                "support": {"metal": {"status": "supported"}},
+            },
+        ]
+    }
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "metal",
+                "backend": "Metal",
+                "source": (
+                    "Apple Metal resources :: "
+                    "Metal-Shading-Language-Specification.pdf"
+                ),
+                "url": "https://developer.apple.com/metal/",
+                "ok": True,
+                "candidate_terms": [{"term": "Descriptors", "count": 4}],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    descriptor_match = module.candidate_feature_matches(
+        "Descriptors", features["features"]
+    )
+    assert descriptor_match[0]["feature_id"] == "resources.bindings"
     assert report["issues"] == []
 
 
@@ -946,9 +1003,18 @@ def test_build_report_maps_vulkan_spirv_opcode_candidates_to_catalog_features():
                     {"term": "OpExtInstImport", "count": 1},
                     {"term": "DescriptorHeapEXT", "count": 1},
                     {"term": "Structured", "count": 1},
+                    {"term": "OpCapability", "count": 1},
+                    {"term": "OpExtension", "count": 1},
+                    {"term": "OpMemoryModel", "count": 1},
+                    {"term": "OpNop", "count": 1},
+                    {"term": "OpSourceContinued", "count": 1},
+                    {"term": "OpSourceExtension", "count": 1},
+                    {"term": "OpTypeOpaque", "count": 1},
                     {"term": "OpLine", "count": 1},
                     {"term": "OpName", "count": 1},
                     {"term": "OpTypePipe", "count": 1},
+                    {"term": "PipelineEnableALTERA", "count": 1},
+                    {"term": "PipelineEnableINTEL", "count": 1},
                 ],
             }
         ]

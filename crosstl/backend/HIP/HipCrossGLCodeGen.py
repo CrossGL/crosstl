@@ -4,6 +4,7 @@ from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
     CastNode,
+    EnumNode,
     FunctionCallNode,
     FunctionNode,
     HipDevicePropertyNode,
@@ -19,7 +20,17 @@ from .HipAst import (
 class HipToCrossGLConverter:
     """Serialize HIP backend AST nodes back into CrossGL source."""
 
+    HIP_RUNTIME_ERROR_WRAPPER_NAMES = {
+        "CHECK_HIP",
+        "HIP_CHECK",
+        "HIPCHECK",
+        "checkHip",
+        "checkHipErrors",
+        "hipCheck",
+    }
+
     VECTOR_TYPE_MAPPING = {
+        "half2": "vec2<f16>",
         "float2": "vec2<f32>",
         "float3": "vec3<f32>",
         "float4": "vec4<f32>",
@@ -688,6 +699,13 @@ class HipToCrossGLConverter:
         if self.is_user_defined_function(stmt.name):
             return False
 
+        runtime_wrapper = self.format_hip_runtime_wrapper_expression(stmt)
+        if runtime_wrapper is not None:
+            comments, _ = runtime_wrapper
+            for comment in comments:
+                self.emit(comment)
+            return True
+
         comments = self.format_hip_runtime_call(stmt)
         if comments is None:
             return False
@@ -702,6 +720,10 @@ class HipToCrossGLConverter:
         if self.is_user_defined_function(value.name):
             return None
 
+        wrapped_runtime = self.format_hip_runtime_wrapper_expression(value)
+        if wrapped_runtime is not None:
+            return wrapped_runtime
+
         comments = self.format_hip_runtime_call(value)
         if comments is None:
             return None
@@ -713,6 +735,17 @@ class HipToCrossGLConverter:
             "HIPRTC_SUCCESS" if value.name.startswith("hiprtc") else "hipSuccess"
         )
         return comments, success_value
+
+    def format_hip_runtime_wrapper_expression(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+        if self.is_user_defined_function(value.name):
+            return None
+        if value.name not in self.HIP_RUNTIME_ERROR_WRAPPER_NAMES:
+            return None
+        if len(getattr(value, "args", []) or []) != 1:
+            return None
+        return self.format_hip_runtime_status_expression(value.args[0])
 
     def format_hip_runtime_call(self, node):
         args = [self.visit_runtime_argument_expression(arg) for arg in node.args]
@@ -3926,6 +3959,9 @@ class HipToCrossGLConverter:
             elif isinstance(stmt, StructNode):
                 self.visit(stmt)
                 self.emit("")
+            elif isinstance(stmt, EnumNode):
+                self.visit(stmt)
+                self.emit("")
             elif isinstance(stmt, VariableNode):
                 self.visit(stmt)
                 self.emit("")
@@ -4131,6 +4167,11 @@ class HipToCrossGLConverter:
         self.register_unique_ptr_name(node.name, getattr(node, "vtype", "int"))
         self.register_variable_type(node.name, var_type)
         if "__shared__" in qualifiers:
+            if getattr(node, "is_dynamic_shared_memory", False):
+                self.emit(
+                    f"// HIP dynamic shared memory: {node.name} uses launch-time "
+                    "shared memory size"
+                )
             self.emit(f"var<workgroup> {node.name}: {var_type};")
             return
 
@@ -4184,6 +4225,11 @@ class HipToCrossGLConverter:
     def visit_SharedMemoryNode(self, node):
         var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
         self.register_variable_type(node.name, var_type)
+        if getattr(node, "is_dynamic_shared_memory", False):
+            self.emit(
+                f"// HIP dynamic shared memory: {node.name} uses launch-time "
+                "shared memory size"
+            )
         if node.size is not None:
             size = self.visit(node.size)
             self.emit(f"var<workgroup> {node.name}: array<{var_type}, {size}>;")
@@ -4428,6 +4474,10 @@ class HipToCrossGLConverter:
         if runtime_expression is not None:
             return runtime_expression
 
+        fp16_intrinsic = self.format_hip_fp16_intrinsic_call(func_name, args)
+        if fp16_intrinsic is not None:
+            return fp16_intrinsic
+
         resource_call = self.format_hip_resource_call(func_name, args, raw_args)
         if resource_call is not None:
             return resource_call
@@ -4435,6 +4485,25 @@ class HipToCrossGLConverter:
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_hip_fp16_intrinsic_call(self, function_name, args):
+        if function_name == "__float2half2_rn" and len(args) == 1:
+            return self.format_vector_constructor("vec2", [args[0], args[0]], "f16")
+        if function_name == "__low2float" and len(args) == 1:
+            return f"f32({self.format_vector_component_access(args[0], 'x')})"
+        if function_name == "__hadd2" and len(args) == 2:
+            return f"({args[0]} + {args[1]})"
+        if function_name == "__hmul2" and len(args) == 2:
+            return f"({args[0]} * {args[1]})"
+        if function_name == "__hfma2" and len(args) == 3:
+            return f"fma({args[0]}, {args[1]}, {args[2]})"
+        return None
+
+    def format_vector_component_access(self, expression, component):
+        text = str(expression).strip()
+        if text and all(char.isalnum() or char in "_." for char in text):
+            return f"{text}.{component}"
+        return f"({text}).{component}"
 
     def format_hip_resource_call(self, function_name, args, raw_args=None):
         base_name, template_args = self.parse_cpp_template(function_name)
@@ -5114,6 +5183,39 @@ class HipToCrossGLConverter:
         else:
             self.emit(f"// {node.sync_type}();")
 
+    def visit_HipAsmNode(self, node):
+        volatility = " volatile" if node.is_volatile else ""
+        self.emit(f"// HIP inline assembly{volatility}: {node.template}")
+        if node.outputs:
+            self.emit(
+                f"// HIP inline assembly outputs: {self.format_hip_asm_operands(node.outputs)}"
+            )
+        if node.inputs:
+            self.emit(
+                f"// HIP inline assembly inputs: {self.format_hip_asm_operands(node.inputs)}"
+            )
+        if node.clobbers:
+            self.emit(f"// HIP inline assembly clobbers: {', '.join(node.clobbers)}")
+
+    def format_hip_asm_operands(self, operands):
+        formatted = []
+        for operand in operands:
+            prefix = (
+                f"[{operand.symbolic_name}] "
+                if operand.symbolic_name is not None
+                else ""
+            )
+            expression = (
+                self.visit(operand.expression)
+                if operand.expression is not None
+                else None
+            )
+            if expression is None:
+                formatted.append(f"{prefix}{operand.constraint}")
+            else:
+                formatted.append(f"{prefix}{operand.constraint}({expression})")
+        return ", ".join(formatted)
+
     def visit_HipBuiltinNode(self, node):
         builtin_map = {
             "threadIdx": "gl_LocalInvocationID",
@@ -5390,6 +5492,17 @@ class HipToCrossGLConverter:
             "long long": "i64",
             "signed long long": "i64",
             "unsigned long long": "u64",
+            "int8_t": "i8",
+            "uint8_t": "u8",
+            "int16_t": "i16",
+            "uint16_t": "u16",
+            "int32_t": "i32",
+            "uint32_t": "u32",
+            "int64_t": "i64",
+            "uint64_t": "u64",
+            "half": "f16",
+            "__half": "f16",
+            "__half2": "vec2<f16>",
             "float": "f32",
             "double": "f64",
             "size_t": "u32",
@@ -5598,6 +5711,9 @@ class HipToCrossGLConverter:
             "short": "i16",
             "int": "i32",
             "long": "i64",
+            "half": "f16",
+            "__half": "f16",
+            "__half2": "vec2<f16>",
             "float": "f32",
             "double": "f64",
             "size_t": "u32",
@@ -5633,19 +5749,30 @@ class HipToCrossGLConverter:
         return function_mapping.get(func_name, func_name)
 
     def visit_EnumNode(self, node):
-        self.emit(f"enum {node.name} {{")
+        name = node.name or ""
+        underlying = getattr(node, "underlying_type", None)
+        suffix = (
+            f" : {self.convert_hip_type_to_crossgl(underlying)}" if underlying else ""
+        )
+        self.emit(f"enum {name}{suffix} {{")
         self.indent_level += 1
 
-        if hasattr(node, "variants") and node.variants:
-            for i, variant in enumerate(node.variants):
-                if hasattr(variant, "value") and variant.value:
-                    value = self.visit(variant.value)
-                    self.emit(f"{variant.name} = {value},")
-                else:
-                    self.emit(f"{variant.name},")
+        members = getattr(node, "members", None) or getattr(node, "variants", [])
+        for member in members:
+            if isinstance(member, tuple):
+                member_name, member_value = member
+            else:
+                member_name = getattr(member, "name", str(member))
+                member_value = getattr(member, "value", None)
+
+            if member_value is not None:
+                value = self.visit(member_value)
+                self.emit(f"{member_name} = {value},")
+            else:
+                self.emit(f"{member_name},")
 
         self.indent_level -= 1
-        self.emit("}")
+        self.emit("};")
 
     # Legacy method for backwards compatibility
     def convert(self, node):

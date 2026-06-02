@@ -672,7 +672,18 @@ class Parser:
                 body=BlockNode([]),
             )
 
-        if stage_name:
+        explicit_stage_entry = self.function_has_explicit_stage_entry_attribute(
+            main_function
+        )
+        if explicit_stage_entry:
+            main_function.preserve_stage_entry_name = True
+            main_function.attributes = [
+                attr
+                for attr in getattr(main_function, "attributes", []) or []
+                if str(getattr(attr, "name", "")).lower() != "stage_entry"
+            ]
+
+        if stage_name and not explicit_stage_entry:
             main_function.name = stage_name
 
         execution_config.update(
@@ -693,6 +704,7 @@ class Parser:
     def function_has_stage_entry_attributes(self, function):
         """Return whether a non-main stage function carries entry metadata."""
         stage_entry_attributes = {
+            "stage_entry",
             "numthreads",
             "outputtopology",
             "max_vertices",
@@ -705,6 +717,13 @@ class Parser:
         }
         return any(
             str(getattr(attr, "name", "")).lower() in stage_entry_attributes
+            for attr in getattr(function, "attributes", []) or []
+        )
+
+    def function_has_explicit_stage_entry_attribute(self, function):
+        """Return whether a function explicitly asks to preserve entry identity."""
+        return any(
+            str(getattr(attr, "name", "")).lower() == "stage_entry"
             for attr in getattr(function, "attributes", []) or []
         )
 
@@ -1875,12 +1894,15 @@ class Parser:
         const_type = self.parse_type()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        attributes = self.parse_post_declaration_attributes()
 
         self.eat("EQUALS")
         value = self.parse_expression()
         self.eat("SEMICOLON")
 
-        return ConstantNode(name=name, const_type=const_type, value=value)
+        return ConstantNode(
+            name=name, const_type=const_type, value=value, attributes=attributes
+        )
 
     def parse_type(self):
         """Parse a CrossGL type expression into a ``TypeNode``."""

@@ -12,18 +12,23 @@ from crosstl.backend.Mojo.MojoAst import (
     ConstantBufferNode,
     ContinueNode,
     ForNode,
+    FunctionCallNode,
     FunctionNode,
     IfNode,
+    ImportNode,
     MemberAccessNode,
     MethodCallNode,
     RangeForNode,
     ReturnNode,
     SwitchNode,
     TernaryOpNode,
+    TupleNode,
     UnaryOpNode,
+    VariableDeclarationNode,
     VariableNode,
     VectorConstructorNode,
     WhileNode,
+    WithNode,
 )
 from crosstl.backend.Mojo.MojoLexer import MojoLexer
 from crosstl.backend.Mojo.MojoParser import MojoParser
@@ -67,6 +72,83 @@ def find_constant_buffer(ast, name: str):
     raise AssertionError(f"Constant buffer {name} not found")
 
 
+def test_function_parameter_conventions_parse_from_official_docs():
+    code = """
+    def get_name_tag(var name: String, out name_tag: NameTag):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "get_name_tag")
+
+    assert [
+        (param.name, param.vtype, param.parameter_convention)
+        for param in function.params
+    ] == [
+        ("name", "String", "var"),
+        ("name_tag", "NameTag", "out"),
+    ]
+
+
+def test_method_self_parameter_convention_without_type_parses():
+    code = """
+    def __init__(out self, value: Int):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "__init__")
+
+    assert [
+        (param.name, param.vtype, param.parameter_convention)
+        for param in function.params
+    ] == [
+        ("self", "", "out"),
+        ("value", "Int", None),
+    ]
+
+
+def test_function_parameter_separator_markers_parse_from_official_docs():
+    code = """
+    def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:
+        var product = a1 * a2
+        if double:
+            product *= 2
+        return product
+
+    def positional_only_args(a1: Int, a2: Int, /, b1: Int) -> Int:
+        return a1 + a2 + b1
+    """
+    ast = parse_code(tokenize_code(code))
+    kw_only = find_function(ast, "kw_only_args")
+    positional_only = find_function(ast, "positional_only_args")
+
+    assert [(param.name, param.vtype) for param in kw_only.params] == [
+        ("a1", "Int"),
+        ("a2", "Int"),
+        ("double", "Bool"),
+    ]
+    assert [(param.name, param.vtype) for param in positional_only.params] == [
+        ("a1", "Int"),
+        ("a2", "Int"),
+        ("b1", "Int"),
+    ]
+
+
+def test_function_optional_argument_default_parses_from_official_docs():
+    code = """
+    fn my_pow(base: Int, exp: Int = 2) -> Int:
+        return base ** exp
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "my_pow")
+
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("base", "Int"),
+        ("exp", "Int"),
+    ]
+    assert function.params[0].default_value is None
+    assert function.params[1].default_value == "2"
+
+
 def test_struct_parsing():
     code = """
     struct VSInput:
@@ -81,6 +163,43 @@ def test_struct_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_parenthesized_import_items_and_floor_divide_parsing():
+    code = """
+    from std.gpu import (
+        block_idx,
+        thread_idx,
+    )
+
+    fn main():
+        var threads = max_threads // 2
+    """
+    ast = parse_code(tokenize_code(code))
+
+    import_node = ast.functions[0]
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+
+    assert isinstance(import_node, ImportNode)
+    assert import_node.items == ["block_idx", "thread_idx"]
+    assert isinstance(declaration.value, BinaryOpNode)
+    assert declaration.value.op == "//"
+
+
+def test_multiline_parenthesized_expression_parsing():
+    code = """
+    fn main():
+        var smem_per_tile = (
+            max_smem // 4 // 2
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+
+    assert isinstance(declaration.value, BinaryOpNode)
+    assert declaration.value.op == "//"
 
 
 def test_struct_generic_member_parsing():
@@ -256,6 +375,32 @@ def test_for_in_range_parsing_preserves_range_call():
     assert loop.iterable.args[2].operand == "1"
 
 
+def test_comptime_for_parsing_preserves_loop_shape():
+    code = """
+    fn main():
+        comptime for value in values:
+            sink(value)
+        comptime for var i: Int = 0; i < 4; i = i + 1:
+            sink(i)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "main")
+    range_loop = function.body[0]
+    c_style_loop = function.body[1]
+
+    assert isinstance(range_loop, RangeForNode)
+    assert getattr(range_loop, "is_comptime", False)
+    assert range_loop.name == "value"
+    assert range_loop.iterable.name == "values"
+
+    assert isinstance(c_style_loop, ForNode)
+    assert getattr(c_style_loop, "is_comptime", False)
+    assert c_style_loop.init.name == "i"
+    assert c_style_loop.condition.op == "<"
+    assert isinstance(c_style_loop.update, AssignmentNode)
+
+
 def test_while_parsing():
     code = """
     fn main():
@@ -388,6 +533,30 @@ def test_generic_function_signature_parsing():
     ]
     assert [attr.name for attr in function.params[1].attributes] == ["binding"]
     assert function.params[1].attributes[0].args == ["0"]
+
+
+def test_parenthesized_where_clause_with_and_constraints_parsing():
+    code = """
+    def outer_product_acc[
+        dtype: DType
+    ](
+        res: TileTensor[mut=True, ...],
+        lhs: TileTensor,
+        rhs: TileTensor,
+    ) where (
+        type_of(res).flat_rank == 2
+        and type_of(lhs).flat_rank == 1
+        and type_of(rhs).shape_known
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "outer_product_acc")
+
+    assert function.where_clause is not None
+    assert "&&" in function.where_clause
+    assert "type_of" in function.where_clause
+    assert function.body
 
 
 def test_else_if_parsing():
@@ -865,6 +1034,34 @@ def test_array_member_access_chain_parsing():
     assert expression.object.index == "0"
 
 
+def test_gpu_tile_tensor_multi_index_access_parsing():
+    code = """
+    from std.gpu import thread_idx
+
+    fn tiled_load(tile: TileTensor, matrix: TileTensor):
+        tile[thread_idx.y, thread_idx.x] = matrix[
+            thread_idx.y,
+            thread_idx.x,
+        ]
+        let value = tile[thread_idx.y, thread_idx.x]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "tiled_load")
+    store = function.body[0]
+    load = function.body[1].initial_value
+
+    assert isinstance(store.left, ArrayAccessNode)
+    assert isinstance(store.left.index, TupleNode)
+    assert [index.member for index in store.left.index.elements] == ["y", "x"]
+
+    assert isinstance(store.right, ArrayAccessNode)
+    assert isinstance(store.right.index, TupleNode)
+    assert [index.member for index in store.right.index.elements] == ["y", "x"]
+
+    assert isinstance(load, ArrayAccessNode)
+    assert isinstance(load.index, TupleNode)
+
+
 def test_parenthesized_call_indexing_parsing():
     code = """
     fn main():
@@ -917,6 +1114,197 @@ def test_function_with_parameters_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Function with parameters parsing not implemented.")
+
+
+def test_function_parameters_allow_trailing_comma():
+    code = """
+    def add_10(
+        output: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+        a: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    ):
+        output[0] = a[0] + 10.0
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "add_10")
+
+    assert [param.name for param in function.params] == ["output", "a"]
+    assert function.params[0].vtype == "UnsafePointer[Scalar[dtype], MutAnyOrigin]"
+
+
+def test_comptime_declarations_and_raises_function_parse():
+    code = """
+    comptime SIZE = 4
+    comptime dtype = DType.float32
+    comptime THREADS_PER_BLOCK = (3, 3)
+
+    def main() raises:
+        comptime BLOCK_SIZE = 16
+        var value = BLOCK_SIZE
+        with DeviceContext() as ctx:
+            value = value + 1
+        comptime if value > 0:
+            value = value + SIZE
+        else:
+            raise Error("bad value", value)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+
+    assert [node.name for node in ast.global_variables] == [
+        "SIZE",
+        "dtype",
+        "THREADS_PER_BLOCK",
+    ]
+    assert all(getattr(node, "is_comptime", False) for node in ast.global_variables)
+    assert isinstance(ast.global_variables[2].initial_value, TupleNode)
+    assert getattr(function.body[0], "is_comptime", False)
+    assert isinstance(function.body[2], WithNode)
+    assert function.body[2].alias == "ctx"
+    assert isinstance(function.body[3], IfNode)
+    assert isinstance(function.body[3].else_body[0], FunctionCallNode)
+    assert function.body[3].else_body[0].name == "raise"
+
+
+def test_alias_declarations_parse_as_comptime_aliases():
+    code = """
+    alias THREADS_PER_BLOCK = 256
+    alias dtype = DType.float32
+
+    def kernel():
+        alias LOCAL_BLOCK = THREADS_PER_BLOCK
+        var lane = thread_idx.x
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "kernel")
+
+    assert [node.name for node in ast.global_variables] == [
+        "THREADS_PER_BLOCK",
+        "dtype",
+    ]
+    assert all(getattr(node, "is_comptime", False) for node in ast.global_variables)
+    assert all(getattr(node, "is_alias", False) for node in ast.global_variables)
+    assert ast.global_variables[0].initial_value == "256"
+    assert isinstance(ast.global_variables[1].initial_value, MemberAccessNode)
+
+    local_alias = function.body[0]
+    assert isinstance(local_alias, VariableDeclarationNode)
+    assert local_alias.name == "LOCAL_BLOCK"
+    assert getattr(local_alias, "is_comptime", False)
+    assert getattr(local_alias, "is_alias", False)
+    assert not local_alias.is_var
+
+
+def test_bare_annotated_assignment_with_initializer_parsing():
+    code = """
+    from std.gpu import global_idx
+
+    def kernel(size: Int):
+        idx: UInt = global_idx.x
+        limit: Int = size
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "kernel")
+
+    idx_decl = function.body[0]
+    limit_decl = function.body[1]
+
+    assert isinstance(idx_decl, VariableDeclarationNode)
+    assert idx_decl.name == "idx"
+    assert idx_decl.vtype == "UInt"
+    assert idx_decl.is_var
+    assert isinstance(idx_decl.initial_value, MemberAccessNode)
+    assert idx_decl.initial_value.object.name == "global_idx"
+    assert idx_decl.initial_value.member == "x"
+
+    assert isinstance(limit_decl, VariableDeclarationNode)
+    assert limit_decl.name == "limit"
+    assert limit_decl.vtype == "Int"
+    assert limit_decl.initial_value.name == "size"
+
+
+def test_comptime_assert_statement_parse():
+    code = """
+    def outer_product_acc(res: TileTensor, size: Int):
+        comptime assert(type_of(res).flat_rank == 2)
+        comptime assert(size > 0, "bad size")
+        comptime assert (
+            dtype.is_floating_point()
+        ), "dtype must be a floating-point type"
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "outer_product_acc")
+    rank_assert = function.body[0]
+    size_assert = function.body[1]
+    dtype_assert = function.body[2]
+
+    assert isinstance(rank_assert, FunctionCallNode)
+    assert getattr(rank_assert, "is_comptime", False)
+    assert rank_assert.name == "assert"
+    assert isinstance(rank_assert.args[0], BinaryOpNode)
+    assert rank_assert.args[0].op == "=="
+
+    assert isinstance(size_assert, FunctionCallNode)
+    assert getattr(size_assert, "is_comptime", False)
+    assert size_assert.args[1] == '"bad size"'
+
+    assert isinstance(dtype_assert, FunctionCallNode)
+    assert getattr(dtype_assert, "is_comptime", False)
+    assert dtype_assert.name == "assert"
+    assert isinstance(dtype_assert.args[0], MethodCallNode)
+    assert dtype_assert.args[0].method == "is_floating_point"
+    assert dtype_assert.args[1] == '"dtype must be a floating-point type"'
+
+
+def test_keyword_style_comptime_assert_statement_parse():
+    code = """
+    def main(size: Int):
+        comptime assert has_accelerator(), "This example requires a supported GPU"
+        comptime assert size > 0, "bad size"
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    gpu_assert = function.body[0]
+    size_assert = function.body[1]
+
+    assert isinstance(gpu_assert, FunctionCallNode)
+    assert getattr(gpu_assert, "is_comptime", False)
+    assert gpu_assert.name == "assert"
+    assert isinstance(gpu_assert.args[0], FunctionCallNode)
+    assert gpu_assert.args[0].name == "has_accelerator"
+    assert gpu_assert.args[1] == '"This example requires a supported GPU"'
+
+    assert isinstance(size_assert, FunctionCallNode)
+    assert getattr(size_assert, "is_comptime", False)
+    assert isinstance(size_assert.args[0], BinaryOpNode)
+    assert size_assert.args[0].op == ">"
+    assert size_assert.args[1] == '"bad size"'
+
+
+def test_nested_decorator_and_generic_function_signature_parse():
+    code = """
+    @compiler.register("vector_addition")
+    struct VectorAddition:
+        value: Int
+
+    @staticmethod
+    def execute[
+        target: StaticString,
+    ](
+        ctx: DeviceContext,
+    ) raises:
+        @parameter
+        def kernel(length: Int):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = ast.structs[0]
+    function = find_function(ast, "execute")
+
+    assert [attr.name for attr in struct_node.attributes] == ["compiler.register"]
+    assert [attr.name for attr in function.attributes] == ["staticmethod"]
+    assert [attr.name for attr in function.body[0].attributes] == ["parameter"]
 
 
 def test_variable_declarations_parsing():

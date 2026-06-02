@@ -40,6 +40,27 @@ class VulkanToCrossGLConverter:
             "mat2": "float2x2",
             "mat3": "float3x3",
             "mat4": "float4x4",
+            "mat2x2": "float2x2",
+            "mat2x3": "float2x3",
+            "mat2x4": "float2x4",
+            "mat3x2": "float3x2",
+            "mat3x3": "float3x3",
+            "mat3x4": "float3x4",
+            "mat4x2": "float4x2",
+            "mat4x3": "float4x3",
+            "mat4x4": "float4x4",
+            "dmat2": "double2x2",
+            "dmat3": "double3x3",
+            "dmat4": "double4x4",
+            "dmat2x2": "double2x2",
+            "dmat2x3": "double2x3",
+            "dmat2x4": "double2x4",
+            "dmat3x2": "double3x2",
+            "dmat3x3": "double3x3",
+            "dmat3x4": "double3x4",
+            "dmat4x2": "double4x2",
+            "dmat4x3": "double4x3",
+            "dmat4x4": "double4x4",
             "int": "int",
             "ivec2": "int2",
             "ivec3": "int3",
@@ -161,6 +182,11 @@ class VulkanToCrossGLConverter:
             for node in getattr(ast, "global_variables", [])
             if isinstance(node, LayoutNode) and self.is_compute_layout(node)
         ]
+        fragment_execution_layouts = [
+            node
+            for node in getattr(ast, "global_variables", [])
+            if isinstance(node, LayoutNode) and self.is_fragment_execution_layout(node)
+        ]
         top_level_nodes = []
         top_level_nodes.extend(getattr(ast, "structs", []))
         top_level_nodes.extend(getattr(ast, "global_variables", []))
@@ -168,7 +194,9 @@ class VulkanToCrossGLConverter:
 
         for node in top_level_nodes:
             if isinstance(node, LayoutNode):
-                if self.is_compute_layout(node):
+                if self.is_compute_layout(node) or self.is_fragment_execution_layout(
+                    node
+                ):
                     continue
                 code += self.generate_layout(node)
             elif isinstance(node, StructNode):
@@ -203,6 +231,8 @@ class VulkanToCrossGLConverter:
                     else:
                         code += "    // Fragment Shader\n"
                         code += "    fragment {\n"
+                        for layout in fragment_execution_layouts:
+                            code += self.generate_fragment_execution_layout(layout)
                         code += self.generate_function(node)
                         code += "    }\n\n"
                 else:
@@ -221,7 +251,27 @@ class VulkanToCrossGLConverter:
             for name, _ in node.qualifiers
         )
 
+    def is_fragment_execution_layout(self, node):
+        if not isinstance(node, LayoutNode):
+            return False
+        if (node.layout_type or "").lower() != "in":
+            return False
+        if getattr(node, "data_type", None) or getattr(node, "variable_name", None):
+            return False
+        qualifier_names = {str(name).lower() for name, _ in node.qualifiers}
+        return bool(qualifier_names & self.fragment_execution_layout_qualifiers())
+
+    def fragment_execution_layout_qualifiers(self):
+        return {"early_fragment_tests"}
+
     def generate_compute_layout(self, node):
+        qualifiers = ", ".join(
+            f"{name} = {value}" if value is not None else name
+            for name, value in node.qualifiers
+        )
+        return f"        layout({qualifiers}) in;\n"
+
+    def generate_fragment_execution_layout(self, node):
         qualifiers = ", ".join(
             f"{name} = {value}" if value is not None else name
             for name, value in node.qualifiers
@@ -251,23 +301,24 @@ class VulkanToCrossGLConverter:
 
     def generate_layout(self, node):
         code = ""
+        if self.is_specialization_constant_layout(node):
+            return self.generate_specialization_constant_layout(node)
+
         layout_type = node.layout_type.lower() if node.layout_type else ""
 
         if layout_type == "uniform":
             if node.struct_fields:
                 block_name = node.block_name or node.variable_name or "UniformBuffer"
                 self.record_flattened_uniform_block_instance(node)
-                push_constant_attr = (
-                    " @push_constant" if getattr(node, "push_constant", False) else ""
-                )
-                code += f"    cbuffer {block_name}{push_constant_attr} {{\n"
+                attributes = self.uniform_block_attribute_suffix(node)
+                code += f"    cbuffer {block_name}{attributes} {{\n"
                 for field_type, field_name in node.struct_fields:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
                 code += "    }\n\n"
             else:
                 code += (
                     f"    {self.map_type(node.data_type)} {node.variable_name}"
-                    f"{self.storage_image_layout_attribute_suffix(node)};\n"
+                    f"{self.uniform_resource_attribute_suffix(node)};\n"
                 )
         elif layout_type == "buffer":
             if node.struct_fields:
@@ -280,11 +331,15 @@ class VulkanToCrossGLConverter:
                     if "readonly" in getattr(node, "declaration_qualifiers", [])
                     else "RWStructuredBuffer"
                 )
+                attributes = self.uniform_block_attribute_suffix(node)
                 code += f"    struct {block_name} {{\n"
                 for field_type, field_name in node.struct_fields:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
                 code += "    };\n\n"
-                code += f"    {buffer_type}<{block_name}> {variable_name};\n\n"
+                code += (
+                    f"    {buffer_type}<{block_name}> {variable_name}"
+                    f"{attributes};\n\n"
+                )
         elif layout_type == "in" or layout_type == "out":
             if node.data_type and node.variable_name:
                 code += (
@@ -293,6 +348,55 @@ class VulkanToCrossGLConverter:
                 )
 
         return code
+
+    def is_specialization_constant_layout(self, node):
+        if (getattr(node, "layout_type", None) or "").lower() != "const":
+            return False
+        return any(
+            str(name).lower() == "constant_id"
+            for name, _ in getattr(node, "qualifiers", []) or []
+        )
+
+    def generate_specialization_constant_layout(self, node):
+        declaration = getattr(node, "declaration", None)
+        if declaration is None:
+            return ""
+
+        constant_id = next(
+            (
+                value
+                for name, value in getattr(node, "qualifiers", []) or []
+                if str(name).lower() == "constant_id"
+            ),
+            None,
+        )
+        metadata = f" @constant_id({constant_id})" if constant_id is not None else ""
+
+        if isinstance(declaration, AssignmentNode):
+            lhs = self.specialization_constant_declaration_lhs(
+                self.assignment_left(declaration), metadata
+            )
+            rhs = self.generate_expression(self.assignment_right(declaration))
+            return f"    {lhs} = {rhs};\n"
+
+        lhs = self.specialization_constant_declaration_lhs(declaration, metadata)
+        return f"    {lhs};\n"
+
+    def specialization_constant_declaration_lhs(self, declaration, metadata):
+        if isinstance(declaration, VariableNode) and self.variable_type(declaration):
+            return (
+                f"{self.map_type(self.variable_type(declaration))} "
+                f"{declaration.name}{metadata}"
+            )
+        return f"{self.generate_expression(declaration)}{metadata}"
+
+    def uniform_resource_attribute_suffix(self, node):
+        storage_suffix = self.storage_image_layout_attribute_suffix(node)
+        if storage_suffix:
+            return storage_suffix
+        if getattr(node, "spirv_storage_class", None) == "UniformConstant":
+            return self.uniform_block_attribute_suffix(node)
+        return ""
 
     def storage_image_layout_attribute_suffix(self, node):
         if not self.is_storage_image_type(getattr(node, "data_type", None)):
@@ -328,6 +432,18 @@ class VulkanToCrossGLConverter:
         if image_format is not None:
             attributes.append(f"@{image_format}")
         attributes.extend(declaration_attributes)
+        return f" {' '.join(attributes)}" if attributes else ""
+
+    def uniform_block_attribute_suffix(self, node):
+        attributes = []
+        for name, value in getattr(node, "qualifiers", []) or []:
+            qualifier_name = str(name).lower()
+            if qualifier_name == "set" and value is not None:
+                attributes.append(f"@set({value})")
+            elif qualifier_name == "binding" and value is not None:
+                attributes.append(f"@binding({value})")
+        if getattr(node, "push_constant", False):
+            attributes.append("@push_constant")
         return f" {' '.join(attributes)}" if attributes else ""
 
     def is_storage_image_type(self, type_name):
@@ -388,6 +504,8 @@ class VulkanToCrossGLConverter:
                 and value is not None
             ):
                 attributes.append(f"@{qualifier_name}({value})")
+            elif qualifier_name == "builtin" and value is not None:
+                attributes.append(self.crossgl_builtin_attribute(value))
 
         supported_qualifiers = {
             "centroid",
@@ -409,6 +527,34 @@ class VulkanToCrossGLConverter:
                 attributes.append(f"@{qualifier_text}")
 
         return f" {' '.join(attributes)}"
+
+    def crossgl_builtin_attribute(self, builtin_name):
+        mapped_builtins = {
+            "BaseInstance": "gl_BaseInstance",
+            "BaseVertex": "gl_BaseVertex",
+            "ClipDistance": "gl_ClipDistance",
+            "CullDistance": "gl_CullDistance",
+            "FragCoord": "gl_FragCoord",
+            "FragDepth": "gl_FragDepth",
+            "FrontFacing": "gl_FrontFacing",
+            "GlobalInvocationId": "gl_GlobalInvocationID",
+            "InstanceIndex": "gl_InstanceID",
+            "LocalInvocationId": "gl_LocalInvocationID",
+            "LocalInvocationIndex": "gl_LocalInvocationIndex",
+            "NumWorkgroups": "gl_NumWorkGroups",
+            "PointCoord": "gl_PointCoord",
+            "PointSize": "gl_PointSize",
+            "Position": "gl_Position",
+            "PrimitiveId": "gl_PrimitiveID",
+            "SubgroupLocalInvocationId": "gl_SubgroupInvocationID",
+            "SubgroupSize": "gl_SubgroupSize",
+            "VertexIndex": "gl_VertexID",
+            "WorkgroupId": "gl_WorkGroupID",
+        }
+        mapped_name = mapped_builtins.get(str(builtin_name))
+        if mapped_name:
+            return f"@{mapped_name}"
+        return f"@builtin({str(builtin_name).lower()})"
 
     def record_flattened_uniform_block_instance(self, node):
         if not node.variable_name:

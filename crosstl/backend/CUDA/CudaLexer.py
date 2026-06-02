@@ -23,10 +23,16 @@ TOKENS = tuple(
         ("HOST", r"\b__host__\b"),
         ("SHARED", r"\b__shared__\b"),
         ("CONSTANT", r"\b__constant__\b"),
-        ("RESTRICT", r"\b__restrict__\b"),
+        ("RESTRICT", r"\b__restrict(?:__)?\b"),
         ("MANAGED", r"\b__managed__\b"),
         ("NOINLINE", r"\b__noinline__\b"),
         ("FORCEINLINE", r"\b__forceinline__\b"),
+        ("LAUNCH_BOUNDS", r"\b__launch_bounds__\b"),
+        ("CLUSTER_DIMS", r"\b__cluster_dims__\b"),
+        ("BLOCK_SIZE", r"\b__block_size__\b"),
+        ("GRID_CONSTANT", r"\b__grid_constant__\b"),
+        ("ALIGNAS", r"\b(?:alignas|__align__)\b"),
+        ("ASM", r"\b(?:asm|__asm__)\b"),
         # CUDA built-in variables
         ("THREADIDX", r"\bthreadIdx\b"),
         ("BLOCKIDX", r"\bblockIdx\b"),
@@ -58,9 +64,10 @@ TOKENS = tuple(
         ("TYPENAME", r"\btypename\b"),
         ("EXTERN", r"\bextern\b"),
         ("STATIC", r"\bstatic\b"),
+        ("CONSTEXPR", r"\bconstexpr\b"),
         ("INLINE", r"\binline\b"),
         ("CONST", r"\bconst\b"),
-        ("VOLATILE", r"\bvolatile\b"),
+        ("VOLATILE", r"\b(?:volatile|__volatile__)\b"),
         ("MUTABLE", r"\bmutable\b"),
         ("VIRTUAL", r"\bvirtual\b"),
         ("PUBLIC", r"\bpublic\b"),
@@ -139,13 +146,14 @@ TOKENS = tuple(
         ("NULL", r"\bNULL\b"),
         ("NULLPTR", r"\bnullptr\b"),
         # Identifiers and literals (must come after keywords)
-        ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         (
             "NUMBER",
             r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFdDlLuU]*",
         ),
+        ("STRING", r'(?:u8|u|U|L)?R"([^\s()\\]{0,16})\([\s\S]*?\)\1"'),
         ("STRING", r'"([^"\\]|\\.)*"'),
-        ("CHAR_LIT", r"'([^'\\]|\\.)'"),
+        ("CHAR_LIT", r"(?:u8|u|U|L)?'(?:[^'\\\n]|\\.)+'"),
+        ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         # Preprocessor
         ("PREPROCESSOR", r"#[^\n]*"),
         # Operators (multi-character first)
@@ -210,9 +218,19 @@ KEYWORDS = {
     "__shared__": "SHARED",
     "__constant__": "CONSTANT",
     "__restrict__": "RESTRICT",
+    "__restrict": "RESTRICT",
     "__managed__": "MANAGED",
     "__noinline__": "NOINLINE",
     "__forceinline__": "FORCEINLINE",
+    "__launch_bounds__": "LAUNCH_BOUNDS",
+    "__cluster_dims__": "CLUSTER_DIMS",
+    "__block_size__": "BLOCK_SIZE",
+    "__grid_constant__": "GRID_CONSTANT",
+    "alignas": "ALIGNAS",
+    "__align__": "ALIGNAS",
+    "asm": "ASM",
+    "__asm__": "ASM",
+    "__volatile__": "VOLATILE",
     "threadIdx": "THREADIDX",
     "blockIdx": "BLOCKIDX",
     "gridDim": "GRIDDIM",
@@ -241,6 +259,7 @@ KEYWORDS = {
     "typename": "TYPENAME",
     "extern": "EXTERN",
     "static": "STATIC",
+    "constexpr": "CONSTEXPR",
     "inline": "INLINE",
     "const": "CONST",
     "volatile": "VOLATILE",
@@ -295,6 +314,12 @@ class TokenType(Enum):
     MANAGED = auto()
     NOINLINE = auto()
     FORCEINLINE = auto()
+    LAUNCH_BOUNDS = auto()
+    CLUSTER_DIMS = auto()
+    BLOCK_SIZE = auto()
+    GRID_CONSTANT = auto()
+    ALIGNAS = auto()
+    ASM = auto()
     THREADIDX = auto()
     BLOCKIDX = auto()
     GRIDDIM = auto()
@@ -318,6 +343,7 @@ class TokenType(Enum):
     TYPENAME = auto()
     EXTERN = auto()
     STATIC = auto()
+    CONSTEXPR = auto()
     INLINE = auto()
     CONST = auto()
     VOLATILE = auto()
@@ -460,6 +486,7 @@ class CudaLexer:
         max_expansion_depth: int = 64,
         file_path: Optional[str] = None,
     ):
+        code = code.lstrip("\ufeff")
         if preprocess:
             preprocessor = CudaPreprocessor(
                 include_paths=include_paths,

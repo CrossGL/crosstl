@@ -160,6 +160,120 @@ def test_enum_discriminant_expression_parsing():
         pytest.fail(f"Enum discriminant expression parsing failed: {e}")
 
 
+def test_braced_macro_invocation_parsing():
+    code = r"""
+    pub unsafe fn subgroup_add(value: u32) -> u32 {
+        let mut result = 0;
+        asm! {
+            "OpStore {result}",
+            value = in(reg) value,
+            result = in(reg) &mut result,
+        }
+        result
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+    macro_call = function.body[1]
+
+    assert isinstance(macro_call, FunctionCallNode)
+    assert macro_call.name == "asm!"
+    assert macro_call.macro_delimiter == "LBRACE"
+    assert "OpStore" in macro_call.args[0]
+
+
+def test_rust_gpu_path_qualified_attribute_parsing():
+    code = r"""
+    #[spirv_std_macros::gpu_only]
+    #[doc(alias = "OpEmitVertex")]
+    #[inline]
+    pub unsafe fn emit_vertex() {
+        unsafe {
+            asm! {
+                "OpEmitVertex",
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+    unsafe_block = function.body[0]
+    macro_call = unsafe_block.block.returns_value
+
+    assert [attr.name for attr in function.attributes] == [
+        "spirv_std_macros::gpu_only",
+        "doc",
+        "inline",
+    ]
+    assert function.name == "emit_vertex"
+    assert function.visibility == "pub"
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    assert isinstance(macro_call, FunctionCallNode)
+    assert macro_call.name == "asm!"
+    assert macro_call.macro_delimiter == "LBRACE"
+
+
+def test_rust_gpu_ray_query_parenthesized_statement_macro_parsing():
+    code = """
+    use glam::Vec3;
+    use spirv_std::ray_tracing::{AccelerationStructure, RayFlags, RayQuery};
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main(#[spirv(descriptor_set = 0, binding = 0)] accel: &AccelerationStructure) {
+        unsafe {
+            spirv_std::ray_query!(let mut handle);
+            handle.initialize(accel, RayFlags::NONE, 0, Vec3::ZERO, 0.0, Vec3::ZERO, 0.0);
+            let origin: glam::Vec3 = handle.get_world_ray_origin();
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    unsafe_block = ast.functions[0].body[0]
+    macro_call = unsafe_block.block.statements[0]
+    origin = unsafe_block.block.statements[2]
+
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    assert isinstance(macro_call, FunctionCallNode)
+    assert macro_call.name == "spirv_std::ray_query!"
+    assert macro_call.args == ["let mut handle"]
+    assert macro_call.macro_delimiter == "LPAREN"
+    assert origin.name == "origin"
+    assert origin.vtype == "glam::Vec3"
+
+
+def test_rust_gpu_compute_shader_method_turbofish_parsing():
+    code = """
+    fn main() {
+        let result = src_range.clone().into_par_iter().map(collatz).collect::<Vec<_>>();
+    }
+    """
+
+    ast = parse_code(code)
+    result = ast.functions[0].body[0]
+    collect_call = result.value
+
+    assert isinstance(collect_call, FunctionCallNode)
+    assert isinstance(collect_call.name, MemberAccessNode)
+    assert collect_call.name.member == "collect<Vec<_>>"
+
+
+def test_underscore_parameter_name_parsing():
+    code = """
+    pub fn fallback(_value: u32) -> u32 {
+        return 0;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.functions[0].params[0].name == "_value"
+    assert ast.functions[0].params[0].vtype == "u32"
+
+
 def test_tuple_struct_and_variant_visibility_parsing():
     code = """
     #[repr(transparent)]
@@ -528,6 +642,170 @@ def test_cfg_attributes_preserved_on_use_and_function_items():
     assert function.visibility == "pub"
     assert function.attributes[0].name == "cfg"
     assert function.attributes[0].args == ["target_os", "=", '"unknown"']
+
+
+def test_inner_and_nested_spirv_attributes_parse_from_rust_gpu_style_source():
+    code = """
+    #![cfg_attr(target_arch = "spirv", no_std)]
+    #![deny(warnings)]
+
+    use core::f32::consts::PI;
+    use spirv_std::spirv;
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] values: &mut [u32],
+    ) {
+        let scale = PI as f32;
+        values[0] = values[0] + scale as u32;
+    }
+    """
+    ast = parse_code(code)
+
+    assert [use.path for use in ast.use_statements] == [
+        "core::f32::consts::PI",
+        "spirv_std::spirv",
+    ]
+    function = ast.functions[0]
+    assert function.name == "main_cs"
+    assert function.attributes[0].name == "spirv"
+    assert function.params[0].attributes[0].args == [
+        "storage_buffer",
+        "descriptor_set",
+        "=",
+        "0",
+        "binding",
+        "=",
+        "0",
+    ]
+
+
+def test_rust_gpu_spirv_entry_point_name_attribute_parsing():
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(compute(threads(256), entry_point_name = "find_matches_and_compute_f4"))]
+    pub fn shader_body() {}
+
+    #[spirv(vertex(entry_point_name = "renamed_vs"))]
+    pub fn vertex_body() {}
+    """
+    ast = parse_code(code)
+
+    compute = ast.functions[0]
+    assert compute.attributes[0].args == [
+        "compute",
+        "(",
+        "threads",
+        "(",
+        "256",
+        ")",
+        "entry_point_name",
+        "=",
+        '"find_matches_and_compute_f4"',
+        ")",
+    ]
+
+    vertex = ast.functions[1]
+    assert vertex.attributes[0].args == [
+        "vertex",
+        "(",
+        "entry_point_name",
+        "=",
+        '"renamed_vs"',
+        ")",
+    ]
+
+
+def test_rust_gpu_image_macro_type_parsing():
+    code = """
+    use spirv_std::{spirv, Image};
+
+    type Image2d = Image!(2D, type=f32, sampled);
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(descriptor_set = 0, binding = 0)] sampled_tex: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 1)] storage_tex: &Image!(2D, format=rgba16f, sampled=false),
+    ) {}
+    """
+    ast = parse_code(code)
+
+    assert ast.type_aliases[0].alias_type == "Image!(2D, type=f32, sampled)"
+    function = ast.functions[0]
+    assert [param.vtype for param in function.params] == [
+        "&Image!(2D, type=f32, sampled)",
+        "&Image!(2D, format=rgba16f, sampled=false)",
+    ]
+    assert function.params[0].attributes[0].args == [
+        "descriptor_set",
+        "=",
+        "0",
+        "binding",
+        "=",
+        "0",
+    ]
+
+
+def test_rust_gpu_sampled_image_generic_type_parsing():
+    code = """
+    use spirv_std::{spirv, Image};
+    use spirv_std::image::SampledImage;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(descriptor_set = 0, binding = 0)] tex: &SampledImage<Image!(2D, type=f32, sampled)>,
+    ) {}
+    """
+    ast = parse_code(code)
+
+    function = ast.functions[0]
+    assert function.params[0].vtype == (
+        "&SampledImage<Image!(2D, type = f32, sampled)>"
+    )
+    assert function.params[0].attributes[0].args == [
+        "descriptor_set",
+        "=",
+        "0",
+        "binding",
+        "=",
+        "0",
+    ]
+
+
+def test_rust_gpu_builtin_spirv_parameter_attributes_parse():
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(frag_coord)] in_frag_coord: Vec4,
+        #[spirv(front_facing)] is_front_facing: bool,
+    ) {}
+
+    #[spirv(vertex)]
+    pub fn main_vs(
+        #[spirv(instance_index)] instance_index: u32,
+    ) {}
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(local_invocation_index)] local_index: u32,
+    ) {}
+    """
+    ast = parse_code(code)
+
+    fragment = ast.functions[0]
+    assert [param.attributes[0].args for param in fragment.params] == [
+        ["frag_coord"],
+        ["front_facing"],
+    ]
+
+    vertex = ast.functions[1]
+    assert vertex.params[0].attributes[0].args == ["instance_index"]
+
+    compute = ast.functions[2]
+    assert compute.params[0].attributes[0].args == ["local_invocation_index"]
 
 
 def test_restricted_visibility_parsing():
@@ -3561,6 +3839,50 @@ def test_trait_parsing():
         assert trait.methods[1].where_clauses == [("V", ["Clone"])]
     except Exception as e:
         pytest.fail(f"Trait parsing failed: {e}")
+
+
+def test_trait_supertrait_bounds_parsing():
+    code = """
+    trait Shape: Copy + Clone {
+        fn distance(self, p: Vec2) -> f32;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.traits[0].name == "Shape"
+    assert ast.traits[0].supertraits == ["Copy", "Clone"]
+    assert ast.traits[0].methods[0].name == "distance"
+
+
+def test_struct_initialization_field_shorthand_parsing():
+    code = """
+    fn make_stroke(shape: Shape, thickness: f32) -> Stroke {
+        return Stroke {
+            shape,
+            thickness,
+        };
+    }
+    """
+
+    ast = parse_code(code)
+    value = ast.functions[0].body[0].value
+
+    assert isinstance(value, StructInitializationNode)
+    assert value.fields == [("shape", "shape"), ("thickness", "thickness")]
+
+
+def test_impl_trait_parameter_type_parsing():
+    code = """
+    fn fill(shape: impl Shape, color: Vec4) {
+        return;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.functions[0].params[0].vtype == "impl Shape"
+    assert ast.functions[0].params[0].name == "shape"
 
 
 def test_trait_default_method_body_parsing():

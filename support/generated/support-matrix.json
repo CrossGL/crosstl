@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 761
+        "test_count": 823
       },
       "translator_codegen": {
         "exists": true,
@@ -127,11 +127,11 @@
       "docs": [
         {
           "name": "GLSL 4.60 specification",
-          "url": "https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html"
+          "url": "https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/specs/gl/GLSLangSpec.4.60.html"
         },
         {
           "name": "OpenGL registry",
-          "url": "https://registry.khronos.org/OpenGL/"
+          "url": "https://github.com/KhronosGroup/OpenGL-Registry"
         }
       ],
       "id": "opengl",
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 898
+        "test_count": 938
       },
       "translator_codegen": {
         "exists": true,
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 679
+        "test_count": 735
       },
       "translator_codegen": {
         "exists": true,
@@ -364,12 +364,12 @@
       ],
       "docs": [
         {
-          "name": "SPIR-V unified specification",
-          "url": "https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html"
+          "name": "SPIR-V unified grammar",
+          "url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/main/include/spirv/unified1/spirv.core.grammar.json"
         },
         {
-          "name": "Khronos SPIR-V registry",
-          "url": "https://registry.khronos.org/SPIR-V/"
+          "name": "Khronos SPIR-V headers",
+          "url": "https://github.com/KhronosGroup/SPIRV-Headers"
         }
       ],
       "id": "vulkan",
@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 668
+        "test_count": 707
       },
       "translator_codegen": {
         "exists": true,
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 464
+        "test_count": 512
       },
       "translator_codegen": {
         "exists": true,
@@ -607,7 +607,7 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 103,
+        "unsupported_marker_count": 105,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -697,7 +697,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 520
+        "test_count": 566
       },
       "translator_codegen": {
         "exists": true,
@@ -811,7 +811,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 588
+        "test_count": 615
       },
       "translator_codegen": {
         "exists": true,
@@ -925,7 +925,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 682
+        "test_count": 707
       },
       "translator_codegen": {
         "exists": true,
@@ -949,7 +949,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 396,
+        "unsupported_marker_count": 402,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -1039,7 +1039,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 517
+        "test_count": 570
       },
       "translator_codegen": {
         "exists": true,

@@ -29,6 +29,7 @@ TOKENS = tuple(
         ("CONST", r"\bconst\b"),
         ("INLINE", r"\binline\b"),
         ("EXTERN", r"\bextern\b"),
+        ("EXPORT", r"\bexport\b"),
         ("VOLATILE", r"\bvolatile\b"),
         ("PRECISE", r"\bprecise\b"),
         ("GLOBALLYCOHERENT", r"\bgloballycoherent\b"),
@@ -36,6 +37,7 @@ TOKENS = tuple(
         ("COLUMN_MAJOR", r"\bcolumn_major\b"),
         # Interpolation modifiers
         ("NOINTERPOLATION", r"\bnointerpolation\b"),
+        ("NOPERSPECTIVE", r"\bnoperspective\b"),
         ("LINEAR", r"\blinear\b"),
         ("CENTROID", r"\bcentroid\b"),
         ("SAMPLE", r"\bsample\b"),
@@ -147,6 +149,9 @@ TOKENS = tuple(
         ("OUT", r"\bout\b"),
         ("INOUT", r"\binout\b"),
         ("UNIFORM", r"\buniform\b"),
+        # Namespace/import-like directives
+        ("NAMESPACE", r"\bnamespace\b"),
+        ("USING", r"\busing\b"),
         # Boolean literals
         ("TRUE", r"\btrue\b"),
         ("FALSE", r"\bfalse\b"),
@@ -167,7 +172,13 @@ TOKENS = tuple(
         ),
         (
             "NUMBER",
-            r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFhH]?|\d+[eE][+-]?\d+[fFhH]?|\d+(?:[uU][lL]?|[lL][uU]?|[fFhH]|[uUlL]{0,2})?",
+            r"\d+\.\#(?i:inf|ind|qnan|snan)"
+            r"|(?:"
+            r"\d+\.(?!(?:[xyzwrgbaXYZWRGBA]{1,4})(?![a-zA-Z0-9_]))\d*"
+            r"|\.\d+"
+            r")(?:[eE][+-]?\d+)?[fFhH]?"
+            r"|\d+[eE][+-]?\d+[fFhH]?"
+            r"|\d+(?:[uU][lL]?|[lL][uU]?|[fFhH]|[uUlL]{0,2})?",
         ),
         # Brackets and braces
         ("LBRACE", r"\{"),
@@ -247,6 +258,7 @@ KEYWORDS = {
     "row_major": "ROW_MAJOR",
     "column_major": "COLUMN_MAJOR",
     "nointerpolation": "NOINTERPOLATION",
+    "noperspective": "NOPERSPECTIVE",
     "linear": "LINEAR",
     "centroid": "CENTROID",
     "sample": "SAMPLE",
@@ -329,6 +341,8 @@ KEYWORDS = {
     "out": "OUT",
     "inout": "INOUT",
     "uniform": "UNIFORM",
+    "namespace": "NAMESPACE",
+    "using": "USING",
     "true": "TRUE",
     "false": "FALSE",
 }
@@ -356,6 +370,7 @@ class TokenType(Enum):
     ROW_MAJOR = auto()
     COLUMN_MAJOR = auto()
     NOINTERPOLATION = auto()
+    NOPERSPECTIVE = auto()
     LINEAR = auto()
     CENTROID = auto()
     SAMPLE = auto()
@@ -444,6 +459,8 @@ class TokenType(Enum):
     OUT = auto()
     INOUT = auto()
     UNIFORM = auto()
+    NAMESPACE = auto()
+    USING = auto()
     TRUE = auto()
     FALSE = auto()
     IDENTIFIER = auto()
@@ -524,6 +541,7 @@ class HLSLLexer:
         defines: Optional[dict] = None,
         strict_preprocessor: bool = False,
     ):
+        code = code.lstrip("\ufeff")
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.file_path = file_path
         self.include_paths = include_paths or []

@@ -180,6 +180,28 @@ def test_declaration_qualifier_tokenization():
     assert ("CONST", "const") in tokens
 
 
+def test_interface_extension_and_where_tokenization():
+    tokens = tokenize_code(
+        "interface IFoo { int foo(); } "
+        "extension MyType : IFoo { int foo(); } "
+        "int use<T>(T value) where T : IFoo { return value.foo(); }"
+    )
+
+    assert ("INTERFACE", "interface") in tokens
+    assert ("EXTENSION", "extension") in tokens
+    assert ("WHERE", "where") in tokens
+
+
+def test_typealias_and_associatedtype_tokenization():
+    tokens = tokenize_code(
+        "typealias Color = float4; "
+        "interface IMaterial { associatedtype BRDF : IBRDF; }"
+    )
+
+    assert ("TYPEALIAS", "typealias") in tokens
+    assert ("ASSOCIATEDTYPE", "associatedtype") in tokens
+
+
 def test_numeric_literal_tokenization():
     tokens = tokenize_code("1e-3f 1.0f .5f 1. 0xffu 123u")
 

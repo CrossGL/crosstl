@@ -58,6 +58,203 @@ class TestHipCodeGen:
         assert "__managed__" not in result
         assert "__shared__" not in result
 
+    def test_public_rocm_examples_device_global_variables_conversion(self):
+        code = """
+        __device__ auto load_callback_dev = load_callback;
+        __device__ __constant__ constexpr float c0 = 299792458.0f;
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var load_callback_dev: auto = load_callback;" in result
+        assert "@group(0) @binding(0) var<uniform> c0: f32 = 299792458.0f;" in result
+
+    def test_public_rocm_bit_extract_fixed_width_pointer_declaration_conversion(self):
+        code = """
+        __global__ void bit_extract_kernel(
+            uint32_t* d_output,
+            const uint32_t* d_input,
+            size_t size) {
+            uint32_t *d_local, *d_shadow;
+            d_output[0] = ((d_input[0] & 0xf00) >> 8);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "@group(0) @binding(0) var<storage, read_write> d_output: array<u32>"
+            in result
+        )
+        assert (
+            "@group(0) @binding(1) var<storage, read_write> d_input: array<u32>"
+            in result
+        )
+        assert "var d_local: ptr<u32>;" in result
+        assert "var d_shadow: ptr<u32>;" in result
+        assert "d_output[0] = ((d_input[0] & 0xf00) >> 8);" in result
+
+    def test_public_rocm_bandwidth_enum_class_conversion(self):
+        code = """
+        enum class MemoryMode : unsigned int
+        {
+            PAGED,
+            PINNED
+        };
+
+        void run_bandwidth_host_device(const MemoryMode memory_mode) {
+            if (memory_mode == MemoryMode::PAGED) {
+                return;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "enum MemoryMode : u32 {" in result
+        assert "PAGED," in result
+        assert "PINNED," in result
+        assert "run_bandwidth_host_device(MemoryMode memory_mode)" in result
+        assert "MemoryMode::PAGED" in result
+        assert "EnumNode" not in result
+
+    def test_inline_assembly_conversion(self):
+        code = r"""
+        __global__ void asmKernel(float* out, float in) {
+            asm volatile(
+                "v_mov_b32_e32 %0, %1"
+                : [dst] "=v"(out[0])
+                : [src] "v"(in)
+                : "memory"
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert '// HIP inline assembly volatile: "v_mov_b32_e32 %0, %1"' in result
+        assert '// HIP inline assembly outputs: [dst] "=v"(out[0])' in result
+        assert '// HIP inline assembly inputs: [src] "v"(in)' in result
+        assert '// HIP inline assembly clobbers: "memory"' in result
+        assert "HipAsmNode" not in result
+
+    def test_dynamic_shared_memory_codegen_marks_launch_sized_storage(self):
+        code = """
+        __global__ void kernel(float* out, const float* in) {
+            extern __shared__ float shared[];
+            shared[threadIdx.x] = in[threadIdx.x];
+            __syncthreads();
+            out[threadIdx.x] = shared[threadIdx.x];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// HIP dynamic shared memory: shared uses launch-time shared memory size"
+            in result
+        )
+        assert "var<workgroup> shared: array<f32>;" in result
+        assert "workgroupBarrier();" in result
+
+    def test_cpp17_if_initializer_conversion(self):
+        code = """
+        int main() {
+            if(auto err = hipDeviceSynchronize(); err != hipSuccess)
+                return 1;
+            return 0;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var err: auto = hipSuccess;" in result
+        assert "if ((err != hipSuccess)) {" in result
+        assert "return 1;" in result
+        assert "return 0;" in result
+
+    def test_launch_bounds_after_return_type_conversion(self):
+        code = """
+        __global__ void __launch_bounds__(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)
+        documented_kernel(float* out) {
+            out[threadIdx.x] = 1.0f;
+        }
+
+        __global__ static __launch_bounds__(BlockSize) void reduction_kernel(float* out) {
+            out[threadIdx.x] = 2.0f;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// HIP launch bounds: "
+            "(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)"
+        ) in result
+        assert "// Kernel: documented_kernel" in result
+        assert "// HIP launch bounds: (BlockSize)" in result
+        assert "// Kernel: reduction_kernel" in result
+
+    def test_c_linkage_kernel_conversion(self):
+        code = """
+        extern "C"
+        __global__ void vector_add(float* output, float* input1, float* input2, size_t size) {
+            int i = threadIdx.x;
+            if (i < size) {
+                output[i] = input1[i] + input2[i];
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Kernel: vector_add" in result
+        assert "fn vector_add(" in result
+        assert "var i: i32 = gl_LocalInvocationID.x;" in result
+        assert "output[i] = (input1[i] + input2[i]);" in result
+        assert "extern" not in result
+        assert '"C"' not in result
+
     def test_device_function_conversion(self):
         code = """
         __device__ float add(float a, float b) {
@@ -107,6 +304,36 @@ class TestHipCodeGen:
         assert "return (a + b);" in result
         assert "out[0] = add(1.0f, 2.0f);" in result
 
+    def test_cpp_qualifiers_convert_without_leaking_to_types(self):
+        code = """
+        __device__ void init_array(float * const a) {
+            return;
+        }
+
+        int main(void) {
+            constexpr unsigned int size = 1;
+            const unsigned blocks = 512;
+            long long int cycles = 0;
+            unsigned long long int ticks = 1;
+            return 0;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "void init_array(ptr<f32> a)" in result
+        assert "i32 main()" in result
+        assert "var size: u32 = 1;" in result
+        assert "var blocks: u32 = 512;" in result
+        assert "var cycles: i64 = 0;" in result
+        assert "var ticks: u64 = 1;" in result
+        assert "constexpr" not in result
+
     def test_multiple_kernels_conversion(self):
         code = """
         __global__ void kernel1() {
@@ -136,7 +363,12 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("double") == "f64"
         assert codegen.convert_hip_type_to_crossgl("bool") == "bool"
         assert codegen.convert_hip_type_to_crossgl("void") == "void"
+        assert codegen.convert_hip_type_to_crossgl("half") == "f16"
+        assert codegen.convert_hip_type_to_crossgl("__half") == "f16"
+        assert codegen.convert_hip_type_to_crossgl("half2") == "vec2<f16>"
+        assert codegen.convert_hip_type_to_crossgl("__half2") == "vec2<f16>"
         assert codegen.convert_hip_type_to_crossgl("float *") == "ptr<f32>"
+        assert codegen.convert_hip_type_to_crossgl("half2 *") == "ptr<vec2<f16>>"
         assert codegen.convert_hip_type_to_crossgl("void * *") == "ptr<ptr<void>>"
         assert codegen.convert_hip_type_to_crossgl("void * []") == "array<ptr<void>>"
         assert codegen.convert_hip_type_to_crossgl("hipArray_t") == "ptr<void>"
@@ -173,6 +405,40 @@ class TestHipCodeGen:
             )
             == "imageCubeArray"
         )
+
+    def test_hip_fp16_half2_types_and_intrinsics_convert_to_crossgl(self):
+        code = """
+        __device__ half2 fp16_ops(half2 a, half2 b, float x) {
+            half2 scalar = __float2half2_rn(x);
+            half2 prod = __hmul2(a, b);
+            half2 sum = __hadd2(prod, scalar);
+            half2 fused = __hfma2(a, b, sum);
+            float low = __low2float(fused);
+            return fused;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "vec2<f16> fp16_ops(vec2<f16> a, vec2<f16> b, f32 x)" in result
+        assert "var scalar: vec2<f16> = vec2<f16>(x, x);" in result
+        assert "var prod: vec2<f16> = (a * b);" in result
+        assert "var sum: vec2<f16> = (prod + scalar);" in result
+        assert "var fused: vec2<f16> = fma(a, b, sum);" in result
+        assert "var low: f32 = f32(fused.x);" in result
+        for raw_name in (
+            "half2",
+            "__float2half2_rn",
+            "__hmul2",
+            "__hadd2",
+            "__hfma2",
+            "__low2float",
+        ):
+            assert raw_name not in result
 
     def test_function_conversion(self):
         codegen = HipToCrossGLConverter()
@@ -557,6 +823,30 @@ class TestHipCodeGen:
 
         assert "// HIP to CrossGL conversion" in result
         assert "struct Point" in result
+
+    def test_typedef_struct_alias_conversion(self):
+        code = """
+        typedef struct {
+            unsigned int x;
+            unsigned int y;
+        } Pair;
+
+        __global__ void kernel(Pair* pairs) {
+            pairs[threadIdx.x].x = 1;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "struct Pair" in result
+        assert "u32 x;" in result
+        assert "u32 y;" in result
+        assert "Pair" in result
 
     def test_empty_program(self):
         code = ""
@@ -1296,6 +1586,29 @@ class TestHipCodeGen:
             in result
         )
         assert "// Arguments: data, 2.0f" in result
+
+    def test_braced_dim3_kernel_launch_conversion(self):
+        code = """
+        __global__ void kernel() {
+        }
+
+        void host() {
+            kernel<<<dim3{1, 1, 1}, dim3{32, 1, 1}>>>();
+            auto block = dim3{64, 1, 1};
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// Kernel launch: kernel<<<vec3<u32>(1, 1, 1), " "vec3<u32>(32, 1, 1)>>>()"
+        ) in result
+        assert "var block: auto = vec3<u32>(64, 1, 1);" in result
 
     def test_computed_kernel_launch_config_conversion(self):
         code = """
@@ -3088,6 +3401,31 @@ class TestHipCodeGen:
         assert "hipFreeArray(" not in result
         assert "hipArrayDestroy(" not in result
         assert "err = hipDeviceSynchronize();" not in result
+
+    def test_hip_runtime_error_wrapper_unwraps_runtime_calls(self):
+        code = """
+        void host(float* h, size_t bytes, hipStream_t stream) {
+            float* d;
+            HIP_CHECK(hipMalloc((void**)&d, bytes));
+            HIP_CHECK(hipMemcpyAsync(d, h, bytes, hipMemcpyHostToDevice, stream));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// HIP memory allocate: d, bytes: bytes" in result
+        assert (
+            "// HIP memory copy: h -> d, bytes: bytes, "
+            "kind: hipMemcpyHostToDevice, stream: stream"
+        ) in result
+        assert "HIP_CHECK(" not in result
+        assert "hipMalloc(" not in result
+        assert "hipMemcpyAsync(" not in result
 
     def test_hip_memory_pointer_occupancy_expression_contexts_emit_status(self):
         code = """
@@ -15376,6 +15714,8 @@ class TestHipCodeGen:
             bool no = false;
             char c = 'x';
             char escaped = '\n';
+            char hex = '\x7f';
+            char oct = '\377';
             int* p = nullptr;
             int* q = NULL;
             return yes && !no;
@@ -15393,6 +15733,8 @@ class TestHipCodeGen:
         assert "var no: bool = false;" in result
         assert "var c: i8 = 'x';" in result
         assert "var escaped: i8 = '\\n';" in result
+        assert "var hex: i8 = '\\x7f';" in result
+        assert "var oct: i8 = '\\377';" in result
         assert "var p: ptr<i32> = nullptr;" in result
         assert "var q: ptr<i32> = NULL;" in result
         assert "return (yes && (!no));" in result

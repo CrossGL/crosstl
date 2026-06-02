@@ -1,6 +1,7 @@
 import pytest
 
 import crosstl.translator
+from crosstl.backend.GLSL.OpenglAst import BinaryOpNode
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
@@ -65,6 +66,92 @@ def test_parse_layout_locations_and_components():
     assert "\n    vec4 fragColor;" in glsl
     assert "out_fragColor = fragColor;" in glsl
     assert "\n    fragColor = fragColor;" not in glsl
+
+
+def test_parse_layout_integer_constant_expression_values():
+    code = """
+    #version 450 core
+    const int BASE_LOCATION = 1;
+    const int COMPONENT_BASE = 3;
+    layout(location = BASE_LOCATION + 1, component = COMPONENT_BASE - 1) in vec3 position;
+
+    void main() {
+        gl_Position = vec4(position, 1.0);
+    }
+    """
+
+    ast = parse_glsl(code, "vertex")
+    position = ast.io_variables[0]
+
+    assert isinstance(position.layout["location"], BinaryOpNode)
+    assert position.layout["location"].op == "+"
+    assert isinstance(position.layout["component"], BinaryOpNode)
+    assert position.layout["component"].op == "-"
+
+
+def test_codegen_layout_integer_constant_expression_values():
+    code = """
+    #version 450 core
+    const int BASE_LOCATION = 1;
+    const int COMPONENT_BASE = 3;
+    layout(location = BASE_LOCATION + 1, component = COMPONENT_BASE - 1) in vec3 position;
+
+    void main() {
+        gl_Position = vec4(position, 1.0);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "vertex")
+
+    assert (
+        "vec3 position @location((BASE_LOCATION + 1)) "
+        "@component((COMPONENT_BASE - 1));"
+    ) in crossgl
+    assert "const int BASE_LOCATION = 1;" in crossgl
+    assert "const int COMPONENT_BASE = 3;" in crossgl
+
+
+def test_parse_specialization_constant_layout_roundtrip():
+    code = """
+    #version 450 core
+    layout(constant_id = 0) const int LIGHTING_MODEL = 0;
+    layout(constant_id = 1) const uint MAX_LIGHTS = 4u;
+
+    void main() {
+    }
+    """
+    ast = parse_glsl(code, "fragment")
+
+    assert ast.constant[0].layout["constant_id"] == "0"
+    assert ast.constant[1].layout["constant_id"] == "1"
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "const int LIGHTING_MODEL @constant_id(0) = 0;" in crossgl
+    assert "const uint MAX_LIGHTS @constant_id(1) = 4u;" in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(constant_id = 0) const int LIGHTING_MODEL = 0;" in glsl
+    assert "layout(constant_id = 1) const uint MAX_LIGHTS = 4u;" in glsl
+
+
+def test_codegen_stage_layout_integer_constant_expression_values():
+    code = """
+    #version 450 core
+    const int GROUP_SIZE = 8;
+    layout(local_size_x = GROUP_SIZE << 1, local_size_y = GROUP_SIZE, local_size_z = GROUP_SIZE > 4 ? 2 : 1) in;
+
+    void main() {
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert (
+        "layout(local_size_x = (GROUP_SIZE << 1), local_size_y = GROUP_SIZE, "
+        "local_size_z = ((GROUP_SIZE > 4) ? 2 : 1)) in;"
+    ) in crossgl
 
 
 @pytest.mark.parametrize(

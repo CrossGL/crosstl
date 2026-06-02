@@ -19,6 +19,7 @@ from .OpenglAst import (
     PostfixOpNode,
     ReturnNode,
     ShaderNode,
+    StructNode,
     SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
@@ -56,7 +57,9 @@ class GLSLToCrossGLConverter:
         "perprimitive": "perprimitive",
         "perprimitiveext": "perprimitive",
         "pervertex": "pervertex",
+        "pervertexext": "pervertex",
         "perview": "perview",
+        "perviewext": "perview",
     }
     VARIABLE_QUALIFIER_ATTRIBUTES = {
         "invariant": "invariant",
@@ -66,9 +69,11 @@ class GLSLToCrossGLConverter:
         "highp": "highp",
     }
     LAYOUT_ATTRIBUTE_NAMES = (
+        "constant_id",
         "location",
         "component",
         "index",
+        "input_attachment_index",
         "stream",
         "xfb_buffer",
         "xfb_offset",
@@ -313,6 +318,14 @@ class GLSLToCrossGLConverter:
             "mat2": "mat2",
             "mat3": "mat3",
             "mat4": "mat4",
+            "texture1D": "texture1D",
+            "texture2D": "texture2D",
+            "texture3D": "texture3D",
+            "textureCube": "textureCube",
+            "texture1DArray": "texture1DArray",
+            "texture2DArray": "texture2DArray",
+            "textureCubeArray": "textureCubeArray",
+            "sampler": "sampler",
             "sampler1D": "sampler1D",
             "sampler2D": "sampler2D",
             "sampler3D": "sampler3D",
@@ -364,6 +377,12 @@ class GLSLToCrossGLConverter:
             "imageBuffer": "imageBuffer",
             "image2DMS": "image2DMS",
             "image2DMSArray": "image2DMSArray",
+            "subpassInput": "subpassInput",
+            "subpassInputMS": "subpassInputMS",
+            "isubpassInput": "isubpassInput",
+            "isubpassInputMS": "isubpassInputMS",
+            "usubpassInput": "usubpassInput",
+            "usubpassInputMS": "usubpassInputMS",
             "iimage1D": "iimage1D",
             "iimage2D": "iimage2D",
             "iimage3D": "iimage3D",
@@ -404,6 +423,7 @@ class GLSLToCrossGLConverter:
             "EQUAL": "==",
             "NOT_EQUAL": "!=",
             "LOGICAL_AND": "&&",
+            "LOGICAL_XOR": "!=",
             "LOGICAL_OR": "||",
             "ASSIGN_ADD": "+=",
             "ASSIGN_SUB": "-=",
@@ -419,6 +439,7 @@ class GLSLToCrossGLConverter:
             "ASSIGN_AND": "&=",
             "ASSIGN_OR": "|=",
             "ASSIGN_XOR": "^=",
+            "^^": "!=",
         }
 
         # Shader-specific info
@@ -431,6 +452,7 @@ class GLSLToCrossGLConverter:
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
         self.interface_block_struct_names = set()
+        self.flattened_uniform_block_instances = {}
         self.task_payload_shared_names = set()
         self.variable_type_scopes = []
 
@@ -465,7 +487,18 @@ class GLSLToCrossGLConverter:
             return False
         name = str(type_name)
         return name == "accelerationStructureEXT" or name.startswith(
-            ("sampler", "isampler", "usampler", "image", "iimage", "uimage")
+            (
+                "texture",
+                "subpassInput",
+                "isubpassInput",
+                "usubpassInput",
+                "sampler",
+                "isampler",
+                "usampler",
+                "image",
+                "iimage",
+                "uimage",
+            )
         )
 
     def resource_function_descriptor(self, name):
@@ -547,7 +580,11 @@ class GLSLToCrossGLConverter:
     def ssbo_binding_attribute_suffix(self, var):
         layout = getattr(var, "layout", None) or {}
         binding = layout.get("binding")
-        return f" @binding({binding})" if binding is not None else ""
+        return (
+            f" @binding({self.layout_value_to_string(binding)})"
+            if binding is not None
+            else ""
+        )
 
     def ssbo_block_attribute_suffix(self, var):
         layout_names = self.ssbo_block_layout_names(var)
@@ -557,7 +594,7 @@ class GLSLToCrossGLConverter:
 
         binding = self.ssbo_binding(var)
         if binding is not None:
-            attributes.append(f"@binding({binding})")
+            attributes.append(f"@binding({self.layout_value_to_string(binding)})")
 
         qualifiers = self._qualifier_set(var)
         for qualifier in ("coherent", "volatile", "restrict", "readonly", "writeonly"):
@@ -648,6 +685,7 @@ class GLSLToCrossGLConverter:
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
         self.variable_type_scopes = [{}]
+        self.flattened_uniform_block_instances = {}
 
         for var in getattr(node, "uniforms", []) or []:
             self.register_variable_type(var)
@@ -729,7 +767,13 @@ class GLSLToCrossGLConverter:
         layout = getattr(var, "layout", None) or {}
         binding = layout.get("binding")
         if binding is not None:
-            attributes.append(f"@binding({binding})")
+            attributes.append(f"@binding({self.layout_value_to_string(binding)})")
+        input_attachment_index = layout.get("input_attachment_index")
+        if input_attachment_index is not None:
+            attributes.append(
+                "@input_attachment_index("
+                f"{self.layout_value_to_string(input_attachment_index)})"
+            )
 
         if self._is_image_resource_type(var_type):
             supported_formats = self.supported_image_formats()
@@ -754,7 +798,7 @@ class GLSLToCrossGLConverter:
         for name in self.LAYOUT_ATTRIBUTE_NAMES:
             value = layout.get(name)
             if value is not None:
-                attributes.append(f"@{name}({value})")
+                attributes.append(f"@{name}({self.layout_value_to_string(value)})")
         for name in self.BARE_LAYOUT_ATTRIBUTE_NAMES:
             if name in layout and layout.get(name) is None:
                 attributes.append(f"@{name}")
@@ -897,6 +941,11 @@ class GLSLToCrossGLConverter:
                 emitted.append(mapped)
         return " ".join(emitted)
 
+    def layout_value_to_string(self, value):
+        if isinstance(value, str):
+            return value
+        return self.generate_expression(value)
+
     def format_layout(self, layout_entry):
         layout = (
             layout_entry.get("layout", {}) if isinstance(layout_entry, dict) else {}
@@ -909,7 +958,7 @@ class GLSLToCrossGLConverter:
             if value is None:
                 parts.append(str(key))
             else:
-                parts.append(f"{key} = {value}")
+                parts.append(f"{key} = {self.layout_value_to_string(value)}")
         layout_str = f"layout({', '.join(parts)})" if parts else "layout()"
         if qualifiers:
             layout_str += " " + " ".join(qualifiers)
@@ -928,6 +977,75 @@ class GLSLToCrossGLConverter:
         block_name = getattr(var, "interface_block", None)
         return bool(block_name and block_name in self.interface_block_struct_names)
 
+    def has_push_constant_layout(self, node):
+        layout = getattr(node, "layout", None) or getattr(
+            node, "interface_layout", None
+        )
+        return any(str(key).lower() == "push_constant" for key in layout or {})
+
+    def is_push_constant_uniform(self, var):
+        if self.has_push_constant_layout(var):
+            return True
+
+        block_name = getattr(var, "interface_block", None)
+        if block_name is None:
+            block_name = getattr(var, "vtype", None)
+        block_struct = self.structs_by_name.get(block_name)
+        return bool(block_struct and self.has_push_constant_layout(block_struct))
+
+    def is_push_constant_interface_block_struct(self, struct):
+        return bool(
+            getattr(struct, "interface_block", False)
+            and self.has_push_constant_layout(struct)
+        )
+
+    def push_constant_block_name(self, var):
+        return getattr(var, "interface_block", None) or getattr(var, "vtype", None)
+
+    def push_constant_block_fields(self, block_name, uniforms):
+        block_struct = self.structs_by_name.get(block_name)
+        if block_struct is not None:
+            return getattr(block_struct, "members", None) or getattr(
+                block_struct, "fields", []
+            )
+        return uniforms
+
+    def record_flattened_push_constant_instance(self, block_name, uniforms, fields):
+        field_names = {getattr(field, "name", None) for field in fields}
+        field_names.discard(None)
+        if not field_names:
+            return
+
+        block_struct = self.structs_by_name.get(block_name)
+        instance_names = set()
+        if block_struct is not None:
+            instance_name = getattr(block_struct, "interface_instance_name", None)
+            if instance_name:
+                instance_names.add(str(instance_name).split("[", 1)[0])
+
+        for uniform in uniforms:
+            if getattr(uniform, "vtype", None) == block_name:
+                instance_names.add(str(uniform.name).split("[", 1)[0])
+
+        for instance_name in instance_names:
+            if instance_name:
+                self.flattened_uniform_block_instances[instance_name] = field_names
+
+    def generate_push_constant_block(self, block_name, uniforms):
+        fields = self.push_constant_block_fields(block_name, uniforms)
+        self.record_flattened_push_constant_instance(block_name, uniforms, fields)
+
+        result = f"cbuffer {block_name} @push_constant {{\n"
+        self.increase_indent()
+        for field in fields:
+            var_type = self.convert_type(getattr(field, "vtype", ""))
+            var_name = getattr(field, "name", "")
+            array_suffix = self.array_suffix(field)
+            result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
+        self.decrease_indent()
+        result += self.indent_str + "};\n"
+        return result
+
     def interface_block_attribute_prefix(self, node):
         if not self.is_graphics_interface_block_struct(node):
             return ""
@@ -944,7 +1062,7 @@ class GLSLToCrossGLConverter:
         for key in self.LAYOUT_ATTRIBUTE_NAMES:
             value = layout.get(key)
             if value is not None:
-                attributes.append(f"@{key}({value})")
+                attributes.append(f"@{key}({self.layout_value_to_string(value)})")
 
         instance_name = getattr(node, "interface_instance_name", None)
         if instance_name:
@@ -1039,6 +1157,8 @@ class GLSLToCrossGLConverter:
         for struct in node.structs:
             if struct.name in self.converted_ssbo_struct_names:
                 continue
+            if self.is_push_constant_interface_block_struct(struct):
+                continue
             result += self.indent_str + self.generate_struct(struct) + "\n\n"
 
         # Generate input struct if needed
@@ -1070,6 +1190,14 @@ class GLSLToCrossGLConverter:
             data_uniforms = [
                 u for u in self.uniform_vars if not self._is_resource_type(u.vtype)
             ]
+            push_constant_blocks = {}
+            ordinary_data_uniforms = []
+            for uniform in data_uniforms:
+                if self.is_push_constant_uniform(uniform):
+                    block_name = self.push_constant_block_name(uniform)
+                    push_constant_blocks.setdefault(block_name, []).append(uniform)
+                else:
+                    ordinary_data_uniforms.append(uniform)
 
             for uniform in resource_uniforms:
                 var_type = self.convert_type(uniform.vtype)
@@ -1081,10 +1209,15 @@ class GLSLToCrossGLConverter:
                     + f"{var_type} {var_name}{array_suffix}{attributes};\n"
                 )
 
-            if data_uniforms:
+            for block_name, uniforms in push_constant_blocks.items():
+                result += self.indent_str + self.generate_push_constant_block(
+                    block_name, uniforms
+                )
+
+            if ordinary_data_uniforms:
                 result += self.indent_str + "cbuffer Uniforms {\n"
                 self.increase_indent()
-                for uniform in data_uniforms:
+                for uniform in ordinary_data_uniforms:
                     var_type = self.convert_type(uniform.vtype)
                     var_name = uniform.name
                     array_suffix = self.array_suffix(uniform)
@@ -1097,7 +1230,9 @@ class GLSLToCrossGLConverter:
         # Generate global constants
         for const_var in getattr(node, "constant", []) or []:
             result += (
-                self.indent_str + self.generate_variable_declaration(const_var) + ";\n"
+                self.indent_str
+                + self.generate_variable_declaration(const_var, array_on_type=True)
+                + ";\n"
             )
         if getattr(node, "constant", []):
             result += "\n"
@@ -1419,6 +1554,8 @@ class GLSLToCrossGLConverter:
                 return ray_control + ";"
             self.register_variable_type(node)
             return self.generate_variable_declaration(node) + ";"
+        elif isinstance(node, StructNode):
+            return self.generate_struct(node)
         elif isinstance(node, FunctionCallNode):
             return self.generate_function_call(node) + ";"
         elif isinstance(node, SwitchNode):
@@ -1542,9 +1679,15 @@ class GLSLToCrossGLConverter:
         init = self.generate_statement(node.init).rstrip(";") if node.init else ""
         condition = self.generate_expression(node.condition) if node.condition else ""
         update_node = getattr(node, "update", None) or getattr(node, "iteration", None)
-        iteration = (
-            self.generate_statement(update_node).rstrip(";") if update_node else ""
-        )
+        if isinstance(update_node, list):
+            iteration = ", ".join(
+                self.generate_statement(update_part).rstrip(";")
+                for update_part in update_node
+            )
+        else:
+            iteration = (
+                self.generate_statement(update_node).rstrip(";") if update_node else ""
+            )
 
         result = f"for ({init}; {condition}; {iteration}) {{\n"
         self.increase_indent()
@@ -1619,6 +1762,8 @@ class GLSLToCrossGLConverter:
             left = self.generate_expression(node.left)
             right = self.generate_expression(node.right)
             operator = self.operator_map.get(node.op, node.op)
+            if operator == ",":
+                return f"({left}, {right})"
             return f"({left} {operator} {right})"
         elif isinstance(node, UnaryOpNode):
             operand = self.generate_expression(node.operand)
@@ -1748,6 +1893,10 @@ class GLSLToCrossGLConverter:
         return None
 
     def generate_member_access(self, node):
+        flattened_member = self.flattened_uniform_block_member(node)
+        if flattened_member is not None:
+            return flattened_member
+
         object_name = ""
         if isinstance(node.object, VariableNode):
             if self.shader_type in (
@@ -1768,6 +1917,15 @@ class GLSLToCrossGLConverter:
             object_name = self.generate_expression(node.object)
 
         return f"{object_name}.{node.member}"
+
+    def flattened_uniform_block_member(self, node):
+        instance_name = self.expression_base_name(getattr(node, "object", None))
+        if instance_name is None:
+            return None
+        fields = self.flattened_uniform_block_instances.get(instance_name)
+        if fields is None or node.member not in fields:
+            return None
+        return node.member
 
     def generate_array_access(self, node):
         structured_access = self.structured_buffer_access_parts(node)
@@ -1865,7 +2023,9 @@ class GLSLToCrossGLConverter:
             name = name.name
         return name in self.RAY_QUERY_TRANSFORM_FUNCTIONS
 
-    def generate_variable_declaration(self, node, array_before_attributes=False):
+    def generate_variable_declaration(
+        self, node, array_before_attributes=False, array_on_type=False
+    ):
         var_type = self.variable_declaration_type(node)
         var_name = node.name
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
@@ -1879,6 +2039,9 @@ class GLSLToCrossGLConverter:
             prefix_parts.append(interface_prefix)
         prefix = f"{' '.join(prefix_parts)} " if prefix_parts else ""
         array_suffix = self.array_suffix(node)
+        if array_on_type and array_suffix:
+            var_type = f"{var_type}{array_suffix}"
+            array_suffix = ""
         attributes = (
             self.variable_layout_attribute_suffix(node)
             + self.image_resource_attribute_suffix(node)

@@ -11,6 +11,16 @@ class MojoParser:
     ATTRIBUTE_START_TOKENS = {"ATTRIBUTE", "AT"}
     FUNCTION_TOKENS = {"FN", "DEF"}
     TYPE_START_TOKENS = {"IDENTIFIER", "INT", "FLOAT", "BOOL", "STRING"}
+    PARAMETER_CONVENTION_TOKENS = {"VAR"}
+    PARAMETER_CONVENTION_IDENTIFIERS = {
+        "borrowed",
+        "inout",
+        "mut",
+        "owned",
+        "out",
+        "read",
+        "ref",
+    }
 
     def __init__(self, tokens):
         self.tokens = tokens
@@ -102,6 +112,12 @@ class MojoParser:
                 self.attach_attributes(node, attributes)
                 constants.append(node)
                 all_items.append(node)
+            elif self.current_token[0] in ["COMPTIME", "ALIAS"]:
+                node = self.parse_comptime_or_alias_statement()
+                self.attach_attributes(node, attributes)
+                if isinstance(node, VariableDeclarationNode):
+                    global_variables.append(node)
+                all_items.append(node)
             elif self.current_token[0] in self.FUNCTION_TOKENS:
                 node = self.parse_function(attributes)
                 functions.append(node)
@@ -163,7 +179,18 @@ class MojoParser:
 
     def parse_import_items(self):
         items = []
+        parenthesized = False
+        self.skip_newlines()
+        if self.current_token[0] == "LPAREN":
+            parenthesized = True
+            self.eat("LPAREN")
+            self.skip_layout_tokens()
+
         while self.current_token[0] not in self.STATEMENT_END_TOKENS | {"SEMICOLON"}:
+            if parenthesized:
+                self.skip_layout_tokens()
+            if parenthesized and self.current_token[0] == "RPAREN":
+                break
             if self.current_token[0] == "MULTIPLY":
                 item = self.current_token[1]
                 self.eat("MULTIPLY")
@@ -179,8 +206,16 @@ class MojoParser:
             items.append(item)
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
+                if parenthesized:
+                    self.skip_layout_tokens()
+                else:
+                    self.skip_newlines()
             else:
                 break
+
+        if parenthesized:
+            self.skip_layout_tokens()
+            self.eat("RPAREN")
 
         if not items:
             raise SyntaxError("Expected imported item")
@@ -192,6 +227,7 @@ class MojoParser:
         self.eat("IDENTIFIER")
 
         members = []
+        methods = []
 
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
@@ -199,7 +235,7 @@ class MojoParser:
                 if self.current_token[0] in ["NEWLINE", "INDENT", "DEDENT"]:
                     self.eat(self.current_token[0])
                     continue
-                members.append(self.parse_struct_member())
+                self.add_struct_item(members, methods, self.parse_struct_member())
                 self.skip_newlines()
             if self.current_token[0] == "RBRACE":
                 self.eat("RBRACE")
@@ -216,7 +252,7 @@ class MojoParser:
                 self.skip_newlines()
                 if self.current_token[0] in ["DEDENT", "EOF"]:
                     break
-                members.append(self.parse_struct_member())
+                self.add_struct_item(members, methods, self.parse_struct_member())
                 self.skip_newlines()
 
             if self.current_token[0] == "DEDENT":
@@ -224,10 +260,22 @@ class MojoParser:
         else:
             raise SyntaxError(f"Expected struct body, got {self.current_token[0]}")
 
-        return StructNode(name, members, attributes=initial_attributes)
+        node = StructNode(name, members, attributes=initial_attributes)
+        node.methods = methods
+        return node
 
     def parse_struct_member(self):
-        return self.parse_typed_member("struct")
+        self.skip_newlines()
+        attributes = self.parse_attributes()
+        if self.current_token[0] in self.FUNCTION_TOKENS:
+            return self.parse_function(attributes)
+        return self.parse_typed_member("struct", attributes)
+
+    def add_struct_item(self, members, methods, node):
+        if isinstance(node, FunctionNode):
+            methods.append(node)
+        else:
+            members.append(node)
 
     def parse_typed_member(self, context, initial_attributes=None):
         self.skip_newlines()
@@ -419,6 +467,9 @@ class MojoParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
+        if self.current_token[0] == "LBRACKET":
+            self.skip_bracketed_suffix()
+
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
@@ -432,6 +483,11 @@ class MojoParser:
         post_attributes = self.parse_attributes()
         attributes.extend(post_attributes)
 
+        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "raises":
+            self.eat("IDENTIFIER")
+
+        where_clause = self.parse_where_clause()
+
         if self.current_token[0] == "COLON":
             self.eat("COLON")
 
@@ -441,7 +497,44 @@ class MojoParser:
             return_type, name, params, body, qualifiers=[], attributes=attributes
         )
         func.qualifier = qualifier
+        func.where_clause = where_clause
         return func
+
+    def parse_where_clause(self):
+        if not (
+            self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "where"
+        ):
+            return None
+
+        self.eat("IDENTIFIER")
+        self.skip_layout_tokens()
+
+        if self.current_token[0] != "LPAREN":
+            raise SyntaxError("Expected parenthesized Mojo where clause")
+
+        parts = []
+        depth = 0
+        while True:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated Mojo where clause")
+
+            token_type, token_value = self.current_token
+            if token_type in {"NEWLINE", "INDENT", "DEDENT"}:
+                self.eat(token_type)
+                continue
+
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+
+            parts.append(str(token_value))
+            self.eat(token_type)
+
+            if depth == 0:
+                break
+
+        return " ".join(parts)
 
     def parse_parameters(self):
         params = []
@@ -450,10 +543,18 @@ class MojoParser:
             if self.current_token[0] == "RPAREN":
                 break
 
+            if self.consume_parameter_separator_marker():
+                continue
+
             attributes = self.parse_attributes()
             self.skip_layout_tokens()
+            convention = self.parse_parameter_convention()
 
-            if self.current_token[0] in self.TYPE_START_TOKENS:
+            if self.is_untyped_self_parameter(convention):
+                name = self.current_token[1]
+                self.eat("IDENTIFIER")
+                vtype = ""
+            elif self.current_token[0] in self.TYPE_START_TOKENS:
                 if self.peek_token()[0] == "COLON":
                     name = self.current_token[1]
                     self.eat(self.current_token[0])
@@ -466,22 +567,33 @@ class MojoParser:
                         name = self.current_token[1]
                         self.eat("IDENTIFIER")
 
-                param_attributes = self.parse_attributes(skip_trailing_newlines=False)
-                attributes.extend(param_attributes)
-
-                params.append(VariableNode(vtype, name, attributes=attributes))
-                self.skip_layout_tokens()
-
             else:
                 raise SyntaxError(
                     f"Unexpected token in parameter list: {self.current_token[0]}"
                 )
 
+            default_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_value = self.parse_expression()
+
+            param_attributes = self.parse_attributes(skip_trailing_newlines=False)
+            attributes.extend(param_attributes)
+            param = VariableNode(
+                vtype,
+                name,
+                attributes=attributes,
+                parameter_convention=convention,
+            )
+            param.default_value = default_value
+            params.append(param)
+            self.skip_layout_tokens()
+
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
                 self.skip_layout_tokens()
                 if self.current_token[0] == "RPAREN":
-                    raise SyntaxError("Trailing comma in parameter list is not allowed")
+                    break
             elif self.current_token[0] == "RPAREN":
                 break
             else:
@@ -490,6 +602,46 @@ class MojoParser:
                 )
 
         return params
+
+    def consume_parameter_separator_marker(self):
+        if self.current_token[0] not in {"MULTIPLY", "DIVIDE"}:
+            return False
+
+        next_token = self.peek_token()[0]
+        if next_token not in {"COMMA", "RPAREN"}:
+            return False
+
+        self.eat(self.current_token[0])
+        self.skip_layout_tokens()
+        if self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+        return True
+
+    def parse_parameter_convention(self):
+        token_type, token_value = self.current_token
+        if token_type in self.PARAMETER_CONVENTION_TOKENS:
+            convention = token_value
+        elif (
+            token_type == "IDENTIFIER"
+            and token_value in self.PARAMETER_CONVENTION_IDENTIFIERS
+        ):
+            convention = token_value
+        else:
+            return None
+
+        if self.peek_token()[0] not in self.TYPE_START_TOKENS:
+            return None
+
+        self.eat(token_type)
+        self.skip_layout_tokens()
+        return convention
+
+    def is_untyped_self_parameter(self, convention):
+        if convention is None:
+            return False
+        if self.current_token[0] != "IDENTIFIER" or self.current_token[1] != "self":
+            return False
+        return self.peek_token()[0] in {"COMMA", "RPAREN"}
 
     def parse_attributes(self, skip_trailing_newlines=True):
         attributes = []
@@ -513,6 +665,14 @@ class MojoParser:
                     )
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
+                while self.current_token[0] == "DOT":
+                    self.eat("DOT")
+                    if self.current_token[0] != "IDENTIFIER":
+                        raise SyntaxError(
+                            f"Expected attribute name after dot, got {self.current_token[0]}"
+                        )
+                    name += f".{self.current_token[1]}"
+                    self.eat("IDENTIFIER")
                 args = []
                 if self.current_token[0] == "LPAREN":
                     self.eat("LPAREN")
@@ -579,8 +739,20 @@ class MojoParser:
             "IDENTIFIER",
             "LET",
             "VAR",
+            "COMPTIME",
+            "ALIAS",
         ]:
             return self.parse_variable_declaration_or_assignment()
+
+        elif self.current_token[0] in self.ATTRIBUTE_START_TOKENS:
+            attributes = self.parse_attributes()
+            if self.current_token[0] in self.FUNCTION_TOKENS:
+                return self.parse_function(attributes)
+            if self.current_token[0] == "STRUCT":
+                return self.parse_struct(attributes)
+            if self.current_token[0] == "CLASS":
+                return self.parse_class(attributes)
+            raise SyntaxError("Expected declaration after attribute")
 
         elif self.current_token[0] in self.FUNCTION_TOKENS:
             return self.parse_function()
@@ -590,8 +762,12 @@ class MojoParser:
             return self.parse_for_statement()
         elif self.current_token[0] == "WHILE":
             return self.parse_while_statement()
+        elif self.current_token[0] == "WITH":
+            return self.parse_with_statement()
         elif self.current_token[0] == "RETURN":
             return self.parse_return_statement()
+        elif self.current_token[0] == "RAISE":
+            return self.parse_raise_statement()
         elif self.current_token[0] == "BREAK":
             self.eat("BREAK")
             self.consume_statement_terminator()
@@ -612,6 +788,9 @@ class MojoParser:
             return self.parse_expression_statement()
 
     def parse_variable_declaration_or_assignment(self):
+        if self.current_token[0] in ["COMPTIME", "ALIAS"]:
+            return self.parse_comptime_or_alias_statement()
+
         if self.current_token[0] in ["LET", "VAR"]:
             var_type = self.current_token[0]
             self.eat(self.current_token[0])
@@ -647,12 +826,107 @@ class MojoParser:
             self.eat("COLON")
             vtype = self.parse_type()
             attributes = self.parse_attributes(skip_trailing_newlines=False)
+            initial_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                initial_value = self.parse_expression()
+                attributes.extend(self.parse_attributes(skip_trailing_newlines=False))
             self.consume_statement_terminator()
+            if initial_value is not None:
+                return VariableDeclarationNode(
+                    vtype,
+                    name,
+                    initial_value,
+                    is_var=True,
+                    attributes=attributes,
+                )
             return VariableNode(vtype, name, attributes=attributes)
 
         statement = self.parse_assignment()
         self.consume_statement_terminator()
         return statement
+
+    def parse_comptime_or_alias_statement(self):
+        if self.current_token[0] == "ALIAS":
+            return self.parse_alias_declaration()
+        return self.parse_comptime_statement()
+
+    def parse_alias_declaration(self):
+        self.eat("ALIAS")
+        node = self.parse_comptime_declaration(after_keyword=True)
+        node.is_alias = True
+        return node
+
+    def parse_comptime_statement(self):
+        self.eat("COMPTIME")
+        if self.current_token[0] == "IF":
+            node = self.parse_if_statement()
+            node.is_comptime = True
+            return node
+        if self.current_token[0] == "FOR":
+            node = self.parse_for_statement()
+            node.is_comptime = True
+            return node
+        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "assert":
+            return self.parse_keyword_comptime_assert_statement()
+        if self.is_comptime_expression_statement():
+            node = self.parse_expression()
+            self.consume_statement_terminator()
+            node.is_comptime = True
+            return node
+        return self.parse_comptime_declaration(after_keyword=True)
+
+    def parse_keyword_comptime_assert_statement(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            node = self.parse_call(VariableNode("", "assert"))
+            args = node.args
+        else:
+            args = [self.parse_expression()]
+
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            args.append(self.parse_expression())
+
+        self.consume_statement_terminator()
+        node = FunctionCallNode("assert", args)
+        node.is_comptime = True
+        return node
+
+    def is_comptime_expression_statement(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+        return self.peek_token()[0] not in {
+            "COLON",
+            "EQUALS",
+            "SEMICOLON",
+            "NEWLINE",
+            "DEDENT",
+            "EOF",
+            "RBRACE",
+        }
+
+    def parse_comptime_declaration(self, after_keyword=False):
+        if not after_keyword:
+            self.eat("COMPTIME")
+
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+
+        vtype = None
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            vtype = self.parse_type()
+
+        initial_value = None
+        if self.current_token[0] == "EQUALS":
+            self.eat("EQUALS")
+            initial_value = self.parse_expression()
+
+        self.consume_statement_terminator()
+        node = VariableDeclarationNode(vtype, name, initial_value, is_var=False)
+        node.is_comptime = True
+        return node
 
     def parse_if_statement(self):
         self.eat("IF")
@@ -742,6 +1016,21 @@ class MojoParser:
         body = self.parse_block()
         return WhileNode(condition, body)
 
+    def parse_with_statement(self):
+        self.eat("WITH")
+        context_expr = self.parse_expression()
+        alias = None
+        if isinstance(context_expr, CastNode) and self.current_token[0] == "COLON":
+            alias = context_expr.target_type
+            context_expr = context_expr.expression
+        elif self.current_token[0] == "AS":
+            self.eat("AS")
+            alias = self.current_token[1]
+            self.eat("IDENTIFIER")
+        self.eat("COLON")
+        body = self.parse_block()
+        return WithNode(context_expr, alias, body)
+
     def parse_switch_statement(self):
         self.eat("SWITCH")
         expression = self.parse_expression()
@@ -804,6 +1093,17 @@ class MojoParser:
         self.consume_statement_terminator()
 
         return ReturnNode(value)
+
+    def parse_raise_statement(self):
+        self.eat("RAISE")
+        if self.current_token[0] in self.STATEMENT_END_TOKENS | {"SEMICOLON"}:
+            value = None
+        else:
+            value = self.parse_expression()
+
+        self.consume_statement_terminator()
+        args = [] if value is None else [value]
+        return FunctionCallNode("raise", args)
 
     def parse_expression_statement(self):
         expr = self.parse_expression()
@@ -935,7 +1235,7 @@ class MojoParser:
 
     def parse_multiplicative(self):
         left = self.parse_unary()
-        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
+        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "FLOOR_DIVIDE", "MOD"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_unary()
@@ -948,7 +1248,16 @@ class MojoParser:
             self.eat(self.current_token[0])
             operand = self.parse_unary()
             return UnaryOpNode(op, operand)
-        return self.parse_primary()
+        return self.parse_power()
+
+    def parse_power(self):
+        left = self.parse_primary()
+        if self.current_token[0] == "POWER":
+            op = self.current_token[1]
+            self.eat("POWER")
+            right = self.parse_unary()
+            return BinaryOpNode(left, op, right)
+        return left
 
     def parse_primary(self):
         if self.current_token[0] == "IDENTIFIER":
@@ -984,7 +1293,20 @@ class MojoParser:
             return type_name
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
+            self.skip_layout_tokens()
             expr = self.parse_expression()
+            self.skip_layout_tokens()
+            if self.current_token[0] == "COMMA":
+                elements = [expr]
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    self.skip_layout_tokens()
+                    if self.current_token[0] == "RPAREN":
+                        break
+                    elements.append(self.parse_expression())
+                    self.skip_layout_tokens()
+                self.eat("RPAREN")
+                return self.parse_postfix_suffixes(TupleNode(elements))
             self.eat("RPAREN")
             return self.parse_postfix_suffixes(expr)
         elif self.current_token[0] in ["FN", "DEF", "STRUCT", "CLASS", "LET", "VAR"]:
@@ -1095,8 +1417,18 @@ class MojoParser:
 
     def parse_array_access(self, array):
         self.eat("LBRACKET")
-        index = self.parse_expression()
+        self.skip_layout_tokens()
+        indices = [self.parse_expression()]
+        self.skip_layout_tokens()
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            self.skip_layout_tokens()
+            if self.current_token[0] == "RBRACKET":
+                break
+            indices.append(self.parse_expression())
+            self.skip_layout_tokens()
         self.eat("RBRACKET")
+        index = indices[0] if len(indices) == 1 else TupleNode(indices)
         return ArrayAccessNode(array, index)
 
     def is_generic_constructor_suffix(self, node):
@@ -1154,6 +1486,18 @@ class MojoParser:
         if self.current_token[0] == "LBRACKET":
             type_name += self.parse_generic_type_suffix()
         return type_name
+
+    def skip_bracketed_suffix(self):
+        self.eat("LBRACKET")
+        depth = 1
+        while depth > 0:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated bracketed suffix")
+            if self.current_token[0] == "LBRACKET":
+                depth += 1
+            elif self.current_token[0] == "RBRACKET":
+                depth -= 1
+            self.eat(self.current_token[0])
 
     def parse_generic_type_suffix(self):
         suffix = "["

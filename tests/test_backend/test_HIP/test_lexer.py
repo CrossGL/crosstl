@@ -27,6 +27,56 @@ class TestHipLexer:
         assert "CLASS" in token_types
         assert "STRUCT" in token_types
 
+    def test_launch_bounds_attribute_tokenization(self):
+        code = """
+        __global__ void __launch_bounds__(BlockSize, MinWarps)
+        kernel(float* out) {}
+        """
+        lexer = HipLexer(code)
+        tokens = [token for token in lexer.tokenize() if token.type != "NEWLINE"]
+
+        assert [(token.type, token.value) for token in tokens[:9]] == [
+            ("__GLOBAL__", "__global__"),
+            ("VOID", "void"),
+            ("__LAUNCH_BOUNDS__", "__launch_bounds__"),
+            ("LPAREN", "("),
+            ("IDENTIFIER", "BlockSize"),
+            ("COMMA", ","),
+            ("IDENTIFIER", "MinWarps"),
+            ("RPAREN", ")"),
+            ("IDENTIFIER", "kernel"),
+        ]
+
+    def test_inline_assembly_tokenization(self):
+        code = "asm __asm__ volatile __volatile__"
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+
+        assert [(token.type, token.value) for token in tokens] == [
+            ("ASM", "asm"),
+            ("ASM", "__asm__"),
+            ("VOLATILE", "volatile"),
+            ("VOLATILE", "__volatile__"),
+        ]
+
+    def test_c_linkage_kernel_tokenization(self):
+        code = """
+        extern "C"
+        __global__ void vector_add(float* output) {}
+        """
+        lexer = HipLexer(code)
+        tokens = [token for token in lexer.tokenize() if token.type != "NEWLINE"]
+
+        assert [(token.type, token.value) for token in tokens[:7]] == [
+            ("EXTERN", "extern"),
+            ("STRING", '"C"'),
+            ("__GLOBAL__", "__global__"),
+            ("VOID", "void"),
+            ("IDENTIFIER", "vector_add"),
+            ("LPAREN", "("),
+            ("FLOAT", "float"),
+        ]
+
     def test_device_lambda_capture_tokenization(self):
         code = "[&] __device__ (int x) { return x; }"
         lexer = HipLexer(code)
@@ -133,7 +183,8 @@ class TestHipLexer:
 
     def test_numeric_literals(self):
         code = """
-        42 3.14f 2.71828 0xFFu 0XCAFEull 0b1010u 0777u 1e5 2.5e-3f .5f
+        42 3.14f 2.71828 0xFFu 0XCAFEull 0xFFFF'FFFF 0b1010u
+        0b1010'0101 0777u 1'000u 1e5 2.5e-3f .5f
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -146,23 +197,51 @@ class TestHipLexer:
 
         assert "0xFFu" in integer_values
         assert "0XCAFEull" in integer_values
+        assert "0xFFFF'FFFF" in integer_values
         assert "0b1010u" in integer_values
+        assert "0b1010'0101" in integer_values
         assert "0777u" in integer_values
+        assert "1'000u" in integer_values
         assert "2.5e-3f" in float_values
         assert ".5f" in float_values
 
-    def test_string_literals(self):
+    def test_string_and_character_literals(self):
         code = """
-        "hello world" 'c' "escaped \\"string\\"" "path/to/file"
+        "hello world" 'c' '\\n' '\\x7f' '\\377' u8'a' L'b'
+        "escaped \\"string\\"" "path/to/file" char
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
         strings = [token for token in tokens if token.type == "STRING"]
-        chars = [token for token in tokens if token.type == "CHAR"]
+        chars = [token for token in tokens if token.type == "CHAR_LIT"]
 
         assert len(strings) >= 3
-        assert len(chars) >= 1
+        assert [token.value for token in chars] == [
+            "'c'",
+            "'\\n'",
+            "'\\x7f'",
+            "'\\377'",
+            "u8'a'",
+            "L'b'",
+        ]
+        assert ("CHAR", "char") in [(token.type, token.value) for token in tokens]
+
+    def test_raw_string_literal_tokenization(self):
+        code = """
+        constexpr const char* shader = R"(
+        #version 330 core
+        void main() {}
+        )";
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+
+        strings = [token.value for token in tokens if token.type == "STRING"]
+
+        assert len(strings) == 1
+        assert strings[0].startswith('R"(')
+        assert "#version 330 core" in strings[0]
 
     def test_preprocessor_directives(self):
         code = """

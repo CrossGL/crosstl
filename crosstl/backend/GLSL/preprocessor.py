@@ -1,5 +1,6 @@
 """Preprocessor support for GLSL source imports."""
 
+import os
 import re
 from typing import Dict, List, Optional
 
@@ -26,9 +27,38 @@ class GLSLPreprocessor:
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
         self._ensure_version_first(code)
-        processed = self._preprocessor.preprocess(code, file_path=file_path)
+        include_paths = self._preprocessor.include_paths
+        implicit_paths = self._implicit_include_paths(file_path)
+        if implicit_paths:
+            self._preprocessor.include_paths = [
+                *include_paths,
+                *(path for path in implicit_paths if path not in include_paths),
+            ]
+        try:
+            processed = self._preprocessor.preprocess(code, file_path=file_path)
+        finally:
+            self._preprocessor.include_paths = include_paths
         self._ensure_version_first(processed)
         return processed
+
+    def _implicit_include_paths(self, file_path: Optional[str]) -> List[str]:
+        if file_path is None:
+            return []
+
+        include_paths: List[str] = []
+        current_dir = os.path.abspath(os.path.dirname(file_path))
+        include_paths.append(current_dir)
+        while True:
+            candidate = os.path.join(current_dir, "includes", "glsl")
+            if os.path.isdir(candidate):
+                include_paths.append(candidate)
+
+            parent_dir = os.path.dirname(current_dir)
+            if parent_dir == current_dir:
+                break
+            current_dir = parent_dir
+
+        return include_paths
 
     def _ensure_version_first(self, code: str):
         version_index = self._find_version_index(code)

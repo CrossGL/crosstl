@@ -231,24 +231,45 @@ class SlangToCrossGLConverter:
         }
 
     def generate(self, ast):
+        self.raise_for_unsupported_conformance_constructs(ast)
+        exported_functions = [
+            exp.item
+            for exp in getattr(ast, "exports", [])
+            if isinstance(getattr(exp, "item", None), FunctionNode)
+        ]
         self.user_function_names = {
-            getattr(func, "name", None) for func in getattr(ast, "functions", [])
+            getattr(func, "name", None)
+            for func in [*getattr(ast, "functions", []), *exported_functions]
         }
         self.user_function_names.discard(None)
         self.sampleable_resource_scopes = [self.collect_sampleable_resources(ast)]
         code = "shader main {\n"
         if ast.imports:
             for imp in ast.imports:
-                code += f"    import {imp.module_name};\n"
+                code += f"    import {self.format_import_path(imp.module_name)};\n"
+            code += "\n"
+        if getattr(ast, "includes", None):
+            for include in ast.includes:
+                code += f"    import {self.format_import_path(include)};\n"
             code += "\n"
         if ast.exports:
             for exp in ast.exports:
-                code += f"    export {exp.item};\n"
+                code += self.generate_export(exp)
             code += "\n"
         for node in ast.typedefs:
             code += (
                 f"    typedef {self.map_type(node.original_type)} {node.new_type};\n"
             )
+        for enum in getattr(ast, "enums", []) or []:
+            if isinstance(enum, EnumNode):
+                code += f"    enum {enum.name} {{\n"
+                for member_name, member_value in enum.members:
+                    if member_value is None:
+                        code += f"        {member_name},\n"
+                    else:
+                        value = self.generate_expression(member_value)
+                        code += f"        {member_name} = {value},\n"
+                code += "    }\n"
         for node in ast.structs:
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"
@@ -292,6 +313,82 @@ class SlangToCrossGLConverter:
         code += "}\n"
         return code
 
+    def raise_for_unsupported_conformance_constructs(self, ast):
+        constructs = []
+
+        for interface in getattr(ast, "interfaces", []) or []:
+            constructs.append(f"interface {interface.name}")
+
+        for struct in getattr(ast, "structs", []) or []:
+            conformances = getattr(struct, "conformances", []) or []
+            if conformances:
+                constructs.append(f"struct {struct.name} : {', '.join(conformances)}")
+
+        for extension in getattr(ast, "extensions", []) or []:
+            conformances = getattr(extension, "conformances", []) or []
+            suffix = f" : {', '.join(conformances)}" if conformances else ""
+            constructs.append(f"extension {extension.extended_type}{suffix}")
+
+        for function in getattr(ast, "functions", []) or []:
+            constructs.extend(self.format_function_generic_constraints(function))
+
+        for export in getattr(ast, "exports", []) or []:
+            item = getattr(export, "item", None)
+            if isinstance(item, InterfaceNode):
+                constructs.append(f"interface {item.name}")
+            elif isinstance(item, ExtensionNode):
+                conformances = getattr(item, "conformances", []) or []
+                suffix = f" : {', '.join(conformances)}" if conformances else ""
+                constructs.append(f"extension {item.extended_type}{suffix}")
+            elif isinstance(item, StructNode):
+                conformances = getattr(item, "conformances", []) or []
+                if conformances:
+                    constructs.append(f"struct {item.name} : {', '.join(conformances)}")
+            elif isinstance(item, FunctionNode):
+                constructs.extend(self.format_function_generic_constraints(item))
+
+        if constructs:
+            details = ", ".join(constructs)
+            raise NotImplementedError(
+                "Reverse Slang to CrossGL does not support "
+                f"interface/conformance constructs: {details}"
+            )
+
+    def format_function_generic_constraints(self, function):
+        constraints = []
+        for constraint in getattr(function, "generic_constraints", []) or []:
+            constraints.append(
+                f"function {function.name} where "
+                f"{constraint.parameter} : {constraint.constraint_type}"
+            )
+        return constraints
+
+    def format_import_path(self, path):
+        path = str(path)
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", path):
+            return path
+        escaped = path.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    def generate_export(self, exp):
+        item = exp.item
+        if isinstance(item, FunctionNode):
+            return self.generate_function(item)
+        if isinstance(item, StructNode):
+            code = f"    struct {item.name} {{\n"
+            for member in item.members:
+                semantic = self.map_semantic(member.semantic)
+                semantic_suffix = f" {semantic}" if semantic else ""
+                code += (
+                    f"        {self.map_type(member.vtype)} {member.name}"
+                    f"{self.format_array_suffixes(member)}{semantic_suffix};\n"
+                )
+            code += "    }\n"
+            return code
+        if isinstance(item, (VariableNode, AssignmentNode)):
+            return self.generate_global_variable(item)
+        return ""
+
     def generate_numthreads_layout(self, func):
         numthreads = getattr(func, "numthreads", None)
         if not numthreads:
@@ -307,7 +404,8 @@ class SlangToCrossGLConverter:
         code = ""
         for node in ast.cbuffers:
             if isinstance(node, StructNode):
-                code += f"    cbuffer {node.name} {{\n"
+                metadata = self.format_variable_metadata(node)
+                code += f"    cbuffer {node.name}{metadata} {{\n"
                 for member in node.members:
                     code += (
                         f"        {self.map_type(member.vtype)} {member.name}"
@@ -485,11 +583,33 @@ class SlangToCrossGLConverter:
 
     def generate_global_variable(self, node):
         if isinstance(node, AssignmentNode):
-            return f"    {self.generate_assignment(node, False)};\n"
+            left = self.generate_variable_declaration(node.left)
+            right = self.generate_expression(node.right, False)
+            return f"    {left} {node.operator} {right};\n"
+        return f"    {self.generate_variable_declaration(node)};\n"
+
+    def generate_variable_declaration(self, node):
         return (
-            f"    {self.map_type(node.vtype)} "
-            f"{node.name}{self.format_array_suffixes(node)};\n"
+            f"{self.map_type(node.vtype)} "
+            f"{node.name}{self.format_array_suffixes(node)}"
+            f"{self.format_variable_metadata(node)}"
         )
+
+    def format_variable_metadata(self, node):
+        metadata = []
+        for attribute in getattr(node, "attributes", []) or []:
+            name = str(attribute.get("name", "")).lower()
+            arguments = attribute.get("arguments", [])
+            if name == "vk::binding" and arguments:
+                if len(arguments) > 1:
+                    metadata.append(f"@set({arguments[1]})")
+                metadata.append(f"@binding({arguments[0]})")
+            elif name == "vk::push_constant":
+                metadata.append("@push_constant")
+
+        if not metadata:
+            return ""
+        return " " + " ".join(metadata)
 
     def binary_precedence(self, op):
         return self.BINARY_PRECEDENCE.get(op, 0)
@@ -536,6 +656,9 @@ class SlangToCrossGLConverter:
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             return f"{left} {expr.operator} {right}"
+        elif isinstance(expr, CastNode):
+            value = self.generate_expression(expr.expression, is_main)
+            return f"{self.map_type(expr.target_type)}({value})"
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand, is_main)
             if isinstance(expr.operand, (AssignmentNode, BinaryOpNode)):
@@ -582,6 +705,10 @@ class SlangToCrossGLConverter:
             return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object, is_main)
+            if isinstance(
+                expr.object, (AssignmentNode, BinaryOpNode, TernaryOpNode, UnaryOpNode)
+            ):
+                obj = f"({obj})"
             return f"{obj}.{expr.member}"
         elif isinstance(expr, ArrayAccessNode):
             array = self.generate_expression(expr.array, is_main)
@@ -642,10 +769,15 @@ class SlangToCrossGLConverter:
         """Map a Slang type name to the closest CrossGL type name."""
         if slang_type:
             slang_type = slang_type.strip()
+            pointer_suffix = ""
+            while slang_type.endswith("*"):
+                pointer_suffix += "*"
+                slang_type = slang_type[:-1].strip()
             base_type = slang_type.split("<", 1)[0].strip()
-            return self.type_map.get(
+            mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
+            return f"{mapped_type}{pointer_suffix}"
         return slang_type
 
     def collect_sampleable_resources(self, ast):

@@ -9,9 +9,11 @@ from crosstl.backend.HIP.HipAst import (
     DeleteNode,
     DesignatedInitializerNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
+    HipAsmNode,
     HipBuiltinNode,
     IfNode,
     InitializerListNode,
@@ -21,6 +23,7 @@ from crosstl.backend.HIP.HipAst import (
     NewNode,
     RangeForNode,
     ReturnNode,
+    StructNode,
     SwitchNode,
     SyncNode,
     TernaryOpNode,
@@ -86,6 +89,54 @@ class TestHipParser:
         assert loop.init.name == "i"
         assert isinstance(loop.body[0], FunctionCallNode)
 
+    def test_cpp_stream_expression_can_continue_after_newline(self):
+        code = """
+        void host() {
+            constexpr size_t elements_to_print = 10;
+            std::cout << "First " << elements_to_print << " elements: "
+                      << format_range(begin, end) << std::endl;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert isinstance(body[1], BinaryOpNode)
+        assert body[1].op == "<<"
+
+    def test_templated_kernel_launch_can_start_on_next_line(self):
+        code = """
+        template <int width>
+        __global__ void matrix_transpose_kernel(float* out, float* input) {
+        }
+
+        void host(float* out, float* input) {
+            matrix_transpose_kernel<16>
+                <<<grid_dim, block_dim, 0, hipStreamDefault>>>(out, input);
+        }
+        """
+        ast = self.parse_code(code)
+
+        launch = ast.statements[1].body[0]
+        assert isinstance(launch, KernelLaunchNode)
+        assert launch.kernel_name == "matrix_transpose_kernel<16>"
+
+    def test_else_can_follow_block_on_next_line(self):
+        code = """
+        void host(unsigned int errors) {
+            if (errors) {
+                return;
+            }
+            else {
+                report_success();
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        branch = ast.statements[0].body[0]
+        assert isinstance(branch, IfNode)
+        assert branch.else_body
+
     def test_hip_flat_builtin_alias_parsing(self):
         code = """
         __global__ void kernel(float* out) {
@@ -112,6 +163,263 @@ class TestHipParser:
         assert right_value.builtin_name == "warpSize"
         assert right_value.component is None
 
+    def test_public_rocm_examples_device_global_variables_parse_as_globals(self):
+        code = """
+        __device__ auto load_callback_dev = load_callback;
+        __device__ __constant__ constexpr float c0 = 299792458.0f;
+
+        __device__ float add(float a, float b) {
+            return a + b;
+        }
+        """
+        ast = self.parse_code(code)
+
+        callback = ast.statements[0]
+        constant = ast.statements[1]
+        function = ast.statements[2]
+
+        assert isinstance(callback, VariableNode)
+        assert callback.name == "load_callback_dev"
+        assert callback.vtype == "auto"
+        assert callback.qualifiers == ["__device__"]
+        assert callback.value == "load_callback"
+
+        assert isinstance(constant, VariableNode)
+        assert constant.name == "c0"
+        assert constant.vtype == "float"
+        assert constant.qualifiers == ["__device__", "__constant__", "constexpr"]
+        assert constant.value == "299792458.0f"
+
+        assert isinstance(function, FunctionNode)
+        assert function.name == "add"
+        assert "__device__" in function.qualifiers
+
+    def test_public_rocm_bit_extract_fixed_width_pointer_declarations_parse(self):
+        code = """
+        __global__ void bit_extract_kernel(
+            uint32_t* d_output,
+            const uint32_t* d_input,
+            size_t size) {
+            uint32_t *d_local, *d_shadow;
+            d_output[0] = ((d_input[0] & 0xf00) >> 8);
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+        d_local, d_shadow, assignment = kernel.body
+
+        assert kernel.params[0] == {"type": "uint32_t *", "name": "d_output"}
+        assert kernel.params[1] == {"type": "const uint32_t *", "name": "d_input"}
+        assert isinstance(d_local, VariableNode)
+        assert d_local.vtype == "uint32_t *"
+        assert d_local.name == "d_local"
+        assert isinstance(d_shadow, VariableNode)
+        assert d_shadow.vtype == "uint32_t *"
+        assert d_shadow.name == "d_shadow"
+        assert isinstance(assignment, AssignmentNode)
+        assert assignment.right.op == ">>"
+
+    def test_public_rocm_bandwidth_enum_class_parse_as_top_level_declaration(self):
+        code = """
+        enum class MemoryMode : unsigned int
+        {
+            PAGED,
+            PINNED
+        };
+
+        void run_bandwidth_host_device(const MemoryMode memory_mode) {
+            if (memory_mode == MemoryMode::PAGED) {
+                return;
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        enum = ast.statements[0]
+        function = ast.statements[1]
+
+        assert isinstance(enum, EnumNode)
+        assert enum.name == "MemoryMode"
+        assert enum.members == [("PAGED", None), ("PINNED", None)]
+        assert enum.underlying_type == "unsigned int"
+        assert enum.is_scoped is True
+        assert function.params[0]["type"] == "const MemoryMode"
+        assert function.params[0]["name"] == "memory_mode"
+
+    def test_public_rocm_bandwidth_multiline_vector_return_type_parsing(self):
+        code = """
+        std::vector<double>
+            run_bandwidth_host_device(const std::vector<size_t>& sizes,
+                                      const unsigned int trails) {
+            const size_t size_in_bytes = 256;
+            const double bandwidth_achieved
+                = ((size_in_bytes * trails) / 1e9) / elapsed;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        body = function.body
+
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "std::vector<double>"
+        assert function.name == "run_bandwidth_host_device"
+        assert body[1].vtype == "const double"
+        assert body[1].name == "bandwidth_achieved"
+        assert isinstance(body[1].value, BinaryOpNode)
+
+    def test_public_rocm_runtime_compilation_adjacent_raw_kernel_string_parsing(self):
+        code = r"""
+        static constexpr auto saxpy_kernel{
+            "#include \"test_header.h\"\n"
+            "#include \"test_header1.h\"\n"
+            R"(
+        extern "C" __global__ void saxpy_kernel()
+        {
+        }
+        )"};
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0]
+        initializer = declaration.value
+
+        assert isinstance(declaration, VariableNode)
+        assert isinstance(initializer, InitializerListNode)
+        assert len(initializer.elements) == 1
+        assert "test_header1.h" in initializer.elements[0]
+        assert 'extern "C" __global__ void saxpy_kernel' in initializer.elements[0]
+
+    def test_public_rocm_opengl_interop_raw_shader_string_parsing(self):
+        code = """
+        constexpr const char* vertex_shader = R"(
+        #version 330 core
+
+        in float in_height;
+
+        void main()
+        {
+            gl_Position = vec4(in_height, 0, 1, 1);
+        }
+        )";
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.name == "vertex_shader"
+        assert declaration.vtype == "const char *"
+        assert declaration.value.startswith('R"(')
+        assert "#version 330 core" in declaration.value
+
+    def test_public_rocm_opengl_interop_unknown_pointer_return_type_parsing(self):
+        code = """
+        GLFWwindow* create_window(const int initial_width, const int initial_height)
+        {
+            return nullptr;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "GLFWwindow *"
+        assert function.name == "create_window"
+        assert function.params[0] == {"type": "const int", "name": "initial_width"}
+
+    def test_public_rocm_opengl_interop_unknown_pointer_local_declaration(self):
+        code = """
+        void host() {
+            GLFWwindow* const window = create_window(initial_width, initial_height);
+            foo * bar;
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0].body[0]
+        expression = ast.statements[0].body[1]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "GLFWwindow * const"
+        assert declaration.name == "window"
+        assert isinstance(declaration.value, FunctionCallNode)
+        assert isinstance(expression, BinaryOpNode)
+        assert expression.op == "*"
+
+    def test_public_rocm_opengl_interop_struct_constructor_body_skips_balanced(self):
+        code = """
+        struct renderer
+        {
+            GLuint vao;
+
+            renderer()
+            {
+                glGenVertexArrays(1, &this->vao);
+            }
+
+            renderer(const renderer&) = delete;
+        };
+
+        int main() {
+            return 0;
+        }
+        """
+        ast = self.parse_code(code)
+
+        struct = ast.statements[0]
+        function = ast.statements[1]
+
+        assert isinstance(struct, StructNode)
+        assert struct.name == "renderer"
+        assert len(struct.members) == 1
+        assert struct.members[0].name == "vao"
+        assert isinstance(function, FunctionNode)
+        assert function.name == "main"
+
+    def test_public_rocm_macro_call_statement_can_omit_semicolon(self):
+        code = """
+        void host(int num_streams, hipStream_t* streams) {
+            HIP_CHECK(hipGetLastError())
+            HIP_CHECK(hipMemcpy(dst, src, size, hipMemcpyDeviceToHost));
+            for(int i = 0; i < num_streams; i++)
+            {
+                HIP_CHECK(hipStreamDestroy(streams[i]))
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        first_call = ast.statements[0].body[0]
+        second_call = ast.statements[0].body[1]
+        loop = ast.statements[0].body[2]
+        statement = loop.body[0]
+
+        assert isinstance(first_call, FunctionCallNode)
+        assert first_call.name == "HIP_CHECK"
+        assert isinstance(second_call, FunctionCallNode)
+        assert second_call.name == "HIP_CHECK"
+        assert isinstance(loop, ForNode)
+        assert isinstance(statement, FunctionCallNode)
+        assert statement.name == "HIP_CHECK"
+
+    def test_dynamic_shared_memory_parsing_marks_extern_unsized_array(self):
+        code = """
+        __global__ void kernel() {
+            extern __shared__ float shared[];
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0].body[0]
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "float[]"
+        assert declaration.qualifiers == ["extern", "__shared__"]
+        assert declaration.is_extern_shared_memory is True
+        assert declaration.is_dynamic_shared_memory is True
+
     def test_hip_device_property_member_names_can_match_builtin_tokens(self):
         code = """
         void host(hipDeviceProp_t* props_ptr) {
@@ -134,6 +442,27 @@ class TestHipParser:
         assert pointer_warp_value.object == "props_ptr"
         assert pointer_warp_value.member == "warpSize"
         assert pointer_warp_value.is_pointer
+
+    def test_newline_split_initializer_and_builtin_named_members(self):
+        code = """
+        void host() {
+            hipChannelFormatDesc channel_desc
+                = hipCreateChannelDesc(8, 0, 0, 0, hipChannelFormatKindUnsigned);
+            hipKernelNodeParams params{};
+            params.gridDim = dim3(1, 1, 1);
+            params.blockDim = dim3(32, 1, 1);
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert body[0].name == "channel_desc"
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "hipCreateChannelDesc"
+        assert isinstance(body[2].left, MemberAccessNode)
+        assert body[2].left.member == "gridDim"
+        assert isinstance(body[3].left, MemberAccessNode)
+        assert body[3].left.member == "blockDim"
 
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         code = """
@@ -161,6 +490,64 @@ class TestHipParser:
         assert ast.statements[2].params[0]["type"] == "float[4]"
         assert ast.statements[2].body[0].vtype == "float[2]"
         assert isinstance(ast.statements[2].body[0].value, InitializerListNode)
+
+    def test_long_long_int_declarations_parsing(self):
+        code = """
+        void kernel() {
+            long long int start = 0;
+            unsigned long long int ticks = 1;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert body[0].vtype == "long long"
+        assert body[0].name == "start"
+        assert body[1].vtype == "unsigned long long"
+        assert body[1].name == "ticks"
+
+    def test_cpp_function_declarator_spacing_and_qualifiers(self):
+        code = """
+        template <typename T>
+        __global__
+        __launch_bounds__(512, 4)
+        void
+        vector_square(T *C_d, size_t N) {
+            C_d[0] = C_d[0];
+        }
+
+        __device__ void init_array(float * const a, const unsigned int arraySize) {
+            return;
+        }
+
+        __host__ __device__ constexpr int round_up(int number, int multiple) {
+            return number;
+        }
+
+        int main(void) {
+            constexpr unsigned int size = 1;
+            const unsigned blocks = 512;
+            return 0;
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+        init_array = ast.statements[1]
+        round_up = ast.statements[2]
+        main = ast.statements[3]
+
+        assert kernel.name == "vector_square"
+        assert kernel.attributes == ["__launch_bounds__(512, 4)"]
+        assert kernel.params[0]["type"] == "T *"
+        assert init_array.params[0]["type"] == "float * const"
+        assert init_array.params[1]["type"] == "const unsigned int"
+        assert round_up.name == "round_up"
+        assert "constexpr" in round_up.qualifiers
+        assert main.params == []
+        assert main.body[0].vtype == "unsigned int"
+        assert "constexpr" in main.body[0].qualifiers
+        assert main.body[1].vtype == "const unsigned int"
 
     def test_user_defined_atomic_name_is_not_parsed_as_builtin_atomic(self):
         code = """
@@ -378,6 +765,36 @@ class TestHipParser:
         assert launch.stream is None
         assert launch.args == ["data", "2.0f"]
 
+    def test_braced_dim3_kernel_launch_parsing(self):
+        code = """
+        __global__ void kernel() {
+        }
+
+        void host() {
+            kernel<<<dim3{1, 1, 1}, dim3{32, 1, 1}>>>();
+            auto block = dim3{64, 1, 1};
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        host = next(
+            statement for statement in ast.statements if statement.name == "host"
+        )
+        launch = host.body[0]
+        assert isinstance(launch, KernelLaunchNode)
+        assert isinstance(launch.blocks, FunctionCallNode)
+        assert launch.blocks.name == "dim3"
+        assert launch.blocks.args == ["1", "1", "1"]
+        assert isinstance(launch.threads, FunctionCallNode)
+        assert launch.threads.name == "dim3"
+        assert launch.threads.args == ["32", "1", "1"]
+        assert isinstance(host.body[1].value, FunctionCallNode)
+        assert host.body[1].value.name == "dim3"
+        assert host.body[1].value.args == ["64", "1", "1"]
+
     def test_computed_kernel_launch_config_parsing(self):
         code = """
         void host(float* data, int n, int stream) {
@@ -576,6 +993,29 @@ class TestHipParser:
         assert isinstance(body[2].right, FunctionCallNode)
         assert body[2].right.name == "hipDeviceSynchronize"
 
+    def test_cpp17_if_initializer_parsing(self):
+        code = """
+        int main() {
+            if(auto err = hipDeviceSynchronize(); err != hipSuccess)
+                return 1;
+            return 0;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert isinstance(body[0], VariableNode)
+        assert body[0].vtype == "auto"
+        assert body[0].name == "err"
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "hipDeviceSynchronize"
+        assert isinstance(body[1], IfNode)
+        assert body[1].condition.left == "err"
+        assert body[1].condition.op == "!="
+        assert body[1].condition.right == "hipSuccess"
+        assert isinstance(body[1].if_body, ReturnNode)
+        assert body[2].value == "0"
+
     def test_std_chrono_benchmark_expressions_parsing(self):
         code = """
         void bench() {
@@ -750,6 +1190,77 @@ class TestHipParser:
         assert ast.statements[0].params[0]["type"] == "std::vector<float> &"
         assert ast.statements[1].return_type == "size_t"
         assert ast.statements[1].params[0]["type"] == "const std::vector<float> &"
+
+    def test_public_rocm_vulkan_qualified_constructor_parameters_parsing(self):
+        code = """
+        base_dispatch::base_dispatch(PFN_vkGetInstanceProcAddr loader)
+            : get_instance_proc_addr(loader), status(0)
+        {
+            this->get_instance_proc_addr = loader;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        constructor = ast.statements[0]
+        assert constructor.name == "base_dispatch::base_dispatch"
+        assert constructor.return_type == ""
+        assert constructor.params == [
+            {"type": "PFN_vkGetInstanceProcAddr", "name": "loader"}
+        ]
+
+    def test_default_parameter_values_are_skipped_in_parameter_lists(self):
+        code = """
+        VkInstance create_instance(const bool with_validation = true,
+                                   const int flags = make_flags(1, 2)) {
+            return instance;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        function = ast.statements[0]
+        assert function.params == [
+            {"type": "const bool", "name": "with_validation"},
+            {"type": "const int", "name": "flags"},
+        ]
+
+    def test_resource_keyword_can_be_contextual_variable_name(self):
+        code = """
+        VkSurfaceKHR create_surface() {
+            VkSurfaceKHR surface;
+            sink(&surface);
+            return surface;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        body = ast.statements[0].body
+        assert body[0].vtype == "VkSurfaceKHR"
+        assert body[0].name == "surface"
+        assert body[2].value == "surface"
+
+    def test_scoped_member_function_definition_with_trailing_const(self):
+        code = """
+        VkSurfaceFormatKHR graphics_context::find_surface_format() const {
+            return format;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        function = ast.statements[0]
+        assert function.return_type == "VkSurfaceFormatKHR"
+        assert function.name == "graphics_context::find_surface_format"
 
     def test_restrict_pointer_qualifier_parsing(self):
         code = """
@@ -1035,6 +1546,48 @@ class TestHipParser:
         assert body[4].vtype == "Table"
         assert body[5].name == "consume"
 
+    def test_public_rocm_device_query_namespace_block_parsing(self):
+        code = """
+        namespace
+        {
+        constexpr unsigned int col_w = 26;
+
+        double khz_to_mhz(size_t f)
+        {
+            return f / 1000.;
+        }
+        }
+
+        namespace helpers
+        {
+        __device__ float add(float a, float b)
+        {
+            return a + b;
+        }
+        }
+
+        int main()
+        {
+            return 0;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.statements) == 4
+        assert isinstance(ast.statements[0], VariableNode)
+        assert ast.statements[0].name == "col_w"
+        assert ast.statements[0].qualifiers == ["constexpr"]
+        assert isinstance(ast.statements[1], FunctionNode)
+        assert ast.statements[1].name == "khz_to_mhz"
+        assert isinstance(ast.statements[2], FunctionNode)
+        assert ast.statements[2].name == "add"
+        assert "__device__" in ast.statements[2].qualifiers
+        assert isinstance(ast.statements[3], FunctionNode)
+        assert ast.statements[3].name == "main"
+
     def test_typedef_multi_declarator_alias_parsing(self):
         code = """
         typedef float Real, *RealPtr;
@@ -1073,6 +1626,39 @@ class TestHipParser:
             "BufferPtr",
         ]
         assert function.body[5].name == "consume"
+
+    def test_typedef_struct_alias_parsing(self):
+        code = """
+        typedef struct Existing *ExistingPtr;
+        typedef struct {
+            unsigned int x;
+            unsigned int y;
+        } Pair;
+
+        __global__ void kernel(Pair* pairs) {
+            pairs[threadIdx.x].x = 1;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        alias = ast.statements[0]
+        pair = ast.statements[1]
+        kernel = ast.statements[2]
+        assert isinstance(alias, TypeAliasNode)
+        assert alias.name == "ExistingPtr"
+        assert alias.alias_type == "struct Existing *"
+        assert isinstance(pair, StructNode)
+        assert pair.name == "Pair"
+        assert [(member.vtype, member.name) for member in pair.members] == [
+            ("unsigned int", "x"),
+            ("unsigned int", "y"),
+        ]
+        assert isinstance(kernel, KernelNode)
+        assert kernel.params[0]["type"] == "Pair *"
+        assert kernel.params[0]["name"] == "pairs"
 
     def test_type_alias_c_style_cast_parsing(self):
         code = """
@@ -1318,6 +1904,78 @@ class TestHipParser:
         assert ast.statements[6].name == "bounded"
         assert ast.statements[6].attributes == ["__launch_bounds__(256, 2)"]
 
+    def test_launch_bounds_after_return_type_kernel_parsing(self):
+        code = """
+        __global__ void __launch_bounds__(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)
+        documented_kernel(float* out) {
+            out[threadIdx.x] = 1.0f;
+        }
+
+        __global__ static __launch_bounds__(BlockSize) void reduction_kernel(float* out) {
+            out[threadIdx.x] = 2.0f;
+        }
+        """
+        ast = self.parse_code(code)
+
+        documented_kernel = ast.statements[0]
+        reduction_kernel = ast.statements[1]
+
+        assert isinstance(documented_kernel, KernelNode)
+        assert documented_kernel.name == "documented_kernel"
+        assert documented_kernel.attributes == [
+            "__launch_bounds__(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)"
+        ]
+        assert documented_kernel.params[0]["type"] == "float *"
+
+        assert isinstance(reduction_kernel, KernelNode)
+        assert reduction_kernel.name == "reduction_kernel"
+        assert reduction_kernel.attributes == ["__launch_bounds__(BlockSize)"]
+        assert reduction_kernel.params[0]["type"] == "float *"
+
+    def test_c_linkage_kernel_parsing(self):
+        code = """
+        extern "C"
+        __global__ void vector_add(float* output, float* input1, float* input2, size_t size) {
+            int i = threadIdx.x;
+            if (i < size) {
+                output[i] = input1[i] + input2[i];
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+        assert isinstance(kernel, KernelNode)
+        assert kernel.name == "vector_add"
+        assert kernel.qualifiers == ["extern", "__global__"]
+        assert kernel.linkage == "C"
+        assert kernel.params == [
+            {"type": "float *", "name": "output"},
+            {"type": "float *", "name": "input1"},
+            {"type": "float *", "name": "input2"},
+            {"type": "size_t", "name": "size"},
+        ]
+
+    def test_c_linkage_block_parsing(self):
+        code = """
+        extern "C" {
+        __global__ void kernel(float* out) {
+            out[threadIdx.x] = 1.0f;
+        }
+        void launch_wrapper() {}
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+        wrapper = ast.statements[1]
+        assert isinstance(kernel, KernelNode)
+        assert kernel.qualifiers == ["extern", "__global__"]
+        assert kernel.linkage == "C"
+        assert isinstance(wrapper, FunctionNode)
+        assert wrapper.qualifiers == ["extern"]
+        assert wrapper.linkage == "C"
+
     def test_hip_opaque_and_declared_type_pointer_declarations_parsing(self):
         code = """
         struct Pair {
@@ -1466,6 +2124,31 @@ class TestHipParser:
         assert isinstance(unmasked_sync, SyncNode)
         assert unmasked_sync.sync_type == "__syncwarp"
         assert unmasked_sync.args == []
+
+    def test_inline_assembly_parsing(self):
+        code = r"""
+        __global__ void asmKernel(float* out, float in) {
+            asm volatile("v_mov_b32_e32 %0, %1" : "=v"(out[0]) : "v"(in));
+            asm __volatile__("s_waitcnt vmcnt(0)" ::: "memory");
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        kernel = ast.statements[0]
+        asm_statements = [stmt for stmt in kernel.body if isinstance(stmt, HipAsmNode)]
+        assert len(asm_statements) == 2
+        assert asm_statements[0].is_volatile is True
+        assert asm_statements[0].template == '"v_mov_b32_e32 %0, %1"'
+        assert asm_statements[0].outputs[0].constraint == '"=v"'
+        assert asm_statements[0].outputs[0].expression.array == "out"
+        assert asm_statements[0].inputs[0].constraint == '"v"'
+        assert asm_statements[0].inputs[0].expression == "in"
+        assert asm_statements[1].outputs == []
+        assert asm_statements[1].inputs == []
+        assert asm_statements[1].clobbers == ['"memory"']
 
     def test_c_style_for_structured_assignment_updates_parsing(self):
         code = """
@@ -1633,8 +2316,11 @@ class TestHipParser:
         code = """
         unsigned int helper() {
             unsigned int mask = 0xffu;
+            unsigned int max_extent = 0xFFFF'FFFF;
             unsigned int bits = 0b1010u;
+            unsigned int lanes = 0b1010'0101u;
             unsigned int oct = 0777u;
+            unsigned int count = 1'000u;
             float x = 1e-3f;
             float y = .5f;
             return mask | bits | oct;
@@ -1647,10 +2333,13 @@ class TestHipParser:
 
         body = ast.statements[0].body
         assert body[0].value == "0xffu"
-        assert body[1].value == "0b1010u"
-        assert body[2].value == "0777u"
-        assert body[3].value == "1e-3f"
-        assert body[4].value == ".5f"
+        assert body[1].value == "0xFFFF'FFFF"
+        assert body[2].value == "0b1010u"
+        assert body[3].value == "0b1010'0101u"
+        assert body[4].value == "0777u"
+        assert body[5].value == "1'000u"
+        assert body[6].value == "1e-3f"
+        assert body[7].value == ".5f"
 
     def test_boolean_null_and_character_literal_parsing(self):
         code = r"""
@@ -1659,6 +2348,8 @@ class TestHipParser:
             bool no = false;
             char c = 'x';
             char escaped = '\n';
+            char hex = '\x7f';
+            char oct = '\377';
             int* p = nullptr;
             int* q = NULL;
             return yes && !no;
@@ -1674,9 +2365,11 @@ class TestHipParser:
         assert body[1].value == "false"
         assert body[2].value == "'x'"
         assert body[3].value == "'\\n'"
-        assert body[4].value == "nullptr"
-        assert body[5].value == "NULL"
-        assert body[6].value.op == "&&"
+        assert body[4].value == "'\\x7f'"
+        assert body[5].value == "'\\377'"
+        assert body[6].value == "nullptr"
+        assert body[7].value == "NULL"
+        assert body[8].value.op == "&&"
 
     def test_control_flow_and_cast_expression_parsing(self):
         code = """

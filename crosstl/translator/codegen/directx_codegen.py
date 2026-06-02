@@ -44,7 +44,6 @@ from ..validation import (
     collect_cbuffer_member_global_conflicts,
     collect_duplicate_cbuffer_member_names,
     collect_duplicate_cbuffer_names,
-    collect_non_resource_global_resource_shadows,
     expression_debug_name,
     texture_bias_argument_index,
     texture_compare_argument_index,
@@ -718,6 +717,8 @@ class HLSLCodeGen:
             "feedbackTexture2DArray": (
                 "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIN_MIP>"
             ),
+            "accelerationStructure": "RaytracingAccelerationStructure",
+            "accelerationStructureEXT": "RaytracingAccelerationStructure",
             "iimage1D": "RWTexture1D<int>",
             "iimage1DArray": "RWTexture1DArray<int>",
             "iimage2D": "RWTexture2D<int>",
@@ -1173,6 +1174,7 @@ class HLSLCodeGen:
         texture_registers = {}
         sampler_registers = {}
         uav_registers = {}
+        cbuffer_registers = {}
         used_resource_registers = {}
         self.reserve_explicit_global_resource_registers(
             global_vars, used_resource_registers
@@ -1318,6 +1320,8 @@ class HLSLCodeGen:
                 or self.is_multisample_storage_image_resource_type(mapped_type)
                 or self.is_hlsl_acceleration_structure_type(mapped_type)
                 or self.is_hlsl_uav_buffer_type(mapped_type)
+                or self.is_hlsl_constant_buffer_type(mapped_type)
+                or self.is_hlsl_texture_buffer_type(mapped_type)
                 or self.is_hlsl_readonly_buffer_type(mapped_type)
                 or mapped_type in ["SamplerState", "SamplerComparisonState"]
             )
@@ -1450,6 +1454,56 @@ class HLSLCodeGen:
                 register = self.resource_register_suffix("u", binding, node)
                 self.advance_resource_register(
                     uav_registers, space, binding, resource_count
+                )
+            elif self.is_hlsl_constant_buffer_type(mapped_type):
+                space = self.explicit_resource_register_space(node)
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "buffer"}, ("b",)
+                )
+                if binding is None:
+                    binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "b",
+                        cbuffer_registers,
+                        space,
+                        resource_count,
+                    )
+                self.reserve_resource_register_range(
+                    used_resource_registers,
+                    "b",
+                    binding,
+                    resource_count,
+                    var_name,
+                    space,
+                )
+                register = self.resource_register_suffix("b", binding, node)
+                self.advance_resource_register(
+                    cbuffer_registers, space, binding, resource_count
+                )
+            elif self.is_hlsl_texture_buffer_type(mapped_type):
+                space = self.explicit_resource_register_space(node)
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "texture"}, ("t",)
+                )
+                if binding is None:
+                    binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "t",
+                        texture_registers,
+                        space,
+                        resource_count,
+                    )
+                self.reserve_resource_register_range(
+                    used_resource_registers,
+                    "t",
+                    binding,
+                    resource_count,
+                    var_name,
+                    space,
+                )
+                register = self.resource_register_suffix("t", binding, node)
+                self.advance_resource_register(
+                    texture_registers, space, binding, resource_count
                 )
             elif self.is_hlsl_readonly_buffer_type(mapped_type):
                 space = self.explicit_resource_register_space(node)
@@ -2687,6 +2741,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ast, target_stage
         )
 
+    def is_hlsl_tbuffer_node(self, node):
+        return any(
+            str(getattr(attr, "name", "")).lower() == "tbuffer"
+            for attr in getattr(node, "attributes", []) or []
+        )
+
     def collect_cbuffer_member_types(self, cbuffers):
         member_types = {}
         for cbuffer in cbuffers or []:
@@ -2772,45 +2832,53 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_cbuffer_registers = {}
         buffer_registers = {}
         for node in cbuffers:
+            register_prefix = "t" if self.is_hlsl_tbuffer_node(node) else "b"
             space = self.explicit_resource_register_space(node)
             binding = self.explicit_resource_binding_index(
-                node, {"binding", "buffer"}, ("b",)
+                node, {"binding", "buffer"}, (register_prefix,)
             )
             if binding is None:
                 continue
             self.reserve_resource_register_range(
                 used_cbuffer_registers,
-                "b",
+                register_prefix,
                 binding,
                 1,
                 node.name,
                 space,
             )
         for node in cbuffers:
+            is_tbuffer = self.is_hlsl_tbuffer_node(node)
+            buffer_keyword = "tbuffer" if is_tbuffer else "cbuffer"
+            register_prefix = "t" if is_tbuffer else "b"
             space = self.explicit_resource_register_space(node)
             binding = self.explicit_resource_binding_index(
-                node, {"binding", "buffer"}, ("b",)
+                node, {"binding", "buffer"}, (register_prefix,)
             )
             if binding is None:
+                cursor_key = (register_prefix, space)
                 binding = self.next_available_resource_register(
                     used_cbuffer_registers,
-                    "b",
-                    buffer_registers,
+                    register_prefix,
+                    {space: buffer_registers.get(cursor_key, 0)},
                     space,
                     1,
                 )
             self.reserve_resource_register_range(
                 used_cbuffer_registers,
-                "b",
+                register_prefix,
                 binding,
                 1,
                 node.name,
                 space,
             )
-            buffer_registers[space] = max(buffer_registers.get(space, 0), binding + 1)
-            register = self.resource_register_suffix("b", binding, node)
+            cursor_key = (register_prefix, space)
+            buffer_registers[cursor_key] = max(
+                buffer_registers.get(cursor_key, 0), binding + 1
+            )
+            register = self.resource_register_suffix(register_prefix, binding, node)
             if isinstance(node, StructNode):
-                code += f"cbuffer {node.name}{register} {{\n"
+                code += f"{buffer_keyword} {node.name}{register} {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
@@ -2838,7 +2906,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             elif hasattr(node, "name") and hasattr(
                 node, "members"
             ):  # Generic cbuffer handling
-                code += f"cbuffer {node.name}{register} {{\n"
+                code += f"{buffer_keyword} {node.name}{register} {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
                         element_type = getattr(
@@ -3199,10 +3267,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         wave_size_attribute = self.generate_hlsl_wave_size_attribute(
             func, effective_shader_type
         )
+        root_signature_attribute = self.generate_hlsl_root_signature_attribute(func)
 
         if effective_shader_type in shader_map:
             return_semantic_attr = self.map_semantic(return_semantic)
             code += f"// {effective_shader_type.capitalize()} Shader\n"
+            code += root_signature_attribute
             if effective_shader_type == "compute":
                 self.validate_hlsl_stage_parameter_requirements(
                     func, effective_shader_type
@@ -3215,6 +3285,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else:
             shader_attr = shader_attr_map.get(effective_shader_type)
             self.validate_hlsl_stage_requirements(func, effective_shader_type)
+            code += root_signature_attribute
             code += self.generate_stage_numthreads(
                 func, effective_shader_type, execution_config
             )
@@ -6184,17 +6255,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return False
 
     def validate_global_resource_shadows(self, ast):
-        conflicts = collect_non_resource_global_resource_shadows(
-            ast,
-            self.collect_global_resource_names(ast),
-            self.is_resource_parameter_type,
-        )
-        if conflicts:
-            names = ", ".join(sorted(conflicts))
-            raise ValueError(
-                "Non-resource local declaration(s) shadow DirectX global resource(s): "
-                f"{names}"
-            )
+        return
 
     def validate_explicit_sampler_role_conflicts(self, ast):
         global_sampler_names = self.collect_global_sampler_names(ast)
@@ -7061,6 +7122,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
 
         sampler_name = self.expression_name(args[1])
+        if sampler_name in self.local_variable_types:
+            sampler_type = self.local_variable_types.get(sampler_name)
+            return sampler_type is not None and self.is_sampler_type(sampler_type)
         if sampler_name in sampler_names:
             return True
         sampler_type = self.expression_result_type(args[1])
@@ -7170,6 +7234,33 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if normalized in valid_names:
             return normalized
         return None
+
+    def hlsl_root_signature_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+
+        normalized = str(attr_name).lower()
+        if normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+        return normalized in {"rootsignature", "root_signature"}
+
+    def generate_hlsl_root_signature_attribute(self, func):
+        for attr in getattr(func, "attributes", []) or []:
+            if not self.hlsl_root_signature_attribute(attr):
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                return "[RootSignature()]\n"
+            argument = arguments[0]
+            value = self.hlsl_stage_attribute_value_to_string(argument)
+            literal_type = getattr(argument, "literal_type", None)
+            literal_type_name = str(getattr(literal_type, "name", literal_type))
+            if literal_type_name == "string":
+                escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+                value = f'"{escaped}"'
+            return f"[RootSignature({value})]\n"
+        return ""
 
     def hlsl_stage_attribute_names(self, func):
         names = set()
@@ -7915,6 +8006,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"must be {expected_description}"
                 )
 
+    def validate_hlsl_semantic_type_one_of(
+        self, parameters, shader_type, semantic, expected_types, expected_description
+    ):
+        for parameter in parameters:
+            if not self.hlsl_parameter_has_semantic(parameter, semantic):
+                continue
+
+            base_type, array_suffix = self.hlsl_parameter_mapped_base_and_array_suffix(
+                parameter
+            )
+            if base_type is None:
+                continue
+            if array_suffix or base_type not in expected_types:
+                raise ValueError(
+                    f"DirectX {shader_type} stage {semantic} "
+                    f"parameter '{parameter.name}' "
+                    f"must be {expected_description}"
+                )
+
     def validate_hlsl_thread_system_value_types(self, parameters, shader_type):
         self.validate_hlsl_exact_semantic_type(
             parameters, shader_type, "SV_GroupIndex", "uint", "scalar uint"
@@ -7947,7 +8057,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def validate_hlsl_compute_system_value_types(self, parameters):
-        self.validate_hlsl_thread_system_value_types(parameters, "compute")
+        self.validate_hlsl_exact_semantic_type(
+            parameters, "compute", "SV_GroupIndex", "uint", "scalar uint"
+        )
+        for semantic in ("SV_GroupID", "SV_GroupThreadID"):
+            self.validate_hlsl_semantic_type_one_of(
+                parameters,
+                "compute",
+                semantic,
+                {"uint2", "uint3"},
+                "uint2 or uint3",
+            )
+        self.validate_hlsl_exact_semantic_type(
+            parameters, "compute", "SV_DispatchThreadID", "uint3", "uint3"
+        )
 
     def hlsl_ray_stage_types(self):
         return {
@@ -12629,6 +12752,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         sampler_name = self.expression_name(args[1]) or self.generate_expression(
             args[1]
         )
+        if sampler_name in self.local_variable_types:
+            sampler_type = self.local_variable_types.get(sampler_name)
+            return sampler_type is not None and self.is_sampler_type(sampler_type)
         if (
             sampler_name in self.sampler_variables
             or sampler_name in self.current_sampler_parameters
@@ -12714,6 +12840,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             elif self.is_hlsl_uav_buffer_type(mapped_type):
                 prefix = "u"
                 attribute_names = {"binding", "texture", "uav"}
+            elif self.is_hlsl_constant_buffer_type(mapped_type):
+                prefix = "b"
+                attribute_names = {"binding", "buffer"}
+            elif self.is_hlsl_texture_buffer_type(mapped_type):
+                prefix = "t"
+                attribute_names = {"binding", "texture"}
             elif self.is_hlsl_readonly_buffer_type(mapped_type):
                 prefix = "t"
                 attribute_names = {"binding", "texture"}
@@ -13019,6 +13151,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def texture_resource_type(self, texture_arg):
         texture_name = self.expression_name(texture_arg)
         if texture_name:
+            local_type = self.local_variable_types.get(texture_name)
+            if local_type is not None and not self.is_texture_or_image_type(local_type):
+                return None
             texture_type = self.current_texture_parameters.get(
                 texture_name, self.texture_variable_types.get(texture_name)
             )
@@ -13825,8 +13960,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def validate_image_store_value_shape(self, image_type, image_format, value_arg):
         expected_channels = self.image_store_channel_count(image_type, image_format)
+        actual_channels = self.expression_component_count(value_arg)
+        if self.allows_three_component_image_value_padding(
+            expected_channels, actual_channels
+        ):
+            return
         value_channels = image_store_value_shape_mismatch(
-            expected_channels, self.expression_component_count(value_arg)
+            expected_channels, actual_channels
         )
         if value_channels is None:
             return
@@ -13882,6 +14022,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         expected_channels = self.expected_component_count()
         loaded_channels = self.image_load_channel_count(image_type, image_format)
+        if self.allows_three_component_image_value_padding(
+            loaded_channels, expected_channels
+        ):
+            return
         expected_channels = image_load_result_shape_mismatch(
             loaded_channels,
             expected_channels,
@@ -13893,6 +14037,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "DirectX", format_label, loaded_channels, expected_channels
             )
         )
+
+    def allows_three_component_image_value_padding(
+        self, image_channels, value_channels
+    ):
+        return image_channels == 4 and value_channels == 3
+
+    def image_load_component_suffix(self, image_type, image_format):
+        expected_channels = self.expected_component_count()
+        loaded_channels = self.image_load_channel_count(image_type, image_format)
+        if self.allows_three_component_image_value_padding(
+            loaded_channels, expected_channels
+        ):
+            return ".xyz"
+        return ""
+
+    def three_component_image_store_constructor(self, texture_type):
+        constructor = self.four_component_image_store_constructor(texture_type)
+        if constructor is None:
+            return None
+        zero_value = self.image_store_zero_values_by_kind().get(
+            self.hlsl_storage_image_component_kind(texture_type)
+        )
+        if zero_value is None:
+            return None
+        return constructor, zero_value
 
     def texture_query_dimension(self, texture_type):
         texture_type = self.sampled_texture_shape_type(texture_type)
@@ -16464,6 +16633,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 or self.hlsl_mesh_parameter_role_attribute_name(attr)
                 or self.hlsl_mesh_payload_parameter_attribute_name(attr)
                 or self.is_hlsl_resource_array_size_marker(node, attr)
+                or self.hlsl_root_signature_attribute(attr)
             ):
                 continue
             if hasattr(attr, "name"):
@@ -16478,6 +16648,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         for attr in func.attributes:
             if self.hlsl_stage_attribute_name(attr):
+                continue
+            if self.hlsl_root_signature_attribute(attr):
                 continue
             if self.hlsl_waveops_include_helper_lanes_attribute(attr):
                 continue
@@ -17735,6 +17907,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def is_hlsl_feedback_texture_type(self, vtype):
         return self.hlsl_resource_type_name(vtype).startswith("FeedbackTexture")
 
+    def is_hlsl_constant_buffer_type(self, vtype):
+        return self.hlsl_resource_type_name(vtype) == "ConstantBuffer"
+
+    def is_hlsl_texture_buffer_type(self, vtype):
+        return self.hlsl_resource_type_name(vtype) == "TextureBuffer"
+
     def is_hlsl_readonly_buffer_type(self, vtype):
         return self.hlsl_resource_type_name(vtype) in {
             "Buffer",
@@ -18107,6 +18285,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 texture_type
             ) and self.is_scalar_value_type(self.current_expression_expected_type):
                 return f"{load_expr}.x"
+            load_suffix = self.image_load_component_suffix(texture_type, image_format)
+            if load_suffix:
+                return f"{load_expr}{load_suffix}"
             return load_expr
 
         if func_name == "imageStore" and len(args) >= 3:
@@ -18148,6 +18329,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     value = self.hlsl_scalar_splat_cast(
                         four_component_constructor, value
                     )
+            elif (
+                four_component_constructor
+                and self.expression_component_count(value_arg) == 3
+            ):
+                constructor_info = self.three_component_image_store_constructor(
+                    texture_type
+                )
+                if constructor_info is not None:
+                    constructor, zero_value = constructor_info
+                    value = f"{constructor}({value}, {zero_value})"
             two_component_constructor = self.two_component_image_store_constructor(
                 texture_type
             )

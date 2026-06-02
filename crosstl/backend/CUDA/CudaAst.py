@@ -12,6 +12,7 @@ from ..common_ast import (
     DeleteNode,
     DesignatedInitializerNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -45,6 +46,7 @@ _COMMON_NODES = (
     DesignatedInitializerNode,
     DeleteNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -72,8 +74,25 @@ _COMMON_NODES = (
 class KernelNode(FunctionNode):
     """Node representing a CUDA kernel function (marked with __global__)"""
 
-    def __init__(self, return_type, name, params, body, attributes=None):
-        super().__init__(return_type, name, params, body, ["__global__"], attributes)
+    def __init__(
+        self,
+        return_type,
+        name,
+        params,
+        body,
+        attributes=None,
+        qualifiers=None,
+        linkage=None,
+    ):
+        super().__init__(
+            return_type,
+            name,
+            params,
+            body,
+            qualifiers or ["__global__"],
+            attributes,
+        )
+        self.linkage = linkage
 
     def __repr__(self):
         return f"KernelNode(name={self.name}, params={self.params}, body={self.body})"
@@ -120,6 +139,48 @@ class CudaBuiltinNode(ASTNode):
         return f"CudaBuiltinNode(builtin_name={self.builtin_name})"
 
 
+class CudaAsmOperandNode(ASTNode):
+    """Node representing one inline PTX asm operand."""
+
+    def __init__(self, constraint, expression=None, symbolic_name=None):
+        self.constraint = constraint
+        self.expression = expression
+        self.symbolic_name = symbolic_name
+
+    def __repr__(self):
+        return (
+            "CudaAsmOperandNode("
+            f"constraint={self.constraint}, expression={self.expression}, "
+            f"symbolic_name={self.symbolic_name})"
+        )
+
+
+class CudaAsmNode(ASTNode):
+    """Node representing a CUDA inline PTX asm statement."""
+
+    def __init__(
+        self,
+        template,
+        outputs=None,
+        inputs=None,
+        clobbers=None,
+        is_volatile=False,
+    ):
+        self.template = template
+        self.outputs = outputs or []
+        self.inputs = inputs or []
+        self.clobbers = clobbers or []
+        self.is_volatile = is_volatile
+
+    def __repr__(self):
+        return (
+            "CudaAsmNode("
+            f"template={self.template}, outputs={self.outputs}, "
+            f"inputs={self.inputs}, clobbers={self.clobbers}, "
+            f"is_volatile={self.is_volatile})"
+        )
+
+
 class TextureAccessNode(ASTNode):
     """Node representing texture memory access"""
 
@@ -134,9 +195,18 @@ class TextureAccessNode(ASTNode):
 class SharedMemoryNode(VariableNode):
     """Node representing shared memory variable declaration"""
 
-    def __init__(self, vtype, name, size=None):
+    def __init__(
+        self,
+        vtype,
+        name,
+        size=None,
+        is_extern=False,
+        is_dynamic=False,
+    ):
         super().__init__(vtype, name, qualifiers=["__shared__"])
         self.size = size
+        self.is_extern_shared_memory = is_extern
+        self.is_dynamic_shared_memory = is_dynamic
 
     def __repr__(self):
         return (

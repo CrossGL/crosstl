@@ -6,20 +6,25 @@ from crosstl.backend.CUDA.CudaAst import (
     AtomicOperationNode,
     BinaryOpNode,
     CastNode,
+    CudaAsmNode,
     CudaBuiltinNode,
     DeleteNode,
     DesignatedInitializerNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
+    IfNode,
     InitializerListNode,
     KernelLaunchNode,
     MemberAccessNode,
     NewNode,
+    PreprocessorNode,
     RangeForNode,
     ReturnNode,
     ShaderNode,
     SharedMemoryNode,
+    StructNode,
     SwitchNode,
     SyncNode,
     TernaryOpNode,
@@ -48,6 +53,66 @@ class TestCudaParser:
         assert len(ast.kernels) == 1
         assert ast.kernels[0].name == "simple_kernel"
 
+    def test_block_preprocessor_pragmas_parsing(self):
+        code = """
+        __global__ void kernel(float* data) {
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                data[i] = data[i] + 1.0f;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        pragma = ast.kernels[0].body[0]
+        assert isinstance(pragma, PreprocessorNode)
+        assert pragma.directive == "other"
+        assert pragma.content == "#pragma unroll"
+
+    def test_adjacent_string_literal_arguments_parsing(self):
+        code = r"""
+        void host() {
+            printf("first "
+                   "second\n");
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        call = ast.functions[0].body[0]
+        assert isinstance(call, FunctionCallNode)
+        assert call.args == ['"first second\\n"']
+
+    def test_empty_statements_in_public_sample_patterns_are_skipped(self):
+        code = """
+        void host() {
+            int value = 0;
+            value = value + 1;;
+            if (value > 0) {
+                value = value - 1;
+            };
+            for (value = 0; value < 4; value++);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+
+        assert len(body) == 4
+        assert isinstance(body[0], VariableNode)
+        assert isinstance(body[1], AssignmentNode)
+        assert isinstance(body[2], IfNode)
+        assert isinstance(body[3], ForNode)
+        assert body[3].body is None
+
     def test_device_function_parsing(self):
         code = """
         __device__ float add(float a, float b) {
@@ -64,6 +129,261 @@ class TestCudaParser:
         assert ast.functions[0].name == "add"
         assert "__device__" in ast.functions[0].qualifiers
 
+    def test_function_parameter_defaults_are_skipped(self):
+        code = """
+        __global__ void shfl_scan_test(int *data,
+                                       int width,
+                                       int *partial_sums = NULL) {
+            int lane_id = threadIdx.x % warpSize;
+        }
+
+        static int test(bool automaticLaunchConfig,
+                        const int count = max(32, 1000000)) {
+            return count;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        kernel_params = ast.kernels[0].params
+        assert [(param.vtype, param.name) for param in kernel_params] == [
+            ("int *", "data"),
+            ("int", "width"),
+            ("int *", "partial_sums"),
+        ]
+
+        function_params = ast.functions[0].params
+        assert [(param.vtype, param.name) for param in function_params] == [
+            ("bool", "automaticLaunchConfig"),
+            ("const int", "count"),
+        ]
+
+    def test_builtin_named_struct_member_access_from_occupancy_sample(self):
+        code = """
+        static double reportPotentialOccupancy() {
+            cudaDeviceProp prop;
+            int activeWarps = 32 / prop.warpSize;
+            int lane = threadIdx.x % warpSize;
+            return (double)activeWarps / lane;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        function = ast.functions[0]
+        active_warps = function.body[1]
+        lane = function.body[2]
+
+        assert isinstance(active_warps.value.right, MemberAccessNode)
+        assert active_warps.value.right.object == "prop"
+        assert active_warps.value.right.member == "warpSize"
+        assert isinstance(lane.value.right, CudaBuiltinNode)
+        assert lane.value.right.builtin_name == "warpSize"
+
+    def test_public_cuda_samples_device_global_variables_parse_as_globals(self):
+        code = """
+        __device__ int g_uids = 0;
+        __device__ double grid_dot_result = 0.0;
+        __device__ cufftCallbackLoadC myOwnCallbackPtr = ComplexPointwiseMulAndScale;
+
+        __device__ float add(float a, float b) {
+            return a + b;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [var.name for var in ast.global_variables] == [
+            "g_uids",
+            "grid_dot_result",
+            "myOwnCallbackPtr",
+        ]
+        assert [var.vtype for var in ast.global_variables] == [
+            "int",
+            "double",
+            "cufftCallbackLoadC",
+        ]
+        assert all(var.qualifiers == ["__device__"] for var in ast.global_variables)
+        assert len(ast.functions) == 1
+        assert ast.functions[0].name == "add"
+
+    def test_fixed_width_pointer_declaration_lists_parse_as_variables(self):
+        code = """
+        __global__ void bit_extract_kernel(
+            uint32_t* d_output,
+            const uint32_t* d_input,
+            size_t size) {
+            uint32_t *d_local, *d_shadow;
+            d_output[0] = ((d_input[0] & 0xf00) >> 8);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        kernel = ast.kernels[0]
+        d_local, d_shadow, assignment = kernel.body
+
+        assert kernel.params[0].vtype == "uint32_t *"
+        assert kernel.params[0].name == "d_output"
+        assert kernel.params[1].vtype == "const uint32_t *"
+        assert kernel.params[1].name == "d_input"
+        assert isinstance(d_local, VariableNode)
+        assert d_local.vtype == "uint32_t *"
+        assert d_local.name == "d_local"
+        assert isinstance(d_shadow, VariableNode)
+        assert d_shadow.vtype == "uint32_t *"
+        assert d_shadow.name == "d_shadow"
+        assert isinstance(assignment, AssignmentNode)
+        assert assignment.right.op == ">>"
+
+    def test_enum_class_declarations_parse_before_functions(self):
+        code = """
+        enum class MemoryMode : unsigned int
+        {
+            PAGED,
+            PINNED
+        };
+
+        void run_copy(const MemoryMode memory_mode) {
+            if (memory_mode == MemoryMode::PAGED) {
+                return;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        enum = ast.structs[0]
+        function = ast.functions[0]
+
+        assert isinstance(enum, EnumNode)
+        assert enum.name == "MemoryMode"
+        assert enum.members == [("PAGED", None), ("PINNED", None)]
+        assert enum.underlying_type == "unsigned int"
+        assert enum.is_scoped is True
+        assert function.params[0].vtype == "const MemoryMode"
+        assert function.params[0].name == "memory_mode"
+
+    def test_void_parameter_list_and_bodyless_prototypes_parsing(self):
+        code = """
+        void runTest(int argc, char **argv);
+        extern "C" bool computeGold(int *gpuData, const int len);
+
+        int main(void) {
+            const unsigned blocks = 512;
+            return 0;
+        }
+
+        void runTest(int argc, char **argv) {
+            return;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.functions[0].name == "runTest"
+        assert ast.functions[0].body is None
+        assert ast.functions[1].name == "computeGold"
+        assert ast.functions[1].body is None
+        assert ast.functions[2].name == "main"
+        assert ast.functions[2].params == []
+        assert ast.functions[2].body[0].vtype == "const unsigned int"
+        assert ast.functions[3].body is not None
+
+    def test_public_cuda_samples_composite_scalar_type_parsing(self):
+        code = """
+        void host() {
+            unsigned long int counter = 0;
+            long double avgElapsedClocks = 0;
+            short int lanes = 32;
+            avgElapsedClocks += (long double)(counter);
+            counter += sizeof(unsigned long int);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert body[0].vtype == "unsigned long int"
+        assert body[1].vtype == "long double"
+        assert body[2].vtype == "short int"
+        assert isinstance(body[3].right, CastNode)
+        assert body[3].right.target_type == "long double"
+        assert body[4].right.args == ["unsigned long int"]
+
+    def test_public_cuda_samples_global_declaration_lists_parsing(self):
+        code = """
+        __device__ static unsigned int numErrors = 0, errorFound = 0;
+        cudaEvent_t start, stop;
+        cudaArray *d_array, *d_tempArray;
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [(var.vtype, var.name, var.value) for var in ast.global_variables] == [
+            ("unsigned int", "numErrors", "0"),
+            ("unsigned int", "errorFound", "0"),
+            ("cudaEvent_t", "start", None),
+            ("cudaEvent_t", "stop", None),
+            ("cudaArray *", "d_array", None),
+            ("cudaArray *", "d_tempArray", None),
+        ]
+        assert ast.global_variables[0].qualifiers == ["__device__", "static"]
+        assert ast.global_variables[1].qualifiers == ["__device__", "static"]
+
+    def test_public_cuda_samples_comma_initializer_and_uint_pointer_lists(self):
+        code = """
+        void host(uint *src, int start, int end) {
+            uint *ikey, *ival, *okey, *oval;
+            int i, sum = 0;
+
+            for (sum = 0, i = start; i < end; i++) {
+                sink(src[i]);
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        params = ast.functions[0].params
+        assert params[0].vtype == "uint *"
+
+        body = ast.functions[0].body
+        assert [var.vtype for var in body[:4]] == [
+            "uint *",
+            "uint *",
+            "uint *",
+            "uint *",
+        ]
+        assert [var.name for var in body[:4]] == ["ikey", "ival", "okey", "oval"]
+        assert [var.name for var in body[4:6]] == ["i", "sum"]
+        assert body[5].value == "0"
+
+        loop = body[6]
+        assert isinstance(loop, ForNode)
+        assert isinstance(loop.init, list)
+        assert len(loop.init) == 2
+        assert loop.init[0].left == "sum"
+        assert loop.init[1].left == "i"
+
     def test_shared_memory_parsing(self):
         code = """
         __global__ void kernel() {
@@ -77,6 +397,23 @@ class TestCudaParser:
 
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
+
+    def test_dynamic_shared_memory_parsing_marks_extern_unsized_array(self):
+        code = """
+        __global__ void kernel() {
+            extern __shared__ float shared[];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        declaration = ast.kernels[0].body[0]
+        assert isinstance(declaration, SharedMemoryNode)
+        assert declaration.vtype == "float[]"
+        assert declaration.is_extern_shared_memory is True
+        assert declaration.is_dynamic_shared_memory is True
 
     def test_builtin_variables_parsing(self):
         code = """
@@ -106,6 +443,29 @@ class TestCudaParser:
 
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
+
+    def test_fp16_pointer_array_declarations_parse_as_variables(self):
+        code = """
+        void host(size_t size) {
+            half2 *vec[2];
+            half2 *const devVec[2];
+            checkCudaErrors(cudaMallocHost((void **)&vec[0],
+                                           size * sizeof *vec[0]));
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert isinstance(body[0], VariableNode)
+        assert body[0].vtype == "half2 *[2]"
+        assert body[0].name == "vec"
+        assert isinstance(body[1], VariableNode)
+        assert body[1].vtype == "half2 * const[2]"
+        assert body[1].name == "devVec"
+        assert isinstance(body[2], FunctionCallNode)
 
     def test_constructor_style_vector_declarations_parsing(self):
         code = """
@@ -183,6 +543,27 @@ class TestCudaParser:
         assert launch.shared_mem is None
         assert launch.stream is None
         assert launch.args == ["data", "2.0f"]
+
+    def test_template_identifier_c_style_cast_parsing(self):
+        code = """
+        template <class T>
+        __global__ void kernel(T* out, unsigned int num_threads) {
+            out[threadIdx.x] = (T)num_threads;
+            out = (T *)malloc(num_threads);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assignment = ast.kernels[0].body[0]
+        assert isinstance(assignment.right, CastNode)
+        assert assignment.right.target_type == "T"
+        assert assignment.right.expression == "num_threads"
+        allocation = ast.kernels[0].body[1]
+        assert isinstance(allocation.right, CastNode)
+        assert allocation.right.target_type == "T *"
 
     def test_computed_kernel_launch_config_parsing(self):
         code = """
@@ -500,6 +881,141 @@ class TestCudaParser:
             "float * __restrict__",
         ]
         assert [var.name for var in body] == ["p", "cp", "a", "b"]
+
+    def test_single_trailing_restrict_pointer_qualifier_parsing(self):
+        code = """
+        static __global__ void kernel(float2 *__restrict out,
+                                      const int *__restrict indices) {
+            out[threadIdx.x] = out[threadIdx.x];
+        }
+        void host(float* data) {
+            float *__restrict a = data, *__restrict b = data;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [param.vtype for param in ast.kernels[0].params] == [
+            "float2 * __restrict",
+            "const int * __restrict",
+        ]
+
+        body = ast.functions[0].body
+        assert [var.vtype for var in body] == [
+            "float * __restrict",
+            "float * __restrict",
+        ]
+        assert [var.name for var in body] == ["a", "b"]
+
+    def test_launch_bounds_kernel_attribute_parsing(self):
+        code = """
+        __launch_bounds__(128) __global__ void BlackScholesGPU(
+            float2 *__restrict d_CallResult,
+            float2 *__restrict d_PutResult) {
+            d_CallResult[threadIdx.x] = d_PutResult[threadIdx.x];
+        }
+
+        extern "C" __launch_bounds__(256, 2) __global__ void bounded(float* data) {
+            data[threadIdx.x] = 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [kernel.name for kernel in ast.kernels] == [
+            "BlackScholesGPU",
+            "bounded",
+        ]
+        assert ast.kernels[0].attributes == ["__launch_bounds__(128)"]
+        assert ast.kernels[1].attributes == ["__launch_bounds__(256, 2)"]
+        assert ast.kernels[0].params[0].vtype == "float2 * __restrict"
+        assert ast.kernels[1].qualifiers == ["extern", "__global__"]
+        assert ast.kernels[1].linkage == "C"
+
+    def test_cuda_function_attribute_parsing(self):
+        code = """
+        __cluster_dims__(2, 1, 1) __block_size__(128) __global__ void clustered(
+            float* out) {
+            out[threadIdx.x] = 1.0f;
+        }
+
+        extern "C" __global__ void __block_size__((256, 1, 1), (2, 2, 2))
+        shaped(float* out) {
+            out[threadIdx.x] = 2.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [kernel.name for kernel in ast.kernels] == ["clustered", "shaped"]
+        assert ast.kernels[0].attributes == [
+            "__cluster_dims__(2, 1, 1)",
+            "__block_size__(128)",
+        ]
+        assert ast.kernels[1].attributes == ["__block_size__((256, 1, 1), (2, 2, 2))"]
+        assert ast.kernels[1].qualifiers == ["extern", "__global__"]
+        assert ast.kernels[1].linkage == "C"
+
+    def test_c_linkage_block_preserves_cuda_function_metadata(self):
+        code = """
+        extern "C" {
+        __global__ void kernel(float* out) {
+            out[threadIdx.x] = 1.0f;
+        }
+
+        __device__ float add(float a, float b) {
+            return a + b;
+        }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        kernel = ast.kernels[0]
+        device_function = ast.functions[0]
+
+        assert kernel.name == "kernel"
+        assert kernel.qualifiers == ["extern", "__global__"]
+        assert kernel.linkage == "C"
+        assert device_function.name == "add"
+        assert device_function.qualifiers == ["extern", "__device__"]
+        assert device_function.linkage == "C"
+
+    def test_grid_constant_kernel_parameter_parsing(self):
+        code = """
+        struct Params {
+            int value;
+        };
+
+        __global__ void kernelDefault(__grid_constant__ const Params p, int* out) {
+            out[threadIdx.x] = p.value;
+        }
+
+        __global__ void kernelGuide(const __grid_constant__ int scale, int* out) {
+            out[threadIdx.x] = scale;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [kernel.name for kernel in ast.kernels] == [
+            "kernelDefault",
+            "kernelGuide",
+        ]
+        assert ast.kernels[0].params[0].vtype == "__grid_constant__ const Params"
+        assert ast.kernels[0].params[0].name == "p"
+        assert ast.kernels[1].params[0].vtype == "const __grid_constant__ int"
+        assert ast.kernels[1].params[0].name == "scale"
 
     def test_rvalue_reference_declarations_parsing(self):
         code = """
@@ -954,9 +1470,12 @@ class TestCudaParser:
         using HostBuffer = std::unique_ptr<float[]>;
         typedef std::vector<std::array<unsigned int, 4>> Table;
         using namespace std;
+        using std::cerr;
+        using std::endl;
 
         void host(int n) {
             using LocalBuffer = std::unique_ptr<float[], HostDeleter>;
+            using std::min;
             HostBuffer h = std::make_unique<float[]>(n);
             HostBuffer* hp = &h;
             LocalBuffer owned(new float[n]);
@@ -985,6 +1504,38 @@ class TestCudaParser:
         assert body[3].vtype == "LocalBuffer"
         assert body[4].vtype == "Table"
         assert body[5].name == "consume"
+
+    def test_cub_dependent_shared_temp_storage_parsing(self):
+        code = """
+        using WarpReduce = cub::WarpReduce<int>;
+
+        __global__ void kernel(int* out, int value) {
+            __shared__ typename WarpReduce::TempStorage temp_storage[4];
+            int warp_id = threadIdx.x / 32;
+            int aggregate = WarpReduce(temp_storage[warp_id]).Sum(value);
+            out[threadIdx.x] = aggregate;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.typedefs[0].name == "WarpReduce"
+        assert ast.typedefs[0].alias_type == "cub::WarpReduce<int>"
+
+        body = ast.kernels[0].body
+        assert isinstance(body[0], SharedMemoryNode)
+        assert body[0].vtype == "typename WarpReduce::TempStorage[4]"
+        assert body[0].name == "temp_storage"
+        assert body[1].vtype == "int"
+        assert isinstance(body[2].value, FunctionCallNode)
+        assert isinstance(body[2].value.name, MemberAccessNode)
+        assert body[2].value.name.member == "Sum"
+        storage_arg = body[2].value.name.object.args[0]
+        assert isinstance(storage_arg, ArrayAccessNode)
+        assert storage_arg.array == "temp_storage"
+        assert storage_arg.index == "warp_id"
 
     def test_typedef_multi_declarator_alias_parsing(self):
         code = """
@@ -1024,6 +1575,119 @@ class TestCudaParser:
             "BufferPtr",
         ]
         assert function.body[5].name == "consume"
+
+    def test_typedef_struct_with_alignment_parsing(self):
+        code = """
+        typedef struct Existing *ExistingPtr;
+        typedef struct __align__(8) {
+            unsigned int x;
+            unsigned int y;
+        } Pair;
+
+        __global__ void kernel(Pair* pairs) {
+            pairs[threadIdx.x].x = 1;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.typedefs) == 1
+        assert ast.typedefs[0].name == "ExistingPtr"
+        assert ast.typedefs[0].alias_type == "struct Existing *"
+        assert len(ast.structs) == 1
+        pair = ast.structs[0]
+        assert isinstance(pair, StructNode)
+        assert pair.name == "Pair"
+        assert pair.attributes == ["__align__(8)"]
+        assert [(member.vtype, member.name) for member in pair.members] == [
+            ("unsigned int", "x"),
+            ("unsigned int", "y"),
+        ]
+        assert ast.kernels[0].params[0].vtype == "Pair *"
+        assert ast.kernels[0].params[0].name == "pairs"
+
+    def test_cuda_struct_conversion_operator_methods_are_skipped(self):
+        code = """
+        template <class T> struct SharedMemory {
+            int tag;
+
+            __device__ inline operator T *() {
+                extern __shared__ int __smem[];
+                return (T *)__smem;
+            }
+
+            __device__ inline operator const T *() const {
+                extern __shared__ int __smem[];
+                return (T *)__smem;
+            }
+        };
+
+        template <> struct SharedMemory<double> {
+            __device__ inline operator double *() {
+                extern __shared__ double __smem_d[];
+                return (double *)__smem_d;
+            }
+        };
+
+        template <class T, unsigned int blockSize, bool nIsPow2>
+        __global__ void reduce(T *out) {
+            T *sdata = SharedMemory<T>();
+            out[threadIdx.x] = sdata[threadIdx.x];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.structs[0].name == "SharedMemory"
+        assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+            ("int", "tag")
+        ]
+        assert ast.structs[1].name == "SharedMemory<double>"
+        assert ast.structs[1].members == []
+        assert ast.kernels[0].name == "reduce"
+
+    def test_constexpr_local_declaration_in_switch_case_parsing(self):
+        code = """
+        void launch(int mode) {
+            switch (mode) {
+            case 9:
+                constexpr int numGroups = 2;
+                break;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        declaration = ast.functions[0].body[0].cases[0].body[0]
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "int"
+        assert declaration.name == "numGroups"
+        assert declaration.qualifiers == ["constexpr"]
+
+    def test_explicit_template_instantiation_declaration_is_skipped(self):
+        code = """
+        template <class T>
+        void reduce(int size, T *data) {
+            data[0] = (T)size;
+        }
+
+        template void reduce<int>(int size, int *data);
+        template void reduce<float>(int size, float *data);
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [function.name for function in ast.functions] == ["reduce"]
+        assert ast.global_variables == []
 
     def test_type_alias_c_style_cast_parsing(self):
         code = """
@@ -1481,6 +2145,42 @@ class TestCudaParser:
         assert isinstance(unmasked_sync, SyncNode)
         assert unmasked_sync.sync_type == "__syncwarp"
         assert unmasked_sync.args == []
+
+    def test_inline_ptx_asm_parsing(self):
+        code = r"""
+        __global__ void asmKernel(unsigned int* out, unsigned int in) {
+            unsigned int lane = 0;
+            asm volatile("bar.sync 0;");
+            asm("mov.u32 %0, %%tid.x;" : "=r"(lane));
+            asm volatile(
+                "add.u32 %0, %1, 1;"
+                : [result] "=r"(lane)
+                : [source] "r"(in)
+                : "memory"
+            );
+            asm __volatile__("membar.gl;" ::: "memory");
+            out[threadIdx.x] = lane;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        asm_statements = [
+            stmt for stmt in ast.kernels[0].body if isinstance(stmt, CudaAsmNode)
+        ]
+        assert len(asm_statements) == 4
+        assert asm_statements[0].is_volatile is True
+        assert asm_statements[0].template == '"bar.sync 0;"'
+        assert asm_statements[1].outputs[0].constraint == '"=r"'
+        assert asm_statements[1].outputs[0].expression == "lane"
+        assert asm_statements[2].outputs[0].symbolic_name == "result"
+        assert asm_statements[2].inputs[0].symbolic_name == "source"
+        assert asm_statements[2].clobbers == ['"memory"']
+        assert asm_statements[3].outputs == []
+        assert asm_statements[3].inputs == []
+        assert asm_statements[3].clobbers == ['"memory"']
 
     def test_cooperative_groups_thread_block_parsing(self):
         code = """
@@ -2036,6 +2736,27 @@ class TestCudaParser:
         assert body[2].value == "0777u"
         assert body[3].value == "1e-3f"
         assert body[4].value == ".5f"
+
+    def test_character_literal_parsing(self):
+        code = r"""
+        char helper() {
+            char c = 'x';
+            char escaped = '\n';
+            char hex = '\x7f';
+            char oct = '\377';
+            return c;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert body[0].value == "'x'"
+        assert body[1].value == "'\\n'"
+        assert body[2].value == "'\\x7f'"
+        assert body[3].value == "'\\377'"
 
     def test_qualified_and_pointer_return_functions_parsing(self):
         code = """

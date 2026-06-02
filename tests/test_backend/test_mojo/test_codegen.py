@@ -81,6 +81,67 @@ def test_struct_generic_member_codegen():
     assert "InlineArray[SIMD[DType.float32, 4], 2] samples;" in generated_code
 
 
+def test_struct_method_codegen_preserves_method_body():
+    code = """
+    struct VectorAddition:
+        @staticmethod
+        def execute(ctx: DeviceContext) raises:
+            raise Error("No known target")
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "struct VectorAddition" in generated_code
+    assert "void execute(DeviceContext ctx)" in generated_code
+    assert 'raise(Error("No known target"));' in generated_code
+
+
+def test_function_parameter_convention_codegen_drops_mojo_conventions():
+    code = """
+    def incr(a: Int, out b: Int):
+        pass
+
+    def __init__(out self, value: Int):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "void incr(int a, int b)" in generated_code
+    assert "void __init__(int value)" in generated_code
+    assert "out b" not in generated_code
+    assert "self" not in generated_code
+
+
+def test_function_parameter_separator_markers_codegen_drops_markers():
+    code = """
+    def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:
+        return a1 + a2
+
+    def positional_only_args(a1: Int, a2: Int, /, b1: Int) -> Int:
+        return a1 + a2 + b1
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int kw_only_args(int a1, int a2, bool double)" in generated_code
+    assert "int positional_only_args(int a1, int a2, int b1)" in generated_code
+    assert "*, double" not in generated_code
+    assert "/, b1" not in generated_code
+
+
+def test_function_optional_argument_default_codegen_preserves_default():
+    code = """
+    fn my_pow(base: Int, exp: Int = 2) -> Int:
+        return base ** exp
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int my_pow(int base, int exp = 2)" in generated_code
+    assert "return (base ** exp);" in generated_code
+
+
 def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     code = """
     struct Resources {
@@ -279,6 +340,22 @@ def test_for_in_descending_range_codegen_uses_greater_than_condition():
     )
 
 
+def test_comptime_for_codegen_preserves_loop_output():
+    code = """
+    fn main():
+        comptime for value in values:
+            sink(value)
+        comptime for var i: Int = 0; i < 4; i = i + 1:
+            sink(i)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for value in values {" in generated_code
+    assert "for (int i = 0; (i < 4); i = (i + 1))" in generated_code
+
+
 def test_for_in_dynamic_step_range_codegen_uses_step_sign_condition():
     code = """
     fn main(step: Int):
@@ -454,6 +531,23 @@ def test_generic_function_signature_codegen():
 
     assert "mat4 build(vec4 value, mat4 transform @ binding(0))" in generated_code
     assert "return transform;" in generated_code
+
+
+def test_where_clause_constraints_are_accepted_and_not_emitted_codegen():
+    code = """
+    fn constrained[BM: Int, BN: Int]() -> Int where (
+        BM == 32
+        and BN == 32
+    ):
+        return 1
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int constrained()" in generated_code
+    assert "return 1;" in generated_code
+    assert "where" not in generated_code
 
 
 def test_method_call_chain_codegen_preserves_receiver():
@@ -714,6 +808,47 @@ def test_user_defined_lerp_call_does_not_lower_to_mix():
     assert "let y = mix(1.0);" not in generated_code
 
 
+def test_comptime_assert_statement_codegen():
+    code = """
+    def outer_product_acc(res: TileTensor, size: Int):
+        comptime assert(type_of(res).flat_rank == 2)
+        comptime assert(size > 0, "bad size")
+        comptime assert (
+            dtype.is_floating_point()
+        ), "dtype must be a floating-point type"
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "assert((type_of(res).flat_rank == 2));" in generated_code
+    assert 'assert((size > 0), "bad size");' in generated_code
+    assert (
+        'assert(dtype.is_floating_point(), "dtype must be a floating-point type");'
+        in generated_code
+    )
+
+
+def test_alias_declaration_codegen_matches_comptime_declarations():
+    code = """
+    alias THREADS_PER_BLOCK = 256
+
+    def kernel():
+        alias LOCAL_BLOCK = THREADS_PER_BLOCK
+        for i in range(LOCAL_BLOCK):
+            sink(i)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let THREADS_PER_BLOCK = 256;" in generated_code
+    assert "let LOCAL_BLOCK = THREADS_PER_BLOCK;" in generated_code
+    assert "for (int i = 0; i < LOCAL_BLOCK; i++)" in generated_code
+
+
 def test_user_defined_lerp_matching_arity_does_not_lower_to_mix():
     code = """
     fn lerp(a: Float32, b: Float32, t: Float32) -> Float32:
@@ -968,6 +1103,24 @@ def test_typed_local_declaration_codegen_preserves_type():
     assert "var transform;" not in generated_code
 
 
+def test_bare_annotated_assignment_codegen_preserves_type_and_initializer():
+    code = """
+    def kernel(size: Int):
+        idx: UInt = global_idx.x
+        limit: Int = size
+        if idx < UInt(limit):
+            process(idx)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint idx = global_idx.x;" in generated_code
+    assert "int limit = size;" in generated_code
+    assert "var idx" not in generated_code
+    assert "let limit" not in generated_code
+
+
 def test_double_dtype_codegen():
     code = """
     struct VSInput:
@@ -1095,6 +1248,28 @@ def test_array_member_access_chain_codegen():
     generated_code = generate_code(ast)
 
     assert "let channel = values[0].x;" in generated_code
+
+
+def test_gpu_tile_tensor_multi_index_access_codegen():
+    code = """
+    from std.gpu import thread_idx
+
+    fn tiled_load(tile: TileTensor, matrix: TileTensor):
+        tile[thread_idx.y, thread_idx.x] = matrix[
+            thread_idx.y,
+            thread_idx.x,
+        ]
+        let value = tile[thread_idx.y, thread_idx.x]
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "tile[thread_idx.y, thread_idx.x] = matrix[thread_idx.y, thread_idx.x];"
+        in generated_code
+    )
+    assert "let value = tile[thread_idx.y, thread_idx.x];" in generated_code
 
 
 def test_parenthesized_call_indexing_codegen():

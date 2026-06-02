@@ -8,9 +8,11 @@ from ..common_ast import (
     BreakNode,
     CallNode,
     CaseNode,
+    CastNode,
     ContinueNode,
     DiscardNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -36,10 +38,12 @@ _COMMON_NODES = (
     BinaryOpNode,
     BreakNode,
     CallNode,
+    CastNode,
     CaseNode,
     ContinueNode,
     DiscardNode,
     DoWhileNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -109,12 +113,67 @@ class GenericNode(ASTNode):
         return f"GenericNode(name={self.name}, constraints={self.constraints})"
 
 
+class GenericConstraintNode(ASTNode):
+    """Node representing a simple generic conformance constraint."""
+
+    def __init__(self, parameter, constraint_type):
+        self.parameter = parameter
+        self.constraint_type = constraint_type
+
+    def __repr__(self):
+        return (
+            "GenericConstraintNode("
+            f"parameter={self.parameter}, constraint_type={self.constraint_type})"
+        )
+
+
+class AssociatedTypeNode(ASTNode):
+    """Node representing a Slang interface associated type requirement."""
+
+    def __init__(self, name, constraint_type=None, target_type=None, qualifiers=None):
+        self.name = name
+        self.constraint_type = constraint_type
+        self.target_type = target_type
+        self.qualifiers = qualifiers or []
+
+    def __repr__(self):
+        return (
+            "AssociatedTypeNode("
+            f"name={self.name}, constraint_type={self.constraint_type}, "
+            f"target_type={self.target_type})"
+        )
+
+
+class InterfaceNode(ASTNode):
+    """Node representing a Slang interface declaration."""
+
+    def __init__(
+        self,
+        name,
+        methods=None,
+        generic_parameters=None,
+        associated_types=None,
+    ):
+        self.name = name
+        self.methods = methods or []
+        self.generic_parameters = generic_parameters
+        self.associated_types = associated_types or []
+
+    def __repr__(self):
+        return f"InterfaceNode(name={self.name}, methods={len(self.methods)})"
+
+
 class ExtensionNode(ASTNode):
     """Node representing a Slang extension"""
 
-    def __init__(self, extended_type, methods):
+    def __init__(self, extended_type, methods, conformances=None):
         self.extended_type = extended_type
         self.methods = methods
+        self.conformances = conformances or []
 
     def __repr__(self):
-        return f"ExtensionNode(extended_type={self.extended_type}, methods={len(self.methods)})"
+        return (
+            "ExtensionNode("
+            f"extended_type={self.extended_type}, conformances={self.conformances}, "
+            f"methods={len(self.methods)})"
+        )

@@ -114,6 +114,67 @@ def test_function_conversion():
         pytest.fail(f"Function conversion failed: {e}")
 
 
+def test_value_returning_function_uses_final_expression_as_return():
+    code = """
+    fn finish(value: u32) -> u32 {
+        let next = value + 1;
+        next
+    }
+
+    fn call_finish(value: u32) -> u32 {
+        finish(value)
+    }
+
+    fn passthrough(value: Option<u32>) -> Option<u32> {
+        value
+    }
+
+    fn choose(value: u32, fallback: u32, ready: bool) -> u32 {
+        if ready {
+            value
+        } else {
+            fallback
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint finish(uint value)" in result
+    assert "let next = (value + 1);" in result
+    assert "return next;" in result
+    assert "uint call_finish(uint value)" in result
+    assert "return finish(value);" in result
+    assert "Option<u32> passthrough(Option<u32> value)" in result
+    assert "return value;" in result
+    assert "uint choose(uint value, uint fallback, bool ready)" in result
+    assert "if (ready) {\n            return value;\n        } else {" in result
+    assert "return fallback;" in result
+
+
+def test_final_expression_return_is_limited_to_function_body():
+    code = """
+    fn value_after_branch(value: u32, ready: bool) -> u32 {
+        if ready {
+            tick();
+        }
+        value
+    }
+
+    fn void_observer(value: u32) {
+        value
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "if (ready) {\n            tick();\n        }" in result
+    assert "return value;" in result
+    assert "void void_observer(uint value)" in result
+    assert "return value;" not in result[result.index("void void_observer") :]
+    assert "value;" in result[result.index("void void_observer") :]
+
+
 def test_translate_api_accepts_rust_source_preserves_stage_entry(tmp_path):
     code = """
     #[vertex_shader]
@@ -134,6 +195,224 @@ def test_translate_api_accepts_rust_source_preserves_stage_entry(tmp_path):
     assert "pub fn vertex_main(vertex_: Vec3<f32>) -> Vec4<f32>" in rust_result
     assert "Vec4::<f32>::new(vertex_.x, vertex_.y, vertex_.z, 1.0)" in rust_result
     assert "pub fn main() -> ()" not in rust_result
+
+
+def test_rust_gpu_ray_query_parenthesized_statement_macro_codegen():
+    code = """
+    use glam::Vec3;
+    use spirv_std::ray_tracing::{AccelerationStructure, RayFlags, RayQuery};
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main(#[spirv(descriptor_set = 0, binding = 0)] accel: &AccelerationStructure) {
+        unsafe {
+            spirv_std::ray_query!(let mut handle);
+            handle.initialize(accel, RayFlags::NONE, 0, Vec3::ZERO, 0.0, Vec3::ZERO, 0.0);
+            let origin: glam::Vec3 = handle.get_world_ray_origin();
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "fragment {" in result
+    assert "AccelerationStructure accel @ binding(0)" in result
+    assert "spirv_std::ray_query!(let mut handle);" in result
+    assert (
+        "handle.initialize(accel, RayFlags::NONE, 0, Vec3::ZERO, 0.0, Vec3::ZERO, 0.0);"
+        in result
+    )
+    assert "vec3 origin = handle.get_world_ray_origin();" in result
+
+
+def test_rust_gpu_compute_shader_method_turbofish_codegen():
+    code = """
+    fn main() {
+        let result = src_range.clone().into_par_iter().map(collatz).collect::<Vec<_>>();
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "collect<Vec<_>>();" in result
+
+
+def test_rust_gpu_compute_shader_is_multiple_of_method_codegen():
+    code = """
+    pub fn collatz(mut n: u32) -> Option<u32> {
+        let mut i = 0;
+        while n != 1 {
+            n = if n.is_multiple_of(2) {
+                n / 2
+            } else {
+                3 * n + 1
+            };
+            i += 1;
+        }
+        Some(i)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "(((n % 2) == 0) ? (n / 2) : ((3 * n) + 1))" in result
+    assert "is_multiple_of" not in result
+
+
+def test_rust_gpu_final_parenthesized_binary_expression_codegen():
+    code = """
+    fn total_rayleigh(lambda: Vec3) -> Vec3 {
+        (8.0 * PI.powf(3.0)
+            * (REFRACTIVE_INDEX.powf(2.0) - 1.0).powf(2.0)
+            * (6.0 + 3.0 * DEPOLARIZATION_FACTOR))
+            / (3.0 * NUM_MOLECULES * pow(lambda, 4.0) * (6.0 - 7.0 * DEPOLARIZATION_FACTOR))
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "return ((((8.0 * pow(PI, 3.0))" in result
+    assert ") / (((3.0 * NUM_MOLECULES) * pow(lambda, 4.0))" in result
+    assert "pow(PI, 3.0));" not in result
+
+
+def test_rust_gpu_path_qualified_attribute_codegen():
+    code = r"""
+    #[spirv_std_macros::gpu_only]
+    #[doc(alias = "OpEmitVertex")]
+    #[inline]
+    pub unsafe fn emit_vertex() {
+        unsafe {
+            asm! {
+                "OpEmitVertex",
+            }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void emit_vertex()" in result
+    assert 'asm!("OpEmitVertex",);' in result
+
+
+def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
+    code = """
+    #![cfg_attr(target_arch = "spirv", no_std)]
+
+    use shared::glam::{Vec4, vec4};
+    use spirv_std::spirv;
+
+    #[spirv(vertex)]
+    pub fn main_vs(
+        #[spirv(vertex_index)] vert_id: i32,
+        #[spirv(position, invariant)] out_pos: &mut Vec4,
+    ) {
+        *out_pos = vec4(vert_id as f32, 0.0, 0.0, 1.0);
+    }
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(global_invocation_id)] id: UVec3,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] values: &mut [u32],
+    ) {}
+    """
+    result = parse_and_generate(code)
+
+    assert "vertex main_vs {" in result
+    assert "int vert_id @ VertexID" in result
+    assert "vec4 out_pos @ gl_Position" in result
+    assert "compute main_cs {" in result
+    assert "uvec3 id @ gl_GlobalInvocationID" in result
+    assert "uint values[] @ binding(0)" in result
+
+
+def test_rust_gpu_spirv_entry_point_name_drives_stage_name():
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(compute(threads(256), entry_point_name = "find_matches_and_compute_f4"))]
+    pub fn shader_body() {}
+
+    #[spirv(vertex(entry_point_name = "renamed_vs"))]
+    pub fn vertex_body() {}
+    """
+    result = parse_and_generate(code)
+
+    assert "compute find_matches_and_compute_f4 {" in result
+    assert "vertex renamed_vs {" in result
+    assert "compute shader_body {" not in result
+    assert "vertex vertex_body {" not in result
+
+
+def test_rust_gpu_image_macro_types_drive_resource_parameters():
+    code = """
+    use spirv_std::{spirv, Image};
+
+    type Image2d = Image!(2D, type=f32, sampled);
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(descriptor_set = 0, binding = 0)] sampled_tex: &Image2d,
+        #[spirv(descriptor_set = 0, binding = 1)] storage_tex: &Image!(2D, format=rgba16f, sampled=false),
+        #[spirv(descriptor_set = 0, binding = 2)] direct_tex: &Image!(2D, type=f32, sampled),
+    ) {}
+    """
+    result = parse_and_generate(code)
+
+    assert "typedef sampler2D Image2d;" in result
+    assert "fragment main_fs {" in result
+    assert "Image2d sampled_tex @ binding(0)" in result
+    assert "image2D storage_tex @ binding(1)" in result
+    assert "sampler2D direct_tex @ binding(2)" in result
+
+
+def test_rust_gpu_sampled_image_generic_type_drives_resource_parameter():
+    code = """
+    use spirv_std::{spirv, Image};
+    use spirv_std::image::SampledImage;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(descriptor_set = 0, binding = 0)] tex: &SampledImage<Image!(2D, type=f32, sampled)>,
+    ) {}
+    """
+    result = parse_and_generate(code)
+
+    assert "fragment main_fs {" in result
+    assert "sampler2D tex @ binding(0)" in result
+    assert "void main(SampledImage" not in result
+
+
+def test_rust_gpu_builtin_spirv_aliases_drive_parameter_semantics():
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(frag_coord)] in_frag_coord: Vec4,
+        #[spirv(front_facing)] is_front_facing: bool,
+    ) {}
+
+    #[spirv(vertex)]
+    pub fn main_vs(
+        #[spirv(instance_index)] instance_index: u32,
+    ) {}
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(local_invocation_index)] local_index: u32,
+    ) {}
+    """
+    result = parse_and_generate(code)
+
+    assert "fragment main_fs {" in result
+    assert "vec4 in_frag_coord @ gl_FragCoord" in result
+    assert "bool is_front_facing @ gl_FrontFacing" in result
+    assert "vertex main_vs {" in result
+    assert "uint instance_index @ InstanceID" in result
+    assert "compute main_cs {" in result
+    assert "uint local_index @ gl_LocalInvocationIndex" in result
 
 
 def test_rust_shader_stage_local_aliases_shadow_parameter_after_initializer(tmp_path):
@@ -186,7 +465,7 @@ def test_fragment_shader_conversion():
         result = parse_and_generate(code)
         assert "fragment fragment_main {" in result
         assert "vec4 main(vec2 input)" in result
-        assert "vec4" in result
+        assert "return vec4(input.x, input.y, 0.0, 1.0);" in result
     except Exception as e:
         pytest.fail(f"Fragment shader conversion failed: {e}")
 
@@ -5754,6 +6033,7 @@ def test_numeric_literal_suffix_conversion():
         let octal = 0o77usize;
         let grouped_float = 1_000.5f32;
         let exponent = 1.0e-3f32;
+        let trailing_dot = 1.;
         match mode {
             1u32 => hit_one(),
             0xffu32 => hit_hex(),
@@ -5777,6 +6057,7 @@ def test_numeric_literal_suffix_conversion():
         assert "octal = 63;" in result
         assert "grouped_float = 1000.5;" in result
         assert "exponent = 1.0e-3;" in result
+        assert "trailing_dot = 1.;" in result
         assert "case 1:" in result
         assert "case 255:" in result
         assert "i32" not in result

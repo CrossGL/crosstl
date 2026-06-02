@@ -5,6 +5,7 @@ from ..common_ast import (
     BreakNode,
     CastNode,
     ContinueNode,
+    InitializerListNode,
     TextureSampleNode,
 )
 from .DirectxAst import *
@@ -18,9 +19,11 @@ class HLSLToCrossGLConverter:
     def __init__(self):
         self.structured_buffer_types = {
             "Buffer",
+            "ConstantBuffer",
             "RWBuffer",
             "StructuredBuffer",
             "RWStructuredBuffer",
+            "TextureBuffer",
             "AppendStructuredBuffer",
             "ConsumeStructuredBuffer",
         }
@@ -784,6 +787,7 @@ class HLSLToCrossGLConverter:
         return None
 
     def resource_method_descriptor(self, member, arg_count=None, resource_type=None):
+        member = self.templated_method_base(member)
         texture_descriptor = self.texture_method_descriptor(
             member, arg_count, resource_type
         )
@@ -849,9 +853,16 @@ class HLSLToCrossGLConverter:
             }
         return None
 
+    @staticmethod
+    def templated_method_base(member):
+        if isinstance(member, str) and "<" in member:
+            return member.split("<", 1)[0]
+        return member
+
     def resource_method_arguments(
         self, obj, member, rendered_args, descriptor, raw_args=None, is_main=False
     ):
+        member = self.templated_method_base(member)
         drop_trailing_args = descriptor.get("drop_trailing_args", 0)
         if drop_trailing_args and member != "SampleCmpBias":
             rendered_args = rendered_args[:-drop_trailing_args]
@@ -1095,6 +1106,47 @@ class HLSLToCrossGLConverter:
                 qualifiers.append(qualifier_name)
         return f"{' '.join(qualifiers)} " if qualifiers else ""
 
+    def format_global_storage_qualifier_prefix(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        ordered = []
+        if "shared" in qualifiers:
+            ordered.append("shared")
+        if "groupshared" in qualifiers:
+            ordered.append("groupshared")
+        if "static" in qualifiers:
+            ordered.append("static")
+            if "const" in qualifiers:
+                ordered.append("const")
+        return f"{' '.join(ordered)} " if ordered else ""
+
+    def format_interpolation_attributes(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        attributes = []
+
+        if "nointerpolation" in qualifiers:
+            attributes.append("flat")
+        elif "noperspective" in qualifiers:
+            attributes.append("noperspective")
+        elif "linear" in qualifiers:
+            attributes.append("smooth")
+
+        if "centroid" in qualifiers:
+            attributes.append("centroid")
+        elif "sample" in qualifiers:
+            attributes.append("sample")
+
+        return " ".join(f"@ {attribute}" for attribute in attributes)
+
+    def format_semantic_and_interpolation_attributes(self, node, semantic):
+        attributes = []
+        mapped_semantic = self.map_semantic(semantic)
+        if mapped_semantic:
+            attributes.append(mapped_semantic)
+        interpolation_attributes = self.format_interpolation_attributes(node)
+        if interpolation_attributes:
+            attributes.append(interpolation_attributes)
+        return f" {' '.join(attributes)}" if attributes else ""
+
     def format_inline_parameter_attributes(self, parameter):
         mesh_role_attributes = {"mesh_payload", "vertices", "indices", "primitives"}
         rendered = []
@@ -1110,7 +1162,30 @@ class HLSLToCrossGLConverter:
                 rendered.append(f"@ {attr_name}")
         return " ".join(rendered)
 
-    def format_parameter(self, parameter):
+    def infer_ray_parameter_semantic(self, function_qualifier, parameter, index):
+        if getattr(parameter, "semantic", None):
+            return parameter.semantic
+
+        qualifier = str(function_qualifier or "").lower()
+        if qualifier == "ray_miss" and index == 0:
+            return "payload"
+        if qualifier in {"ray_closest_hit", "ray_any_hit"}:
+            if (
+                str(getattr(parameter, "vtype", ""))
+                == "BuiltInTriangleIntersectionAttributes"
+            ):
+                return "hit_attribute"
+            if index == 0:
+                return "payload"
+            if index == 1:
+                return "hit_attribute"
+        if qualifier == "ray_callable" and index == 0:
+            return "callable_data"
+        return None
+
+    def format_parameter(
+        self, parameter, function_qualifier=None, parameter_index=None
+    ):
         prefixes = []
         attributes = self.format_inline_parameter_attributes(parameter)
         if attributes:
@@ -1120,13 +1195,23 @@ class HLSLToCrossGLConverter:
             ).strip()
             if qualifier_prefix:
                 prefixes.append(qualifier_prefix)
+        parameter_name = parameter.name or f"_param{parameter_index}"
         parameter_text = (
-            f"{self.map_variable_type(parameter)} {parameter.name}"
+            f"{self.map_variable_type(parameter)} {parameter_name}"
             f"{self.format_array_suffixes(parameter)}"
         )
-        semantic = self.map_semantic(parameter.semantic)
-        if semantic:
-            parameter_text += f" {semantic}"
+        semantic = self.map_semantic(
+            self.infer_ray_parameter_semantic(
+                function_qualifier, parameter, parameter_index
+            )
+        )
+        interpolation_attributes = self.format_interpolation_attributes(parameter)
+        if semantic or interpolation_attributes:
+            parameter_text += " " + " ".join(
+                attribute
+                for attribute in (semantic, interpolation_attributes)
+                if attribute
+            )
         prefixes.append(parameter_text)
         return " ".join(prefixes)
 
@@ -1911,11 +1996,12 @@ class HLSLToCrossGLConverter:
                 code += f"    struct {node.name} {{\n"
                 for member in node.members:
                     array_suffix = self.format_array_suffixes(member)
-                    semantic = self.map_semantic(member.semantic)
-                    semantic = f" {semantic}" if semantic else ""
+                    attributes = self.format_semantic_and_interpolation_attributes(
+                        member, member.semantic
+                    )
                     code += (
                         f"        {self.map_variable_type(member)} "
-                        f"{member.name}{array_suffix}{semantic};\n"
+                        f"{member.name}{array_suffix}{attributes};\n"
                     )
                 code += "    }\n"
             elif isinstance(node, PragmaNode):
@@ -1929,11 +2015,14 @@ class HLSLToCrossGLConverter:
             code += self.format_attributes(getattr(node, "attributes", []), 1)
             code += self.format_resource_qualifier_attributes(node, 1)
             code += self.format_binding_attributes(node, 1)
-            storage_prefix = self.format_storage_qualifier_prefix(node, {"groupshared"})
+            storage_prefix = self.format_global_storage_qualifier_prefix(node)
             array_suffix = self.format_array_suffixes(node)
+            initializer = ""
+            if getattr(node, "value", None) is not None:
+                initializer = f" = {self.generate_expression(node.value)}"
             code += (
                 f"    {storage_prefix}{self.map_variable_type(node)} "
-                f"{node.name}{array_suffix};\n"
+                f"{node.name}{array_suffix}{initializer};\n"
             )
         if ast.cbuffers:
             code += "    // Constant Buffers\n"
@@ -1960,7 +2049,12 @@ class HLSLToCrossGLConverter:
             if stage_name:
                 code += f"    // {stage_name} Shader\n"
                 code += f"    {stage_name} {{\n"
-                code += self.generate_function(func, skip_attribute_names={"shader"})
+                entry_name = "main" if stage_name.startswith("ray_") else None
+                code += self.generate_function(
+                    func,
+                    skip_attribute_names={"shader"},
+                    entry_name=entry_name,
+                )
                 code += "    }\n\n"
             else:
                 code += self.generate_function(func)
@@ -1972,9 +2066,18 @@ class HLSLToCrossGLConverter:
         code = ""
         for node in ast.cbuffers:
             if isinstance(node, StructNode):
+                attributes = list(getattr(node, "attributes", []) or [])
+                if getattr(node, "is_tbuffer", False):
+                    attributes = [AttributeNode("tbuffer")] + attributes
+                code += self.format_attributes(attributes, 1)
                 code += self.format_binding_attributes(node, 1)
                 code += f"    cbuffer {node.name} {{\n"
                 for member in node.members:
+                    for qualifier in getattr(member, "qualifiers", []) or []:
+                        if qualifier in {"row_major", "column_major"}:
+                            code += f"        @ {qualifier}\n"
+                    code += self.format_attributes(getattr(member, "attributes", []), 2)
+                    code += self.format_binding_attributes(member, 2)
                     array_suffix = self.format_array_suffixes(member)
                     code += (
                         f"        {self.map_variable_type(member)} "
@@ -1983,7 +2086,9 @@ class HLSLToCrossGLConverter:
                 code += "    }\n"
         return code
 
-    def generate_function(self, func, indent=1, skip_attribute_names=None):
+    def generate_function(
+        self, func, indent=1, skip_attribute_names=None, entry_name=None
+    ):
         """Render one HLSL function node as a CrossGL function block."""
         code = self.format_attributes(
             getattr(func, "attributes", []), indent, skip_attribute_names
@@ -1995,11 +2100,17 @@ class HLSLToCrossGLConverter:
         self.current_resource_array_dims = dict(self.global_resource_array_dims)
         for param in func.params:
             self.record_variable_type(param)
-        params = ", ".join(self.format_parameter(p) for p in func.params)
+        qualifier = getattr(func, "qualifier", None)
+        params = ", ".join(
+            self.format_parameter(p, qualifier, index)
+            for index, p in enumerate(func.params)
+        )
         semantic = self.map_semantic(func.semantic)
         semantic = f" {semantic}" if semantic else ""
+        function_name = entry_name or func.name
         code += (
-            f"{self.map_type(func.return_type)} {func.name}({params}){semantic} {{\n"
+            f"{self.map_type(func.return_type)} "
+            f"{function_name}({params}){semantic} {{\n"
         )
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    " * indent + "}\n\n"
@@ -2084,7 +2195,8 @@ class HLSLToCrossGLConverter:
     def generate_get_dimensions_statement(self, stmt, indent=0, is_main=False):
         if not isinstance(stmt.name, MemberAccessNode):
             return None
-        if stmt.name.member != "GetDimensions":
+        member = self.templated_method_base(stmt.name.member)
+        if member != "GetDimensions":
             return None
 
         resource_type = self.expression_raw_type(stmt.name.object)
@@ -2107,7 +2219,7 @@ class HLSLToCrossGLConverter:
         )
         if assignments is None:
             descriptor = self.resource_method_descriptor(
-                "GetDimensions", len(stmt.args), resource_type
+                member, len(stmt.args), resource_type
             )
             function = descriptor["function"] if descriptor else "texture_dimensions"
             diagnostic = (
@@ -2299,15 +2411,23 @@ class HLSLToCrossGLConverter:
         return rendered
 
     def generate_for_loop(self, node, indent, is_main):
-        if isinstance(node.init, VariableNode):
-            array_suffix = self.format_array_suffixes(node.init, is_main)
-            init = (
-                f"{self.map_variable_type(node.init)} "
-                f"{node.init.name}{array_suffix}"
-            )
-            if node.init.value is not None:
-                init += f" = {self.generate_expression(node.init.value, is_main)}"
-            self.record_variable_type(node.init)
+        def render_initializer(initializer):
+            if isinstance(initializer, VariableNode):
+                array_suffix = self.format_array_suffixes(initializer, is_main)
+                text = (
+                    f"{self.map_variable_type(initializer)} "
+                    f"{initializer.name}{array_suffix}"
+                )
+                if initializer.value is not None:
+                    text += f" = {self.generate_expression(initializer.value, is_main)}"
+                self.record_variable_type(initializer)
+                return text
+            return self.generate_expression(initializer, is_main)
+
+        if isinstance(node.init, list):
+            init = ", ".join(render_initializer(item) for item in node.init)
+        elif isinstance(node.init, VariableNode):
+            init = render_initializer(node.init)
         elif node.init is None:
             init = ""
         else:
@@ -2318,11 +2438,16 @@ class HLSLToCrossGLConverter:
             if node.condition is not None
             else ""
         )
-        update = (
-            self.generate_expression(node.update, is_main)
-            if node.update is not None
-            else ""
-        )
+        if isinstance(node.update, list):
+            update = ", ".join(
+                self.generate_expression(expr, is_main) for expr in node.update
+            )
+        else:
+            update = (
+                self.generate_expression(node.update, is_main)
+                if node.update is not None
+                else ""
+            )
 
         code = f"for ({init}; {condition}; {update}) {{\n"
         code += self.generate_function_body(node.body, indent + 1, is_main)
@@ -2408,6 +2533,7 @@ class HLSLToCrossGLConverter:
             if isinstance(expr.name, MemberAccessNode):
                 obj = self.generate_expression(expr.name.object, is_main)
                 member = expr.name.member
+                method_member = self.templated_method_base(member)
                 rendered_args = [
                     self.generate_expression(arg, is_main) for arg in expr.args
                 ]
@@ -2415,7 +2541,7 @@ class HLSLToCrossGLConverter:
                 resource_type = self.expression_raw_type(expr.name.object)
                 resource_base = self.raw_type_base(resource_type)
                 if (
-                    member == "GatherCmpRed"
+                    method_member == "GatherCmpRed"
                     and len(rendered_args) in {7, 8}
                     and resource_base in {"Texture2D", "Texture2DArray"}
                 ):
@@ -2424,23 +2550,23 @@ class HLSLToCrossGLConverter:
                     )
                     if len(rendered_args) == 8:
                         diagnostic = self.resource_method_diagnostic(
-                            member, {"dropped_parameters": ["status output"]}
+                            method_member, {"dropped_parameters": ["status output"]}
                         )
                         return f"{diagnostic} {call}"
                     return call
                 descriptor = self.resource_method_descriptor(
-                    member, len(expr.args), resource_type
+                    method_member, len(expr.args), resource_type
                 )
                 if descriptor:
                     descriptor = self.refine_texture_load_status_descriptor(
-                        member, expr.args, descriptor
+                        method_member, expr.args, descriptor
                     )
                     if descriptor.get("fallback_expression") is not None:
                         call = descriptor["fallback_expression"]
                     else:
                         method_args = self.resource_method_arguments(
                             obj,
-                            member,
+                            method_member,
                             rendered_args,
                             descriptor,
                             expr.args,
@@ -2450,7 +2576,9 @@ class HLSLToCrossGLConverter:
                         result_component = descriptor.get("result_component")
                         if result_component:
                             call = f"{call}{result_component}"
-                    diagnostic = self.resource_method_diagnostic(member, descriptor)
+                    diagnostic = self.resource_method_diagnostic(
+                        method_member, descriptor
+                    )
                     if diagnostic:
                         return f"{diagnostic} {call}"
                     return call
@@ -2526,6 +2654,11 @@ class HLSLToCrossGLConverter:
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             return f"{self.map_type(expr.type_name)}({args})"
+        elif isinstance(expr, InitializerListNode):
+            elements = ", ".join(
+                self.generate_expression(element, is_main) for element in expr.elements
+            )
+            return f"{{{elements}}}"
         elif isinstance(expr, bool):
             return "true" if expr else "false"
         elif isinstance(expr, float):
@@ -2542,7 +2675,13 @@ class HLSLToCrossGLConverter:
         type_name = str(hlsl_type)
         if "<" in type_name and type_name.endswith(">"):
             base, generic_args = type_name.split("<", 1)
+            base = base.strip()
             generic_type = generic_args[:-1].strip()
+            vector_or_matrix_type = self.map_template_vector_or_matrix_type(
+                base, generic_type
+            )
+            if vector_or_matrix_type:
+                return vector_or_matrix_type
             rasterizer_buffer_type = self.map_rasterizer_ordered_buffer_type(
                 base, generic_type
             )
@@ -2557,7 +2696,94 @@ class HLSLToCrossGLConverter:
             if storage_image_type:
                 return storage_image_type
             type_name = base
+        default_template_type = {
+            "vector": "vec4",
+            "matrix": "mat4",
+        }.get(type_name)
+        if default_template_type:
+            return default_template_type
         return self.type_map.get(type_name, type_name)
+
+    def map_template_vector_or_matrix_type(self, base_type, generic_type):
+        args = self.split_generic_arguments(generic_type)
+        if base_type == "vector":
+            scalar_type = args[0] if args else "float"
+            components = self.parse_template_dimension(args[1]) if len(args) > 1 else 4
+            return self.map_template_vector_type(scalar_type, components)
+        if base_type == "matrix":
+            scalar_type = args[0] if args else "float"
+            rows = self.parse_template_dimension(args[1]) if len(args) > 1 else 4
+            cols = self.parse_template_dimension(args[2]) if len(args) > 2 else 4
+            return self.map_template_matrix_type(scalar_type, rows, cols)
+        return None
+
+    def split_generic_arguments(self, generic_type):
+        args = []
+        depth = 0
+        current = []
+        for char in generic_type:
+            if char == "<":
+                depth += 1
+            elif char == ">" and depth:
+                depth -= 1
+            elif char == "," and depth == 0:
+                args.append("".join(current).strip())
+                current = []
+                continue
+            current.append(char)
+        if current or generic_type.strip():
+            args.append("".join(current).strip())
+        return args
+
+    def parse_template_dimension(self, value):
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
+    def map_template_vector_type(self, scalar_type, components):
+        if components is None or components < 1 or components > 4:
+            return None
+        scalar = str(scalar_type).strip()
+        if components == 1:
+            return self.map_type(scalar)
+        prefixes = {
+            "float": "vec",
+            "half": "f16vec",
+            "min16float": "f16vec",
+            "min10float": "f16vec",
+            "float16_t": "f16vec",
+            "double": "dvec",
+            "int": "ivec",
+            "min16int": "i16vec",
+            "min12int": "i16vec",
+            "int16_t": "i16vec",
+            "uint": "uvec",
+            "min16uint": "u16vec",
+            "uint16_t": "u16vec",
+            "bool": "bvec",
+        }
+        prefix = prefixes.get(scalar)
+        if prefix is None:
+            return None
+        return f"{prefix}{components}"
+
+    def map_template_matrix_type(self, scalar_type, rows, cols):
+        if rows is None or cols is None or rows < 2 or rows > 4 or cols < 2 or cols > 4:
+            return None
+        prefixes = {
+            "float": "mat",
+            "half": "f16mat",
+            "min16float": "f16mat",
+            "min10float": "f16mat",
+            "float16_t": "f16mat",
+            "double": "dmat",
+        }
+        prefix = prefixes.get(str(scalar_type).strip())
+        if prefix is None:
+            return None
+        suffix = str(rows) if rows == cols else f"{rows}x{cols}"
+        return f"{prefix}{suffix}"
 
     def map_rasterizer_ordered_buffer_type(self, base_type, element_type):
         buffer_type = {
@@ -2721,14 +2947,14 @@ class HLSLToCrossGLConverter:
         self.indentation += 1
 
         for member in node.members:
-            semantic = ""
-            if member.semantic:
-                semantic = f" {self.map_semantic(member.semantic)}"
+            attributes = self.format_semantic_and_interpolation_attributes(
+                member, member.semantic
+            )
 
             array_suffix = self.format_array_suffixes(member)
             code += (
                 self.get_indent() + f"{self.map_variable_type(member)} "
-                f"{member.name}{array_suffix}{semantic};\n"
+                f"{member.name}{array_suffix}{attributes};\n"
             )
 
         self.indentation -= 1

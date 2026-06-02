@@ -44,12 +44,24 @@ from ..common_ast import (
     WhileNode,
 )
 
+
+class BlockNode(ASTNode):
+    """Metal standalone scoped block."""
+
+    def __init__(self, statements):
+        self.statements = statements
+
+    def __repr__(self):
+        return f"BlockNode(statements={len(self.statements)})"
+
+
 _COMMON_NODES = (
     ASTNode,
     ArrayAccessNode,
     AssignmentNode,
     AttributeNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CallNode,
     CaseNode,

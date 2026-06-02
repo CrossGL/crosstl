@@ -11,7 +11,8 @@ RUST_NUMERIC_LITERAL_RE = re.compile(
     r"0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|"
     r"0[bB][01](?:_?[01])*|"
     r"0[oO][0-7](?:_?[0-7])*|"
-    r"\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d(?:_?\d)*)?"
+    r"\d(?:_?\d)*(?:(?:\.\d(?:_?\d)*)|\.(?![._A-Za-z0-9]))?"
+    r"(?:[eE][+-]?\d(?:_?\d)*)?"
     r")(?P<suffix>(?:[iu](?:8|16|32|64|128|size))|f(?:32|64))?$"
 )
 RUST_RAW_STRING_RE = re.compile(r'^r(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
@@ -121,6 +122,15 @@ class RustToCrossGLConverter:
             "Vec2": "vec2",
             "Vec3": "vec3",
             "Vec4": "vec4",
+            "IVec2": "ivec2",
+            "IVec3": "ivec3",
+            "IVec4": "ivec4",
+            "UVec2": "uvec2",
+            "UVec3": "uvec3",
+            "UVec4": "uvec4",
+            "BVec2": "bvec2",
+            "BVec3": "bvec3",
+            "BVec4": "bvec4",
             # Rust matrix types to CrossGL
             "Mat2<f32>": "mat2",
             "Mat3<f32>": "mat3",
@@ -211,19 +221,30 @@ class RustToCrossGLConverter:
             "vertex_texcoord3": "TexCoord3",
             "vertex_color": "Color",
             "instance_id": "InstanceID",
+            "instance_index": "InstanceID",
             "vertex_id": "VertexID",
+            "vertex_index": "VertexID",
             # Fragment shader semantics
+            "frag_coord": "gl_FragCoord",
             "fragment_position": "gl_Position",
+            "position": "gl_Position",
             "fragment_color": "gl_FragColor",
             "fragment_depth": "gl_FragDepth",
             "front_face": "gl_IsFrontFace",
+            "front_facing": "gl_FrontFacing",
             "primitive_id": "gl_PrimitiveID",
             "point_coord": "gl_PointCoord",
             # Compute shader semantics
             "local_invocation_id": "gl_LocalInvocationID",
+            "local_invocation_index": "gl_LocalInvocationIndex",
             "global_invocation_id": "gl_GlobalInvocationID",
             "workgroup_id": "gl_WorkGroupID",
             "num_workgroups": "gl_NumWorkGroups",
+        }
+        self.spirv_stage_map = {
+            "vertex": "vertex",
+            "fragment": "fragment",
+            "compute": "compute",
         }
 
         self.function_map = {
@@ -680,10 +701,21 @@ class RustToCrossGLConverter:
                     self.get_local_function_item_helper_name(stmt),
                 )
 
-    def generate_scoped_function_body(self, body, indent=1, loop_contexts=None):
+    def generate_scoped_function_body(
+        self,
+        body,
+        indent=1,
+        loop_contexts=None,
+        allow_implicit_final_return=False,
+    ):
         self.push_local_callable_scope()
         try:
-            return self.generate_function_body(body, indent, loop_contexts)
+            return self.generate_function_body(
+                body,
+                indent,
+                loop_contexts,
+                allow_implicit_final_return=allow_implicit_final_return,
+            )
         finally:
             self.pop_local_callable_scope()
 
@@ -738,7 +770,12 @@ class RustToCrossGLConverter:
             name = self.crossgl_identifier(param.name, forbidden)
             aliases[param.name] = name
             used_names.add(name)
-            declarations.append(self.format_typed_declarator(param.vtype, name))
+            semantic = self.get_semantic_from_attributes(
+                getattr(param, "attributes", [])
+            )
+            declarations.append(
+                f"{self.format_typed_declarator(param.vtype, name)}{semantic}"
+            )
             param_type = self.normalize_receiver_type(param.vtype, struct_name)
             param_types.append((name, param_type))
 
@@ -1790,7 +1827,11 @@ class RustToCrossGLConverter:
         self.push_value_type_scope(param_types)
         self.push_local_callable_scope()
         try:
-            body_code = self.generate_function_body(func.body, indent=indent + 1)
+            body_code = self.generate_function_body(
+                func.body,
+                indent=indent + 1,
+                allow_implicit_final_return=True,
+            )
             helper_code = "".join(self.current_closure_helpers)
             code += helper_code
             code += f"{indent_str}{return_type} {func_name}({params_str}) {{\n"
@@ -1817,7 +1858,8 @@ class RustToCrossGLConverter:
             extra_forbidden=local_binding_names,
         )
         return_type = self.map_type(func.return_type)
-        stage_name = self.crossgl_identifier(func.name)
+        entry_point_name = self.get_entry_point_name_from_attributes(func.attributes)
+        stage_name = self.crossgl_identifier(entry_point_name or func.name)
         stage_header = (
             shader_type if stage_name == "main" else f"{shader_type} {stage_name}"
         )
@@ -1831,7 +1873,11 @@ class RustToCrossGLConverter:
         self.push_name_alias_scope(name_aliases)
         self.local_binding_name_scopes.append(local_binding_names)
         try:
-            body_code = self.generate_function_body(func.body, indent=3)
+            body_code = self.generate_function_body(
+                func.body,
+                indent=3,
+                allow_implicit_final_return=True,
+            )
             helper_code = "".join(self.current_closure_helpers)
         finally:
             self.current_function_return_type = previous_return_type
@@ -1849,9 +1895,59 @@ class RustToCrossGLConverter:
         code += "    }\n\n"
         return code
 
-    def generate_function_body(self, body, indent=1, loop_contexts=None):
+    def function_returns_value(self):
+        return_type = self.current_function_return_type
+        if not return_type:
+            return False
+
+        return self.map_type(return_type) != "void"
+
+    def is_implicit_final_return_statement(self, stmt, index, body):
+        if index != len(body) - 1 or not self.function_returns_value():
+            return False
+
+        return not isinstance(
+            stmt,
+            (
+                ConstNode,
+                StaticNode,
+                FunctionNode,
+                LetNode,
+                AssignmentNode,
+                ReturnNode,
+                ForNode,
+                WhileNode,
+                BreakNode,
+                ContinueNode,
+            ),
+        )
+
+    def generate_implicit_final_return_statement(
+        self,
+        stmt,
+        indent,
+        loop_contexts=None,
+    ):
+        if isinstance(stmt, MatchesMacroNode):
+            return self.generate_matches_expression_return(stmt, indent, loop_contexts)
+
+        return self.generate_expression_result(
+            stmt,
+            indent,
+            self.return_result_target,
+            loop_contexts,
+        )
+
+    def generate_function_body(
+        self,
+        body,
+        indent=1,
+        loop_contexts=None,
+        allow_implicit_final_return=False,
+    ):
         code = ""
         indent_str = "    " * indent
+        body = body or []
         loop_contexts = loop_contexts or []
         scoped_aliases = self.local_aliasing_enabled()
         if scoped_aliases:
@@ -1863,8 +1959,21 @@ class RustToCrossGLConverter:
 
         try:
             self.predeclare_local_function_items(body)
-            for stmt in body:
-                if isinstance(stmt, ConstNode):
+            for index, stmt in enumerate(body):
+                if (
+                    allow_implicit_final_return
+                    and self.is_implicit_final_return_statement(
+                        stmt,
+                        index,
+                        body,
+                    )
+                ):
+                    code += self.generate_implicit_final_return_statement(
+                        stmt,
+                        indent,
+                        loop_contexts,
+                    )
+                elif isinstance(stmt, ConstNode):
                     code += self.generate_const_statement(stmt, indent)
                 elif isinstance(stmt, StaticNode):
                     code += self.generate_static_statement(stmt, indent)
@@ -2878,7 +2987,14 @@ class RustToCrossGLConverter:
                 branch, indent, result_target, loop_contexts
             )
         if isinstance(branch, list):
-            return self.generate_scoped_function_body(branch, indent, loop_contexts)
+            return self.generate_scoped_function_body(
+                branch,
+                indent,
+                loop_contexts,
+                allow_implicit_final_return=(
+                    result_target is self.return_result_target
+                ),
+            )
         if branch is not None:
             return self.generate_expression_result(
                 branch, indent, result_target, loop_contexts
@@ -3534,6 +3650,9 @@ class RustToCrossGLConverter:
                 f"{self.SCALAR_TWO_ARG_METHOD_MAP[method_name]}"
                 f"({obj}, {args[0]}, {args[1]})"
             )
+
+        if method_name == "is_multiple_of" and len(args) == 1:
+            return f"(({obj} % {args[0]}) == 0)"
 
         if method_name == "length" and not args:
             return f"length({obj})"
@@ -8445,6 +8564,10 @@ class RustToCrossGLConverter:
         return resolved
 
     def map_builtin_type(self, rust_type):
+        image_macro_type = self.map_image_macro_type(rust_type)
+        if image_macro_type is not None:
+            return image_macro_type
+
         for type_name in self.type_lookup_names(rust_type):
             mapped = self.type_map.get(type_name)
             if mapped is not None:
@@ -8473,6 +8596,9 @@ class RustToCrossGLConverter:
     def map_resource_generic_type(self, base_name, args):
         if not args:
             return None
+
+        if base_name == "SampledImage":
+            return self.map_sampled_image_generic_type(args[0])
 
         sampled_texture_map = {
             "Texture1D": "sampler1D",
@@ -8526,6 +8652,167 @@ class RustToCrossGLConverter:
         if element_type.startswith("i"):
             return f"iimage{suffix}"
         return f"image{suffix}"
+
+    def map_sampled_image_generic_type(self, image_type):
+        image_config = self.parse_image_macro_type(image_type)
+        if image_config is not None:
+            suffix = self.image_macro_dimension_suffix(image_config)
+            if suffix is None:
+                return None
+
+            prefix = self.image_macro_sampler_prefix(image_config)
+            if image_config["depth"] is True:
+                return f"{prefix}{suffix}Shadow"
+            return f"{prefix}{suffix}"
+
+        mapped_image_type = self.map_type(image_type)
+        sampler_type = self.sampled_image_type_from_mapped_image(mapped_image_type)
+        if sampler_type is not None:
+            return sampler_type
+
+        return None
+
+    def sampled_image_type_from_mapped_image(self, mapped_image_type):
+        if not isinstance(mapped_image_type, str):
+            return None
+
+        if mapped_image_type.startswith("sampler"):
+            return mapped_image_type
+        if mapped_image_type.startswith("uimage"):
+            return f"usampler{mapped_image_type[len('uimage') :]}"
+        if mapped_image_type.startswith("iimage"):
+            return f"isampler{mapped_image_type[len('iimage') :]}"
+        if mapped_image_type.startswith("image"):
+            return f"sampler{mapped_image_type[len('image') :]}"
+        return None
+
+    def map_image_macro_type(self, rust_type):
+        image_config = self.parse_image_macro_type(rust_type)
+        if image_config is None:
+            return None
+
+        suffix = self.image_macro_dimension_suffix(image_config)
+        if suffix is None:
+            return None
+
+        if image_config["sampled"] is True:
+            prefix = self.image_macro_sampler_prefix(image_config)
+            if image_config["depth"] is True:
+                return f"{prefix}{suffix}Shadow"
+            return f"{prefix}{suffix}"
+
+        prefix = self.image_macro_storage_prefix(image_config)
+        return f"{prefix}{suffix}"
+
+    def parse_image_macro_type(self, rust_type):
+        if not isinstance(rust_type, str):
+            return None
+
+        match = re.match(
+            r"^(?:(?:[A-Za-z_][A-Za-z0-9_]*)::)*Image!\((?P<args>.*)\)$",
+            rust_type,
+        )
+        if match is None:
+            return None
+
+        args = self.split_generic_arguments(match.group("args"))
+        if not args:
+            return None
+
+        config = {
+            "dimension": args[0].replace(" ", ""),
+            "type": None,
+            "format": None,
+            "sampled": None,
+            "multisampled": False,
+            "arrayed": False,
+            "depth": None,
+        }
+
+        for arg in args[1:]:
+            key, value = self.split_image_macro_argument(arg)
+            if key in {"type", "format"}:
+                config[key] = value
+            elif key in {"sampled", "multisampled", "arrayed", "depth"}:
+                config[key] = self.parse_image_macro_bool(value)
+
+        return config
+
+    def split_image_macro_argument(self, arg):
+        if "=" not in arg:
+            return arg.strip(), "true"
+
+        key, value = arg.split("=", 1)
+        return key.strip(), value.strip()
+
+    def parse_image_macro_bool(self, value):
+        value = (value or "").strip().lower()
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        return None
+
+    def image_macro_dimension_suffix(self, config):
+        suffix_map = {
+            "1d": "1D",
+            "2d": "2D",
+            "3d": "3D",
+            "cube": "Cube",
+        }
+        suffix = suffix_map.get(config["dimension"].lower())
+        if suffix is None:
+            return None
+
+        if config["multisampled"] is True:
+            if suffix != "2D":
+                return None
+            suffix = f"{suffix}MS"
+
+        if config["arrayed"] is True:
+            suffix = f"{suffix}Array"
+
+        return suffix
+
+    def image_macro_sampler_prefix(self, config):
+        if config["depth"] is True:
+            return "sampler"
+
+        family = self.image_macro_numeric_family(config)
+        if family == "u":
+            return "usampler"
+        if family == "i":
+            return "isampler"
+        return "sampler"
+
+    def image_macro_storage_prefix(self, config):
+        family = self.image_macro_numeric_family(config)
+        if family == "u":
+            return "uimage"
+        if family == "i":
+            return "iimage"
+        return "image"
+
+    def image_macro_numeric_family(self, config):
+        sample_type = config.get("type")
+        if sample_type:
+            sample_type = sample_type.rsplit("::", 1)[-1].strip().lower()
+            if sample_type.startswith("u"):
+                return "u"
+            if sample_type.startswith("i"):
+                return "i"
+            return "f"
+
+        image_format = config.get("format")
+        if image_format:
+            image_format = image_format.rsplit("::", 1)[-1].strip().lower()
+            image_format = image_format.replace("_", "")
+            if image_format.endswith("ui"):
+                return "u"
+            if image_format.endswith("i") and not image_format.endswith("ui"):
+                return "i"
+
+        return "f"
 
     def resolve_type_alias_target(self, rust_type):
         generic = self.parse_generic_type(rust_type)
@@ -8772,7 +9059,39 @@ class RustToCrossGLConverter:
                 mapped = self.attribute_map.get(attr.name)
                 if mapped in ["vertex", "fragment", "compute"]:
                     return mapped
+                if attr.name == "spirv":
+                    for arg in attr.args:
+                        mapped = self.spirv_stage_map.get(arg)
+                        if mapped:
+                            return mapped
         return None
+
+    def get_entry_point_name_from_attributes(self, attributes):
+        if not attributes:
+            return None
+
+        for attr in attributes:
+            if not isinstance(attr, AttributeNode) or attr.name != "spirv":
+                continue
+
+            entry_point_name = self.attribute_arg_value(attr.args, "entry_point_name")
+            if entry_point_name is not None:
+                return self.unquote_attribute_string(entry_point_name)
+
+        return None
+
+    def unquote_attribute_string(self, value):
+        if not isinstance(value, str):
+            return value
+
+        raw_string = RUST_RAW_STRING_RE.match(value)
+        if raw_string:
+            return raw_string.group(2)
+
+        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+            return value[1:-1]
+
+        return value
 
     def get_semantic_from_attributes(self, attributes):
         if not attributes:
@@ -8782,11 +9101,29 @@ class RustToCrossGLConverter:
             if isinstance(attr, AttributeNode):
                 if attr.name in self.semantic_map:
                     return f" @ {self.semantic_map[attr.name]}"
+                if attr.name == "spirv":
+                    for arg in attr.args:
+                        if arg in self.semantic_map:
+                            return f" @ {self.semantic_map[arg]}"
+
+                    binding_index = self.attribute_arg_value(attr.args, "binding")
+                    if binding_index is not None:
+                        return f" @ binding({binding_index})"
                 elif attr.name == "location" and attr.args:
                     return f" @ location({attr.args[0]})"
                 elif attr.name == "binding" and attr.args:
                     return f" @ binding({attr.args[0]})"
         return ""
+
+    def attribute_arg_value(self, args, key):
+        for index, arg in enumerate(args):
+            if arg != key:
+                continue
+            if index + 2 < len(args) and args[index + 1] == "=":
+                return args[index + 2]
+            if index + 1 < len(args):
+                return args[index + 1]
+        return None
 
     def visit_StructNode(self, node):
         code = f"struct {node.name} {{\n"
@@ -8804,7 +9141,12 @@ class RustToCrossGLConverter:
     def visit_FunctionNode(self, node):
         shader_type = self.get_shader_type_from_attributes(node.attributes)
         if shader_type:
-            return f"{shader_type} {{\n{self.generate_function_body(node.body, 1)}}}\n"
+            body = self.generate_function_body(
+                node.body,
+                1,
+                allow_implicit_final_return=True,
+            )
+            return f"{shader_type} {{\n{body}}}\n"
         else:
             return self.generate_function(node, 0)
 

@@ -98,6 +98,28 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
     assert "memoryBarrierShared();" not in generated_code
     assert "deviceMemoryBarrier();" not in generated_code
     assert "memoryBarrierBuffer();" not in generated_code
+
+
+def test_directx_compute_rootsignature_attribute_is_not_return_semantic():
+    shader = """
+    shader RootSignatureCompute {
+        compute {
+            @ RootSignature("RootFlags(0), RootConstants(b0, num32BitConstants = 1)")
+            @ numthreads(8, 1, 1)
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        '[RootSignature("RootFlags(0), RootConstants(b0, num32BitConstants = 1)")]'
+        in generated_code
+    )
+    assert "[numthreads(8, 1, 1)]" in generated_code
+    assert "return semantic 'RootSignature'" not in generated_code
     assert "memoryBarrierImage();" not in generated_code
     assert "allMemoryBarrier();" not in generated_code
 
@@ -6053,6 +6075,29 @@ def test_directx_ray_tracing_intrinsics_validate_stage_and_arity():
 
 
 def test_directx_ray_tracing_intrinsics_validate_payload_arguments():
+    reverse_imported_trace_ray_code = """
+    shader ReverseImportedTraceRayPayload {
+        accelerationStructure scene @binding(0);
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray = {vec3(0.0), 0.0, vec3(0.0, 0.0, 1.0), 1000.0};
+                RayPayload payload = {vec3(0.0)};
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(reverse_imported_trace_ray_code), "ray_generation"
+    )
+    assert "RaytracingAccelerationStructure scene : register(t0);" in generated
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payload);" in generated
+
     valid_trace_ray_code = """
     shader ValidTraceRayPayload {
         struct RayPayload {
@@ -11644,6 +11689,24 @@ def test_compute_stage_validates_system_value_parameter_types():
     assert "uint3 dispatchId : SV_DispatchThreadID" in generated
     assert "uint groupIndex : SV_GroupIndex" in generated
 
+    valid_group_vec2_code = """
+    shader ValidComputeGroupVec2SystemValues {
+        compute {
+            void main(
+                uvec2 groupId @ SV_GroupID,
+                uvec2 groupThreadId @ SV_GroupThreadID,
+                uint groupIndex @ SV_GroupIndex
+            ) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_group_vec2_code), "compute"
+    )
+    assert "uint2 groupId : SV_GroupID" in generated
+    assert "uint2 groupThreadId : SV_GroupThreadID" in generated
+    assert "uint groupIndex : SV_GroupIndex" in generated
+
 
 def test_directx_thread_system_crossgl_semantics_lower_and_validate():
     invalid_code = """
@@ -13945,24 +14008,47 @@ def test_directx_texture_resources_and_sampling():
     assert generated_code.count("// Fragment Shader") == 1
 
 
-def test_directx_rejects_non_resource_shadow_of_global_resource():
+def test_directx_allows_non_resource_shadow_of_global_resource_when_not_used_as_resource():
     shader = """
     shader ResourceShadow {
-        sampler2D colorMap;
-        sampler linearSampler;
+        sampler2D Luma;
+        sampler2D texNormal;
 
         struct FSInput {
             vec2 uv;
         };
 
-        vec4 shade(float colorMap, FSInput input) {
-            float linearSampler = 1.0;
-            return vec4(colorMap + linearSampler);
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float Luma = input.uv.x;
+                vec3 texNormal = vec3(input.uv, 1.0);
+                return vec4(Luma + texNormal.z);
+            }
         }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D Luma : register(t0);" in generated_code
+    assert "Texture2D texNormal : register(t1);" in generated_code
+    assert "float Luma = input.uv.x;" in generated_code
+    assert "float3 texNormal = float3(input.uv, 1.0);" in generated_code
+
+
+def test_directx_rejects_texture_call_with_shadowing_non_resource_local():
+    shader = """
+    shader InvalidResourceShadow {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv;
+        };
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return shade(1.0, input);
+                float colorMap = input.uv.x;
+                return texture(colorMap, input.uv);
             }
         }
     }
@@ -13971,8 +14057,8 @@ def test_directx_rejects_non_resource_shadow_of_global_resource():
     with pytest.raises(
         ValueError,
         match=(
-            "Non-resource local declaration\\(s\\) shadow DirectX global "
-            "resource\\(s\\): colorMap, linearSampler"
+            "DirectX texture operation 'texture' requires a declared texture "
+            "or image resource argument: colorMap"
         ),
     ):
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
@@ -16148,6 +16234,38 @@ def test_directx_explicit_rgba_float_image_formats():
     assert "image[pixelLayer] = (oldValue + value);" in generated_code
     assert "image[voxel] = (oldValue + value);" in generated_code
     assert "RWTexture2D<int> image" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_directx_default_float4_image_allows_three_component_load_store():
+    shader = """
+    shader ImageVec3 {
+        image2D target;
+
+        vec3 touch(image2D image, ivec2 pixel, vec3 value) {
+            vec3 oldValue = imageLoad(image, pixel);
+            imageStore(image, pixel, value);
+            return oldValue;
+        }
+
+        compute {
+            void main() {
+                vec3 color = touch(target, ivec2(0, 0), vec3(1.0, 0.5, 0.25));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "RWTexture2D<float4> target : register(u0);" in generated_code
+    assert (
+        "float3 touch(RWTexture2D<float4> image, int2 pixel, float3 value)"
+        in generated_code
+    )
+    assert "float3 oldValue = image[pixel].xyz;" in generated_code
+    assert "image[pixel] = float4(value, 0.0);" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
 

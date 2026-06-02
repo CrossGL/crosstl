@@ -39,6 +39,20 @@ def test_preprocessor_function_like_macro_expansion():
     assert "2.0" in values
 
 
+def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation():
+    code = """
+    #define DECLARE_TYPED(name, type) type name;
+    DECLARE_TYPED(
+        value,
+        float);
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "DECLARE_TYPED(" in output
+    assert "float value" not in output
+
+
 def test_preprocessor_include_with_search_path(tmp_path):
     include_file = tmp_path / "constants.metal"
     include_file.write_text("constant int from_include = 7;\n", encoding="utf-8")

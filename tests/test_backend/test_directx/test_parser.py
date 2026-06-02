@@ -1,12 +1,17 @@
+import math
 import textwrap
 
 import pytest
 
 from crosstl.backend.common_ast import (
+    CastNode,
     FunctionCallNode,
+    InitializerListNode,
     MemberAccessNode,
     TextureSampleNode,
+    VectorConstructorNode,
 )
+from crosstl.backend.DirectX.DirectxAst import ForNode, IfNode, VariableNode
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 
@@ -214,12 +219,71 @@ def test_parse_vertex_pixel_shader():
     assert_parses(VERTEX_PIXEL_HLSL)
 
 
+def test_parse_brace_initializer_declarations():
+    ast = parse_code(textwrap.dedent("""
+            struct MyPayload {
+                int val;
+            };
+
+            struct RayDesc {
+                float3 Origin;
+                float TMin;
+                float3 Direction;
+                float TMax;
+            };
+
+            void RayGen() {
+                float3 origin = float3(0.0, 0.0, 0.0);
+                float3 rayDir = float3(0.0, 0.0, 1.0);
+                RayDesc myRay = { origin, 0.0f, rayDir, 10000.0f };
+                MyPayload payload = { 0 };
+            }
+            """))
+
+    raygen = next(function for function in ast.functions if function.name == "RayGen")
+    my_ray = next(stmt for stmt in raygen.body if getattr(stmt, "name", "") == "myRay")
+    payload = next(
+        stmt for stmt in raygen.body if getattr(stmt, "name", "") == "payload"
+    )
+
+    assert isinstance(my_ray.value, InitializerListNode)
+    assert len(my_ray.value.elements) == 4
+    assert isinstance(payload.value, InitializerListNode)
+    assert payload.value.elements == [0]
+
+
+def test_parse_global_static_const_array_initializer():
+    ast = parse_code("static const float Weights[2] = { 0.25f, 0.75f };")
+
+    weights = ast.global_variables[0]
+    assert weights.name == "Weights"
+    assert weights.vtype == "float"
+    assert weights.qualifiers == ["static", "const"]
+    assert weights.is_const is True
+    assert weights.array_sizes == [2]
+    assert isinstance(weights.value, InitializerListNode)
+    assert weights.value.elements == [0.25, 0.75]
+
+
 def test_parse_control_flow_and_operators():
     assert_parses(CONTROL_FLOW_HLSL)
 
 
 def test_parse_arrays_and_indexing():
     assert_parses(ARRAYS_HLSL)
+
+
+def test_parse_scalar_literal_swizzle_from_saschawillems_input_attachment():
+    ast = parse_code("""
+    float4 main() : SV_Target0 {
+        return 0.xxxx;
+    }
+    """)
+
+    value = ast.functions[0].body[0].value
+    assert isinstance(value, MemberAccessNode)
+    assert value.object == 0
+    assert value.member == "xxxx"
 
 
 def test_parse_resources_and_bindings():
@@ -232,6 +296,79 @@ def test_parse_function_overloads_and_calls():
 
 def test_parse_compute_attributes_and_semantics():
     assert_parses(COMPUTE_HLSL)
+
+
+def test_parse_noperspective_interpolation_modifier_from_hlsl_docs():
+    ast = parse_code("""
+    struct PSInput {
+        centroid noperspective float2 uv : TEXCOORD0;
+        noperspective float4 color : COLOR0;
+    };
+
+    float4 PSMain(noperspective float4 color : COLOR0) : SV_Target0 {
+        return color;
+    }
+    """)
+
+    struct = ast.structs[0]
+    uv, color = struct.members
+    param = ast.functions[0].params[0]
+
+    assert uv.vtype == "float2"
+    assert uv.name == "uv"
+    assert uv.semantic == "TEXCOORD0"
+    assert uv.qualifiers == ["centroid", "noperspective"]
+    assert color.vtype == "float4"
+    assert color.qualifiers == ["noperspective"]
+    assert param.vtype == "float4"
+    assert param.qualifiers == ["noperspective"]
+
+
+def test_parse_contextual_shared_storage_modifier_from_hlsl_docs():
+    ast = parse_code("""
+    shared float cachedWeight;
+    Texture2D<float> shared : register(t0);
+
+    float4 PSMain(float2 uv : TEXCOORD0) : SV_Target0 {
+        return shared.SampleLevel(samplerState, uv, 0.0);
+    }
+    """)
+
+    cached_weight = ast.global_variables[0]
+    shared_texture = ast.global_variables[1]
+
+    assert cached_weight.name == "cachedWeight"
+    assert cached_weight.vtype == "float"
+    assert cached_weight.qualifiers == ["shared"]
+    assert shared_texture.name == "shared"
+    assert shared_texture.vtype == "Texture2D<float>"
+    assert shared_texture.qualifiers == []
+
+
+def test_parse_rootsignature_macro_adjacent_string_literals():
+    code = r"""
+    #define RootSig \
+        "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT|ALLOW_STREAM_OUTPUT)," \
+        "DescriptorTable(SRV(t0, numDescriptors=1))," \
+        "DescriptorTable(UAV(u0, numDescriptors=2))," \
+        "DescriptorTable(Sampler(s0, numDescriptors=2))"
+
+    [RootSignature(RootSig)]
+    float4 RootSignaturePS(float4 pos : SV_POSITION) : SV_TARGET {
+        return pos;
+    }
+    """
+
+    ast = parse_code(code)
+    attributes = ast.functions[0].attributes
+
+    assert attributes[0].name == "RootSignature"
+    assert attributes[0].args == [
+        '"RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT|ALLOW_STREAM_OUTPUT),'
+        "DescriptorTable(SRV(t0, numDescriptors=1)),"
+        "DescriptorTable(UAV(u0, numDescriptors=2)),"
+        'DescriptorTable(Sampler(s0, numDescriptors=2))"'
+    ]
 
 
 def test_parse_interpolation_intrinsics_keep_free_function_calls():
@@ -255,6 +392,58 @@ def test_parse_interpolation_intrinsics_keep_free_function_calls():
     assert "EvaluateAttributeAtSample" in free_calls
     assert "EvaluateAttributeSnapped" in free_calls
     assert "EvaluateAttributeCentroid" in free_calls
+
+
+def test_parse_namespace_block_flattens_and_preserves_scoped_call_name():
+    code = """
+    using namespace dx;
+
+    namespace CrossBilateral {
+        float Weight(float value) {
+            return value;
+        }
+    }
+
+    float UseWeight(float value) {
+        return CrossBilateral::Weight(value);
+    }
+    """
+
+    ast = parse_code(code)
+    calls = [
+        node.name
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, FunctionCallNode) and isinstance(node.name, str)
+    ]
+
+    assert [function.name for function in ast.functions] == ["Weight", "UseWeight"]
+    assert "CrossBilateral::Weight" in calls
+
+
+def test_parse_clip_intrinsic_expression_statement():
+    code = """
+    float4 PSMain(float4 color : COLOR0) : SV_Target {
+        clip(color.a < 0.1f ? -1 : 1);
+        return color;
+    }
+    """
+
+    ast = parse_code(code)
+    calls = [
+        node
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, FunctionCallNode) and node.name == "clip"
+    ]
+
+    assert len(calls) == 1
+
+
+def test_parse_export_function_specifier():
+    ast = parse_code("export void LogTraceRayStart() { }")
+
+    assert ast.functions[0].name == "LogTraceRayStart"
+    assert ast.functions[0].return_type == "void"
+    assert "export" in ast.functions[0].qualifiers
 
 
 def test_parse_preprocessor_directives():
@@ -287,6 +476,35 @@ def test_parse_enum_and_typedef():
     assert_parses(code)
 
 
+def test_parse_anonymous_enum_constants_inside_namespace_from_directx_samples():
+    code = """
+    namespace SMem
+    {
+        namespace Size
+        {
+            enum {
+                Histogram = NUM_KEYS,
+            };
+        }
+
+        namespace Offset
+        {
+            enum {
+                Histogram = 0,
+                Key8b = Size::Histogram,
+            };
+        }
+    }
+    """
+    ast = parse_code(code)
+
+    assert len(ast.enums) == 2
+    assert ast.enums[0].name == "AnonymousEnum_1"
+    assert ast.enums[1].name == "AnonymousEnum_2"
+    assert [name for name, _ in ast.enums[0].members] == ["Histogram"]
+    assert [name for name, _ in ast.enums[1].members] == ["Histogram", "Key8b"]
+
+
 def test_parse_resource_arrays_and_register_space():
     code = """
     Texture2D textures[4] : register(t0, space1);
@@ -297,6 +515,39 @@ def test_parse_resource_arrays_and_register_space():
     }
     """
     assert_parses(code)
+
+
+def test_parse_sampler_state_initializer_blocks_from_microsoft_docs():
+    code = """
+    SamplerState MeshTextureSampler
+    {
+        Filter = MIN_MAG_MIP_LINEAR;
+        AddressU = Wrap;
+        AddressV = Wrap;
+    };
+
+    SamplerComparisonState ShadowSampler
+    {
+        Filter = COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+        AddressU = Clamp;
+        ComparisonFunc = LESS;
+    };
+    """
+    ast = parse_code(code)
+    mesh_sampler, shadow_sampler = ast.global_variables
+
+    assert mesh_sampler.vtype == "SamplerState"
+    assert mesh_sampler.sampler_state == [
+        ("Filter", "MIN_MAG_MIP_LINEAR"),
+        ("AddressU", "Wrap"),
+        ("AddressV", "Wrap"),
+    ]
+    assert shadow_sampler.vtype == "SamplerComparisonState"
+    assert shadow_sampler.sampler_state == [
+        ("Filter", "COMPARISON_MIN_MAG_LINEAR_MIP_POINT"),
+        ("AddressU", "Clamp"),
+        ("ComparisonFunc", "LESS"),
+    ]
 
 
 def test_parse_rasterizer_ordered_resources_and_register_space():
@@ -371,6 +622,82 @@ def test_parse_min_precision_vector_and_matrix_types():
     assert local_uv.vtype == "min10float2"
 
 
+def test_parse_template_style_vector_matrix_types_and_constructors():
+    ast = parse_code("""
+    struct TemplateTypes {
+        vector<float, 3> normal : NORMAL;
+        matrix<float, 3, 3> basis;
+    };
+
+    vector<double, 4> MakeTemplateVector(
+        vector<float, 3> input : TEXCOORD0
+    ) : SV_Target0 {
+        matrix<float, 2, 3> localBasis;
+        vector<float> defaultWidth = vector<float>(1.0, 2.0, 3.0, 4.0);
+        return vector<double, 4>(input.x, input.y, input.z, 1.0);
+    }
+    """)
+
+    struct = ast.structs[0]
+    func = ast.functions[0]
+    default_width = next(
+        node
+        for node in iter_ast_nodes(func)
+        if getattr(node, "name", None) == "defaultWidth"
+    )
+    local_basis = next(
+        node
+        for node in iter_ast_nodes(func)
+        if getattr(node, "name", None) == "localBasis"
+    )
+
+    assert [member.vtype for member in struct.members] == [
+        "vector<float, 3>",
+        "matrix<float, 3, 3>",
+    ]
+    assert func.return_type == "vector<double, 4>"
+    assert func.params[0].vtype == "vector<float, 3>"
+    assert local_basis.vtype == "matrix<float, 2, 3>"
+    assert default_width.vtype == "vector<float>"
+    assert isinstance(default_width.value, VectorConstructorNode)
+    assert default_width.value.type_name == "vector<float>"
+    assert isinstance(func.body[-1].value, VectorConstructorNode)
+    assert func.body[-1].value.type_name == "vector<double, 4>"
+
+
+def test_parse_template_function_prefix_from_raytracing_sample():
+    ast = parse_code("""
+    template<typename T>
+    T InterpolateAttribute(T vertexAttribute[3], float2 barycentrics)
+    {
+        return vertexAttribute[0] +
+            barycentrics.x * (vertexAttribute[1] - vertexAttribute[0]) +
+            barycentrics.y * (vertexAttribute[2] - vertexAttribute[0]);
+    }
+    """)
+
+    function = ast.functions[0]
+    assert function.name == "InterpolateAttribute"
+    assert function.return_type == "T"
+    assert function.params[0].vtype == "T"
+    assert function.params[0].array_sizes == [3]
+
+
+def test_skip_top_level_raw_text_from_public_raytracing_samples():
+    ast = parse_code("""
+    ToDo fix or remove
+    Texture2D<float> g_inValue : register(t0);
+
+    On change, update triangle/vertex definitiions.
+    static const float GRASS_X[3][7] = {
+        {-0.329877, 0.329877, -0.212571, 0.212571, -0.173286, 0.173286, 0.000000 }
+    };
+    """)
+
+    names = [variable.name for variable in ast.global_variables]
+    assert names == ["g_inValue", "GRASS_X"]
+
+
 def test_parse_cbuffer_preserves_buffer_and_member_bindings():
     code = """
     cbuffer FrameData : register(b0, space1) {
@@ -390,6 +717,80 @@ def test_parse_cbuffer_preserves_buffer_and_member_bindings():
     assert cbuffer.members[1].name == "tint"
     assert cbuffer.members[1].packoffset == "c4"
     assert cbuffer.members[1].register is None
+
+
+def test_parse_anonymous_old_style_cbuffer_uses_synthetic_name():
+    code = """
+    cbuffer : register(b1)
+    {
+        float4 a;
+        int2 b;
+    };
+    """
+
+    ast = parse_code(code)
+    cbuffer = ast.cbuffers[0]
+
+    assert cbuffer.name == "AnonymousCBuffer_b1"
+    assert cbuffer.register == "b1"
+    assert [member.name for member in cbuffer.members] == ["a", "b"]
+    assert [member.vtype for member in cbuffer.members] == ["float4", "int2"]
+
+
+def test_parse_tbuffer_preserves_texture_buffer_metadata():
+    ast = parse_code("""
+    tbuffer LookupData : register(t3, space2) {
+        float4 values[4] : packoffset(c0);
+        float scale : packoffset(c4.x);
+    };
+    """)
+
+    tbuffer = ast.cbuffers[0]
+
+    assert tbuffer.name == "LookupData"
+    assert tbuffer.buffer_kind == "tbuffer"
+    assert tbuffer.is_tbuffer is True
+    assert tbuffer.register == "t3, space2"
+    assert [member.name for member in tbuffer.members] == ["values", "scale"]
+    assert tbuffer.members[0].array_sizes == [4]
+    assert tbuffer.members[0].packoffset == "c0"
+    assert tbuffer.members[1].packoffset == "c4.x"
+
+
+def test_parse_object_style_buffer_resource_templates():
+    ast = parse_code("""
+    struct FrameConstants {
+        float4 tint;
+    };
+    ConstantBuffer<FrameConstants> frame : register(b2, space1);
+    TextureBuffer<FrameConstants> lookup : register(t5, space3);
+    """)
+
+    globals_by_name = {node.name: node for node in ast.global_variables}
+
+    assert globals_by_name["frame"].vtype == "ConstantBuffer<FrameConstants>"
+    assert globals_by_name["frame"].register == "b2, space1"
+    assert globals_by_name["lookup"].vtype == "TextureBuffer<FrameConstants>"
+    assert globals_by_name["lookup"].register == "t5, space3"
+
+
+def test_parse_cxx11_namespaced_attribute_on_cbuffer():
+    ast = parse_code("""
+    [[vk::push_constant]]
+    cbuffer PushConstants : register(b0, space1) {
+        float4 tint : packoffset(c0);
+    };
+    """)
+
+    cbuffer = ast.cbuffers[0]
+
+    assert cbuffer.name == "PushConstants"
+    assert cbuffer.register == "b0, space1"
+    assert cbuffer.members[0].name == "tint"
+    assert cbuffer.members[0].packoffset == "c0"
+    assert len(cbuffer.attributes) == 1
+    assert cbuffer.attributes[0].name == "vk::push_constant"
+    assert cbuffer.attributes[0].args == []
 
 
 def test_parse_geometry_shader():
@@ -460,6 +861,39 @@ def test_parse_mesh_task_shaders():
     assert_parses(code)
 
 
+def test_parse_pascal_case_mesh_attributes_infer_mesh_stage():
+    code = """
+    struct VertexOut {
+        float4 position : SV_Position;
+    };
+
+    [NumThreads(128, 1, 1)]
+    [OutputTopology(\"triangle\")]
+    void main(
+        out indices uint3 tris[1],
+        out vertices VertexOut verts[1]
+    ) {
+        SetMeshOutputCounts(1, 1);
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.name == "main"
+    assert function.qualifier == "mesh"
+    assert [attribute.name for attribute in function.attributes] == [
+        "NumThreads",
+        "OutputTopology",
+    ]
+    assert [attribute.name for attribute in function.params[0].attributes] == [
+        "indices"
+    ]
+    assert [attribute.name for attribute in function.params[1].attributes] == [
+        "vertices"
+    ]
+
+
 def test_parse_raytracing_shader():
     code = """
     RaytracingAccelerationStructure accel : register(t0, space1);
@@ -488,6 +922,46 @@ def test_parse_raytracing_shader_stages():
     assert_parses(code)
 
 
+def test_parse_raytracing_payload_parameter_named_payload():
+    ast = parse_code("""
+    struct Payload {
+        float3 hitValue;
+        bool shadowed;
+    };
+
+    struct Attributes {
+        float2 bary;
+    };
+
+    [shader(\"closesthit\")]
+    void ClosestHit(inout Payload payload, in Attributes attribs) {
+        payload.shadowed = true;
+    }
+
+    [shader(\"miss\")]
+    void Miss(inout Payload payload) {
+        payload.shadowed = false;
+    }
+    """)
+
+    closest_hit = ast.functions[0]
+    miss = ast.functions[1]
+
+    assert closest_hit.qualifier == "ray_closest_hit"
+    assert closest_hit.params[0].vtype == "Payload"
+    assert closest_hit.params[0].name == "payload"
+    assert closest_hit.params[0].qualifiers == ["inout"]
+    assert closest_hit.params[0].attributes == []
+    assert closest_hit.params[1].vtype == "Attributes"
+    assert closest_hit.params[1].name == "attribs"
+    assert closest_hit.params[1].qualifiers == ["in"]
+    assert miss.qualifier == "ray_miss"
+    assert miss.params[0].vtype == "Payload"
+    assert miss.params[0].name == "payload"
+    assert miss.params[0].qualifiers == ["inout"]
+    assert miss.params[0].attributes == []
+
+
 def test_parse_additional_attributes():
     code = """
     [earlydepthstencil]
@@ -512,6 +986,22 @@ def test_parse_additional_attributes():
     void AttrMain() { }
     """
     assert_parses(code)
+
+
+def test_parse_cxx11_namespaced_attribute_on_top_level_resource_declaration():
+    ast = parse_code("""
+    [[vk::binding(3, 1)]]
+    Texture2D<float4> texture2 : register(t0, space0);
+    """)
+
+    resource = ast.global_variables[0]
+
+    assert resource.name == "texture2"
+    assert resource.vtype == "Texture2D<float4>"
+    assert resource.register == "t0, space0"
+    assert len(resource.attributes) == 1
+    assert resource.attributes[0].name == "vk::binding"
+    assert resource.attributes[0].args == [3, 1]
 
 
 def test_parse_wave_intrinsics():
@@ -962,6 +1452,286 @@ def test_parse_resource_method_ast_shapes():
         "Append",
         "Consume",
     }.issubset(set(members))
+
+
+def test_parse_typed_resource_method_calls():
+    code = """
+    RWByteAddressBuffer rawBytes : register(u1);
+
+    void main(uint ix : IX) {
+        uint loaded = rawBytes.Load<uint>(ix);
+        rawBytes.Store<uint>(ix, loaded);
+        bool inRange = ix < 4u;
+    }
+    """
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    members = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert "Load<uint>" in members
+    assert "Store<uint>" in members
+
+
+def test_parse_upstream_default_parameter_value():
+    ast = parse_code("""
+    float4 ToRGBM(float3 rgb, float PeakValue = 255.0 / 16.0) {
+        return float4(rgb, PeakValue);
+    }
+    """)
+
+    func = ast.functions[0]
+
+    assert func.params[1].name == "PeakValue"
+    assert func.params[1].value is not None
+
+
+def test_parse_upstream_comma_separated_declarations():
+    ast = parse_code("""
+    cbuffer CSConstants : register(b0) {
+        uint ViewportWidth, ViewportHeight;
+    };
+
+    float main() : SV_Target0 {
+        float x = 1.0, y = 2.0;
+        return x + y;
+    }
+    """)
+
+    assert [member.name for member in ast.cbuffers[0].members] == [
+        "ViewportWidth",
+        "ViewportHeight",
+    ]
+
+    main_func = ast.functions[0]
+    locals_ = [stmt for stmt in main_func.body if isinstance(stmt, VariableNode)]
+    assert [node.name for node in locals_] == ["x", "y"]
+    assert [node.value for node in locals_] == [1.0, 2.0]
+
+
+def test_parse_upstream_statement_attributes_and_for_update_sequences():
+    ast = parse_code("""
+    void main(uint count) {
+        uint tileLightLoadOffset = 0;
+        [unroll]
+        for (uint n = 0; n < count; n++, tileLightLoadOffset += 4) {
+        }
+    }
+    """)
+
+    loop = next(node for node in iter_ast_nodes(ast) if isinstance(node, ForNode))
+
+    assert [attr.name for attr in loop.attributes] == ["unroll"]
+    assert isinstance(loop.update, list)
+    assert len(loop.update) == 2
+
+
+def test_parse_upstream_else_if_chain_with_final_else():
+    ast = parse_code("""
+    float TestSamples(uint x, uint y) {
+        if (y == 0) {
+            return 0.5;
+        } else if (x == y) {
+            return 0.25;
+        } else {
+            return 0.125;
+        }
+    }
+    """)
+
+    first_if = next(node for node in iter_ast_nodes(ast) if isinstance(node, IfNode))
+
+    assert isinstance(first_if.else_body, IfNode)
+    assert first_if.else_body.else_body is not None
+
+
+def test_parse_upstream_bare_scope_block():
+    ast = parse_code("""
+    float main(float ao) : SV_Target0 {
+        float colorSum = 0.0;
+        {
+            float ambient = ao;
+            colorSum += ambient;
+        }
+        return colorSum;
+    }
+    """)
+
+    body_names = [
+        node.name for node in ast.functions[0].body if isinstance(node, VariableNode)
+    ]
+    assert body_names == ["colorSum", "ambient"]
+
+
+def test_parse_parenthesized_identifier_after_unary_minus_not_cast():
+    ast = parse_code("""
+    float Sigmoid(float v) {
+        return 1.0 / (1.0 + exp(-(v)));
+    }
+    """)
+
+    assert ast.functions[0].name == "Sigmoid"
+
+
+def test_parse_function_prototype_declaration():
+    ast = parse_code("""
+    void TraceRay_OnMiss(inout uint rngState);
+
+    void main() {
+        TraceRay_OnMiss(0);
+    }
+    """)
+
+    assert ast.functions[0].name == "TraceRay_OnMiss"
+    assert ast.functions[0].body == []
+    assert ast.functions[0].is_prototype is True
+
+
+def test_parse_ray_payload_struct_attributes_from_directx_graphics_samples():
+    ast = parse_code("""
+    struct [raypayload] RayPayload {
+        float4 color : write(caller, closesthit, miss) : read(caller);
+        uint iterations : write(caller) : read(closesthit);
+    };
+    """)
+
+    payload = ast.structs[0]
+
+    assert payload.name == "RayPayload"
+    assert [attribute.name for attribute in payload.attributes] == ["raypayload"]
+    assert (
+        payload.members[0].semantic == "write(caller, closesthit, miss): read(caller)"
+    )
+    assert payload.members[1].semantic == "write(caller): read(closesthit)"
+
+
+def test_parse_scoped_enum_parameter_type_from_directx_graphics_samples():
+    ast = parse_code("""
+    float GetDistanceFromSignedDistancePrimitive(
+        in float3 position,
+        in SignedDistancePrimitive::Enum sdPrimitive);
+    """)
+
+    function = ast.functions[0]
+
+    assert function.is_prototype is True
+    assert function.params[1].vtype == "SignedDistancePrimitive::Enum"
+    assert function.params[1].name == "sdPrimitive"
+
+
+def test_parse_scoped_local_variable_type_from_directx_graphics_samples():
+    ast = parse_code("""
+    struct AabbCB {
+        uint primitiveType;
+    };
+
+    float ResolvePrimitive(AabbCB cb) {
+        AnalyticPrimitive::Enum primitiveType =
+            (AnalyticPrimitive::Enum) cb.primitiveType;
+        CrossBilateral::BilinearDepthNormal::Parameters params;
+        params.Depth.Sigma = 1.0;
+        return params.Depth.Sigma + primitiveType;
+    }
+    """)
+
+    function = ast.functions[0]
+    primitive_decl = next(
+        stmt for stmt in function.body if getattr(stmt, "name", "") == "primitiveType"
+    )
+    params_decl = next(
+        stmt for stmt in function.body if getattr(stmt, "name", "") == "params"
+    )
+
+    assert primitive_decl.vtype == "AnalyticPrimitive::Enum"
+    assert primitive_decl.name == "primitiveType"
+    assert isinstance(primitive_decl.value, CastNode)
+    assert primitive_decl.value.target_type == "AnalyticPrimitive::Enum"
+    assert params_decl.vtype == "CrossBilateral::BilinearDepthNormal::Parameters"
+    assert params_decl.name == "params"
+
+
+def test_parse_sample_contextual_identifier_from_directx_graphics_samples():
+    ast = parse_code("""
+    struct SampleValue {
+        float3 value;
+    };
+
+    StructuredBuffer<SampleValue> g_sampleSets : register(t0);
+
+    float3 GenerateRayDirection(
+        uint sampleSetJump,
+        uint sampleJump,
+        uint numSamplesPerSet,
+        float3 u,
+        float3 v,
+        float3 w
+    ) {
+        float3 sample =
+            g_sampleSets[sampleSetJump + (sampleJump % numSamplesPerSet)].value;
+        float3 rayDirection =
+            normalize(sample.x * u + sample.y * v + sample.z * w);
+        return rayDirection;
+    }
+    """)
+
+    function = ast.functions[0]
+    sample_decl = next(
+        stmt for stmt in function.body if getattr(stmt, "name", "") == "sample"
+    )
+
+    assert sample_decl.vtype == "float3"
+    assert sample_decl.name == "sample"
+
+
+def test_parse_legacy_special_float_literal_from_directx_graphics_samples():
+    ast = parse_code("""
+    bool RayAABBIntersectionTest(float3 rayDirection) {
+        const float FLT_INFINITY = 1.#INF;
+        float3 invRayDirection = rayDirection != 0
+            ? 1 / rayDirection
+            : float3(FLT_INFINITY, FLT_INFINITY, FLT_INFINITY);
+        return true;
+    }
+    """)
+
+    function = ast.functions[0]
+    infinity = next(
+        stmt for stmt in function.body if getattr(stmt, "name", "") == "FLT_INFINITY"
+    )
+
+    assert math.isinf(infinity.value)
+
+
+def test_parse_unsigned_int_namespace_constants_from_directx_graphics_samples():
+    ast = parse_code("""
+    namespace FilterKernel
+    {
+        static const unsigned int Radius = 1;
+        static const unsigned int Width = 1 + 2 * Radius;
+        static const float Kernel1D[Width] = { 0.27901, 0.44198, 0.27901 };
+    }
+
+    Texture2D<float> g_inDepth : register(t1);
+    """)
+
+    radius = next(
+        variable
+        for variable in ast.global_variables
+        if getattr(variable, "name", "") == "Radius"
+    )
+    width = next(
+        variable
+        for variable in ast.global_variables
+        if getattr(variable, "name", "") == "Width"
+    )
+
+    assert radius.vtype == "unsigned int"
+    assert width.vtype == "unsigned int"
+    assert [variable.name for variable in ast.global_variables[-1:]] == ["g_inDepth"]
 
 
 @pytest.mark.parametrize(

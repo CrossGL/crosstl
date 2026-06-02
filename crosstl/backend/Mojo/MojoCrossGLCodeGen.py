@@ -211,6 +211,8 @@ class MojoToCrossGLConverter:
 
         if hasattr(ast, "functions"):
             functions = [f for f in ast.functions if isinstance(f, FunctionNode)]
+            for struct_node in [f for f in ast.functions if isinstance(f, StructNode)]:
+                functions.extend(getattr(struct_node, "methods", []))
             for class_node in [f for f in ast.functions if isinstance(f, ClassNode)]:
                 functions.extend(getattr(class_node, "methods", []))
             for func in functions:
@@ -260,6 +262,9 @@ class MojoToCrossGLConverter:
         for node in getattr(ast, "functions", []):
             if isinstance(node, FunctionNode):
                 record(node)
+            elif isinstance(node, StructNode):
+                for method in getattr(node, "methods", []):
+                    record(method)
             elif isinstance(node, ClassNode):
                 for method in getattr(node, "methods", []):
                     record(method)
@@ -367,7 +372,12 @@ class MojoToCrossGLConverter:
         param_names = []
         if hasattr(func, "params") and func.params:
             for p in func.params:
+                if not p.vtype:
+                    continue
                 param_str = f"{self.map_type(p.vtype)} {p.name}"
+                if getattr(p, "default_value", None) is not None:
+                    default_value = self.generate_expression(p.default_value)
+                    param_str += f" = {default_value}"
                 if hasattr(p, "attributes") and p.attributes:
                     semantic = self.map_semantic(p.attributes)
                     if semantic:
@@ -433,6 +443,8 @@ class MojoToCrossGLConverter:
                     code += self.generate_range_for_loop(stmt, indent)
                 elif isinstance(stmt, WhileNode):
                     code += self.generate_while_loop(stmt, indent)
+                elif isinstance(stmt, WithNode):
+                    code += self.generate_with_block(stmt, indent)
                 elif isinstance(stmt, IfNode):
                     code += self.generate_if_statement(stmt, indent)
                 elif isinstance(stmt, SwitchNode):
@@ -487,6 +499,16 @@ class MojoToCrossGLConverter:
 
         code = f"for ({init}; {condition}; {update}) {{\n"
         if hasattr(node, "body") and node.body:
+            code += self.generate_function_body(node.body, indent + 1)
+        code += indent_str + "}\n"
+        return code
+
+    def generate_with_block(self, node, indent):
+        indent_str = "    " * indent
+        context = self.generate_expression(node.context_expr)
+        alias = f" as {node.alias}" if node.alias else ""
+        code = f"{{ // with {context}{alias}\n"
+        if getattr(node, "body", None):
             code += self.generate_function_body(node.body, indent + 1)
         code += indent_str + "}\n"
         return code
@@ -673,6 +695,9 @@ class MojoToCrossGLConverter:
                 return expr.name
         elif isinstance(expr, VariableDeclarationNode):
             return self.generate_variable_declaration(expr)
+        elif isinstance(expr, TupleNode):
+            elements = ", ".join(self.generate_expression(e) for e in expr.elements)
+            return f"({elements})"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, BinaryOpNode):
@@ -732,11 +757,18 @@ class MojoToCrossGLConverter:
             return f"{type_name}({args_str})"
         elif isinstance(expr, ArrayAccessNode):
             array = self.generate_expression(expr.array)
-            index = self.generate_expression(expr.index)
+            index = self.generate_array_index(expr.index)
             return f"{array}[{index}]"
         else:
             # For any unhandled expression type
             return f"/* Unhandled expression: {type(expr).__name__} */"
+
+    def generate_array_index(self, index):
+        if isinstance(index, TupleNode):
+            return ", ".join(
+                self.generate_expression(element) for element in index.elements
+            )
+        return self.generate_expression(index)
 
     def map_type(self, mojo_type):
         """Map a Mojo type name to the closest CrossGL type name."""
