@@ -1381,6 +1381,31 @@ class TestCudaParser:
         assert isinstance(ast.functions[0].body[4], FunctionCallNode)
         assert ast.functions[0].body[4].name == "cudaLaunchKernel"
 
+    def test_cuda_launch_cooperative_kernel_api_parsing(self):
+        code = """
+        void host(void** params) {
+            dim3 grid(16);
+            dim3 block(32);
+            cudaLaunchCooperativeKernel((void*)k, grid, block, params, 0, NULL);
+            cudaLaunchCooperativeKernel(k);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        launch = ast.functions[0].body[2]
+        assert isinstance(launch, KernelLaunchNode)
+        assert launch.kernel_name == "k"
+        assert launch.blocks == "grid"
+        assert launch.threads == "block"
+        assert launch.shared_mem == "0"
+        assert launch.stream == "NULL"
+        assert launch.args == ["params"]
+        assert isinstance(ast.functions[0].body[3], FunctionCallNode)
+        assert ast.functions[0].body[3].name == "cudaLaunchCooperativeKernel"
+
     def test_cuda_launch_kernel_casted_packed_args_parsing(self):
         code = """
         void host(float* data, int n, int stream) {

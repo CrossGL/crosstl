@@ -1257,6 +1257,26 @@ class TestCudaCodeGen:
         assert "// Arguments: data, n" in result
         assert "cudaLaunchKernel" not in result
 
+    def test_cuda_launch_cooperative_kernel_api_conversion(self):
+        code = """
+        void host(void** params) {
+            dim3 grid(16);
+            dim3 block(32);
+            cudaLaunchCooperativeKernel((void*)k, grid, block, params, 0, NULL);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Kernel launch: k<<<grid, block, 0, NULL>>>()" in result
+        assert "// Arguments: params" in result
+        assert "cudaLaunchCooperativeKernel" not in result
+
     def test_user_defined_cuda_launch_kernel_call_is_not_kernel_launch(self):
         code = """
         void cudaLaunchKernel(float* out, int grid, int block, void* args, int shared, int stream) {
@@ -1278,6 +1298,31 @@ class TestCudaCodeGen:
         assert "// Function: cudaLaunchKernel" in result
         assert "void cudaLaunchKernel(" in result
         assert "cudaLaunchKernel(out, grid, block, args, 0, 0);" in result
+        assert "// Kernel launch: out<<<grid, block, 0, 0>>>()" not in result
+
+    def test_user_defined_cuda_launch_cooperative_kernel_call_is_not_kernel_launch(
+        self,
+    ):
+        code = """
+        void cudaLaunchCooperativeKernel(float* out, int grid, int block, void* args, int shared, int stream) {
+            return;
+        }
+
+        void host(float* out, int grid, int block, void* args) {
+            cudaLaunchCooperativeKernel(out, grid, block, args, 0, 0);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Function: cudaLaunchCooperativeKernel" in result
+        assert "void cudaLaunchCooperativeKernel(" in result
+        assert "cudaLaunchCooperativeKernel(out, grid, block, args, 0, 0);" in result
         assert "// Kernel launch: out<<<grid, block, 0, 0>>>()" not in result
 
     def test_user_defined_cuda_launch_kernel_declared_later_is_not_kernel_launch(self):

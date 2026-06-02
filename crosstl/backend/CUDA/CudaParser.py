@@ -3297,7 +3297,7 @@ class CudaParser:
             return named_cast
 
         if (
-            function_name == "cudaLaunchKernel"
+            function_name in {"cudaLaunchKernel", "cudaLaunchCooperativeKernel"}
             and len(args) == 6
             and function_name not in self.user_function_names
         ):
