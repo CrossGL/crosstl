@@ -107,6 +107,43 @@ class HipParser:
         "HIPARRAYT",
     }
     FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
+    OVERLOADABLE_OPERATOR_TOKENS = {
+        "PLUS",
+        "MINUS",
+        "STAR",
+        "SLASH",
+        "PERCENT",
+        "AMPERSAND",
+        "PIPE",
+        "XOR",
+        "TILDE",
+        "NOT",
+        "ASSIGN",
+        "LT",
+        "GT",
+        "PLUS_ASSIGN",
+        "MINUS_ASSIGN",
+        "STAR_ASSIGN",
+        "SLASH_ASSIGN",
+        "PERCENT_ASSIGN",
+        "AND_ASSIGN",
+        "OR_ASSIGN",
+        "XOR_ASSIGN",
+        "EQ",
+        "NE",
+        "LE",
+        "GE",
+        "AND",
+        "OR",
+        "LSHIFT",
+        "RSHIFT",
+        "LSHIFT_ASSIGN",
+        "RSHIFT_ASSIGN",
+        "INCREMENT",
+        "DECREMENT",
+        "LBRACKET",
+        "LPAREN",
+    }
     LAMBDA_SPECIFIER_TOKENS = {
         "__DEVICE__",
         "__HOST__",
@@ -374,17 +411,21 @@ class HipParser:
         return name
 
     def consume_operator_function_suffix(self, name):
-        if (
-            name == "operator"
-            and self.match("LPAREN")
-            and self.peek()
-            and self.peek().type == "RPAREN"
-            and self.peek(2)
-            and self.peek(2).type == "LPAREN"
-        ):
+        if name != "operator":
+            return ""
+
+        if self.match("LBRACKET"):
+            self.advance()
+            self.consume("RBRACKET")
+            return "[]"
+        if self.match("LPAREN"):
             self.advance()
             self.consume("RPAREN")
             return "()"
+        if self.match(*self.OVERLOADABLE_OPERATOR_TOKENS):
+            operator_value = self.current_token.value
+            self.advance()
+            return operator_value
         return ""
 
     def is_declarator_name_token(self):
@@ -3598,14 +3639,23 @@ class HipParser:
         return None
 
     def skip_operator_function_suffix_at(self, index, name):
+        if name != "operator" or index >= len(self.tokens):
+            return index
+
         if (
-            name == "operator"
-            and index + 2 < len(self.tokens)
-            and self.tokens[index].type == "LPAREN"
-            and self.tokens[index + 1].type == "RPAREN"
-            and self.tokens[index + 2].type == "LPAREN"
+            self.tokens[index].type == "LBRACKET"
+            and index + 1 < len(self.tokens)
+            and self.tokens[index + 1].type == "RBRACKET"
         ):
             return index + 2
+        if (
+            self.tokens[index].type == "LPAREN"
+            and index + 1 < len(self.tokens)
+            and self.tokens[index + 1].type == "RPAREN"
+        ):
+            return index + 2
+        if self.tokens[index].type in self.OVERLOADABLE_OPERATOR_TOKENS:
+            return index + 1
         return index
 
     def is_variable_declaration(self) -> bool:

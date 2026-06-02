@@ -2676,6 +2676,26 @@ class TestHipParser:
         assert function.body[0].name == "inputType"
         assert function.body[0].value.name == "getDataTypeEnumFromType<InputType>"
 
+    def test_generated_matrix_helper_free_operator_overload_parsing(self):
+        code = """
+        struct float2x2 { float m[4]; };
+
+        __host__ __device__ inline float2x2 operator*(float lhs, const float2x2& rhs) {
+            return rhs;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[1]
+        assert isinstance(function, FunctionNode)
+        assert function.name == "operator*"
+        assert function.return_type == "float2x2"
+        assert function.qualifiers == ["__host__", "__device__", "inline"]
+        assert function.params == [
+            {"type": "float", "name": "lhs"},
+            {"type": "const float2x2 &", "name": "rhs"},
+        ]
+
     def test_public_rocm_try_block_with_const_local_declarations_parsing(self):
         code = """
         int main() {
