@@ -129,6 +129,37 @@ class TestCudaParser:
         assert ast.functions[0].name == "add"
         assert "__device__" in ast.functions[0].qualifiers
 
+    def test_function_parameter_defaults_are_skipped(self):
+        code = """
+        __global__ void shfl_scan_test(int *data,
+                                       int width,
+                                       int *partial_sums = NULL) {
+            int lane_id = threadIdx.x % warpSize;
+        }
+
+        static int test(bool automaticLaunchConfig,
+                        const int count = max(32, 1000000)) {
+            return count;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        kernel_params = ast.kernels[0].params
+        assert [(param.vtype, param.name) for param in kernel_params] == [
+            ("int *", "data"),
+            ("int", "width"),
+            ("int *", "partial_sums"),
+        ]
+
+        function_params = ast.functions[0].params
+        assert [(param.vtype, param.name) for param in function_params] == [
+            ("bool", "automaticLaunchConfig"),
+            ("const int", "count"),
+        ]
+
     def test_public_cuda_samples_device_global_variables_parse_as_globals(self):
         code = """
         __device__ int g_uids = 0;

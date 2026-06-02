@@ -21,6 +21,7 @@ class SlangParser:
         "__global",
         "__extern_cpp",
         "no_diff",
+        "override",
     }
     BUILTIN_IDENTIFIER_TYPES = {
         "double",
@@ -1013,6 +1014,8 @@ class SlangParser:
         while self.current_token[0] == "LBRACKET":
             self.parse_attribute_list()
 
+        if self.is_variable_declaration_start():
+            return self.parse_variable_declaration_or_assignment()
         if self.current_token[0] == "IDENTIFIER" and self.tokens[self.pos + 1][0] in {
             "LPAREN",
             "LBRACKET",
@@ -1020,8 +1023,6 @@ class SlangParser:
             "COLON",
         }:
             return self.parse_expression_statement()
-        if self.is_variable_declaration_start():
-            return self.parse_variable_declaration_or_assignment()
         elif self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -1055,6 +1056,7 @@ class SlangParser:
             return False
         if token_type == "IDENTIFIER" and self.tokens[current_pos + 1][0] not in {
             "IDENTIFIER",
+            "LBRACKET",
             "LESS_THAN",
         }:
             return False
@@ -1066,7 +1068,7 @@ class SlangParser:
 
     def parse_variable_declaration_or_assignment(self):
         qualifiers = self.parse_qualifiers()
-        var_type = self.parse_type_name()
+        var_type = self.parse_type_name(allow_array_suffix=True)
         var_type += self.parse_pointer_suffix()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -1418,10 +1420,13 @@ class SlangParser:
                 and self.tokens[type_pos + 1][0] != "LESS_THAN"
             ):
                 return False
-        elif token_type not in self.DECLARATION_TYPE_TOKENS | self.RESOURCE_TYPE_TOKENS:
+        elif token_type not in (
+            self.DECLARATION_TYPE_TOKENS | self.RESOURCE_TYPE_TOKENS | {"VOID"}
+        ):
             return False
 
         close_pos = self.skip_generic_type_suffix_tokens(type_pos + 1)
+        close_pos = self.skip_pointer_declarator_tokens(close_pos)
         if close_pos >= len(self.tokens) or self.tokens[close_pos][0] != "RPAREN":
             return False
 
@@ -1451,6 +1456,7 @@ class SlangParser:
     def parse_c_style_cast(self):
         self.eat("LPAREN")
         target_type = self.parse_type_name()
+        target_type += self.parse_pointer_suffix()
         self.eat("RPAREN")
         return CastNode(target_type, self.parse_unary())
 

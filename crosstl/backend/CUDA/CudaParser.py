@@ -1127,6 +1127,7 @@ class CudaParser:
         param_type = self.parse_type()
         param_name = self.eat("IDENTIFIER")[1]
         param_type += self.parse_array_suffix()
+        self.skip_parameter_default()
         return VariableNode(param_type, param_name)
 
     def parse_type(self):
@@ -2451,7 +2452,7 @@ class CudaParser:
                 raise SyntaxError("Expected lambda parameter name")
             param_name = self.eat("IDENTIFIER")[1]
             param_type += self.parse_array_suffix()
-            self.skip_lambda_parameter_default()
+            self.skip_parameter_default()
             return VariableNode(param_type, param_name)
         except SyntaxError:
             self.current_index = saved_index
@@ -2459,7 +2460,7 @@ class CudaParser:
             raw = self.collect_lambda_parameter_raw()
             return VariableNode("", raw)
 
-    def skip_lambda_parameter_default(self):
+    def skip_parameter_default(self):
         if self.current_token[0] != "ASSIGN":
             return
 

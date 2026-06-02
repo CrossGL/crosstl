@@ -1889,5 +1889,56 @@ def test_pointer_and_statement_attribute_syntax_from_mlp_training_samples():
     assert call.name == "AdamOptimizer::step"
 
 
+def test_mlp_coopvec_array_type_local_and_void_pointer_cast_parsing():
+    code = """
+    public struct FeedForwardLayer<int InputSize, int OutputSize>
+    {
+        internal void* biasesGrad;
+
+        internal static NFloat[N] coopVecToArray(CoopVec<NFloat, N> v)
+        {
+            NFloat[N] arr;
+            return arr;
+        }
+
+        public void evalBwd(MLVec<OutputSize> resultGrad)
+        {
+            coopVecReduceSumAccumulate(resultGrad.data, (void*)biasesGrad);
+        }
+
+        public override static Differential dzero()
+        {
+            return {};
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+    array_method = next(
+        method for method in struct.methods if method.name == "coopVecToArray"
+    )
+    backward_method = next(
+        method for method in struct.methods if method.name == "evalBwd"
+    )
+    override_method = next(
+        method for method in struct.methods if method.name == "dzero"
+    )
+    array_decl = array_method.body[0]
+    call = backward_method.body[0]
+    cast = call.args[1]
+
+    assert array_method.return_type == "NFloat[N]"
+    assert isinstance(array_decl, VariableNode)
+    assert array_decl.vtype == "NFloat[N]"
+    assert array_decl.name == "arr"
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(cast, CastNode)
+    assert cast.target_type == "void*"
+    assert cast.expression.name == "biasesGrad"
+    assert override_method.qualifiers == ["public", "override", "static"]
+
+
 if __name__ == "__main__":
     pytest.main()
