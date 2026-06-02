@@ -23,6 +23,13 @@ class SlangParser:
         "no_diff",
         "override",
     }
+    GEOMETRY_INPUT_PRIMITIVE_QUALIFIERS = {
+        "point",
+        "line",
+        "triangle",
+        "lineadj",
+        "triangleadj",
+    }
     BUILTIN_IDENTIFIER_TYPES = {
         "double",
         "double2",
@@ -201,6 +208,39 @@ class SlangParser:
         while self.is_qualifier_token_at(self.pos):
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
+        return qualifiers
+
+    def is_geometry_input_primitive_qualifier_at(self, index):
+        if index >= len(self.tokens):
+            return False
+
+        token_type, token_value = self.tokens[index]
+        if (
+            token_type != "IDENTIFIER"
+            or token_value not in self.GEOMETRY_INPUT_PRIMITIVE_QUALIFIERS
+        ):
+            return False
+
+        type_pos = index + 1
+        if (
+            type_pos >= len(self.tokens)
+            or self.tokens[type_pos][0] not in self.TYPE_NAME_TOKENS
+        ):
+            return False
+
+        name_pos = type_pos + 1
+        if name_pos >= len(self.tokens):
+            return False
+        name_pos = self.skip_generic_type_suffix_tokens(name_pos)
+        name_pos = self.skip_type_array_suffix_tokens(name_pos)
+        name_pos = self.skip_pointer_declarator_tokens(name_pos)
+        return name_pos < len(self.tokens) and self.tokens[name_pos][0] == "IDENTIFIER"
+
+    def parse_parameter_qualifiers(self):
+        qualifiers = self.parse_qualifiers()
+        while self.is_geometry_input_primitive_qualifier_at(self.pos):
+            qualifiers.append(self.current_token[1])
+            self.eat("IDENTIFIER")
         return qualifiers
 
     def parse_declaration_prefixes(self):
@@ -978,7 +1018,7 @@ class SlangParser:
         params = []
         while self.current_token[0] != "RPAREN":
             struct_def = ""
-            qualifiers = self.parse_qualifiers()
+            qualifiers = self.parse_parameter_qualifiers()
             vtype = self.parse_type_name(allow_array_suffix=True)
             vtype += self.parse_pointer_suffix()
             name = self.current_token[1]

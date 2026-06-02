@@ -173,7 +173,10 @@ TOKENS = tuple(
         (
             "NUMBER",
             r"\d+\.\#(?i:inf|ind|qnan|snan)"
-            r"|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFhH]?"
+            r"|(?:"
+            r"\d+\.(?!(?:[xyzwrgbaXYZWRGBA]{1,4})(?![a-zA-Z0-9_]))\d*"
+            r"|\.\d+"
+            r")(?:[eE][+-]?\d+)?[fFhH]?"
             r"|\d+[eE][+-]?\d+[fFhH]?"
             r"|\d+(?:[uU][lL]?|[lL][uU]?|[fFhH]|[uUlL]{0,2})?",
         ),

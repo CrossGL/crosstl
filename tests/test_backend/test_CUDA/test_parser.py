@@ -160,6 +160,30 @@ class TestCudaParser:
             ("const int", "count"),
         ]
 
+    def test_builtin_named_struct_member_access_from_occupancy_sample(self):
+        code = """
+        static double reportPotentialOccupancy() {
+            cudaDeviceProp prop;
+            int activeWarps = 32 / prop.warpSize;
+            int lane = threadIdx.x % warpSize;
+            return (double)activeWarps / lane;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        function = ast.functions[0]
+        active_warps = function.body[1]
+        lane = function.body[2]
+
+        assert isinstance(active_warps.value.right, MemberAccessNode)
+        assert active_warps.value.right.object == "prop"
+        assert active_warps.value.right.member == "warpSize"
+        assert isinstance(lane.value.right, CudaBuiltinNode)
+        assert lane.value.right.builtin_name == "warpSize"
+
     def test_public_cuda_samples_device_global_variables_parse_as_globals(self):
         code = """
         __device__ int g_uids = 0;

@@ -1336,6 +1336,40 @@ def test_local_and_parameter_array_declarator_parsing():
     assert isinstance(function.body[2].value, ArrayAccessNode)
 
 
+def test_geometry_primitive_array_parameter_parsing():
+    code = """
+    struct VSOutput {
+        float4 Pos : POSITION0;
+    };
+
+    struct GSOutput {
+        float4 Pos : SV_POSITION;
+    };
+
+    [shader("geometry")]
+    [maxvertexcount(3)]
+    void geometryMain(triangle VSOutput input[3],
+                      inout TriangleStream<GSOutput> outStream,
+                      uint PrimitiveID : SV_PrimitiveID) {
+        return;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "geometryMain")
+
+    assert function.qualifier == "geometry"
+    assert function.attributes == [{"name": "maxvertexcount", "arguments": ["3"]}]
+    assert [
+        (param.qualifiers, param.vtype, param.name, param.array_sizes, param.semantic)
+        for param in function.params
+    ] == [
+        (["triangle"], "VSOutput", "input", ["3"], None),
+        (["inout"], "TriangleStream<GSOutput>", "outStream", [], None),
+        ([], "uint", "PrimitiveID", [], "SV_PrimitiveID"),
+    ]
+
+
 def test_local_and_parameter_generic_resource_type_parsing():
     code = """
     float4 sample(Sampler2D<float4> tex, Texture2D<float4> image,

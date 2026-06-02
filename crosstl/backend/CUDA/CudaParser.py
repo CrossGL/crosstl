@@ -1956,7 +1956,7 @@ class CudaParser:
         while True:
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
-                member = self.eat("IDENTIFIER")[1]
+                member = self.parse_member_name()
                 left = MemberAccessNode(left, member, False)
             elif self.current_token[0] == "SCOPE":
                 self.eat("SCOPE")
@@ -1966,7 +1966,7 @@ class CudaParser:
                 left = self.append_template_suffix(left)
             elif self.current_token[0] == "ARROW":
                 self.eat("ARROW")
-                member = self.eat("IDENTIFIER")[1]
+                member = self.parse_member_name()
                 left = MemberAccessNode(left, member, True)
             elif self.current_token[0] == "LBRACKET":
                 self.eat("LBRACKET")
@@ -2003,6 +2003,13 @@ class CudaParser:
                 break
 
         return left
+
+    def parse_member_name(self):
+        if self.current_token[0] in {"IDENTIFIER", "WARPSIZE"}:
+            member = self.current_token[1]
+            self.eat(self.current_token[0])
+            return member
+        raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
 
     def append_qualified_name(self, base, separator, member):
         if isinstance(base, str):

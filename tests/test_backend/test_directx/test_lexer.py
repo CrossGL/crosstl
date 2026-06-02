@@ -244,6 +244,15 @@ def test_numeric_literals_tokenization():
     assert_values_present(values, expected)
 
 
+def test_scalar_literal_swizzle_keeps_dot_token():
+    tokens = tokenize_code("float4 clear = 0.xxxx; float a = 1.; float b = 1.f;")
+
+    assert tokens[3:6] == [("NUMBER", "0"), ("DOT", "."), ("IDENTIFIER", "xxxx")]
+    assert ("NUMBER", "0.") not in tokens
+    assert ("NUMBER", "1.") in tokens
+    assert ("NUMBER", "1.f") in tokens
+
+
 def test_legacy_special_float_literal_from_directx_graphics_samples():
     tokens = tokenize_code("const float FLT_INFINITY = 1.#INF;")
 

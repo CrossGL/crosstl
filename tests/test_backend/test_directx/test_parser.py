@@ -273,6 +273,19 @@ def test_parse_arrays_and_indexing():
     assert_parses(ARRAYS_HLSL)
 
 
+def test_parse_scalar_literal_swizzle_from_saschawillems_input_attachment():
+    ast = parse_code("""
+    float4 main() : SV_Target0 {
+        return 0.xxxx;
+    }
+    """)
+
+    value = ast.functions[0].body[0].value
+    assert isinstance(value, MemberAccessNode)
+    assert value.object == 0
+    assert value.member == "xxxx"
+
+
 def test_parse_resources_and_bindings():
     assert_parses(RESOURCES_HLSL)
 
