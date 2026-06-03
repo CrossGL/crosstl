@@ -511,6 +511,20 @@ def test_for_in_iterable_codegen_preserves_iterable_loop():
     assert "for value in values {" in generated_code
 
 
+def test_tuple_for_target_codegen_from_modular_pmpp_examples():
+    code = """
+    fn initialize_image(width: Int, height: Int):
+        for row, col in product(range(height), range(width)):
+            sink(row, col)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for (row, col) in product(range(height), range(width)) {" in generated_code
+    assert "sink(row, col);" in generated_code
+
+
 def test_for_in_range_codegen_lowers_range_call():
     code = """
     fn main():
@@ -718,6 +732,46 @@ def test_multiline_function_call_codegen():
     generated_code = generate_code(ast)
 
     assert "let result = add(1.0, 2.0);" in generated_code
+
+
+def test_multiline_expression_layout_codegen_from_modular_examples():
+    code = """
+    fn main():
+        var m_1 = (
+            LayoutTensor[Q_tile.dtype, Layout(BN, 1), MutAnyOrigin]
+            .stack_allocation()
+            .fill(Scalar[Q_tile.dtype].MIN)
+        )
+        print(
+            (
+                "Launching shared memory sum reduction kernel (Fig 10.10) with 1"
+                " block and"
+            ),
+            BLOCK_DIM,
+            "threads",
+        )
+        print(
+            "Coarsening with contiguous partitioning (COARSE_FACTOR="
+            + String(COARSE_FACTOR)
+            + ")"
+        )
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "LayoutTensor[Q_tile.dtype, Layout(BN, 1), "
+        "MutAnyOrigin].stack_allocation().fill(Scalar[Q_tile.dtype].MIN)"
+    ) in generated_code
+    assert (
+        'print("Launching shared memory sum reduction kernel (Fig 10.10) '
+        'with 1 block and", BLOCK_DIM, "threads");'
+    ) in generated_code
+    assert (
+        'print((("Coarsening with contiguous partitioning (COARSE_FACTOR=" '
+        '+ String(COARSE_FACTOR)) + ")"));'
+    ) in generated_code
 
 
 def test_generic_function_signature_codegen():

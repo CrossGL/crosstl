@@ -2875,7 +2875,19 @@ class HLSLToCrossGLConverter:
             return ""
         mapped = self.semantic_map.get(semantic)
         if mapped is None and isinstance(semantic, str):
-            mapped = self.semantic_map.get(semantic.upper())
+            semantic_upper = semantic.upper()
+            mapped = self.semantic_map.get(semantic_upper)
+            if mapped is None:
+                for hlsl_prefix, crossgl_semantic in (
+                    ("SV_CLIPDISTANCE", "gl_ClipDistance"),
+                    ("SV_CULLDISTANCE", "gl_CullDistance"),
+                ):
+                    suffix = semantic_upper.removeprefix(hlsl_prefix)
+                    if semantic_upper.startswith(hlsl_prefix) and (
+                        not suffix or suffix.isdigit()
+                    ):
+                        mapped = crossgl_semantic
+                        break
         mapped = mapped or semantic
         return f"@ {mapped}"
 

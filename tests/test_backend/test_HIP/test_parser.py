@@ -213,6 +213,39 @@ class TestHipParser:
         assert function.name == "add"
         assert "__device__" in function.qualifiers
 
+    def test_public_rocm_hipfft_complex_pointer_declarators_parse(self):
+        code = """
+        void host() {
+            hipfftDoubleComplex *d_data, *d_filter;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert [declaration.vtype for declaration in body] == [
+            "hipfftDoubleComplex *",
+            "hipfftDoubleComplex *",
+        ]
+        assert [declaration.name for declaration in body] == ["d_data", "d_filter"]
+
+    def test_public_rocm_composable_kernel_parameter_attribute_parse(self):
+        code = """
+        template <typename CLayout>
+        int run_flatmm_example_with_layouts(
+            int argc,
+            [[maybe_unused]] const CLayout c_layout = CLayout{}) {
+            return argc;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        assert isinstance(function, FunctionNode)
+        assert function.params == [
+            {"type": "int", "name": "argc"},
+            {"type": "const CLayout", "name": "c_layout"},
+        ]
+
     def test_public_hpc_training_const_static_declarations_parse(self):
         code = """
         const static int BLOCKSIZE = 1024;

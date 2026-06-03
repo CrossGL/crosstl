@@ -234,6 +234,11 @@ class HipParser:
     ELABORATED_TYPE_TOKENS = {"STRUCT", "CLASS", "ENUM"}
     CONTEXTUAL_IDENTIFIER_TOKENS = RESOURCE_TYPE_TOKENS
     HIP_IDENTIFIER_TYPE_NAMES = {
+        "hipComplex",
+        "hipDoubleComplex",
+        "hipFloatComplex",
+        "hipfftComplex",
+        "hipfftDoubleComplex",
         "int8_t",
         "uint8_t",
         "int16_t",
@@ -821,6 +826,38 @@ class HipParser:
             self.skip_newlines()
 
         return attributes
+
+    def is_cpp_attribute_start(self):
+        return (
+            self.match("LBRACKET")
+            and self.peek() is not None
+            and self.peek().type == "LBRACKET"
+        )
+
+    def skip_cpp_attributes(self):
+        while self.is_cpp_attribute_start():
+            self.advance()
+            self.advance()
+            depth = 1
+
+            while self.current_token and depth > 0:
+                if self.is_cpp_attribute_start():
+                    self.advance()
+                    self.advance()
+                    depth += 1
+                    continue
+                if (
+                    self.match("RBRACKET")
+                    and self.peek() is not None
+                    and self.peek().type == "RBRACKET"
+                ):
+                    self.advance()
+                    self.advance()
+                    depth -= 1
+                    continue
+                self.advance()
+
+            self.skip_newlines()
 
     def consume_balanced_token_values(self, open_token, close_token):
         values = []
@@ -1598,6 +1635,7 @@ class HipParser:
         type_prefixes = []
         saw_integral_sign = False
 
+        self.skip_cpp_attributes()
         self.parse_type_attribute_prefixes()
 
         while self.match(*self.TYPE_QUALIFIER_TOKENS):
@@ -1606,6 +1644,7 @@ class HipParser:
             type_prefixes.append(self.current_token.value)
             self.advance()
 
+        self.skip_cpp_attributes()
         interleaved_qualifiers = self.parse_declaration_qualifiers()
         if interleaved_qualifiers:
             qualifiers.extend(interleaved_qualifiers)
@@ -1618,6 +1657,7 @@ class HipParser:
 
         self.pos = saved_pos
         self.current_token = saved_token
+        self.skip_cpp_attributes()
         self.parse_type_attribute_prefixes()
         base_type = self.parse_type()
         qualifiers.extend(self.parse_declaration_qualifiers())
@@ -1760,6 +1800,7 @@ class HipParser:
         type_parts = []
         saw_integral_sign = False
 
+        self.skip_cpp_attributes()
         while self.match(*self.TYPE_PREFIX_TOKENS):
             self.advance()
 
@@ -1769,6 +1810,7 @@ class HipParser:
             type_parts.append(self.current_token.value)
             self.advance()
 
+        self.skip_cpp_attributes()
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
         elif (
@@ -1810,6 +1852,7 @@ class HipParser:
         type_parts = []
         saw_integral_sign = False
 
+        self.skip_cpp_attributes()
         while self.match(*self.TYPE_PREFIX_TOKENS):
             self.advance()
 
@@ -1819,6 +1862,7 @@ class HipParser:
             type_parts.append(self.current_token.value)
             self.advance()
 
+        self.skip_cpp_attributes()
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
         elif (
@@ -3605,6 +3649,7 @@ class HipParser:
         # Simple heuristic: type followed by identifier followed by (
         index = self.pos
 
+        index = self.skip_cpp_attributes_at_pos(index)
         while (
             index < len(self.tokens)
             and self.tokens[index].type in self.FUNCTION_SPECIFIER_TOKENS
@@ -3692,6 +3737,7 @@ class HipParser:
         }:
             index += 1
 
+        index = self.skip_cpp_attributes_at_pos(index)
         index = self.skip_type_attribute_prefixes_at_pos(index)
         index = self.skip_type_at_pos(index)
         if index is not None:
@@ -3735,8 +3781,41 @@ class HipParser:
             index = self.skip_newlines_at_pos(index)
         return index
 
+    def skip_cpp_attributes_at_pos(self, index):
+        while (
+            index + 1 < len(self.tokens)
+            and self.tokens[index].type == "LBRACKET"
+            and self.tokens[index + 1].type == "LBRACKET"
+        ):
+            index += 2
+            depth = 1
+
+            while index < len(self.tokens) and depth > 0:
+                if (
+                    index + 1 < len(self.tokens)
+                    and self.tokens[index].type == "LBRACKET"
+                    and self.tokens[index + 1].type == "LBRACKET"
+                ):
+                    index += 2
+                    depth += 1
+                    continue
+                if (
+                    index + 1 < len(self.tokens)
+                    and self.tokens[index].type == "RBRACKET"
+                    and self.tokens[index + 1].type == "RBRACKET"
+                ):
+                    index += 2
+                    depth -= 1
+                    continue
+                index += 1
+
+            index = self.skip_newlines_at_pos(index)
+
+        return index
+
     def skip_type_at_pos(self, index, allow_unknown_identifier_pointers=False):
         saw_integral_sign = False
+        index = self.skip_cpp_attributes_at_pos(index)
         while (
             index < len(self.tokens)
             and self.tokens[index].type in self.TYPE_PREFIX_TOKENS
@@ -3751,6 +3830,7 @@ class HipParser:
                 saw_integral_sign = True
             index += 1
 
+        index = self.skip_cpp_attributes_at_pos(index)
         if index >= len(self.tokens):
             return None
 

@@ -74,6 +74,23 @@ class TestHipCodeGen:
         assert "var load_callback_dev: auto = load_callback;" in result
         assert "@group(0) @binding(0) var<uniform> c0: f32 = 299792458.0f;" in result
 
+    def test_public_rocm_hipfft_complex_pointer_declarators_conversion(self):
+        code = """
+        void host() {
+            hipfftDoubleComplex *d_data, *d_filter;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var d_data: ptr<hipfftDoubleComplex>;" in result
+        assert "var d_filter: ptr<hipfftDoubleComplex>;" in result
+
     def test_public_rocm_bit_extract_fixed_width_pointer_declaration_conversion(self):
         code = """
         __global__ void bit_extract_kernel(

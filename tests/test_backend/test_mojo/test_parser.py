@@ -440,6 +440,25 @@ def test_for_in_iterable_parsing_preserves_loop_iterable():
     assert loop.iterable.name == "values"
 
 
+def test_tuple_for_target_parsing_from_modular_pmpp_examples():
+    code = """
+    from std.itertools import product
+
+    fn initialize_image(width: Int, height: Int):
+        for row, col in product(range(height), range(width)):
+            sink(row, col)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    loop = find_function(ast, "initialize_image").body[0]
+
+    assert isinstance(loop, RangeForNode)
+    assert isinstance(loop.name, TupleNode)
+    assert [element.name for element in loop.name.elements] == ["row", "col"]
+    assert isinstance(loop.iterable, FunctionCallNode)
+    assert loop.iterable.name == "product"
+
+
 def test_for_in_range_parsing_preserves_range_call():
     code = """
     fn main():
@@ -561,6 +580,43 @@ def test_parenthesized_method_call_chain_parsing():
     assert isinstance(expression.object, MethodCallNode)
     assert expression.object.method == "sample"
     assert expression.object.object.name == "texture"
+
+
+def test_multiline_postfix_chain_parsing_from_modular_custom_ops():
+    code = """
+    fn fused_attention_cpu():
+        var m_1 = (
+            LayoutTensor[Q_tile.dtype, Layout(BN, 1), MutAnyOrigin]
+            .stack_allocation()
+            .fill(Scalar[Q_tile.dtype].MIN)
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    declaration = find_function(ast, "fused_attention_cpu").body[0]
+    fill_call = declaration.initial_value
+
+    assert isinstance(fill_call, MethodCallNode)
+    assert fill_call.method == "fill"
+    assert isinstance(fill_call.object, MethodCallNode)
+    assert fill_call.object.method == "stack_allocation"
+    assert isinstance(fill_call.object.object, ArrayAccessNode)
+
+
+def test_multiline_call_argument_expression_parsing_from_modular_pmpp_examples():
+    code = """
+    fn main():
+        print(
+            "Coarsening with contiguous partitioning (COARSE_FACTOR="
+            + String(COARSE_FACTOR)
+            + ")"
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    print_call = find_function(ast, "main").body[0]
+
+    assert isinstance(print_call, FunctionCallNode)
+    assert isinstance(print_call.args[0], BinaryOpNode)
+    assert print_call.args[0].op == "+"
 
 
 def test_as_cast_expression_parsing():

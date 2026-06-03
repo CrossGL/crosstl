@@ -740,10 +740,17 @@ class MojoParser:
                 args = []
                 if self.current_token[0] == "LPAREN":
                     self.eat("LPAREN")
+                    self.skip_layout_tokens()
                     while self.current_token[0] != "RPAREN":
-                        args.append(self.parse_expression())
+                        self.expression_layout_depth += 1
+                        try:
+                            args.append(self.parse_expression())
+                        finally:
+                            self.expression_layout_depth -= 1
+                        self.skip_layout_tokens()
                         if self.current_token[0] == "COMMA":
                             self.eat("COMMA")
+                            self.skip_layout_tokens()
                         elif self.current_token[0] != "RPAREN":
                             raise SyntaxError(
                                 f"Expected COMMA or RPAREN, got {self.current_token[0]}"
@@ -1107,8 +1114,7 @@ class MojoParser:
             self.current_token = saved_token
 
         if self.current_token[0] == "IDENTIFIER":
-            var_name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            var_name = self.parse_identifier_tuple()
             if self.current_token[0] == "IN":
                 self.eat("IN")
                 iterable = self.parse_for_iterable()
@@ -1466,6 +1472,8 @@ class MojoParser:
             finally:
                 self.expression_layout_depth -= 1
             self.skip_layout_tokens()
+            expr = self.parse_adjacent_string_literals(expr)
+            self.skip_layout_tokens()
             if self.current_token[0] == "COMMA":
                 elements = [expr]
                 while self.current_token[0] == "COMMA":
@@ -1514,7 +1522,11 @@ class MojoParser:
         args = []
         self.skip_layout_tokens()
         while self.current_token[0] != "RPAREN":
-            arg = self.parse_expression()
+            self.expression_layout_depth += 1
+            try:
+                arg = self.parse_expression()
+            finally:
+                self.expression_layout_depth -= 1
             self.skip_layout_tokens()
             arg = self.parse_adjacent_string_literals(arg)
             args.append(arg)
@@ -1547,6 +1559,8 @@ class MojoParser:
 
     def parse_postfix_suffixes(self, node):
         while True:
+            self.skip_expression_layout()
+
             if self.current_token[0] == "LPAREN":
                 node = self.parse_call(node)
                 continue
@@ -1597,7 +1611,11 @@ class MojoParser:
         args = []
         self.skip_layout_tokens()
         while self.current_token[0] != "RPAREN":
-            arg = self.parse_expression()
+            self.expression_layout_depth += 1
+            try:
+                arg = self.parse_expression()
+            finally:
+                self.expression_layout_depth -= 1
             self.skip_layout_tokens()
             arg = self.parse_adjacent_string_literals(arg)
             args.append(arg)

@@ -565,12 +565,13 @@ class MojoToCrossGLConverter:
 
     def generate_range_for_loop(self, node, indent):
         indent_str = "    " * indent
+        target = self.generate_declaration_name(node.name)
 
-        if self.is_range_call(node.iterable):
+        if isinstance(node.name, str) and self.is_range_call(node.iterable):
             code = self.generate_range_call_for_loop(node)
         else:
             iterable = self.generate_expression(node.iterable)
-            code = f"for {node.name} in {iterable} {{\n"
+            code = f"for {target} in {iterable} {{\n"
 
         if hasattr(node, "body") and node.body:
             code += self.generate_function_body(node.body, indent + 1)
@@ -596,7 +597,8 @@ class MojoToCrossGLConverter:
             step = self.generate_expression(args[2])
         else:
             iterable = self.generate_expression(node.iterable)
-            return f"for {node.name} in {iterable} {{\n"
+            target = self.generate_declaration_name(node.name)
+            return f"for {target} in {iterable} {{\n"
 
         condition = self.generate_range_condition(node.name, stop, args, step)
         update = f"{node.name}++" if step == "1" else f"{node.name} += {step}"

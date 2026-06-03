@@ -685,6 +685,41 @@ def test_parse_clip_intrinsic_expression_statement():
     assert len(calls) == 1
 
 
+def test_parse_clip_identifier_from_vkd3d_clip_distance_sample():
+    code = """
+    struct vertex {
+        float4 position : SV_POSITION;
+        float clip : SV_CLIPDISTANCE;
+        float cull : SV_CULLDISTANCE1;
+    };
+
+    void main(float4 position : POSITION, out vertex vertex) {
+        vertex.position = position;
+        vertex.clip = position.y;
+        vertex.cull = position.x;
+        clip(vertex.clip - 0.5f);
+    }
+    """
+
+    ast = parse_code(code)
+    vertex_struct = ast.structs[0]
+    main = ast.functions[0]
+    clip_assignment = main.body[1]
+    clip_calls = [
+        node
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, FunctionCallNode) and node.name == "clip"
+    ]
+
+    assert vertex_struct.members[1].name == "clip"
+    assert vertex_struct.members[1].semantic == "SV_CLIPDISTANCE"
+    assert vertex_struct.members[2].name == "cull"
+    assert vertex_struct.members[2].semantic == "SV_CULLDISTANCE1"
+    assert isinstance(clip_assignment.left, MemberAccessNode)
+    assert clip_assignment.left.member == "clip"
+    assert len(clip_calls) == 1
+
+
 def test_parse_export_function_specifier():
     ast = parse_code("export void LogTraceRayStart() { }")
 

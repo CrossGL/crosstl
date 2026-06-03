@@ -510,6 +510,83 @@ OpReturn
 OpFunctionEnd
 """
 
+GLSLANG_STD450_MATRIX_OPS_ASSEMBLY = """
+; Reduced from Khronos glslang Test/baseResults/spv.matrix2.frag.out.
+OpCapability Shader
+%std450 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_matrix %determinant_out %inverse_out
+OpExecutionMode %main OriginUpperLeft
+OpName %input_matrix "inputMatrix"
+OpName %determinant_out "determinantOut"
+OpName %inverse_out "inverseOut"
+OpDecorate %input_matrix Location 0
+OpDecorate %determinant_out Location 0
+OpDecorate %inverse_out Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v2float = OpTypeVector %float 2
+%mat2 = OpTypeMatrix %v2float 2
+%ptr_input_mat2 = OpTypePointer Input %mat2
+%ptr_output_float = OpTypePointer Output %float
+%ptr_output_mat2 = OpTypePointer Output %mat2
+%input_matrix = OpVariable %ptr_input_mat2 Input
+%determinant_out = OpVariable %ptr_output_float Output
+%inverse_out = OpVariable %ptr_output_mat2 Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %mat2 %input_matrix
+%det = OpExtInst %float %std450 Determinant %loaded
+OpStore %determinant_out %det
+%inverse = OpExtInst %mat2 %std450 MatrixInverse %loaded
+OpStore %inverse_out %inverse
+OpReturn
+OpFunctionEnd
+"""
+
+GLSLANG_STD450_INTERPOLATION_ASSEMBLY = """
+; Reduced from Khronos glslang Test/baseResults/spv.interpOps.frag.out.
+OpCapability Shader
+%std450 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %centroid_out %sample_out %offset_out
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %centroid_out "centroidOut"
+OpName %sample_out "sampleOut"
+OpName %offset_out "offsetOut"
+OpDecorate %input_value Location 0
+OpDecorate %centroid_out Location 0
+OpDecorate %sample_out Location 1
+OpDecorate %offset_out Location 2
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2float = OpTypeVector %float 2
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_float = OpTypePointer Output %float
+%one = OpConstant %int 1
+%zero = OpConstant %float 0.0
+%offset = OpConstantComposite %v2float %zero %zero
+%input_value = OpVariable %ptr_input_float Input
+%centroid_out = OpVariable %ptr_output_float Output
+%sample_out = OpVariable %ptr_output_float Output
+%offset_out = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %input_value
+%centroid = OpExtInst %float %std450 InterpolateAtCentroid %loaded
+OpStore %centroid_out %centroid
+%sample = OpExtInst %float %std450 InterpolateAtSample %loaded %one
+OpStore %sample_out %sample
+%offset_value = OpExtInst %float %std450 InterpolateAtOffset %loaded %offset
+OpStore %offset_out %offset_value
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_LOCAL_SIZE_ID_ASSEMBLY = """
 ; Reduced from specialization-driven compute local sizes.
 OpCapability Shader
@@ -989,6 +1066,39 @@ def test_glslang_std450_faceforward_extinst_codegen():
     assert "float3 color @output @location(0);" in generated_code
     assert "color = faceforward(normal, incident, reference);" in generated_code
     assert "spirv_GLSL_std_450_FaceForward" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_std450_matrix_extinst_codegen():
+    tokens = tokenize_code(GLSLANG_STD450_MATRIX_OPS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2x2 inputMatrix @input @location(0);" in generated_code
+    assert "float determinantOut @output @location(0);" in generated_code
+    assert "float2x2 inverseOut @output @location(1);" in generated_code
+    assert "determinantOut = determinant(inputMatrix);" in generated_code
+    assert "inverseOut = inverse(inputMatrix);" in generated_code
+    assert "spirv_GLSL_std_450_Determinant" not in generated_code
+    assert "spirv_GLSL_std_450_MatrixInverse" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_std450_interpolation_extinst_codegen():
+    tokens = tokenize_code(GLSLANG_STD450_INTERPOLATION_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float inputValue @input @location(0);" in generated_code
+    assert "centroidOut = interpolateAtCentroid(inputValue);" in generated_code
+    assert "sampleOut = interpolateAtSample(inputValue, 1);" in generated_code
+    assert (
+        "offsetOut = interpolateAtOffset(inputValue, float2(0.0, 0.0));"
+        in generated_code
+    )
+    assert "spirv_GLSL_std_450_InterpolateAtCentroid" not in generated_code
+    assert "spirv_GLSL_std_450_InterpolateAtSample" not in generated_code
+    assert "spirv_GLSL_std_450_InterpolateAtOffset" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

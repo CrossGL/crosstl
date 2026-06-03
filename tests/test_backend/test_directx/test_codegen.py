@@ -595,6 +595,31 @@ def test_codegen_vector_clip_intrinsic_imports_to_conditional_discard():
     assert "any(lessThan(color, vec4(0.0)))" in glsl
 
 
+def test_codegen_clip_identifier_from_vkd3d_clip_distance_sample():
+    crossgl = generate_crossgl("""
+        struct VertexOut {
+            float4 position : SV_POSITION;
+            float clip : SV_CLIPDISTANCE;
+            float cull : SV_CULLDISTANCE1;
+        };
+
+        void main(float4 position : POSITION, out VertexOut outputVertex) {
+            outputVertex.position = position;
+            outputVertex.clip = position.y;
+            outputVertex.cull = position.x;
+            clip(outputVertex.clip - 0.5f);
+        }
+    """)
+
+    assert "float clip @ gl_ClipDistance;" in crossgl
+    assert "float cull @ gl_CullDistance;" in crossgl
+    assert "outputVertex.clip = position.y;" in crossgl
+    assert "outputVertex.cull = position.x;" in crossgl
+    assert "if ((outputVertex.clip - 0.5) < 0.0) {" in crossgl
+    assert "discard;" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_mul_intrinsic_imports_to_multiply_expression():
     crossgl = generate_crossgl("""
         float4x4 viewProj;
