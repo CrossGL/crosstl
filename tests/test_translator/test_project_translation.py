@@ -219,6 +219,14 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["unitsBySourceBackend"] == {"cgl": 1}
+    assert payload["summary"]["artifactsByTarget"] == {
+        "opengl": {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+    }
     assert payload["artifacts"][0]["source"] == "shaders/graphics/simple.cgl"
     assert payload["artifacts"][0]["target"] == "opengl"
     assert payload["artifacts"][0]["path"] == (
@@ -267,18 +275,43 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
 
-    report = translate_project(repo, targets=["not-a-backend"], output_dir="out")
+    report = translate_project(
+        repo,
+        targets=["opengl", "not-a-backend"],
+        output_dir="out",
+    )
     payload = report.to_json()
 
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["artifactsByTarget"] == {
+        "not-a-backend": {
+            "artifactCount": 1,
+            "translatedCount": 0,
+            "failedCount": 1,
+        },
+        "opengl": {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        },
+    }
     assert payload["diagnosticCounts"]["error"] == 1
-    diagnostic = payload["diagnostics"][0]
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.failed"
+    )
     assert diagnostic["severity"] == "error"
     assert diagnostic["code"] == "project.translate.failed"
     assert diagnostic["target"] == "not-a-backend"
     assert diagnostic["location"]["file"] == "simple.cgl"
-    assert payload["artifacts"][0]["status"] == "failed"
-    assert payload["artifacts"][0]["error"]
+    failed_artifact = next(
+        artifact for artifact in payload["artifacts"] if artifact["status"] == "failed"
+    )
+    assert failed_artifact["target"] == "not-a-backend"
+    assert failed_artifact["error"]
 
 
 def test_project_cli_translate_project_writes_report(tmp_path):

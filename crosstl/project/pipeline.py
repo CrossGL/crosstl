@@ -108,6 +108,37 @@ def _diagnostic_counts(diagnostics: Sequence[ProjectDiagnostic]) -> dict[str, in
     return counts
 
 
+def _unit_counts_by_source_backend(
+    units: Sequence[ProjectTranslationUnit],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for unit in units:
+        counts[unit.source_backend] = counts.get(unit.source_backend, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _artifact_counts_by_target(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact in artifacts:
+        target = str(artifact.get("target", "unknown"))
+        row = counts.setdefault(
+            target,
+            {
+                "artifactCount": 0,
+                "translatedCount": 0,
+                "failedCount": 0,
+            },
+        )
+        row["artifactCount"] += 1
+        if artifact.get("status") == "translated":
+            row["translatedCount"] += 1
+        elif artifact.get("status") == "failed":
+            row["failedCount"] += 1
+    return {target: counts[target] for target in sorted(counts)}
+
+
 def _config_location(config: ProjectConfig) -> SourceLocation:
     if config.config_path:
         file = (
@@ -336,6 +367,8 @@ class ProjectPortabilityReport:
                 "translatedCount": translated_count,
                 "failedCount": failed_count,
                 "diagnosticCounts": _diagnostic_counts(self.diagnostics),
+                "unitsBySourceBackend": _unit_counts_by_source_backend(self.units),
+                "artifactsByTarget": _artifact_counts_by_target(self.artifacts),
             },
             "units": [unit.to_json() for unit in self.units],
             "skipped": list(self.skipped),
