@@ -574,6 +574,112 @@ class TestHipCodeGen:
         assert "__shfl_sync(0xffffffffffffffff, value, lane)" not in result
         assert "__activemask();" not in result
 
+    def test_cooperative_groups_thread_block_sync_rank_and_size_convert(self):
+        code = """
+        #include <hip/hip_cooperative_groups.h>
+        namespace cg = cooperative_groups;
+
+        __global__ void sync(float* out) {
+            cg::thread_block block = cg::this_thread_block();
+            block.sync();
+            unsigned int rank = block.thread_rank();
+            unsigned int size = block.size();
+            unsigned int direct =
+                cooperative_groups::this_thread_block().thread_rank();
+            cg::sync(block);
+            out[rank] = size + direct;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert result.count("workgroupBarrier();") == 2
+        assert (
+            "// cooperative_groups thread_block block maps to the current workgroup"
+            in result
+        )
+        assert "var rank: u32 = gl_LocalInvocationIndex;" in result
+        assert (
+            "var size: u32 = "
+            "((gl_WorkGroupSize.x * gl_WorkGroupSize.y) * gl_WorkGroupSize.z);"
+            in result
+        )
+        assert "var direct: u32 = gl_LocalInvocationIndex;" in result
+        assert "cg::this_thread_block" not in result
+        assert "cooperative_groups::this_thread_block" not in result
+        assert "thread_rank" not in result
+        assert "block.size" not in result
+
+    def test_cooperative_groups_tiled_partition_converts(self):
+        code = """
+        namespace cg = cooperative_groups;
+
+        __global__ void tile_ranks(unsigned int* out) {
+            auto block = cg::this_thread_block();
+            auto tile = cg::tiled_partition<32>(block);
+            unsigned int lane = tile.thread_rank();
+            unsigned int width = tile.num_threads();
+            out[lane] = width;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// cooperative_groups thread_block_tile<32> tile maps to a "
+            "tiled partition of the current workgroup" in result
+        )
+        assert "var lane: u32 = (gl_LocalInvocationIndex % 32);" in result
+        assert "var width: u32 = 32;" in result
+        assert "tiled_partition" not in result
+        assert "thread_rank" not in result
+
+    def test_unsupported_cooperative_groups_emit_diagnostics(self):
+        code = """
+        __global__ void sync_grid(unsigned int* out) {
+            auto grid = cooperative_groups::this_grid();
+            grid.sync();
+            auto group = cooperative_groups::coalesced_threads();
+            unsigned int rank = group.thread_rank();
+            out[0] = rank;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// cooperative_groups grid_group for grid not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cooperative_groups grid_group.sync not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cooperative_groups coalesced_group for group not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "var rank: u32 = (/* cooperative_groups "
+            "coalesced_group.thread_rank not directly supported in CrossGL */ 0);"
+            in result
+        )
+        assert "cooperative_groups::this_grid" not in result
+        assert "cooperative_groups::coalesced_threads" not in result
+        assert "None" not in result
+
     def test_atomic_builtins_parse_and_convert_to_crossgl(self):
         code = """
         __global__ void atomics(int* out, int* expected) {
