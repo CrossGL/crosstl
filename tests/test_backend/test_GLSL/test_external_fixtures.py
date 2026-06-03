@@ -138,6 +138,25 @@ EXTERNAL_FIXTURES = [
         """).strip(),
     ),
     ExternalFixture(
+        name="glslang-150-frag-patch-contextual-identifier",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/150.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 150 core
+
+            out vec4 color;
+
+            float patch = 3.1;
+
+            void main()
+            {
+                color = vec4(patch);
+            }
+        """).strip(),
+    ),
+    ExternalFixture(
         name="learnopengl-deferred-shading-fragment",
         repo="https://github.com/JoeyDeVries/LearnOpenGL",
         commit="a545a703f95893258d16dbe32f5ccbb6400fd213",
@@ -605,6 +624,20 @@ def test_parse_glslang_anonymous_struct_declarator_fixture():
     assert isinstance(value.value, InitializerListNode)
 
 
+def test_parse_glslang_patch_contextual_identifier_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-150-frag-patch-contextual-identifier"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    patch = next(var for var in ast.global_variables if var.name == "patch")
+
+    assert patch.vtype == "float"
+    assert patch.value.value == "3.1"
+
+
 def test_parse_godot_particles_precision_ubo_hash_fixture():
     fixture = next(
         item
@@ -812,6 +845,20 @@ def test_codegen_glslang_anonymous_struct_fixture_snippet():
 
     assert "struct AnonymousStruct0 {" in crossgl
     assert "AnonymousStruct0 e = { 1.2, 2 };" in crossgl
+
+
+def test_codegen_glslang_patch_contextual_identifier_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-150-frag-patch-contextual-identifier"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "float patch = 3.1;" in crossgl
+    assert "vec4(patch)" in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_glslang_legacy_varying_fragment_input_fixture():

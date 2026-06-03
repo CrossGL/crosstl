@@ -382,6 +382,22 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_vector_size_one_initializer",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/var.init.hlsl",
+        code=textwrap.dedent("""
+            float4 main(float component: COLOR) : SV_TARGET {
+                uint1 x = uint1(1);
+                return float4(component, component, component, component);
+            }
+        """).strip(),
+        contains=(
+            "uint x = uint(1);",
+            "return vec4(component, component, component, component);",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_non_uniform_dynamic_resource_heap",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

@@ -2932,6 +2932,7 @@ class HipParser:
                         "KERNEL_LAUNCH_START",
                         "COMMA",
                         "RPAREN",
+                        "SEMICOLON",
                     }
             elif token_type == "RSHIFT":
                 depth -= 2
@@ -2956,6 +2957,7 @@ class HipParser:
                         "KERNEL_LAUNCH_START",
                         "COMMA",
                         "RPAREN",
+                        "SEMICOLON",
                     }
                 if depth < 0:
                     return False
@@ -2982,6 +2984,7 @@ class HipParser:
                         "KERNEL_LAUNCH_START",
                         "COMMA",
                         "RPAREN",
+                        "SEMICOLON",
                     }
                 if depth < 0:
                     return False

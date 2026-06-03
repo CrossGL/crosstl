@@ -1513,6 +1513,14 @@ class SlangToCrossGLConverter:
             mip = self.generate_expression(vector_args[3], is_main)
             return [f"{coord_type}({x}, {y}, {z})", mip]
 
+        if vector_type in {"int2", "uint2"}:
+            base_type = str(resource_type or "").strip().split("<", 1)[0].strip()
+            if base_type != "Texture1D" or len(vector_args) != 2:
+                return None
+            coord = self.generate_expression(vector_args[0], is_main)
+            mip = self.generate_expression(vector_args[1], is_main)
+            return [coord, mip]
+
         if vector_type not in {"int3", "uint3"}:
             return None
 

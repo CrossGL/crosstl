@@ -107,10 +107,10 @@ TOKENS = tuple(
             r"min16int|min12int|min16uint)[2-4]x[2-4]\b",
         ),
         # Vector types (must come before scalar types)
-        ("FVECTOR", r"\b(float|half|double|min16float|min10float)[2-4]\b"),
-        ("IVECTOR", r"\b(int|min16int|min12int)[2-4]\b"),
-        ("UVECTOR", r"\b(uint|min16uint)[2-4]\b"),
-        ("BVECTOR", r"\bbool[2-4]\b"),
+        ("FVECTOR", r"\b(float|half|double|min16float|min10float)[1-4]\b"),
+        ("IVECTOR", r"\b(int|min16int|min12int)[1-4]\b"),
+        ("UVECTOR", r"\b(uint|min16uint)[1-4]\b"),
+        ("BVECTOR", r"\bbool[1-4]\b"),
         # Scalar types
         ("FLOAT", r"\bfloat\b"),
         ("HALF", r"\bhalf\b"),

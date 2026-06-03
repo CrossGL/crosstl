@@ -597,6 +597,34 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "mlx_complex_top_level_operator_overloads",
+        "repo_url": MLX_REPO,
+        "commit": MLX_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/complex.h",
+        "roundtrip": False,
+        "struct_names": ["complex64_t"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct complex64_t {
+                float real;
+                float imag;
+            };
+
+            constexpr complex64_t operator-(complex64_t x) {
+                return {-x.real, -x.imag};
+            }
+
+            constexpr bool operator>=(complex64_t a, complex64_t b) {
+                return (a.real > b.real)
+                    || (a.real == b.real && a.imag >= b.imag);
+            }
+        """
+        ),
+    },
+    {
         "name": "candle_gemv_struct_static_assert",
         "repo_url": CANDLE_REPO,
         "commit": CANDLE_COMMIT,

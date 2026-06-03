@@ -1168,7 +1168,14 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
-            if result_id and opcode.startswith("OpConvert") and len(operands) >= 2:
+            if (
+                result_id
+                and (
+                    opcode.startswith("OpConvert")
+                    or opcode in {"OpFConvert", "OpSConvert", "OpUConvert"}
+                )
+                and len(operands) >= 2
+            ):
                 expressions[result_id] = FunctionCallNode(
                     self.spirv_type_name(operands[0], types) or operands[0],
                     [
