@@ -1622,16 +1622,45 @@ class MetalToCrossGLConverter:
             element_type, size = vector_type
             return f"{self.map_generic_vector_type(element_type, size)}{suffix}"
 
-        # Normalize generic access qualifiers: texture2d<float, access::read_write>
+        # Normalize Metal resource access qualifiers without dropping dimensions or
+        # other non-resource generic arguments, e.g. matrix<bfloat, 4, 4>.
         if "<" in base and ">" in base:
             base_name, inner = base.split("<", 1)
             inner = inner.rstrip(">")
             generic_args = self.split_generic_arguments(inner)
-            if generic_args:
+            if self.should_elide_resource_access_qualifier(base_name, generic_args):
                 base = f"{base_name}<{generic_args[0].strip()}>"
 
         mapped = self.type_map.get(base, base)
         return f"{mapped}{suffix}"
+
+    def should_elide_resource_access_qualifier(self, base_name, generic_args):
+        if len(generic_args) < 2 or not self.is_metal_resource_type_name(base_name):
+            return False
+        return self.normalized_access_qualifier(generic_args[1]).startswith("access::")
+
+    def is_metal_resource_type_name(self, base_name):
+        base = str(base_name).strip()
+        while base.startswith("metal::"):
+            base = base.split("metal::", 1)[1]
+        return base in {
+            "texture1d",
+            "texture1d_array",
+            "texture2d",
+            "texture2d_array",
+            "texture2d_ms",
+            "texture2d_ms_array",
+            "texture3d",
+            "texturecube",
+            "texturecube_array",
+            "texture_buffer",
+            "depth2d",
+            "depth2d_array",
+            "depth2d_ms",
+            "depth2d_ms_array",
+            "depthcube",
+            "depthcube_array",
+        }
 
     def generic_type_parts(self, metal_type):
         base = self.normalized_metal_type(metal_type)

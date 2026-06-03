@@ -67,7 +67,7 @@ class TestCudaCodeGen:
         assert "// CUDA block size: (128)" in result
         assert '// CUDA inline PTX volatile: "add.u32 %0, %1, 1;"' in result
         assert '// CUDA inline PTX outputs: [result] "=r"(lane)' in result
-        assert '// CUDA inline PTX inputs: [source] "r"(in)' in result
+        assert '// CUDA inline PTX inputs: [source] "r"(in_)' in result
         assert '// CUDA inline PTX clobbers: "memory"' in result
         assert "CudaAsmNode" not in result
 

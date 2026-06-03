@@ -304,6 +304,24 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_native_16bit_scalar_types",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/constant.scalar.16bit.enabled.hlsl",
+        code=textwrap.dedent("""
+            void main() {
+              float16_t c_float16t = 1.5;
+              uint16_t c_uint16_16 = 16;
+              int16_t c_int16_n16 = -16;
+            }
+        """).strip(),
+        contains=(
+            "float16 c_float16t = 1.5;",
+            "uint16 c_uint16_16 = 16;",
+            "int16 c_int16_n16 = -16;",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_non_uniform_dynamic_resource_heap",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

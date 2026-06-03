@@ -187,6 +187,8 @@ class RustParser:
             elif self.current_token[0] == "USE":
                 u = self.parse_use_statement()
                 use_statements.append(u)
+            elif self.current_token[0] == "MOD":
+                self.skip_module_item()
             elif self.current_token[0] == "TYPE":
                 type_aliases.append(self.parse_type_alias())
             elif self.current_token[0] == "STRUCT":
@@ -245,6 +247,8 @@ class RustParser:
                 elif self.current_token[0] == "USE":
                     u = self.parse_use_statement(visibility=visibility)
                     use_statements.append(u)
+                elif self.current_token[0] == "MOD":
+                    self.skip_module_item()
                 elif self.current_token[0] == "EXTERN":
                     self.skip_extern_block()
                 elif (
@@ -279,6 +283,8 @@ class RustParser:
                 elif self.current_token[0] == "USE":
                     u = self.parse_use_statement(attributes=attrs)
                     use_statements.append(u)
+                elif self.current_token[0] == "MOD":
+                    self.skip_module_item()
                 elif self.is_macro_rules_definition():
                     self.skip_macro_rules_definition()
                 elif self.current_token[0] == "EXTERN":
@@ -315,6 +321,8 @@ class RustParser:
                             attributes=attrs,
                         )
                         use_statements.append(u)
+                    elif self.current_token[0] == "MOD":
+                        self.skip_module_item()
                     elif self.current_token[0] == "EXTERN":
                         self.skip_extern_block()
                     elif (
@@ -529,6 +537,18 @@ class RustParser:
             self.eat(self.current_token[0])
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
+
+    def skip_module_item(self):
+        self.eat("MOD")
+        if self.current_token[0] in self.NAME_TOKENS:
+            self.eat(self.current_token[0])
+
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return
+
+        if self.current_token[0] == "LBRACE":
+            self.skip_balanced_braces()
 
     def skip_balanced_braces(self):
         depth = 0

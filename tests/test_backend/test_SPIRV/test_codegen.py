@@ -724,6 +724,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_IMAGE_QUERY_SIZE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
+; Source path: test/val/val_image_test.cpp
+; Reduced from ValidateImage::QuerySizeSuccess OpImageQuerySize on a multisampled image.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %Size %uImage
+OpExecutionMode %main OriginUpperLeft
+OpName %Size "Size"
+OpName %uImage "uImage"
+OpDecorate %Size Location 0
+OpDecorate %uImage DescriptorSet 0
+OpDecorate %uImage Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%v2int = OpTypeVector %int 2
+%float = OpTypeFloat 32
+%image_type = OpTypeImage %float 2D 0 0 1 1 Unknown
+%ptr_output_v2int = OpTypePointer Output %v2int
+%ptr_uniformconstant_image = OpTypePointer UniformConstant %image_type
+%Size = OpVariable %ptr_output_v2int Output
+%uImage = OpVariable %ptr_uniformconstant_image UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %image_type %uImage
+%size = OpImageQuerySize %v2int %loaded
+OpStore %Size %size
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_CROSS_COMPOSITE_INSERT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
 ; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
@@ -1588,6 +1621,19 @@ def test_spirv_cross_image_query_size_lod_codegen():
         in generated_code
     )
     assert "Size = (size0 + size1);" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_image_query_size_codegen():
+    tokens = tokenize_code(SPIRV_TOOLS_IMAGE_QUERY_SIZE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int2 Size @output @location(0);" in generated_code
+    assert "Texture2DMS uImage @set(0) @binding(0);" in generated_code
+    assert "Size = textureSize(uImage);" in generated_code
+    assert "Size = size;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

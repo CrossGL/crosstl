@@ -20,6 +20,8 @@ MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
 CANDLE_REPO = "https://github.com/huggingface/candle"
 CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
+LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
+LLAMA_CPP_COMMIT = "94a220cd6745e6e3f8de62870b66fd5b9bc92700"
 PMETAL_REPO = "https://github.com/Epistates/pmetal"
 PMETAL_COMMIT = "089171635d1b9c9b7a58b575cf7d522834022cd3"
 IMGUI_REPO = "https://github.com/ocornut/imgui"
@@ -563,6 +565,35 @@ EXTERNAL_FIXTURES = [
                 static_assert(SM * SN == 32,
                               "simdgroup must have 32 threads");
             };
+        """
+        ),
+    },
+    {
+        "name": "llama_cpp_bfloat_matrix_typedef_dimensions",
+        "repo_url": LLAMA_CPP_REPO,
+        "commit": LLAMA_CPP_COMMIT,
+        "source_path": "ggml/src/ggml-metal/ggml-metal.metal",
+        "roundtrip": True,
+        "contains": [
+            "typedef matrix<bfloat,4,4> bfloat4x4;",
+            "typedef matrix<bfloat,2,4> bfloat2x4;",
+            "void kernel_memset(constant ggml_metal_kargs_memset& args",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            typedef matrix<bfloat, 4, 4> bfloat4x4;
+            typedef matrix<bfloat, 2, 4> bfloat2x4;
+
+            template<typename T>
+            kernel void kernel_memset(
+                    constant ggml_metal_kargs_memset & args,
+                    device T * dst,
+                    uint tpig[[thread_position_in_grid]]) {
+                dst[tpig] = args.val;
+            }
         """
         ),
     },
