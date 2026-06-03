@@ -117,6 +117,16 @@ def _diagnostic_counts(diagnostics: Sequence[ProjectDiagnostic]) -> dict[str, in
     return counts
 
 
+def _diagnostic_payload_counts(
+    diagnostics: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts = {"note": 0, "warning": 0, "error": 0}
+    for diagnostic in diagnostics:
+        severity = str(diagnostic.get("severity", "note"))
+        counts[severity] = counts.get(severity, 0) + 1
+    return counts
+
+
 def _unit_counts_by_source_backend(
     units: Sequence[ProjectTranslationUnit],
 ) -> dict[str, int]:
@@ -867,26 +877,23 @@ def validate_project_report(
         validation["toolchainRuns"] = toolchain_runs
         validation["_diagnostics"].extend(_toolchain_run_diagnostics(toolchain_runs))
     diagnostic_objects = validation.pop("_diagnostics", [])
-    diagnostics = [diagnostic.to_json() for diagnostic in diagnostic_objects]
+    source_diagnostics = [
+        dict(diagnostic)
+        for diagnostic in report.get("diagnostics", [])
+        if isinstance(diagnostic, Mapping)
+    ]
+    diagnostics = source_diagnostics + [
+        diagnostic.to_json() for diagnostic in diagnostic_objects
+    ]
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": "crosstl-project-validation-report",
         "sourceReport": str(path),
         "generatedAt": int(time.time()),
         "success": not any(
-            diagnostic["severity"] == "error" for diagnostic in diagnostics
+            diagnostic.get("severity") == "error" for diagnostic in diagnostics
         ),
-        "diagnosticCounts": _diagnostic_counts(
-            [
-                ProjectDiagnostic(
-                    severity=diagnostic["severity"],
-                    code=diagnostic["code"],
-                    message=diagnostic["message"],
-                    location=SourceLocation(file=diagnostic["location"]["file"]),
-                )
-                for diagnostic in diagnostics
-            ]
-        ),
+        "diagnosticCounts": _diagnostic_payload_counts(diagnostics),
         "diagnostics": diagnostics,
         "validation": validation,
     }

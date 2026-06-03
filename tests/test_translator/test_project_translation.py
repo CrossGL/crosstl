@@ -409,6 +409,56 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
     assert payload["diagnosticCounts"]["error"] == 0
 
 
+def test_validate_project_report_preserves_source_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "diagnostics": [
+                    {
+                        "severity": "error",
+                        "code": "project.config.source-root-outside-project",
+                        "message": (
+                            "Configured source root resolves outside the repository."
+                        ),
+                        "location": {
+                            "file": "crosstl.toml",
+                            "line": 1,
+                            "column": 1,
+                            "offset": 0,
+                            "length": 0,
+                            "endLine": 1,
+                            "endColumn": 1,
+                            "endOffset": 0,
+                        },
+                        "missingCapabilities": ["repo.scan"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["diagnostics"][0]["code"] == (
+        "project.config.source-root-outside-project"
+    )
+    assert payload["diagnostics"][0]["missingCapabilities"] == ["repo.scan"]
+
+
 def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
