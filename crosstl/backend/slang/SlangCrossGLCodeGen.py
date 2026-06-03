@@ -43,7 +43,11 @@ class SlangToCrossGLConverter:
         "Sample": "texture",
         "SampleBias": "texture",
         "SampleCmp": "textureCompare",
+        "SampleCmpLevel": "textureCompareLod",
+        "SampleCmpLevelZero": "textureCompareLod",
+        "SampleCmpGrad": "textureCompareGrad",
         "SampleLevel": "textureLod",
+        "SampleLOD": "textureLod",
         "SampleGrad": "textureGrad",
         "Load": "texelFetch",
     }
@@ -133,6 +137,7 @@ class SlangToCrossGLConverter:
         }
         self.user_function_names = set()
         self.sampleable_resource_scopes = [set()]
+        self.sampleable_resource_type_scopes = [{}]
 
         self.semantic_map = {
             # Vertex inputs position
@@ -242,7 +247,9 @@ class SlangToCrossGLConverter:
             for func in [*getattr(ast, "functions", []), *exported_functions]
         }
         self.user_function_names.discard(None)
-        self.sampleable_resource_scopes = [self.collect_sampleable_resources(ast)]
+        resource_types = self.collect_sampleable_resource_types(ast)
+        self.sampleable_resource_scopes = [set(resource_types)]
+        self.sampleable_resource_type_scopes = [resource_types]
         code = "shader main {\n"
         if ast.imports:
             for imp in ast.imports:
@@ -691,10 +698,9 @@ class SlangToCrossGLConverter:
             return f"{name}({args})"
         elif isinstance(expr, MethodCallNode):
             obj = self.generate_expression(expr.object, is_main)
-            texture_func = self.crossgl_texture_function(expr)
-            if texture_func is not None:
-                args = self.format_texture_method_args(expr, is_main)
-                return f"{texture_func}({', '.join([obj] + args)})"
+            texture_call = self.generate_texture_method_call(expr, obj, is_main)
+            if texture_call is not None:
+                return texture_call
 
             args = [self.generate_expression(arg, is_main) for arg in expr.args]
             args = ", ".join(args)
@@ -787,31 +793,42 @@ class SlangToCrossGLConverter:
             return f"{mapped_type}{pointer_suffix}"
         return slang_type
 
-    def collect_sampleable_resources(self, ast):
-        resources = set()
+    def collect_sampleable_resource_types(self, ast):
+        resources = {}
         for node in getattr(ast, "global_vars", []) or []:
             declaration = node.left if isinstance(node, AssignmentNode) else node
             if self.is_sampleable_resource_type(getattr(declaration, "vtype", None)):
-                resources.add(getattr(declaration, "name", None))
-        resources.discard(None)
+                name = getattr(declaration, "name", None)
+                if name is not None:
+                    resources[name] = getattr(declaration, "vtype", None)
         return resources
 
     def push_sampleable_resource_scope(self, params):
         scope = set()
+        type_scope = {}
         for param in params or []:
             if self.is_sampleable_resource_type(getattr(param, "vtype", None)):
-                scope.add(getattr(param, "name", None))
-        scope.discard(None)
+                name = getattr(param, "name", None)
+                if name is not None:
+                    scope.add(name)
+                    type_scope[name] = getattr(param, "vtype", None)
         self.sampleable_resource_scopes.append(scope)
+        self.sampleable_resource_type_scopes.append(type_scope)
 
     def pop_sampleable_resource_scope(self):
         if len(self.sampleable_resource_scopes) > 1:
             self.sampleable_resource_scopes.pop()
+        if len(self.sampleable_resource_type_scopes) > 1:
+            self.sampleable_resource_type_scopes.pop()
 
     def register_sampleable_resource(self, node):
         if self.is_sampleable_resource_type(getattr(node, "vtype", None)):
-            self.sampleable_resource_scopes[-1].add(getattr(node, "name", None))
-            self.sampleable_resource_scopes[-1].discard(None)
+            name = getattr(node, "name", None)
+            if name is not None:
+                self.sampleable_resource_scopes[-1].add(name)
+                self.sampleable_resource_type_scopes[-1][name] = getattr(
+                    node, "vtype", None
+                )
 
     def is_sampleable_resource_type(self, type_name):
         if not type_name:
@@ -819,23 +836,116 @@ class SlangToCrossGLConverter:
         base_type = str(type_name).strip().split("<", 1)[0].strip()
         return base_type in self.SAMPLEABLE_RESOURCE_TYPES
 
-    def crossgl_texture_function(self, expr):
+    def generate_texture_method_call(self, expr, obj, is_main=False):
         if expr.method not in self.SAMPLE_METHOD_MAP:
             return None
         if not self.is_sampleable_resource_expression(expr.object):
             return None
-        return self.SAMPLE_METHOD_MAP[expr.method]
+        texture_func, args = self.crossgl_texture_call_parts(expr, is_main)
+        return f"{texture_func}({', '.join([obj] + args)})"
+
+    def crossgl_texture_call_parts(self, expr, is_main=False):
+        if expr.method == "Load":
+            args = self.format_texture_load_args(expr.args, is_main)
+            texture_func = (
+                "texelFetchOffset" if len(expr.args or []) > 1 else "texelFetch"
+            )
+            return texture_func, args
+
+        prefix, coord, extra_args = self.split_texture_sample_args(expr, is_main)
+        if coord is None:
+            return self.SAMPLE_METHOD_MAP[expr.method], prefix + extra_args
+
+        if expr.method == "Sample":
+            if extra_args:
+                return "textureOffset", prefix + [coord, *extra_args]
+            return "texture", prefix + [coord]
+
+        if expr.method == "SampleBias":
+            if len(extra_args) > 1:
+                bias, offset, *rest = extra_args
+                return "textureOffset", prefix + [coord, offset, bias, *rest]
+            return "texture", prefix + [coord, *extra_args]
+
+        if expr.method in {"SampleLevel", "SampleLOD"}:
+            if len(extra_args) > 1:
+                lod, offset, *rest = extra_args
+                return "textureLodOffset", prefix + [coord, lod, offset, *rest]
+            return "textureLod", prefix + [coord, *extra_args]
+
+        if expr.method == "SampleGrad":
+            if len(extra_args) > 2:
+                ddx, ddy, offset, *rest = extra_args
+                return "textureGradOffset", prefix + [coord, ddx, ddy, offset, *rest]
+            return "textureGrad", prefix + [coord, *extra_args]
+
+        if expr.method == "SampleCmp":
+            if len(extra_args) > 1:
+                compare, offset, *rest = extra_args
+                return "textureCompareOffset", prefix + [coord, compare, offset, *rest]
+            return "textureCompare", prefix + [coord, *extra_args]
+
+        if expr.method == "SampleCmpLevel":
+            if len(extra_args) > 2:
+                compare, lod, offset, *rest = extra_args
+                return (
+                    "textureCompareLodOffset",
+                    prefix + [coord, compare, lod, offset, *rest],
+                )
+            return "textureCompareLod", prefix + [coord, *extra_args]
+
+        if expr.method == "SampleCmpLevelZero":
+            if len(extra_args) > 1:
+                compare, offset, *rest = extra_args
+                return (
+                    "textureCompareLodOffset",
+                    prefix + [coord, compare, "0.0", offset, *rest],
+                )
+            return "textureCompareLod", prefix + [coord, *extra_args, "0.0"]
+
+        if expr.method == "SampleCmpGrad":
+            if len(extra_args) > 3:
+                compare, ddx, ddy, offset, *rest = extra_args
+                return (
+                    "textureCompareGradOffset",
+                    prefix + [coord, compare, ddx, ddy, offset, *rest],
+                )
+            return "textureCompareGrad", prefix + [coord, *extra_args]
+
+        return self.SAMPLE_METHOD_MAP[expr.method], prefix + [coord, *extra_args]
 
     def format_texture_method_args(self, expr, is_main=False):
         if expr.method == "Load":
             return self.format_texture_load_args(expr.args, is_main)
         return [self.generate_expression(arg, is_main) for arg in expr.args]
 
+    def split_texture_sample_args(self, expr, is_main=False):
+        generated_args = [
+            self.generate_expression(arg, is_main) for arg in expr.args or []
+        ]
+        coord_index = 1 if self.texture_method_uses_explicit_sampler(expr) else 0
+        if len(generated_args) <= coord_index:
+            return generated_args, None, []
+        prefix = generated_args[:coord_index]
+        coord = generated_args[coord_index]
+        extra_args = generated_args[coord_index + 1 :]
+        return prefix, coord, extra_args
+
+    def texture_method_uses_explicit_sampler(self, expr):
+        type_name = self.sampleable_resource_expression_type(expr.object)
+        if not type_name:
+            return False
+        base_type = str(type_name).strip().split("<", 1)[0].strip()
+        return base_type.startswith("Texture")
+
     def format_texture_load_args(self, args, is_main=False):
-        if len(args) == 1:
+        if args:
             load_args = self.split_texture_load_vector_argument(args[0], is_main)
             if load_args is not None:
-                return load_args
+                trailing_args = [
+                    self.generate_expression(arg, is_main) for arg in args[1:]
+                ]
+                return load_args + trailing_args
         return [self.generate_expression(arg, is_main) for arg in args]
 
     def split_texture_load_vector_argument(self, arg, is_main=False):
@@ -869,6 +979,15 @@ class SlangToCrossGLConverter:
         if name is None:
             return False
         return any(name in scope for scope in reversed(self.sampleable_resource_scopes))
+
+    def sampleable_resource_expression_type(self, expr):
+        name = self.expression_base_name(expr)
+        if name is None:
+            return None
+        for scope in reversed(self.sampleable_resource_type_scopes):
+            if name in scope:
+                return scope[name]
+        return None
 
     def expression_base_name(self, expr):
         if isinstance(expr, str):

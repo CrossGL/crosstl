@@ -9003,6 +9003,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "as a function return semantic"
             )
 
+        if self.hlsl_gl_frag_data_semantic(
+            semantic
+        ) and self.hlsl_render_target_semantic(mapped_semantic):
+            if array_suffix or not self.hlsl_render_target_type(actual_base_type):
+                raise ValueError(
+                    f"DirectX {shader_type} return semantic '{semantic}' maps to "
+                    f"'{mapped_semantic}' and requires function '{function_name}' "
+                    "to return a scalar or vector numeric render target type, "
+                    f"got {actual_type}"
+                )
+            return
+
         expected_type = self.hlsl_output_builtin_semantic_type(mapped_semantic)
         if expected_type is None:
             return
@@ -9030,6 +9042,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         actual_type = self.map_type(member_type)
         actual_base_type, array_suffix = split_array_type_suffix(actual_type)
+        if self.hlsl_gl_frag_data_semantic(
+            semantic
+        ) and self.hlsl_render_target_semantic(mapped_semantic):
+            if array_suffix or not self.hlsl_render_target_type(actual_base_type):
+                raise ValueError(
+                    f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
+                    f"'{mapped_semantic}' and requires member '{member_name}' to "
+                    "have a scalar or vector numeric render target type, "
+                    f"got {actual_type}"
+                )
+            return
+
         if array_suffix or actual_base_type != expected_type:
             raise ValueError(
                 f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
@@ -9088,6 +9112,42 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if suffix == "" or suffix.isdigit():
                 return "float4"
         return None
+
+    def hlsl_render_target_semantic(self, mapped_semantic):
+        if mapped_semantic is None:
+            return False
+        semantic_key = str(mapped_semantic).upper()
+        if not semantic_key.startswith("SV_TARGET"):
+            return False
+        suffix = semantic_key[len("SV_TARGET") :]
+        return suffix == "" or suffix.isdigit()
+
+    def hlsl_gl_frag_data_semantic(self, semantic):
+        semantic_text = str(semantic)
+        prefix = "gl_FragData["
+        suffix = "]"
+        if not semantic_text.startswith(prefix) or not semantic_text.endswith(suffix):
+            return False
+        index = semantic_text[len(prefix) : -len(suffix)]
+        return index.isdigit()
+
+    def hlsl_render_target_type(self, actual_base_type):
+        numeric_scalar_bases = (
+            "min16float",
+            "min16uint",
+            "min16int",
+            "float",
+            "double",
+            "half",
+            "uint",
+            "int",
+        )
+        for scalar_base in numeric_scalar_bases:
+            if not actual_base_type.startswith(scalar_base):
+                continue
+            suffix = actual_base_type[len(scalar_base) :]
+            return suffix in {"", "2", "3", "4"}
+        return False
 
     def validate_hlsl_stage_return_semantics(self, func, shader_type, semantic=None):
         if semantic is None:
@@ -9157,7 +9217,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_canonical_semantic(self, semantic):
         if semantic is None:
             return None
-        return self.semantic_map.get(str(semantic), str(semantic))
+        return self.hlsl_semantic_name(semantic)
+
+    def hlsl_semantic_name(self, semantic):
+        semantic_text = str(semantic)
+        prefix = "gl_FragData["
+        if semantic_text.startswith(prefix) and semantic_text.endswith("]"):
+            index = semantic_text[len(prefix) : -1]
+            if index.isdigit():
+                return f"SV_TARGET{index}"
+        return self.semantic_map.get(semantic_text, semantic_text)
 
     def validate_hlsl_stage_parameter_requirements(self, func, shader_type):
         parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
@@ -11383,7 +11452,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
     def hlsl_semantic_key(self, semantic):
-        mapped_semantic = self.semantic_map.get(semantic, semantic)
+        mapped_semantic = self.hlsl_semantic_name(semantic)
         return str(mapped_semantic).lower()
 
     def hlsl_struct_member_declared_semantic(self, member):
@@ -16637,7 +16706,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 continue
             if hasattr(attr, "name"):
-                return attr.name
+                return self.semantic_attribute_name(attr)
         return None
 
     def hlsl_function_return_semantic(self, func):
@@ -16667,7 +16736,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 continue
             if hasattr(attr, "name"):
-                return attr.name
+                return self.semantic_attribute_name(attr)
         return None
 
     def semantic_from_array_node(self, node):
@@ -16688,8 +16757,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 continue
             if hasattr(attr, "name"):
-                return attr.name
+                return self.semantic_attribute_name(attr)
         return None
+
+    def semantic_attribute_name(self, attr):
+        name = getattr(attr, "name", None)
+        if name == "gl_FragData":
+            arguments = getattr(attr, "arguments", None) or getattr(attr, "args", None)
+            if arguments:
+                index_arg = arguments[0]
+                index = getattr(index_arg, "value", None)
+                if index is None:
+                    index = getattr(index_arg, "name", None)
+                if index is None:
+                    index = self.attribute_value_to_string(index_arg)
+                if index is not None:
+                    return f"gl_FragData[{index}]"
+        return name
 
     def semantic_from_struct_member(self, member):
         if isinstance(member, ArrayNode):
@@ -18629,6 +18713,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to an HLSL semantic suffix."""
         if semantic:
-            return f": {self.semantic_map.get(semantic, semantic)}"
+            return f": {self.hlsl_semantic_name(semantic)}"
         else:
             return ""  # Handle None by returning an empty string

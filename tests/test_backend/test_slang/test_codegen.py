@@ -1172,6 +1172,79 @@ def test_texture_lod_and_grad_method_call_codegen():
     assert "tex.SampleGrad" not in generated_code
 
 
+def test_texture_offset_method_call_codegen():
+    code = """
+    Texture2D<float4> albedo;
+    SamplerState linearSampler;
+
+    float4 main(float2 uv, int2 offset, float bias, float lod, float2 ddx, float2 ddy) {
+        float4 offsetColor = albedo.Sample(linearSampler, uv, offset);
+        float4 biasColor = albedo.SampleBias(linearSampler, uv, bias, offset);
+        float4 lodColor = albedo.SampleLevel(linearSampler, uv, lod, offset);
+        float4 gradColor = albedo.SampleGrad(linearSampler, uv, ddx, ddy, offset);
+        return offsetColor + biasColor + lodColor + gradColor;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D albedo;" in generated_code
+    assert "sampler linearSampler;" in generated_code
+    assert (
+        "vec4 offsetColor = textureOffset(albedo, linearSampler, uv, offset);"
+        in generated_code
+    )
+    assert (
+        "vec4 biasColor = textureOffset(albedo, linearSampler, uv, offset, bias);"
+        in generated_code
+    )
+    assert (
+        "vec4 lodColor = textureLodOffset(albedo, linearSampler, uv, lod, offset);"
+        in generated_code
+    )
+    assert (
+        "vec4 gradColor = textureGradOffset("
+        "albedo, linearSampler, uv, ddx, ddy, offset);" in generated_code
+    )
+    assert "albedo.Sample(" not in generated_code
+    assert "albedo.SampleBias" not in generated_code
+    assert "albedo.SampleLevel" not in generated_code
+    assert "albedo.SampleGrad" not in generated_code
+
+
+def test_combined_sampler_offset_method_call_codegen():
+    code = """
+    Sampler2D<float4> albedo;
+
+    float4 main(float2 uv, int2 offset, float bias, float lod, float2 ddx, float2 ddy) {
+        float4 offsetColor = albedo.Sample(uv, offset);
+        float4 biasColor = albedo.SampleBias(uv, bias, offset);
+        float4 lodColor = albedo.SampleLOD(uv, lod, offset);
+        float4 gradColor = albedo.SampleGrad(uv, ddx, ddy, offset);
+        return offsetColor + biasColor + lodColor + gradColor;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D albedo;" in generated_code
+    assert "vec4 offsetColor = textureOffset(albedo, uv, offset);" in generated_code
+    assert "vec4 biasColor = textureOffset(albedo, uv, offset, bias);" in generated_code
+    assert (
+        "vec4 lodColor = textureLodOffset(albedo, uv, lod, offset);" in generated_code
+    )
+    assert (
+        "vec4 gradColor = textureGradOffset(albedo, uv, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert "albedo.Sample(" not in generated_code
+    assert "albedo.SampleBias" not in generated_code
+    assert "albedo.SampleLOD" not in generated_code
+    assert "albedo.SampleGrad" not in generated_code
+
+
 def test_texture_load_method_call_codegen():
     code = """
     Texture2D<float4> albedo;
@@ -1219,6 +1292,61 @@ def test_texture_load_method_call_splits_scalar_uint3_coordinates_codegen():
 
     assert "return texelFetch(albedo, uvec2(pixel.x, pixel.y), mip);" in generated_code
     assert "texelFetch(albedo, uint3(pixel.x, pixel.y, mip))" not in generated_code
+
+
+def test_texture_load_offset_method_call_codegen():
+    code = """
+    Texture2D<float4> albedo;
+
+    float4 main(int2 pixel, int mip, int2 offset) {
+        return albedo.Load(int3(pixel, mip), offset);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D albedo;" in generated_code
+    assert "return texelFetchOffset(albedo, pixel, mip, offset);" in generated_code
+    assert "albedo.Load" not in generated_code
+
+
+def test_texture_compare_offset_method_call_codegen():
+    code = """
+    Texture2D<float> shadowMap;
+    SamplerComparisonState cmpSampler;
+
+    float main(float2 uv, float depth, int2 offset, float lod, float2 ddx, float2 ddy) {
+        float offsetDepth = shadowMap.SampleCmp(cmpSampler, uv, depth, offset);
+        float lodDepth = shadowMap.SampleCmpLevel(cmpSampler, uv, depth, lod, offset);
+        float levelZeroDepth = shadowMap.SampleCmpLevelZero(cmpSampler, uv, depth, offset);
+        float gradDepth = shadowMap.SampleCmpGrad(cmpSampler, uv, depth, ddx, ddy, offset);
+        return offsetDepth + lodDepth + levelZeroDepth + gradDepth;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D shadowMap;" in generated_code
+    assert "sampler cmpSampler;" in generated_code
+    assert (
+        "float offsetDepth = textureCompareOffset("
+        "shadowMap, cmpSampler, uv, depth, offset);" in generated_code
+    )
+    assert (
+        "float lodDepth = textureCompareLodOffset("
+        "shadowMap, cmpSampler, uv, depth, lod, offset);" in generated_code
+    )
+    assert (
+        "float levelZeroDepth = textureCompareLodOffset("
+        "shadowMap, cmpSampler, uv, depth, 0.0, offset);" in generated_code
+    )
+    assert (
+        "float gradDepth = textureCompareGradOffset("
+        "shadowMap, cmpSampler, uv, depth, ddx, ddy, offset);" in generated_code
+    )
+    assert "shadowMap.SampleCmp" not in generated_code
 
 
 def test_resource_array_sample_method_call_codegen():

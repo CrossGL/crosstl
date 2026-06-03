@@ -1007,6 +1007,21 @@ def test_codegen_texture_sample_mapping():
     assert "texture_sample" not in output
 
 
+def test_codegen_sv_target_index_roundtrips_to_hlsl_semantic():
+    output = generate_crossgl("""
+        float4 PSMain(float2 uv : TEXCOORD0) : SV_Target1 {
+            return float4(uv, 0.0, 1.0);
+        }
+    """)
+
+    assert "@ gl_FragData[1]" in output
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+
+    assert "float4 PSMain(float2 uv : TexCoord0): SV_TARGET1" in regenerated_hlsl
+    assert "gl_FragData" not in regenerated_hlsl
+
+
 def test_codegen_register_bindings_emitted():
     output = generate_crossgl(REGISTER_BINDINGS_HLSL)
     assert "@ register" in output

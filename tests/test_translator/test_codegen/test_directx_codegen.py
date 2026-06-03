@@ -3818,6 +3818,36 @@ def test_hlsl_output_return_semantics_still_emit():
     )
     assert "float4 PSMain(): SV_TARGET1" in color_output
 
+    frag_data_code = """
+    shader ValidFragDataReturnSemantic {
+        fragment {
+            vec4 main() @gl_FragData[2] {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    frag_data_output = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(frag_data_code), "fragment"
+    )
+    assert "float4 PSMain(): SV_TARGET2" in frag_data_output
+    assert "gl_FragData" not in frag_data_output
+
+    integer_target_code = """
+    shader ValidIntegerFragDataReturnSemantic {
+        fragment {
+            uint main() @gl_FragData[3] {
+                return 1u;
+            }
+        }
+    }
+    """
+    integer_target_output = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(integer_target_code), "fragment"
+    )
+    assert "uint PSMain(): SV_TARGET3" in integer_target_output
+    assert "gl_FragData" not in integer_target_output
+
 
 @pytest.mark.parametrize(
     ("stage", "return_type", "semantic", "value", "hlsl_semantic", "expected_type"),
@@ -3899,6 +3929,7 @@ def test_hlsl_struct_output_builtin_semantics_still_emit():
 
         struct FSOutput {
             vec4 color @ gl_FragColor1;
+            uvec4 integerColor @ gl_FragData[2];
             float depth @ gl_FragDepth;
         };
 
@@ -3925,6 +3956,7 @@ def test_hlsl_struct_output_builtin_semantics_still_emit():
 
     assert "float4 position: SV_POSITION;" in generated
     assert "float4 color: SV_TARGET1;" in generated
+    assert "uint4 integerColor: SV_TARGET2;" in generated
     assert "float depth: SV_DEPTH;" in generated
 
 

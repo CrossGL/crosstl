@@ -5154,6 +5154,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         condition = self.visit(node.condition) if node.condition else ""
         self.emit(f"}} while ({condition});")
 
+    def visit_LoopNode(self, node):
+        """Lower CrossGL infinite loops to CUDA while loops."""
+        self.emit("while (true) {")
+
+        self.indent_level += 1
+        self.emit_body(getattr(node, "body", []))
+        self.indent_level -= 1
+
+        self.emit("}")
+
     def visit_SwitchNode(self, node):
         """Visit switch statement"""
         expression = self.visit(node.expression)

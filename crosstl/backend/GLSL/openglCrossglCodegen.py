@@ -1709,17 +1709,12 @@ class GLSLToCrossGLConverter:
 
     def generate_do_while(self, node):
         condition = self.generate_expression(node.condition)
-        result = "while (true) {\n"
+        result = "do {\n"
         self.increase_indent()
         for statement in node.body:
             result += self.indent() + self.generate_statement(statement) + "\n"
-        result += self.indent() + f"if (!({condition})) {{\n"
-        self.increase_indent()
-        result += self.indent() + "break;\n"
         self.decrease_indent()
-        result += self.indent() + "}\n"
-        self.decrease_indent()
-        result += self.indent() + "}"
+        result += self.indent() + f"}} while ({condition});"
         return result
 
     def generate_block(self, node):

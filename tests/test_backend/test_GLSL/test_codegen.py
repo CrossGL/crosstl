@@ -527,6 +527,38 @@ def test_codegen_control_flow_roundtrip():
     assert "switch" in lowered
 
 
+def test_codegen_do_while_continue_roundtrip_preserves_condition_check():
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            int i = 0;
+            do {
+                i++;
+                if (i < 2) {
+                    continue;
+                }
+                fragColor = vec4(float(i));
+            } while (i < 3);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "do {" in crossgl
+    assert "continue;" in crossgl
+    assert "} while ((i < 3));" in crossgl
+    assert "while (true)" not in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "do {" in glsl
+    assert "continue;" in glsl
+    assert "} while ((i < 3));" in glsl
+    assert "while (true)" not in glsl
+
+
 def test_codegen_structs_and_arrays_roundtrip():
     output = assert_roundtrip(STRUCT_ARRAY_GLSL, "vertex", ShaderStage.VERTEX)
     assert "Light" in output
