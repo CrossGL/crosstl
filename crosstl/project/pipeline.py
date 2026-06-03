@@ -108,6 +108,17 @@ def _diagnostic_counts(diagnostics: Sequence[ProjectDiagnostic]) -> dict[str, in
     return counts
 
 
+def _config_location(config: ProjectConfig) -> SourceLocation:
+    if config.config_path:
+        file = (
+            _relpath(config.config_path, config.root)
+            if _is_relative_to(config.config_path, config.root)
+            else str(config.config_path)
+        )
+        return SourceLocation(file=file)
+    return SourceLocation(file=str(config.root))
+
+
 @dataclass(frozen=True)
 class ProjectConfig:
     """Configuration for scanning and translating a shader repository."""
@@ -190,6 +201,39 @@ class ProjectDiagnostic:
         if self.missing_capabilities:
             payload["missingCapabilities"] = list(self.missing_capabilities)
         return payload
+
+
+def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    location = _config_location(config)
+    if config.include_dirs:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="warning",
+                code="project.config.include-dirs-not-applied",
+                message=(
+                    "Project include directories are recorded in the report but "
+                    "are not applied to backend parser invocations yet."
+                ),
+                location=location,
+                missing_capabilities=["include.resolution"],
+            )
+        )
+    if config.defines or config.variants:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="warning",
+                code="project.config.variants-not-applied",
+                message=(
+                    "Project defines and variants are recorded in the report but "
+                    "variant expansion through backend preprocessors is not "
+                    "implemented yet."
+                ),
+                location=location,
+                missing_capabilities=["macro.variants"],
+            )
+        )
+    return diagnostics
 
 
 @dataclass(frozen=True)
@@ -404,7 +448,7 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
     )
     units: list[ProjectTranslationUnit] = []
     skipped: list[dict[str, Any]] = []
-    diagnostics: list[ProjectDiagnostic] = []
+    diagnostics: list[ProjectDiagnostic] = _configuration_diagnostics(config)
 
     for path in _iter_scan_candidates(config):
         try:
@@ -422,6 +466,27 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
             if override
             else SOURCE_REGISTRY.get_by_extension(str(path))
         )
+        if override and not source_spec:
+            skipped.append(
+                {
+                    "path": relative_path,
+                    "reason": "unsupported-source-override",
+                    "sourceOverride": override,
+                }
+            )
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.config.unsupported-source-override",
+                    message=(
+                        f"Source override for {relative_path} references "
+                        f"unsupported backend '{override}'."
+                    ),
+                    location=_config_location(config),
+                    missing_capabilities=["source.override"],
+                )
+            )
+            continue
         if not source_spec:
             skipped.append({"path": relative_path, "reason": "unsupported-extension"})
             diagnostics.append(

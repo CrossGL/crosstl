@@ -80,9 +80,12 @@ configuration contract is intentionally small:
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Source
 overrides allow extensionless or non-standard files to be assigned to a
-registered source backend. Include directories, defines, and variants are
+registered source backend; invalid override backend names are reported as
+configuration diagnostics. Include directories, defines, and variants are
 recorded in project reports; full variant expansion through every native
-preprocessor remains a tracked project-porting capability.
+preprocessor remains a tracked project-porting capability. Reports emit
+structured warnings when these fields are present but not yet applied during
+backend parser invocation.
 
 Report Shape
 ------------

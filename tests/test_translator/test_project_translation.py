@@ -115,6 +115,22 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     assert [(unit.relative_path, unit.source_backend) for unit in scan.units] == [
         ("gpu/kernel.shader", "cgl")
     ]
+    diagnostics = {diagnostic.code: diagnostic for diagnostic in scan.diagnostics}
+    assert set(diagnostics) == {
+        "project.config.include-dirs-not-applied",
+        "project.config.variants-not-applied",
+    }
+    assert diagnostics[
+        "project.config.include-dirs-not-applied"
+    ].missing_capabilities == ["include.resolution"]
+    assert diagnostics["project.config.variants-not-applied"].missing_capabilities == [
+        "macro.variants"
+    ]
+    payload = scan.to_report(targets=config.targets).to_json()
+    assert payload["diagnosticCounts"]["warning"] == 2
+    assert {
+        diagnostic["location"]["file"] for diagnostic in payload["diagnostics"]
+    } == {"crosstl.toml"}
 
 
 def test_translate_project_honors_source_backend_overrides(tmp_path):
@@ -147,6 +163,44 @@ def test_translate_project_honors_source_backend_overrides(tmp_path):
     assert payload["units"][0]["sourceOverride"] == "cgl"
     assert payload["artifacts"][0]["sourceBackend"] == "cgl"
     assert payload["artifacts"][0]["path"] == "translated/opengl/gpu/kernel.glsl"
+
+
+def test_scan_project_reports_unsupported_source_overrides(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            include = ["**/*"]
+
+            [project.sources]
+            "gpu/*.shader" = "unknown-backend"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report().to_json()
+
+    assert scan.units == []
+    assert scan.skipped == [
+        {
+            "path": "gpu/kernel.shader",
+            "reason": "unsupported-source-override",
+            "sourceOverride": "unknown-backend",
+        }
+    ]
+    assert [diagnostic["code"] for diagnostic in payload["diagnostics"]] == [
+        "project.config.unsupported-source-override",
+        "project.scan.empty",
+    ]
+    assert payload["diagnostics"][0]["severity"] == "error"
+    assert payload["diagnostics"][0]["location"]["file"] == "crosstl.toml"
+    assert payload["diagnostics"][0]["missingCapabilities"] == ["source.override"]
+    assert "unknown-backend" in payload["diagnostics"][0]["message"]
 
 
 def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_path):
