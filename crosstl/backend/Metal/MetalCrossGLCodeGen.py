@@ -107,6 +107,60 @@ class MetalToCrossGLConverter:
         "rgba32sint",
         "rgba32float",
     }
+    metal_math_namespace_prefixes = (
+        "metal::fast::",
+        "metal::precise::",
+        "metal::",
+        "fast::",
+        "precise::",
+    )
+    metal_math_intrinsics = {
+        "abs",
+        "acos",
+        "acosh",
+        "asin",
+        "asinh",
+        "atan",
+        "atan2",
+        "atanh",
+        "ceil",
+        "clamp",
+        "cos",
+        "cosh",
+        "cospi",
+        "distance",
+        "dot",
+        "exp",
+        "exp2",
+        "fabs",
+        "floor",
+        "fma",
+        "fmax",
+        "fmin",
+        "fmod",
+        "fract",
+        "length",
+        "log",
+        "log2",
+        "max",
+        "min",
+        "mix",
+        "normalize",
+        "pow",
+        "reflect",
+        "rsqrt",
+        "select",
+        "sign",
+        "sin",
+        "sincos",
+        "sinh",
+        "sinpi",
+        "smoothstep",
+        "sqrt",
+        "step",
+        "tan",
+        "tanh",
+    }
 
     def __init__(self):
         self.rt_qualifiers = {
@@ -1604,6 +1658,9 @@ class MetalToCrossGLConverter:
     def map_function_call_name(self, name):
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
         if not match:
+            metal_math_name = self.map_metal_math_function_name(name)
+            if metal_math_name is not None:
+                return metal_math_name
             return self.sanitize_identifier(name)
 
         target_type = self.normalized_metal_type(match.group(1))
@@ -1615,6 +1672,15 @@ class MetalToCrossGLConverter:
         if target_type.startswith("int") or mapped_type.startswith("ivec"):
             return "asint"
         return name
+
+    def map_metal_math_function_name(self, name):
+        for prefix in self.metal_math_namespace_prefixes:
+            if not str(name).startswith(prefix):
+                continue
+            unscoped = str(name)[len(prefix) :]
+            if unscoped in self.metal_math_intrinsics:
+                return unscoped
+        return None
 
     def generate_binary_operand(self, operand, parent_op, is_right, is_main=False):
         text = self.generate_expression(operand, is_main)

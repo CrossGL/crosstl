@@ -24,6 +24,7 @@ EXTERNAL_SAMPLES = [
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
             "cpp/3_CUDA_Features/cudaCompressibleMemory/saxpy.cu",
+            "cpp/3_CUDA_Features/cdpAdvancedQuicksort/cdpAdvancedQuicksort.cu",
             "cpp/3_CUDA_Features/simpleCudaGraphs/simpleCudaGraphs.cu",
             "cpp/3_CUDA_Features/cudaTensorCoreGemm/cudaTensorCoreGemm.cu",
             "cpp/6_Performance/transpose/transpose.cu",
@@ -620,6 +621,33 @@ def test_external_raja_global_qualified_cuda_shuffle_codegen_reparse():
     assert "i32 shfl_sync(i32 var_, i32 srcLane)" in crossgl
     assert "return WaveReadLaneAt(var_, srcLane);" in crossgl
     assert "::__shfl_sync" not in crossgl
+
+
+def test_cuda_samples_cdp_advanced_quicksort_popc_codegen_reparse():
+    source = """
+    __global__ void qsort_warp(unsigned *outdata,
+                               unsigned int gt_mask,
+                               unsigned int lt_mask,
+                               unsigned int lane_mask_lt) {
+        unsigned int gt_count = __popc(gt_mask);
+        unsigned int lt_count = __popc(lt_mask);
+        unsigned int my_mask = gt_mask | lt_mask;
+        unsigned int my_offset = __popc(my_mask & lane_mask_lt);
+        outdata[threadIdx.x] = gt_count + lt_count + my_offset;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.kernels[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(body[0].value, FunctionCallNode)
+    assert body[0].value.name == "__popc"
+    assert "var gt_count: u32 = bitCount(gt_mask);" in crossgl
+    assert "var lt_count: u32 = bitCount(lt_mask);" in crossgl
+    assert "var my_offset: u32 = bitCount((my_mask & lane_mask_lt));" in crossgl
+    assert "__popc" not in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():

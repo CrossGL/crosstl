@@ -361,6 +361,25 @@ def test_try_except_codegen_from_layout_tensor_gpu_docs():
     assert "print(error);" in generated_code
 
 
+def test_modular_trait_codegen_omits_abstract_contract_methods():
+    code = """
+    trait PipelineSchedule:
+        def config(self) -> PipelineConfig:
+            ...
+
+    fn helper() -> Int:
+        return 1
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int helper()" in generated_code
+    assert "return 1;" in generated_code
+    assert "PipelineSchedule" not in generated_code
+    assert "config(" not in generated_code
+    assert "..." not in generated_code
+
+
 def test_function_local_imports_codegen_from_layout_tensor_gpu_docs():
     code = """
     def simd_width_example():

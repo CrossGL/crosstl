@@ -360,6 +360,28 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_fixed_width_vector_typedef",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/initializelist.undefined.hlsl",
+        code=textwrap.dedent("""
+            typedef vector<uint32_t,3> uint32_t3;
+            typedef vector<uint16_t,3> uint16_t3;
+            uint32_t3 gl_WorkGroupSize();
+
+            [numthreads(1, 1, 1)]
+            void main() {
+              const uint16_t3 dims = uint16_t3(gl_WorkGroupSize());
+            }
+        """).strip(),
+        contains=(
+            "type uint32_t3 = uvec3;",
+            "type uint16_t3 = u16vec3;",
+            "@ numthreads(1, 1, 1)",
+            "uint16_t3 dims = uint16_t3(gl_WorkGroupSize());",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_non_uniform_dynamic_resource_heap",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,
