@@ -1016,6 +1016,39 @@ def test_qualified_type_paths_parse_in_typedefs_structs_and_locals():
     assert isinstance(local.right, InitializerListNode)
 
 
+def test_module_level_require_capability_declaration_is_skipped():
+    code = """
+    __require_capability(cpp);
+
+    void main() {
+        return;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert [function.name for function in ast.functions] == ["main"]
+
+
+def test_module_level_using_namespace_declaration_is_skipped():
+    code = """
+    namespace N {
+        int compute() { return 42; }
+    }
+    using namespace N;
+
+    void main() {
+        return;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert [function.name for function in ast.functions] == ["main"]
+
+
 def test_type_test_and_cast_expression_operators_parse():
     code = """
     struct MyInst {};

@@ -198,6 +198,10 @@ class SlangParser:
                 typedefs.append(self.parse_typedef())
             elif self.is_namespace_declaration_start():
                 self.skip_namespace_declaration()
+            elif self.is_require_capability_declaration_start():
+                self.skip_semicolon_terminated_declaration()
+            elif self.is_using_declaration_start():
+                self.skip_semicolon_terminated_declaration()
             elif self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS:
                 if self.is_function():
                     functions.append(
@@ -312,6 +316,18 @@ class SlangParser:
         self.eat("IDENTIFIER")
         self.eat("IDENTIFIER")
         self.skip_balanced_block()
+
+    def is_require_capability_declaration_start(self):
+        return self.current_token == ("IDENTIFIER", "__require_capability")
+
+    def is_using_declaration_start(self):
+        return self.current_token == ("IDENTIFIER", "using")
+
+    def skip_semicolon_terminated_declaration(self):
+        while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+            self.eat(self.current_token[0])
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
 
     def is_glsl_precision_declaration_start(self):
         return (

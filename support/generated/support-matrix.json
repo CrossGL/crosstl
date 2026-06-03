@@ -1039,7 +1039,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 604
+        "test_count": 606
       },
       "translator_codegen": {
         "exists": true,
