@@ -758,6 +758,23 @@ def _validate_artifacts(
                     missing_capabilities=["artifact.manifest"],
                 )
             )
+        if artifact.get("status") == "failed":
+            error = str(artifact.get("error", "")).strip()
+            message = (
+                f"Artifact translation failed before validation: {artifact['path']}"
+            )
+            if error:
+                message = f"{message}: {error}"
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.validate.failed-artifact",
+                    message=message,
+                    location=SourceLocation(file=str(artifact["source"])),
+                    target=str(artifact["target"]),
+                    missing_capabilities=["batch.translation"],
+                )
+            )
 
     for toolchain in toolchains:
         if toolchain["status"] == "unavailable":
@@ -792,12 +809,11 @@ def validate_project_report(
     )
     validation = _validate_artifacts(report.get("artifacts", []), targets, config)
     if run_toolchains:
-        validation["toolchainRuns"] = _run_toolchain_smoke(
-            report.get("artifacts", []), root
-        )
-    diagnostics = [
-        diagnostic.to_json() for diagnostic in validation.pop("_diagnostics", [])
-    ]
+        toolchain_runs = _run_toolchain_smoke(report.get("artifacts", []), root)
+        validation["toolchainRuns"] = toolchain_runs
+        validation["_diagnostics"].extend(_toolchain_run_diagnostics(toolchain_runs))
+    diagnostic_objects = validation.pop("_diagnostics", [])
+    diagnostics = [diagnostic.to_json() for diagnostic in diagnostic_objects]
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": "crosstl-project-validation-report",
@@ -820,6 +836,31 @@ def validate_project_report(
         "diagnostics": diagnostics,
         "validation": validation,
     }
+
+
+def _toolchain_run_diagnostics(
+    runs: Sequence[Mapping[str, Any]],
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    for run in runs:
+        if run.get("returncode") == 0:
+            continue
+        target = str(run.get("target", "unknown"))
+        artifact_path = str(run.get("path", ""))
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.validate.toolchain-failed",
+                message=(
+                    f"Validation toolchain for target {target} rejected "
+                    f"{artifact_path}."
+                ),
+                location=SourceLocation(file=artifact_path),
+                target=target,
+                missing_capabilities=["toolchain.validation"],
+            )
+        )
+    return diagnostics
 
 
 def _run_toolchain_smoke(
@@ -860,10 +901,12 @@ def _run_toolchain_smoke(
         )
         runs.append(
             {
+                "source": str(artifact.get("source", "")),
                 "target": target,
                 "path": str(artifact["path"]),
                 "command": command,
                 "returncode": completed.returncode,
+                "status": "ok" if completed.returncode == 0 else "failed",
                 "stdout": completed.stdout[-4000:],
                 "stderr": completed.stderr[-4000:],
             }

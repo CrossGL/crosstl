@@ -4530,69 +4530,87 @@
       "id": "project.validation_hooks",
       "category": "project",
       "name": "Optional validation hooks",
-      "description": "Record artifact existence and optional external toolchain availability for translated project outputs.",
+      "description": "Record failed artifacts, translated artifact existence, optional external toolchain availability, and opt-in toolchain smoke failures for project outputs.",
       "support": {
         "directx": {
           "status": "diagnostic",
-          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "notes": "Project validation records failed artifacts, checks translated artifact existence, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts"
           ]
         },
         "opengl": {
           "status": "diagnostic",
-          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "notes": "Project validation records failed artifacts, checks translated artifact existence, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts"
           ]
         },
         "metal": {
           "status": "diagnostic",
-          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "notes": "Project validation records failed artifacts, checks translated artifact existence, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts"
           ]
         },
         "vulkan": {
           "status": "diagnostic",
-          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "notes": "Project validation records failed artifacts, checks translated artifact existence, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts"
           ]
         },
         "cuda": {
           "status": "diagnostic",
-          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "notes": "Project validation records failed artifacts, checks translated artifact existence, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts"
           ]
         },
         "hip": {
           "status": "diagnostic",
-          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "notes": "Project validation records failed artifacts, checks translated artifact existence, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts"
           ]
         },
         "mojo": {
           "status": "diagnostic",
-          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "notes": "Project validation records failed artifacts, checks translated artifact existence, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts"
           ]
         },
         "rust": {
           "status": "diagnostic",
-          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "notes": "Project validation records failed artifacts, checks translated artifact existence, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts"
           ]
         },
         "slang": {
           "status": "diagnostic",
-          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "notes": "Project validation records failed artifacts, checks translated artifact existence, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts"
           ]
         }
       }
@@ -4769,6 +4787,8 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
           ]
@@ -4779,6 +4799,8 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
           ]
@@ -4789,6 +4811,8 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
           ]
@@ -4799,6 +4823,8 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
           ]
@@ -4809,6 +4835,8 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
           ]
@@ -4819,6 +4847,8 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
           ]
@@ -4829,6 +4859,8 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
           ]
@@ -4839,6 +4871,8 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
           ]
@@ -4849,6 +4883,8 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
           ]

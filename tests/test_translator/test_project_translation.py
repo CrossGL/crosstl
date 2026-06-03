@@ -3,8 +3,15 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
-from crosstl.project import load_project_config, scan_project, translate_project
+import crosstl.project.pipeline as project_pipeline
+from crosstl.project import (
+    load_project_config,
+    scan_project,
+    translate_project,
+    validate_project_report,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -317,6 +324,115 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
     assert payload["diagnosticCounts"]["error"] == 0
 
 
+def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    artifact = repo / "out" / "opengl" / "simple.glsl"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "opengl",
+                        "path": "out/opengl/simple.glsl",
+                        "status": "translated",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+    monkeypatch.setattr(
+        project_pipeline.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=2,
+            stdout="",
+            stderr="shader validation failed",
+        ),
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == "project.validate.toolchain-failed"
+    assert payload["diagnostics"][0]["target"] == "opengl"
+    assert payload["diagnostics"][0]["location"]["file"] == ("out/opengl/simple.glsl")
+    assert payload["validation"]["toolchainRuns"][0]["status"] == "failed"
+    assert payload["validation"]["toolchainRuns"][0]["returncode"] == 2
+    assert payload["validation"]["toolchainRuns"][0]["stderr"] == (
+        "shader validation failed"
+    )
+
+
+def test_validate_project_report_records_failed_artifacts(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["not-a-backend"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "not-a-backend",
+                        "path": "out/not-a-backend/simple.out",
+                        "status": "failed",
+                        "error": "unsupported target backend",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["validation"]["artifacts"] == [
+        {
+            "source": "simple.cgl",
+            "target": "not-a-backend",
+            "path": "out/not-a-backend/simple.out",
+            "exists": False,
+            "status": "failed",
+        }
+    ]
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.failed-artifact"
+    assert diagnostic["location"]["file"] == "simple.cgl"
+    assert diagnostic["target"] == "not-a-backend"
+    assert "unsupported target backend" in diagnostic["message"]
+
+
 def test_translate_project_records_structured_diagnostics_for_failures(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -391,6 +507,54 @@ def test_project_cli_translate_project_writes_report(tmp_path):
     assert "Wrote" in result.stdout
     assert payload["summary"]["translatedCount"] == 1
     assert (repo / "out" / "opengl" / "simple.glsl").exists()
+
+
+def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["not-a-backend"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "not-a-backend",
+                        "path": "out/not-a-backend/simple.out",
+                        "status": "failed",
+                        "error": "unsupported target backend",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert payload["success"] is False
+    assert payload["diagnostics"][0]["code"] == "project.validate.failed-artifact"
 
 
 def test_legacy_single_file_cli_still_works(tmp_path):
