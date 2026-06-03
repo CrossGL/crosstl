@@ -137,6 +137,58 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_sampler_kind_modifiers",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenHLSL/SamplerKind.hlsl",
+        code=textwrap.dedent("""
+            cbuffer cbPerObject : register( b0 )
+            {
+                float4 g_vObjectColor : packoffset( c0 );
+            };
+
+            cbuffer cbPerFrame : register( b1 )
+            {
+                float3 g_vLightDir : packoffset( c0 );
+                float g_fAmbient : packoffset( c0.w );
+            };
+
+            Texture2D g_txDiffuse : register( t0 );
+            SamplerState g_samLinear : register( s0 );
+            SamplerComparisonState g_samLinearC : register( s1 );
+            RWTexture2D<float4> uav1 : register( u3 );
+
+            struct PS_INPUT
+            {
+              sample float3 vNormal : NORMAL;
+              noperspective float2 vTexcoord : TEXCOORD0;
+            };
+
+            float cmpVal;
+
+            float4 main( PS_INPUT Input) : SV_TARGET
+            {
+                float4 vDiffuse = g_txDiffuse.Sample( g_samLinear, Input.vTexcoord );
+                vDiffuse += g_txDiffuse.CalculateLevelOfDetail(g_samLinear, Input.vTexcoord);
+                vDiffuse += g_txDiffuse.Gather(g_samLinear, Input.vTexcoord);
+                vDiffuse += g_txDiffuse.SampleCmp(g_samLinearC, Input.vTexcoord, cmpVal);
+                vDiffuse += g_txDiffuse.GatherCmp(g_samLinearC, Input.vTexcoord, cmpVal);
+
+                float fLighting = saturate( dot( g_vLightDir, Input.vNormal ) );
+                fLighting = max( fLighting, g_fAmbient );
+
+                return vDiffuse * fLighting * uav1.Load(int2(0,0));
+            }
+        """).strip(),
+        contains=(
+            "vec3 vNormal @ Normal @ sample;",
+            "vec2 vTexcoord @ TexCoord0 @ noperspective;",
+            "@ packoffset(c0.w)",
+            "textureGather(g_txDiffuse, g_samLinear, Input.vTexcoord)",
+            "textureGatherCompare(g_txDiffuse, g_samLinearC, Input.vTexcoord, cmpVal)",
+        ),
+    ),
+    ExternalFixture(
         name="directx_graphics_samples_meshlet_render_pixel",
         repo=DIRECTX_GRAPHICS_SAMPLES_REPO,
         commit=DIRECTX_GRAPHICS_SAMPLES_COMMIT,

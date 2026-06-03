@@ -290,6 +290,47 @@ def test_rust_gpu_compute_shader_is_multiple_of_method_codegen():
     assert "is_multiple_of" not in result
 
 
+def test_vulkan_shader_examples_compute_atomic_const_generics_codegen():
+    code = """
+    use spirv_std::arch::atomic_i_add;
+    use spirv_std::glam::UVec3;
+    use spirv_std::spirv;
+
+    #[repr(C)]
+    pub struct UBOOut {
+        pub draw_count: i32,
+        pub lod_count: [i32; 6],
+    }
+
+    #[spirv(compute(threads(16)))]
+    pub fn main_cs(
+        #[spirv(global_invocation_id)] global_id: UVec3,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] ubo_out: &mut UBOOut,
+    ) {
+        let lod_level = 0u32;
+        unsafe {
+            atomic_i_add::<
+                i32,
+                { spirv_std::memory::Scope::Device as u32 },
+                { spirv_std::memory::Semantics::NONE.bits() },
+            >(&mut ubo_out.lod_count[lod_level as usize], 1);
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "compute main_cs {" in result
+    assert "void main(uvec3 global_id @ gl_GlobalInvocationID" in result
+    assert "UBOOut ubo_out @ set(0) @ binding(3)" in result
+    assert "int lod_count[6];" in result
+    assert (
+        "atomic_i_add<i32, {spirv_std::memory::Scope::Device as u32}, "
+        "{spirv_std::memory::Semantics::NONE.bits()},>"
+        "(ubo_out.lod_count[(uint)lod_level], 1);"
+    ) in result
+
+
 def test_rust_gpu_final_parenthesized_binary_expression_codegen():
     code = """
     fn total_rayleigh(lambda: Vec3) -> Vec3 {

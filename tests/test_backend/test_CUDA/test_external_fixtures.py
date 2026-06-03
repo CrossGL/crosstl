@@ -12,6 +12,7 @@ EXTERNAL_SAMPLES = [
         "paths": [
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
+            "cpp/3_CUDA_Features/cudaCompressibleMemory/saxpy.cu",
         ],
     },
     {
@@ -187,4 +188,45 @@ def test_cccl_cub_local_union_aligned_dynamic_shared_codegen_reparse():
     assert "struct ShmemLayout" in crossgl
     assert "var<workgroup> smem: array<i8>;" in crossgl
     assert "workgroupBarrier();" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_compressible_memory_grid_stride_float4_codegen_reparse():
+    source = """
+    __global__ void saxpy(const float a,
+                          const float4 *x,
+                          const float4 *y,
+                          float4 *z,
+                          const size_t n) {
+        for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+             i < n;
+             i += gridDim.x * blockDim.x) {
+            const float4 x4 = x[i];
+            const float4 y4 = y[i];
+            z[i] = make_float4(a * x4.x + y4.x,
+                               a * x4.y + y4.y,
+                               a * x4.z + y4.z,
+                               a * x4.w + y4.w);
+        }
+    }
+
+    __global__ void init(float4 *x, float4 *y, const float val, const size_t n) {
+        const float4 val4 = make_float4(val, val, val, val);
+        for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+             i < n;
+             i += gridDim.x * blockDim.x) {
+            x[i] = y[i] = val4;
+        }
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "array<vec4<f32> >" in crossgl
+    assert "gl_NumWorkGroups.x * gl_WorkGroupSize.x" in crossgl
+    assert (
+        "z[i] = vec4<f32>(((a * x4.x) + y4.x), ((a * x4.y) + y4.y), "
+        "((a * x4.z) + y4.z), ((a * x4.w) + y4.w));"
+    ) in crossgl
+    assert "x[i] = y[i] = val4;" in crossgl
     assert_crossgl_reparse(crossgl)

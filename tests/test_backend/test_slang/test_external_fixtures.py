@@ -169,6 +169,32 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["255.f"],
     },
     {
+        "id": "slang_texture2darray_load_int4",
+        "repo": "shader-slang/slang",
+        "path": (
+            "docs/generated/tests/cross-cutting/core-module/texture2darray-load.slang"
+        ),
+        "source": (
+            """
+            Texture2DArray<float4> tex;
+            RWStructuredBuffer<float4> outBuf;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void main(uint3 tid : SV_DispatchThreadID)
+            {
+                outBuf[tid.x] = tex.Load(int4(int(tid.x), int(tid.y), 0, 0));
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "sampler2DArray tex;",
+            "texelFetch(tex, ivec4(int(tid.x), int(tid.y), 0, 0))",
+        ],
+        "not_contains": ["tex.Load"],
+    },
+    {
         "id": "falcor_pixel_stats_resource_array",
         "repo": "NVIDIAGameWorks/Falcor",
         "path": "Source/Falcor/Rendering/Utils/PixelStats.cs.slang",

@@ -570,6 +570,48 @@ def test_comptime_for_parsing_preserves_loop_shape():
     assert isinstance(c_style_loop.update, AssignmentNode)
 
 
+def test_mojo_gpu_puzzles_async_shared_memory_copy_call_parsing():
+    code = """
+    def matmul_idiomatic_tiled[
+        rows: Int,
+        cols: Int,
+        inner: Int,
+        dtype: DType = DType.float32,
+    ](
+        output: TileTensor[mut=True, dtype, OutLayout, MutAnyOrigin],
+    ):
+        var out_tile = output.tile[MATMUL_BLOCK_DIM_XY, MATMUL_BLOCK_DIM_XY](
+            block_idx.y, block_idx.x
+        )
+        comptime for idx in range(
+            (inner + MATMUL_BLOCK_DIM_XY - 1) // MATMUL_BLOCK_DIM_XY
+        ):
+            copy_dram_to_sram_async[
+                thread_layout=load_a_layout,
+                num_threads=MATMUL_NUM_THREADS,
+                block_dim_count=MATMUL_BLOCK_DIM_COUNT,
+            ](a_shared, a_tile)
+            async_copy_wait_all()
+            barrier()
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "matmul_idiomatic_tiled")
+    loop = function.body[1]
+    copy_call = loop.body[0]
+
+    assert function.params[0].vtype == (
+        "TileTensor[mut=true, dtype, OutLayout, MutAnyOrigin]"
+    )
+    assert isinstance(loop, RangeForNode)
+    assert getattr(loop, "is_comptime", False)
+    assert isinstance(copy_call, VectorConstructorNode)
+    assert copy_call.type_name == (
+        "copy_dram_to_sram_async[thread_layout=load_a_layout, "
+        "num_threads=MATMUL_NUM_THREADS, block_dim_count=MATMUL_BLOCK_DIM_COUNT]"
+    )
+    assert [arg.name for arg in copy_call.args] == ["a_shared", "a_tile"]
+
+
 def test_statement_attributes_parse_from_real_world_mojo():
     code = """
     fn main():

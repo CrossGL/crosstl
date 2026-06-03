@@ -810,7 +810,10 @@ class VulkanParser:
             instructions,
             names,
             decorations,
+            member_decorations,
+            member_names,
             types,
+            variables,
             entry_points,
             execution_modes,
             constants,
@@ -842,7 +845,10 @@ class VulkanParser:
         instructions,
         names,
         decorations,
+        member_decorations,
+        member_names,
         types,
+        variables,
         entry_points,
         execution_modes,
         constants,
@@ -921,7 +927,10 @@ class VulkanParser:
                     raw_instructions,
                     names,
                     decorations,
+                    member_decorations,
+                    member_names,
                     types,
+                    variables,
                     constants,
                     extended_instruction_imports,
                 ),
@@ -967,13 +976,17 @@ class VulkanParser:
         raw_instructions,
         names,
         decorations,
+        member_decorations,
+        member_names,
         types,
+        variables,
         constants,
         extended_instruction_imports,
     ):
         statements = []
         expressions = {}
         expression_type_ids = {}
+        variables_by_id = {variable["id"]: variable for variable in variables}
 
         for result_id, opcode, operands, _line_number in raw_instructions:
             if result_id and opcode == "OpFunctionParameter":
@@ -1135,24 +1148,18 @@ class VulkanParser:
 
             if result_id and opcode in {"OpAccessChain", "OpInBoundsAccessChain"}:
                 if len(operands) >= 2:
-                    access = self.spirv_assembly_operand_expression(
+                    access = self.spirv_assembly_access_chain_expression(
                         operands[1],
+                        operands[2:],
                         expressions,
                         names,
                         decorations,
+                        member_decorations,
+                        member_names,
+                        types,
+                        variables_by_id,
                         constants,
                     )
-                    for index_operand in operands[2:]:
-                        access = ArrayAccessNode(
-                            access,
-                            self.spirv_assembly_operand_expression(
-                                index_operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                        )
                     expressions[result_id] = access
                     expression_type_ids[result_id] = operands[0]
                 continue
@@ -1357,6 +1364,127 @@ class VulkanParser:
                 statements.append(ReturnNode())
 
         return statements
+
+    def spirv_assembly_access_chain_expression(
+        self,
+        base_operand,
+        index_operands,
+        expressions,
+        names,
+        decorations,
+        member_decorations,
+        member_names,
+        types,
+        variables_by_id,
+        constants,
+    ):
+        struct_member = self.spirv_assembly_struct_member_access_expression(
+            base_operand,
+            index_operands,
+            expressions,
+            names,
+            decorations,
+            member_decorations,
+            member_names,
+            types,
+            variables_by_id,
+            constants,
+        )
+        if struct_member is not None:
+            return struct_member
+
+        access = self.spirv_assembly_operand_expression(
+            base_operand,
+            expressions,
+            names,
+            decorations,
+            constants,
+        )
+        for index_operand in index_operands:
+            access = ArrayAccessNode(
+                access,
+                self.spirv_assembly_operand_expression(
+                    index_operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                ),
+            )
+        return access
+
+    def spirv_assembly_struct_member_access_expression(
+        self,
+        base_operand,
+        index_operands,
+        expressions,
+        names,
+        decorations,
+        member_decorations,
+        member_names,
+        types,
+        variables_by_id,
+        constants,
+    ):
+        if not index_operands:
+            return None
+
+        variable = variables_by_id.get(base_operand)
+        if variable is None:
+            return None
+
+        pointer_type = types.get(variable["pointer_type_id"], {})
+        if pointer_type.get("kind") != "pointer":
+            return None
+
+        storage_class = variable["storage_class"] or pointer_type.get("storage_class")
+        if storage_class not in self.SPIRV_INTERFACE_STORAGE_CLASSES:
+            return None
+
+        struct_type_id = pointer_type.get("type_id")
+        struct_type = types.get(struct_type_id, {})
+        if struct_type.get("kind") != "struct":
+            return None
+
+        member_index = self.spirv_integer_constant_operand(index_operands[0], constants)
+        if member_index is None:
+            return None
+
+        member_types = struct_type.get("member_types", [])
+        if not 0 <= member_index < len(member_types):
+            return None
+
+        member_key = str(member_index)
+        member_layout_decorations = [
+            (decoration, operands)
+            for member, decoration, operands in member_decorations.get(
+                struct_type_id, []
+            )
+            if member == member_key
+        ]
+        qualifiers = self.spirv_layout_qualifiers(member_layout_decorations)
+        block_name = names.get(base_operand) or base_operand.lstrip("%")
+        member_name = self.spirv_struct_member_variable_name(
+            struct_type_id,
+            member_key,
+            block_name,
+            qualifiers,
+            member_names,
+            storage_class=storage_class,
+        )
+        access = VariableNode("", member_name)
+        for index_operand in index_operands[1:]:
+            access = ArrayAccessNode(
+                access,
+                self.spirv_assembly_operand_expression(
+                    index_operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                ),
+            )
+        return access
 
     def spirv_assembly_image_sample_expression(
         self,
@@ -1966,6 +2094,13 @@ class VulkanParser:
         if isinstance(operand, str) and operand.startswith("%"):
             return operand.lstrip("%")
         return operand
+
+    def spirv_integer_constant_operand(self, operand, constants):
+        value = constants.get(operand, operand)
+        try:
+            return int(str(value), 0)
+        except (TypeError, ValueError):
+            return None
 
     def spirv_constant_expression_text(self, value):
         if isinstance(value, str):

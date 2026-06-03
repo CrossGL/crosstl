@@ -451,7 +451,10 @@ class MojoToCrossGLConverter:
                     code += self.generate_if_statement(stmt, indent)
                 elif isinstance(stmt, SwitchNode):
                     code += self.generate_switch_statement(stmt, indent)
-                elif isinstance(stmt, (FunctionCallNode, MethodCallNode, CallNode)):
+                elif isinstance(
+                    stmt,
+                    (FunctionCallNode, MethodCallNode, CallNode, VectorConstructorNode),
+                ):
                     code += f"{self.generate_expression(stmt)};\n"
                 elif isinstance(stmt, str):
                     code += f"{stmt};\n"

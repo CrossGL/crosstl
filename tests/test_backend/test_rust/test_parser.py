@@ -393,6 +393,50 @@ def test_rust_gpu_compute_shader_method_turbofish_parsing():
     assert collect_call.name.member == "collect<Vec<_>>"
 
 
+def test_vulkan_shader_examples_compute_atomic_const_generics_parsing():
+    code = """
+    use spirv_std::arch::atomic_i_add;
+    use spirv_std::glam::UVec3;
+    use spirv_std::spirv;
+
+    #[repr(C)]
+    pub struct UBOOut {
+        pub draw_count: i32,
+        pub lod_count: [i32; 6],
+    }
+
+    #[spirv(compute(threads(16)))]
+    pub fn main_cs(
+        #[spirv(global_invocation_id)] global_id: UVec3,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] ubo_out: &mut UBOOut,
+    ) {
+        let lod_level = 0u32;
+        unsafe {
+            atomic_i_add::<
+                i32,
+                { spirv_std::memory::Scope::Device as u32 },
+                { spirv_std::memory::Semantics::NONE.bits() },
+            >(&mut ubo_out.lod_count[lod_level as usize], 1);
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    unsafe_block = ast.functions[0].body[1]
+    atomic_call = unsafe_block.block.statements[0]
+
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    assert isinstance(atomic_call, FunctionCallNode)
+    assert atomic_call.name == (
+        "atomic_i_add<i32, {spirv_std::memory::Scope::Device as u32}, "
+        "{spirv_std::memory::Semantics::NONE.bits()},>"
+    )
+    assert isinstance(atomic_call.args[0], ReferenceNode)
+    assert isinstance(atomic_call.args[0].expression, ArrayAccessNode)
+    assert isinstance(atomic_call.args[0].expression.index, CastNode)
+    assert atomic_call.args[0].expression.index.target_type == "usize"
+
+
 def test_underscore_parameter_name_parsing():
     code = """
     pub fn fallback(_value: u32) -> u32 {

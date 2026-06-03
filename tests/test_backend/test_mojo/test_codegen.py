@@ -407,6 +407,43 @@ def test_gpu_fundamentals_launch_keyword_tuple_args_codegen():
     assert "comptime" not in generated_code
 
 
+def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
+    code = """
+    def matmul_idiomatic_tiled[
+        rows: Int,
+        cols: Int,
+        inner: Int,
+        dtype: DType = DType.float32,
+    ](
+        output: TileTensor[mut=True, dtype, OutLayout, MutAnyOrigin],
+    ):
+        var out_tile = output.tile[MATMUL_BLOCK_DIM_XY, MATMUL_BLOCK_DIM_XY](
+            block_idx.y, block_idx.x
+        )
+        comptime for idx in range(
+            (inner + MATMUL_BLOCK_DIM_XY - 1) // MATMUL_BLOCK_DIM_XY
+        ):
+            copy_dram_to_sram_async[
+                thread_layout=load_a_layout,
+                num_threads=MATMUL_NUM_THREADS,
+                block_dim_count=MATMUL_BLOCK_DIM_COUNT,
+            ](a_shared, a_tile)
+            async_copy_wait_all()
+            barrier()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "copy_dram_to_sram_async[thread_layout=load_a_layout, "
+        "num_threads=MATMUL_NUM_THREADS, block_dim_count=MATMUL_BLOCK_DIM_COUNT]"
+        "(a_shared, a_tile);"
+    ) in generated_code
+    assert "async_copy_wait_all();" in generated_code
+    assert "barrier();" in generated_code
+    assert "Unhandled statement type: VectorConstructorNode" not in generated_code
+
+
 def test_type_member_expression_codegen_from_modular_testing_examples():
     code = """
     def inc(n: Int) raises -> Int:

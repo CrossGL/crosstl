@@ -835,6 +835,53 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY = """
+; Reduced from KhronosGroup/SPIRV-Tools@96545708d0fb060ec6d1e67e85de593bcf24dd21
+; test/diff/diff_files/spec_constant_array_size_src.spvasm.
+; Generator: Google ANGLE Shader Compiler; 0
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %22 "main" %4 %19
+OpSource GLSL 450
+OpName %4 "_ua_position"
+OpName %17 "gl_PerVertex"
+OpMemberName %17 0 "gl_Position"
+OpMemberName %17 1 "gl_PointSize"
+OpMemberName %17 2 "gl_ClipDistance"
+OpMemberName %17 3 "gl_CullDistance"
+OpName %19 ""
+OpName %22 "main"
+OpDecorate %4 Location 0
+OpMemberDecorate %17 1 RelaxedPrecision
+OpMemberDecorate %17 0 BuiltIn Position
+OpMemberDecorate %17 1 BuiltIn PointSize
+OpMemberDecorate %17 2 BuiltIn ClipDistance
+OpMemberDecorate %17 3 BuiltIn CullDistance
+OpDecorate %17 Block
+%1 = OpTypeFloat 32
+%2 = OpTypeVector %1 4
+%5 = OpTypeInt 32 0
+%8 = OpTypeVector %5 4
+%15 = OpConstant %5 8
+%16 = OpTypeArray %1 %15
+%17 = OpTypeStruct %2 %1 %16 %16
+%20 = OpTypeVoid
+%25 = OpConstant %5 0
+%3 = OpTypePointer Input %2
+%13 = OpTypePointer Output %2
+%18 = OpTypePointer Output %17
+%21 = OpTypeFunction %20
+%4 = OpVariable %3 Input
+%19 = OpVariable %18 Output
+%22 = OpFunction %20 None %21
+%23 = OpLabel
+%24 = OpLoad %2 %4
+%26 = OpAccessChain %13 %19 %25
+OpStore %26 %24
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -1371,6 +1418,19 @@ def test_spirv_assembly_fragment_sample_and_view_builtins_codegen():
     assert "@builtin(sampleid)" not in generated_code
     assert "@builtin(samplemask)" not in generated_code
     assert "@builtin(layer)" not in generated_code
+
+
+def test_spirv_tools_gl_pervertex_access_chain_codegen():
+    tokens = tokenize_code(SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 _ua_position @input @location(0);" in generated_code
+    assert "float4 gl_Position @output @gl_Position;" in generated_code
+    assert "float gl_ClipDistance[8] @output @gl_ClipDistance;" in generated_code
+    assert "gl_Position = _ua_position;" in generated_code
+    assert "value_19[0]" not in generated_code
+    assert "Unhandled statement type" not in generated_code
 
 
 def test_translate_api_accepts_spirv_assembly_uniform_constant_resources(tmp_path):

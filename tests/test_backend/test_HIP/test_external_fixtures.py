@@ -1,4 +1,9 @@
-from crosstl.backend.HIP.HipAst import FunctionCallNode, KernelLaunchNode, VariableNode
+from crosstl.backend.HIP.HipAst import (
+    AtomicOperationNode,
+    FunctionCallNode,
+    KernelLaunchNode,
+    VariableNode,
+)
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
@@ -12,6 +17,7 @@ EXTERNAL_FIXTURE_SOURCES = {
         "paths": [
             "HIP-Basic/bit_extract/main.hip",
             "HIP-Basic/dynamic_shared/main.hip",
+            "HIP-Basic/texture_management/main.hip",
         ],
     },
     "hip_examples": {
@@ -229,3 +235,38 @@ def test_external_rocm_bit_extract_builtin_crossgl_reparse():
     assert bit_extract_call.name == "__bitextract_u32"
     assert "gl_NumWorkGroups.x" in crossgl
     assert "__bitextract_u32(d_input[i], 8, 4)" in crossgl
+
+
+def test_external_rocm_texture_management_tex2d_atomic_codegen_reparse():
+    source = """
+    __global__ void histogram_kernel(unsigned int* histogram,
+                                     unsigned int size_x,
+                                     unsigned int size_y,
+                                     unsigned int hist_bin_count,
+                                     hipTextureObject_t tex_obj) {
+        unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+        unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+        if(x >= size_x || y >= size_y) {
+            return;
+        }
+
+        float u = x / static_cast<float>(size_x) + .5f;
+        float v = y / static_cast<float>(size_y) + .5f;
+        unsigned char val = tex2D<unsigned char>(tex_obj, u, v);
+        unsigned int bin_range = ceiling_div(256, hist_bin_count);
+        unsigned int bin_idx = static_cast<unsigned int>(val) / bin_range;
+        atomicAdd(&histogram[bin_idx], 1);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert isinstance(body[5].value, FunctionCallNode)
+    assert body[5].value.name == "tex2D<unsigned char>"
+    assert isinstance(body[8], AtomicOperationNode)
+    assert body[8].operation == "atomicAdd"
+    assert "sampler2D tex_obj" in crossgl
+    assert "var val: u8 = texture(tex_obj, vec2<f32>(u, v));" in crossgl
+    assert "atomicAdd((&histogram[bin_idx]), 1);" in crossgl

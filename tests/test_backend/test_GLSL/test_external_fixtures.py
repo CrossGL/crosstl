@@ -9,6 +9,9 @@ from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
+VULKAN_SAMPLES_REPO = "https://github.com/KhronosGroup/Vulkan-Samples"
+VULKAN_SAMPLES_COMMIT = "ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a"
+
 
 @dataclass(frozen=True)
 class ExternalFixture:
@@ -272,6 +275,73 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    ExternalFixture(
+        name="vulkan-samples-base-frag-set-bindings-push-constants",
+        repo=VULKAN_SAMPLES_REPO,
+        commit=VULKAN_SAMPLES_COMMIT,
+        path="shaders/base.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 320 es
+            precision highp float;
+
+            layout(set = 0, binding = 0) uniform sampler2D base_color_texture;
+
+            layout(location = 0) in vec4 in_pos;
+            layout(location = 1) in vec2 in_uv;
+            layout(location = 2) in vec3 in_normal;
+
+            layout(location = 0) out vec4 o_color;
+
+            layout(set = 0, binding = 1) uniform GlobalUniform
+            {
+                mat4 model;
+                mat4 view_proj;
+                vec3 camera_position;
+            }
+            global_uniform;
+
+            layout(push_constant, std430) uniform PBRMaterialUniform
+            {
+                vec4  base_color_factor;
+                float metallic_factor;
+                float roughness_factor;
+            }
+            pbr_material_uniform;
+
+            layout(set = 0, binding = 4) uniform LightsInfo
+            {
+                Light directional_lights[48];
+                Light point_lights[48];
+                Light spot_lights[48];
+            }
+            lights_info;
+
+            layout(constant_id = 0) const uint DIRECTIONAL_LIGHT_COUNT = 0U;
+            layout(constant_id = 1) const uint POINT_LIGHT_COUNT       = 0U;
+            layout(constant_id = 2) const uint SPOT_LIGHT_COUNT        = 0U;
+
+            void main(void)
+            {
+                vec3 normal = normalize(in_normal);
+
+                vec3 light_contribution = vec3(0.0);
+
+                for (uint i = 0U; i < DIRECTIONAL_LIGHT_COUNT; ++i)
+                {
+                    light_contribution += apply_directional_light(lights_info.directional_lights[i], normal);
+                }
+
+                vec4 base_color = vec4(1.0, 0.0, 0.0, 1.0);
+
+                base_color = texture(base_color_texture, in_uv);
+
+                vec3 ambient_color = vec3(0.2) * base_color.xyz;
+
+                o_color = vec4(ambient_color + light_contribution * base_color.xyz, base_color.w);
+            }
+        """).strip(),
+    ),
 ]
 
 
@@ -353,6 +423,28 @@ def test_parse_filament_instancing_highp_object_uniforms_fixture():
     assert object_uniforms.vtype == "ObjectUniforms"
     assert object_uniforms.layout == {"std140": None}
     assert object_data.members[0].qualifiers == ["highp"]
+
+
+def test_parse_vulkan_samples_base_frag_push_constants_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "vulkan-samples-base-frag-set-bindings-push-constants"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    base_texture = next(var for var in ast.uniforms if var.name == "base_color_texture")
+    material_block = next(
+        var for var in ast.uniforms if var.name == "pbr_material_uniform"
+    )
+    lights_info = next(var for var in ast.uniforms if var.name == "lights_info")
+    spot_count = next(var for var in ast.constant if var.name == "SPOT_LIGHT_COUNT")
+
+    assert base_texture.layout == {"set": "0", "binding": "0"}
+    assert material_block.layout == {"push_constant": None, "std430": None}
+    assert lights_info.layout == {"set": "0", "binding": "4"}
+    assert spot_count.layout == {"constant_id": "2"}
+    assert spot_count.value.value == "0U"
 
 
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda fixture: fixture.name)
