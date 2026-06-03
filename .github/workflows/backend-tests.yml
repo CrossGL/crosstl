@@ -38,6 +38,9 @@ jobs:
           - python-version: "3.8"
             OS: windows-latest
             runner: windows-2022
+          - python-version: "3.9"
+            OS: windows-latest
+            runner: windows-2022
       fail-fast: false
       max-parallel: 24
 
