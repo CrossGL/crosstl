@@ -587,8 +587,10 @@ class MojoParser:
             self.eat(self.current_token[0])
 
         return_type = None
+        if self.current_token[0] not in {"IDENTIFIER", "DEFAULT"}:
+            raise SyntaxError(f"Expected function name, got {self.current_token[0]}")
         name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        self.eat(self.current_token[0])
 
         if self.current_token[0] == "LBRACKET":
             self.skip_bracketed_suffix()
@@ -1654,7 +1656,7 @@ class MojoParser:
         return left
 
     def parse_primary(self):
-        if self.current_token[0] == "IDENTIFIER":
+        if self.current_token[0] in {"IDENTIFIER", "DEFAULT"}:
             return self.parse_function_call_or_identifier()
         elif self.current_token[0] == "BACKTICK_IDENTIFIER":
             value = self.current_token[1]
@@ -1770,9 +1772,9 @@ class MojoParser:
         return VectorConstructorNode(type_name, args)
 
     def parse_function_call_or_identifier(self):
-        if self.current_token[0] == "IDENTIFIER":
+        if self.current_token[0] in {"IDENTIFIER", "DEFAULT"}:
             name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            self.eat(self.current_token[0])
             if self.current_token[0] == "STRING_LITERAL":
                 value = f"{name}{self.current_token[1]}"
                 self.eat("STRING_LITERAL")

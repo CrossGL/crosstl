@@ -2200,6 +2200,39 @@ def test_modular_histogram_nested_gpu_kernel_metadata_parse():
     assert [arg.left.name for arg in launch.args[3:]] == ["block_dim", "grid_dim"]
 
 
+def test_modular_static_default_method_name_parse():
+    # Reduced from modularml/mojo commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/kernels/src/pipeline/strategies.mojo PipelineStrategy.default.
+    code = """
+    struct PipelineStrategy:
+        var minimal: Bool
+
+        @staticmethod
+        def default() -> Self:
+            return Self(minimal=false)
+
+        @staticmethod
+        def minimal_no_set_prio() -> Self:
+            return Self.default()
+    """
+
+    ast = parse_code(tokenize_code(code))
+    strategy = find_struct(ast, "PipelineStrategy")
+    default_method, minimal_method = strategy.methods
+
+    assert default_method.name == "default"
+    assert [attr.name for attr in default_method.attributes] == ["staticmethod"]
+    assert isinstance(default_method.body[0], ReturnNode)
+    assert isinstance(default_method.body[0].value, FunctionCallNode)
+    assert default_method.body[0].value.name == "Self"
+
+    default_call = minimal_method.body[0].value
+    assert isinstance(default_call, MethodCallNode)
+    assert default_call.object.name == "Self"
+    assert default_call.method == "default"
+
+
 def test_modular_vector_addition_nested_gpu_launch_parse():
     # Reduced from modularml/mojo commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,

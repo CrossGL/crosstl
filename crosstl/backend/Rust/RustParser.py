@@ -1830,6 +1830,12 @@ class RustParser:
                 if self.current_token[0] == "MUT":
                     is_mutable = True
                     self.eat("MUT")
+                    if self.current_token[0] == "SELF":
+                        params.append(VariableNode("Self", "self", is_mutable=True))
+                        self.eat("SELF")
+                        if self.current_token[0] == "COMMA":
+                            self.eat("COMMA")
+                        continue
 
                 if self.current_token[0] == "UNDERSCORE":
                     self.eat("UNDERSCORE")

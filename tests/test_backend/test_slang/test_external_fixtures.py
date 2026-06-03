@@ -20,6 +20,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "a49a125809f7b491bfd54a3014021fa7d716bbdc",
     },
+    "shader-slang/slang-wgsl-2026": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "726e0973b3f547c7729b86f122ff7aef8322bace",
+    },
     "shader-slang/optix-examples": {
         "url": "https://github.com/shader-slang/optix-examples",
         "commit": "02fa85ae2f39400ced9a602531aa096589055076",
@@ -273,6 +277,33 @@ EXTERNAL_FIXTURES = [
         "not_contains": [
             "tex.Load",
             "ivec4(int(tid.x), int(tid.y), int(tid.z), 0)",
+        ],
+    },
+    {
+        "id": "slang_wgsl_texture1d_load_int2",
+        "repo": "shader-slang/slang-wgsl-2026",
+        "path": "tests/wgsl/texture-load.slang",
+        "source": (
+            """
+            Texture1D<float4> tex;
+            RWStructuredBuffer<float4> outBuf;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void main(uint3 tid : SV_DispatchThreadID)
+            {
+                outBuf[tid.x] = tex.Load(int2(int(tid.x), 0));
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "sampler1D tex;",
+            "texelFetch(tex, int(tid.x), 0)",
+        ],
+        "not_contains": [
+            "tex.Load",
+            "ivec2(int(tid.x), 0)",
         ],
     },
     {

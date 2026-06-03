@@ -102,6 +102,43 @@ TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
 KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER"}
 TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
+OPERATOR_OVERLOAD_TOKENS = {
+    "PLUS",
+    "MINUS",
+    "MULTIPLY",
+    "DIVIDE",
+    "MOD",
+    "EQUAL",
+    "NOT_EQUAL",
+    "LESS_THAN",
+    "GREATER_THAN",
+    "LESS_EQUAL",
+    "GREATER_EQUAL",
+    "PLUS_EQUALS",
+    "MINUS_EQUALS",
+    "MULTIPLY_EQUALS",
+    "DIVIDE_EQUALS",
+    "ASSIGN_MOD",
+    "ASSIGN_AND",
+    "ASSIGN_OR",
+    "ASSIGN_XOR",
+    "ASSIGN_SHIFT_LEFT",
+    "ASSIGN_SHIFT_RIGHT",
+    "AND",
+    "OR",
+    "NOT",
+    "BITWISE_NOT",
+    "BITWISE_AND",
+    "BITWISE_OR",
+    "BITWISE_XOR",
+    "SHIFT_LEFT",
+    "SHIFT_RIGHT",
+    "INCREMENT",
+    "DECREMENT",
+    "EQUALS",
+    "LBRACKET",
+    "LPAREN",
+}
 CONSTRUCTOR_TYPE_TOKENS = TYPE_TOKENS - {
     "VOID",
     "IDENTIFIER",
@@ -313,6 +350,8 @@ class MetalParser:
                     typedefs.append(typedef)
             elif self.current_token[0] == "STATIC_ASSERT":
                 global_variables.append(self.parse_static_assert())
+            elif self.is_operator_function_definition():
+                self.skip_operator_function_definition()
             elif self.is_top_level_parameter_fragment_start():
                 self.parse_top_level_parameter_fragment()
             elif self.current_token[0] == "CONSTANT":
@@ -559,6 +598,69 @@ class MetalParser:
                 self.eat("SEMICOLON")
                 return
             self.eat(token_type)
+
+    def is_operator_function_definition(self):
+        idx = self.skip_leading_attribute_tokens_at(self.pos)
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
+        if idx >= len(self.tokens) or self.tokens[idx][0] not in TYPE_TOKENS:
+            return False
+
+        idx += 1
+        idx = self.skip_scoped_type_suffix_at(idx)
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_template_argument_list_at(idx)
+
+        while idx < len(self.tokens):
+            if self.is_qualifier_token_at(idx):
+                idx += 1
+                continue
+            if self.tokens[idx][0] in {"MULTIPLY", "BITWISE_AND"}:
+                idx += 1
+                continue
+            break
+
+        operator_end = self.skip_operator_name_at(idx)
+        return (
+            operator_end > idx
+            and operator_end < len(self.tokens)
+            and self.tokens[operator_end][0] == "LPAREN"
+        )
+
+    def skip_operator_name_at(self, idx):
+        if idx + 1 >= len(self.tokens):
+            return idx
+        token_type, token_value = self.tokens[idx]
+        if token_type != "IDENTIFIER" or token_value != "operator":
+            return idx
+
+        operator_token = self.tokens[idx + 1][0]
+        if operator_token not in OPERATOR_OVERLOAD_TOKENS:
+            return idx
+        if operator_token == "LBRACKET":
+            return (
+                idx + 3
+                if (
+                    idx + 2 < len(self.tokens) and self.tokens[idx + 2][0] == "RBRACKET"
+                )
+                else idx
+            )
+        if operator_token == "LPAREN":
+            return (
+                idx + 3
+                if (idx + 2 < len(self.tokens) and self.tokens[idx + 2][0] == "RPAREN")
+                else idx
+            )
+        return idx + 2
+
+    def skip_operator_function_definition(self):
+        while self.current_token[0] not in {"LBRACE", "SEMICOLON", "EOF"}:
+            self.eat(self.current_token[0])
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return
+        if self.current_token[0] == "LBRACE":
+            self.skip_balanced_block()
 
     def is_function_definition(self):
         idx = self.skip_leading_attribute_tokens_at(self.pos)

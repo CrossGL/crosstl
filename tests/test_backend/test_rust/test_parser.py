@@ -5022,6 +5022,32 @@ def test_rust_gpu_mouse_shader_tuple_struct_destructure_parse():
     assert method.body[1].value.op == "-"
 
 
+def test_rust_gpu_builder_mut_self_receiver_parse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/spirv-builder/src/lib.rs builder methods.
+    code = """
+    impl SpirvBuilder {
+        pub fn deny_warnings(mut self, v: bool) -> Self {
+            self.deny_warnings = v;
+            self
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    method = ast.impl_blocks[0].methods[0]
+
+    assert method.name == "deny_warnings"
+    assert method.params[0].name == "self"
+    assert method.params[0].vtype == "Self"
+    assert method.params[0].is_mutable is True
+    assert method.params[1].name == "v"
+    assert method.params[1].vtype == "bool"
+    assert isinstance(method.body[0], AssignmentNode)
+    assert method.body[-1] == "self"
+
+
 def test_error_handling():
     invalid_codes = [
         "fn incomplete(",

@@ -22,6 +22,7 @@ EXTERNAL_FIXTURE_SOURCES = {
             "HIP-Basic/dynamic_shared/main.hip",
             "HIP-Basic/texture_management/main.hip",
             "HIP-Basic/warp_shuffle/main.hip",
+            "HIP-Doc/Tutorials/graph_api/src/filtering.hip",
             "HIP-Doc/Tutorials/Programming-Patterns/image_convolution/main.hip",
             "HIP-Doc/Programming-Guide/HIP-C++-Language-Extensions/warp_size_reduction/popcount.hpp",
         ],
@@ -327,6 +328,29 @@ def test_external_rocm_reduction_digit_separator_literals_crossgl_reparse():
 
     assert "100000000" in crossgl
     assert "100'000'000" not in crossgl
+
+
+def test_external_rocm_graph_api_variable_template_constant_crossgl_reparse():
+    source = """
+    __global__ void filter_creation_kernel(float* __restrict__ r,
+                                           int N_hFFT,
+                                           float tau) {
+        constexpr auto pi = std::numbers::pi_v<float>;
+        auto const i = blockDim.x * blockIdx.x + threadIdx.x;
+        if(i < static_cast<unsigned int>(N_hFFT)) {
+            auto const x = pi * i / N_hFFT;
+            r[i] = x / tau;
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    pi = ast.statements[0].body[0]
+
+    assert isinstance(pi, VariableNode)
+    assert pi.value == "std::numbers::pi_v<float>"
+    assert "var pi: auto = std::numbers::pi_v<float>;" in crossgl
+    assert "var x: auto = ((pi * i) / N_hFFT);" in crossgl
 
 
 def test_external_hip_examples_histogram_dynamic_shared_crossgl_reparse():

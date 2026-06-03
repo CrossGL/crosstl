@@ -190,6 +190,37 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_FCONVERT_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/spv.matrix.frag.out
+; Reduced from Test/spv.matrix.frag float-to-double FConvert in sum34 -> dm.
+OpCapability Shader
+OpCapability Float64
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %double_out
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %double_out "doubleOut"
+OpDecorate %input_value Location 0
+OpDecorate %double_out Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%double = OpTypeFloat 64
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_double = OpTypePointer Output %double
+%input_value = OpVariable %ptr_input_float Input
+%double_out = OpVariable %ptr_output_double Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %input_value
+%converted = OpFConvert %double %loaded
+OpStore %double_out %converted
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_PRECISE_DOT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -1549,6 +1580,19 @@ def test_glslang_matrix_transpose_codegen_reparse():
     assert "float4x3 m43 @output @location(0);" in generated_code
     assert "m43 = transpose(sum34);" in generated_code
     assert "m43 = transposed;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_fconvert_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_FCONVERT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float inputValue @input @location(0);" in generated_code
+    assert "double doubleOut @output @location(0);" in generated_code
+    assert "doubleOut = double(inputValue);" in generated_code
+    assert "doubleOut = converted;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
