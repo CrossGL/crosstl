@@ -474,6 +474,42 @@ OpReturn
 OpFunctionEnd
 """
 
+GLSLANG_STD450_FACEFORWARD_ASSEMBLY = """
+; Reduced from glslang 16.3.0 fragment output for GLSL faceforward().
+OpCapability Shader
+%std450 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %color %normal %incident %reference
+OpExecutionMode %main OriginUpperLeft
+OpName %color "color"
+OpName %normal "normal"
+OpName %incident "incident"
+OpName %reference "reference"
+OpDecorate %color Location 0
+OpDecorate %normal Location 0
+OpDecorate %incident Location 1
+OpDecorate %reference Location 2
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v3float = OpTypeVector %float 3
+%ptr_output_v3float = OpTypePointer Output %v3float
+%ptr_input_v3float = OpTypePointer Input %v3float
+%color = OpVariable %ptr_output_v3float Output
+%normal = OpVariable %ptr_input_v3float Input
+%incident = OpVariable %ptr_input_v3float Input
+%reference = OpVariable %ptr_input_v3float Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_normal = OpLoad %v3float %normal
+%loaded_incident = OpLoad %v3float %incident
+%loaded_reference = OpLoad %v3float %reference
+%facing = OpExtInst %v3float %std450 FaceForward %loaded_normal %loaded_incident %loaded_reference
+OpStore %color %facing
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_LOCAL_SIZE_ID_ASSEMBLY = """
 ; Reduced from specialization-driven compute local sizes.
 OpCapability Shader
@@ -939,6 +975,20 @@ def test_spirv_tools_std450_sqrt_extinst_codegen():
     assert "float outputValue @output @location(0);" in generated_code
     assert "outputValue = sqrt(inputValue);" in generated_code
     assert "spirv_GLSL_std_450_Sqrt" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_std450_faceforward_extinst_codegen():
+    tokens = tokenize_code(GLSLANG_STD450_FACEFORWARD_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float3 normal @input @location(0);" in generated_code
+    assert "float3 incident @input @location(1);" in generated_code
+    assert "float3 reference @input @location(2);" in generated_code
+    assert "float3 color @output @location(0);" in generated_code
+    assert "color = faceforward(normal, incident, reference);" in generated_code
+    assert "spirv_GLSL_std_450_FaceForward" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

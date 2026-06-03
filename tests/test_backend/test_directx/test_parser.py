@@ -328,6 +328,36 @@ def test_parse_struct_base_lists_from_dxc_rewriter():
     assert structs["my_struct_5"].base_classes == ["my_class", "my_interface"]
 
 
+def test_parse_elaborated_struct_function_signature_and_local_from_vkd3d():
+    ast = parse_code(textwrap.dedent("""
+            struct input {
+                struct {
+                    float4 texcoord : texcoord;
+                } m;
+            };
+
+            struct output {
+                struct {
+                    float4 color : sv_target;
+                } m;
+            };
+
+            struct output main(struct input i) {
+                struct output o;
+                o.m.color = i.m.texcoord;
+                return o;
+            }
+            """))
+
+    function = ast.functions[0]
+    local_output = function.body[0]
+
+    assert function.return_type == "output"
+    assert function.params[0].vtype == "input"
+    assert local_output.vtype == "output"
+    assert local_output.name == "o"
+
+
 def test_parse_elaborated_struct_declarations_from_dxc_rewriter():
     ast = parse_code(textwrap.dedent("""
             struct my_struct_type_decl {

@@ -1457,6 +1457,51 @@ def test_function_local_imports_parse_from_layout_tensor_gpu_docs():
     assert function.body[1].items == ["get_gpu_target"]
 
 
+def test_postfix_transfer_marker_parse_from_life_examples():
+    code = """
+    def make_grid():
+        return Grid(8, 8, glider^)
+
+    def random_grid():
+        return grid^
+
+    def xor_value(a: Int, b: Int) -> Int:
+        return a ^ b
+    """
+    ast = parse_code(tokenize_code(code))
+    make_grid = find_function(ast, "make_grid")
+    random_grid = find_function(ast, "random_grid")
+    xor_value = find_function(ast, "xor_value")
+
+    transferred_arg = make_grid.body[0].value.args[2]
+    assert transferred_arg.name == "glider"
+    assert getattr(transferred_arg, "is_transfer", False)
+    assert random_grid.body[0].value.name == "grid"
+    assert getattr(random_grid.body[0].value, "is_transfer", False)
+    assert isinstance(xor_value.body[0].value, BinaryOpNode)
+    assert xor_value.body[0].value.op == "^"
+
+
+def test_type_member_expression_parse_from_modular_testing_examples():
+    code = """
+    def inc(n: Int) raises -> Int:
+        if n == Int.MAX:
+            raise Error("inc overflow")
+        return inc(Int.MAX)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "inc")
+    condition = function.body[0].condition
+    call_arg = function.body[1].value.args[0]
+
+    assert isinstance(condition.right, MemberAccessNode)
+    assert condition.right.object.name == "Int"
+    assert condition.right.member == "MAX"
+    assert isinstance(call_arg, MemberAccessNode)
+    assert call_arg.object.name == "Int"
+    assert call_arg.member == "MAX"
+
+
 def test_alias_declarations_parse_as_comptime_aliases():
     code = """
     alias THREADS_PER_BLOCK = 256

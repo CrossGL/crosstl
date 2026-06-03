@@ -313,6 +313,38 @@ def test_function_local_imports_codegen_from_layout_tensor_gpu_docs():
     )
 
 
+def test_postfix_transfer_marker_codegen_from_life_examples():
+    code = """
+    def make_grid():
+        return Grid(8, 8, glider^)
+
+    def random_grid():
+        return grid^
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "return Grid(8, 8, glider);" in generated_code
+    assert "return grid;" in generated_code
+    assert "glider^" not in generated_code
+    assert "grid^" not in generated_code
+
+
+def test_type_member_expression_codegen_from_modular_testing_examples():
+    code = """
+    def inc(n: Int) raises -> Int:
+        if n == Int.MAX:
+            raise Error("inc overflow")
+        return inc(Int.MAX)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "if ((n == Int.MAX))" in generated_code
+    assert 'raise(Error("inc overflow"));' in generated_code
+    assert "return inc(Int.MAX);" in generated_code
+
+
 def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     code = """
     struct Resources {

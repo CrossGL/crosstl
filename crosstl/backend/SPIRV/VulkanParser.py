@@ -202,6 +202,7 @@ class VulkanParser:
         "Exp2": "exp2",
         "FAbs": "abs",
         "FClamp": "clamp",
+        "FaceForward": "faceforward",
         "FindILsb": "findLSB",
         "FindSMsb": "findMSB",
         "FindUMsb": "findMSB",

@@ -1454,6 +1454,8 @@ class MojoParser:
                 return self.parse_postfix_suffixes(
                     self.parse_vector_constructor(type_name)
                 )
+            elif self.current_token[0] in {"DOT", "LBRACKET", "AS"}:
+                return self.parse_postfix_suffixes(VariableNode("", type_name))
             return type_name
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
@@ -1573,7 +1575,22 @@ class MojoParser:
                 node = CastNode(self.parse_type(), node)
                 continue
 
+            if self.current_token[0] == "BITWISE_XOR":
+                if not self.is_postfix_transfer_marker():
+                    return node
+                self.eat("BITWISE_XOR")
+                node.is_transfer = True
+                continue
+
             return node
+
+    def is_postfix_transfer_marker(self):
+        return self.peek_token()[0] in self.STATEMENT_END_TOKENS | {
+            "COMMA",
+            "RPAREN",
+            "RBRACKET",
+            "COLON",
+        }
 
     def parse_call(self, callee):
         self.eat("LPAREN")

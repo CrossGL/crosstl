@@ -462,6 +462,21 @@ class HipParser:
             index += 1
         return index
 
+    def peek_non_newline(self, offset=1):
+        index = self.pos + offset
+        index = self.skip_newlines_at_pos(index)
+        if index < len(self.tokens):
+            return self.tokens[index]
+        return None
+
+    def is_type_constructor_expression_start(self):
+        next_token = self.peek_non_newline()
+        return (
+            self.is_type_token(allow_identifier=False)
+            and next_token
+            and next_token.type in {"LPAREN", "LBRACE"}
+        )
+
     def is_builtin_type_token(self, token=None):
         token = token or self.current_token
         if not token:
@@ -3026,11 +3041,7 @@ class HipParser:
             member = self.consume_qualified_name_member()
             return f"::{member}"
 
-        elif (
-            self.is_type_token(allow_identifier=False)
-            and self.peek()
-            and self.peek().type in {"LPAREN", "LBRACE"}
-        ):
+        elif self.is_type_constructor_expression_start():
             return self.parse_type_without_array_suffix()
 
         elif self.match("STRING"):

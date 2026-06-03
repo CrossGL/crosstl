@@ -189,7 +189,10 @@ class HLSLParser:
                     structs.append(directive)
                 continue
 
-            if self.current_token[0] == "STRUCT":
+            if (
+                self.current_token[0] == "STRUCT"
+                and not self.looks_like_external_declaration()
+            ):
                 synthetic_start = len(self.synthetic_structs)
                 struct = self.parse_struct()
                 structs.extend(self.synthetic_structs[synthetic_start:])
@@ -1279,9 +1282,6 @@ class HLSLParser:
             self.parse_preprocessor_directive()
             return None
 
-        if self.current_token[0] == "STRUCT":
-            return self.parse_struct()
-
         if self.looks_like_declaration():
             qualifiers = self.parse_qualifiers()
             var = self.parse_variable_declaration(
@@ -1291,6 +1291,9 @@ class HLSLParser:
                 consume_semicolon=True,
             )
             return var
+
+        if self.current_token[0] == "STRUCT":
+            return self.parse_struct()
 
         expr = self.parse_expression()
         self.eat("SEMICOLON")

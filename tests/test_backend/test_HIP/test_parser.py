@@ -876,6 +876,30 @@ class TestHipParser:
         assert isinstance(body[3].left, MemberAccessNode)
         assert body[3].left.member == "blockDim"
 
+    def test_public_rocm_graph_api_newline_split_vector_constructor_parse(self):
+        code = """
+        __global__ void create_phantom_kernel(ulonglong3 dim, float3 voxelDim) {
+            auto const denorm = float3
+            {
+                ((dim.x - 1) * voxelDim.x) / 2.f,
+                ((dim.y - 1) * voxelDim.y) / 2.f,
+                ((dim.z - 1) * voxelDim.z) / 2.f
+            };
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0].body[0]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "auto const"
+        assert declaration.name == "denorm"
+        assert isinstance(declaration.value, FunctionCallNode)
+        assert declaration.value.name == "float3"
+        assert len(declaration.value.args) == 3
+        assert isinstance(declaration.value.args[0], BinaryOpNode)
+        assert declaration.value.args[0].op == "/"
+
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         code = """
         float weights[4] = {1.0f, 2.0f, 3.0f, 4.0f};
