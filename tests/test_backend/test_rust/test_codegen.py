@@ -8183,6 +8183,43 @@ def test_rust_gpu_sky_shader_hex_default_spec_constant_codegen():
     )
 
 
+def test_rust_gpu_sky_shader_cfg_test_module_is_not_emitted_to_crossgl():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/sky-shader/src/lib.rs trailing #[cfg(test)] module.
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main_fs(output: &mut Vec4) {
+        *output = vec4(1.0, 0.0, 0.0, 1.0);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_tonemap() {
+            assert_eq!(
+                tonemap(vec3(1_f32, 1_f32, 1_f32)),
+                vec3(0.001261625, 0.001261625, 0.001261625)
+            );
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "fragment main_fs {" in result
+    assert "void main(vec4 output)" in result
+    assert "output = vec4(1.0, 0.0, 0.0, 1.0);" in result
+    assert "test_tonemap" not in result
+    assert "assert_eq!" not in result
+    assert "1_f32" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_mouse_shader_tuple_struct_destructure_codegen():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

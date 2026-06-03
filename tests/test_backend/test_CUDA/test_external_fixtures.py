@@ -20,6 +20,7 @@ EXTERNAL_SAMPLES = [
             "cpp/0_Introduction/simpleSurfaceWrite/simpleSurfaceWrite.cu",
             "cpp/0_Introduction/simpleTexture3D/simpleTexture3D_kernel.cu",
             "cpp/0_Introduction/simpleVoteIntrinsics/simpleVote_kernel.cuh",
+            "cpp/2_Concepts_and_Techniques/MC_SingleAsianOptionP/src/pricingengine.cu",
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
             "cpp/3_CUDA_Features/cudaCompressibleMemory/saxpy.cu",
@@ -116,6 +117,41 @@ def test_cuda_samples_simple_vote_intrinsics_warp_vote_codegen_reparse():
     assert "cuda warp intrinsic __all_sync(mask, input[tx])" in crossgl
     assert "__any_sync(mask, input[tx]);" not in crossgl
     assert "__all_sync(mask, input[tx]);" not in crossgl
+
+
+def test_cuda_samples_monte_carlo_reserved_in_parameter_codegen_reparse():
+    source = """
+    namespace cg = cooperative_groups;
+
+    template <typename Real>
+    __device__ Real reduce_sum(Real in, cg::thread_block cta) {
+        SharedMemory<Real> sdata;
+        unsigned int ltid = threadIdx.x;
+
+        sdata[ltid] = in;
+        cg::sync(cta);
+
+        for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
+            if (ltid < s) {
+                sdata[ltid] += sdata[ltid + s];
+            }
+
+            cg::sync(cta);
+        }
+
+        return sdata[0];
+    }
+    """
+
+    ast = parse_cuda(source)
+    reduce_sum = ast.functions[0]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert reduce_sum.params[0].name == "in"
+    assert "Real reduce_sum(Real in_, cooperative_groups_thread_block cta)" in crossgl
+    assert "sdata[ltid] = in_;" in crossgl
+    assert "Real in," not in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_samples_simple_atomic_intrinsics_codegen_reparse():

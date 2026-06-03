@@ -139,7 +139,7 @@ class CudaToCrossGLConverter:
         "cudaStreamGraphTailLaunch": "tail",
         "cudaStreamGraphFireAndForgetAsSibling": "fire-and-forget sibling",
     }
-    CROSSGL_RESERVED_IDENTIFIERS = {"var"}
+    CROSSGL_RESERVED_IDENTIFIERS = {"in", "var"}
 
     def __init__(self):
         self.indent_level = 0
