@@ -9,8 +9,7 @@ from crosstl.project import load_project_config, scan_project, translate_project
 ROOT = Path(__file__).resolve().parents[2]
 
 
-SIMPLE_CROSSL = textwrap.dedent(
-    """
+SIMPLE_CROSSL = textwrap.dedent("""
     shader RepoShader {
         struct VertexInput {
             vec3 position;
@@ -28,11 +27,12 @@ SIMPLE_CROSSL = textwrap.dedent(
             }
         }
     }
-    """
-).strip()
+    """).strip()
 
 
-def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported(tmp_path):
+def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported(
+    tmp_path,
+):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
     shader_dir.mkdir(parents=True)
@@ -57,13 +57,11 @@ def test_scan_project_reports_explicitly_included_unsupported_sources(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "crosstl.toml").write_text(
-        textwrap.dedent(
-            """
+        textwrap.dedent("""
             [project]
             include = ["**/*"]
             exclude = []
-            """
-        ).strip(),
+            """).strip(),
         encoding="utf-8",
     )
     (repo / "kernel.txt").write_text("not shader code", encoding="utf-8")

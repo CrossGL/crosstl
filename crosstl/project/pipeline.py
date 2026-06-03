@@ -100,7 +100,7 @@ def _source_hash(path: Path) -> dict[str, str]:
     return {"algorithm": "sha256", "value": digest}
 
 
-def _diagnostic_counts(diagnostics: Sequence["ProjectDiagnostic"]) -> dict[str, int]:
+def _diagnostic_counts(diagnostics: Sequence[ProjectDiagnostic]) -> dict[str, int]:
     counts = {"note": 0, "warning": 0, "error": 0}
     for diagnostic in diagnostics:
         counts[diagnostic.severity] = counts.get(diagnostic.severity, 0) + 1
@@ -222,8 +222,12 @@ class ProjectScan:
     skipped: Sequence[dict[str, Any]] = ()
     diagnostics: Sequence[ProjectDiagnostic] = ()
 
-    def to_report(self, targets: Sequence[str] | None = None) -> "ProjectPortabilityReport":
-        report_targets = list(targets) if targets is not None else self.config.normalized_targets()
+    def to_report(
+        self, targets: Sequence[str] | None = None
+    ) -> ProjectPortabilityReport:
+        report_targets = (
+            list(targets) if targets is not None else self.config.normalized_targets()
+        )
         return ProjectPortabilityReport(
             config=self.config,
             targets=report_targets,
@@ -268,7 +272,9 @@ class ProjectPortabilityReport:
             },
             "project": {
                 "root": str(self.config.root),
-                "config": str(self.config.config_path) if self.config.config_path else None,
+                "config": (
+                    str(self.config.config_path) if self.config.config_path else None
+                ),
                 "sourceRoots": list(self.config.source_roots),
                 "includePatterns": list(self.config.include_patterns),
                 "excludePatterns": list(self.config.exclude_patterns),
@@ -309,7 +315,9 @@ class ProjectPortabilityReport:
         path.write_text(json.dumps(self.to_json(), indent=2, sort_keys=True) + "\n")
 
 
-def load_project_config(root: str | os.PathLike[str], config: str | os.PathLike[str] | None = None) -> ProjectConfig:
+def load_project_config(
+    root: str | os.PathLike[str], config: str | os.PathLike[str] | None = None
+) -> ProjectConfig:
     """Load ``crosstl.toml`` if present, otherwise return default scan settings."""
     root_path = Path(root).resolve()
     config_path = Path(config).resolve() if config else root_path / DEFAULT_CONFIG_NAME
@@ -341,12 +349,16 @@ def load_project_config(root: str | os.PathLike[str], config: str | os.PathLike[
             project.get("source_roots", "."), field_name="project.source_roots"
         )
         or (".",),
-        include_patterns=_as_str_list(project.get("include"), field_name="project.include"),
+        include_patterns=_as_str_list(
+            project.get("include"), field_name="project.include"
+        ),
         exclude_patterns=excludes,
         targets=_as_str_list(project.get("targets"), field_name="project.targets"),
         output_dir=str(project.get("output_dir", DEFAULT_OUTPUT_DIR)),
         source_overrides={str(key): str(value) for key, value in sources.items()},
-        include_dirs=_as_str_list(project.get("include_dirs"), field_name="project.include_dirs"),
+        include_dirs=_as_str_list(
+            project.get("include_dirs"), field_name="project.include_dirs"
+        ),
         defines={str(key): str(value) for key, value in defines.items()},
         variants={
             str(name): {str(key): str(value) for key, value in value.items()}
@@ -377,7 +389,9 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
         if not absolute_root.exists():
             continue
         for pattern in include_patterns:
-            candidates.update(path for path in absolute_root.glob(pattern) if path.is_file())
+            candidates.update(
+                path for path in absolute_root.glob(pattern) if path.is_file()
+            )
     return sorted(candidates)
 
 
@@ -401,7 +415,11 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
             continue
 
         override = _override_for_path(relative_path, config)
-        source_spec = SOURCE_REGISTRY.get(override) if override else SOURCE_REGISTRY.get_by_extension(str(path))
+        source_spec = (
+            SOURCE_REGISTRY.get(override)
+            if override
+            else SOURCE_REGISTRY.get_by_extension(str(path))
+        )
         if not source_spec:
             skipped.append({"path": relative_path, "reason": "unsupported-extension"})
             diagnostics.append(
@@ -435,11 +453,19 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
                 missing_capabilities=["repo.scan"],
             )
         )
-    return ProjectScan(config=config, units=units, skipped=skipped, diagnostics=diagnostics)
+    return ProjectScan(
+        config=config, units=units, skipped=skipped, diagnostics=diagnostics
+    )
 
 
-def _artifact_path(config: ProjectConfig, unit: ProjectTranslationUnit, target: str) -> Path:
-    extension = ".cgl" if target in {"cgl", "crossgl"} else get_backend_extension(target) or ".out"
+def _artifact_path(
+    config: ProjectConfig, unit: ProjectTranslationUnit, target: str
+) -> Path:
+    extension = (
+        ".cgl"
+        if target in {"cgl", "crossgl"}
+        else get_backend_extension(target) or ".out"
+    )
     relative = Path(unit.relative_path)
     return config.output_path / target / relative.with_suffix(extension)
 
@@ -492,7 +518,9 @@ def translate_project(
             variants=config.variants,
         )
 
-    selected_targets = list(targets) if targets is not None else config.normalized_targets()
+    selected_targets = (
+        list(targets) if targets is not None else config.normalized_targets()
+    )
     if not selected_targets:
         selected_targets = ["cgl"]
     selected_targets = [
@@ -511,16 +539,21 @@ def translate_project(
                 "source": unit.relative_path,
                 "sourceBackend": unit.source_backend,
                 "target": target,
-                "path": _relpath(output_path, config.root)
-                if _is_relative_to(output_path, config.root)
-                else str(output_path),
+                "path": (
+                    _relpath(output_path, config.root)
+                    if _is_relative_to(output_path, config.root)
+                    else str(output_path)
+                ),
                 "status": "translated",
                 "sourceHash": _source_hash(unit.path),
                 "provenance": {
                     "pipeline": "single-file-translate",
-                    "intermediate": "crossgl"
-                    if unit.source_backend not in {"cgl", "crossgl"} and target not in {"cgl", "crossgl"}
-                    else None,
+                    "intermediate": (
+                        "crossgl"
+                        if unit.source_backend not in {"cgl", "crossgl"}
+                        and target not in {"cgl", "crossgl"}
+                        else None
+                    ),
                 },
             }
             try:
@@ -531,7 +564,9 @@ def translate_project(
                     save_shader=str(output_path),
                     format_output=format_output,
                 )
-            except Exception as exc:  # noqa: BLE001 - report instead of hiding failures.
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 - report instead of hiding failures.
                 artifact["status"] = "failed"
                 artifact["error"] = str(exc)
                 diagnostics.append(
@@ -546,7 +581,11 @@ def translate_project(
                 )
             artifacts.append(artifact)
 
-    validation = _validate_artifacts(artifacts, selected_targets, config) if validate else {"toolchains": [], "artifacts": []}
+    validation = (
+        _validate_artifacts(artifacts, selected_targets, config)
+        if validate
+        else {"toolchains": [], "artifacts": []}
+    )
     diagnostics.extend(validation.pop("_diagnostics", []))
     return ProjectPortabilityReport(
         config=config,
@@ -582,7 +621,9 @@ def _tool_status(target: str) -> dict[str, Any]:
 
 
 def _validate_artifacts(
-    artifacts: Sequence[Mapping[str, Any]], targets: Sequence[str], config: ProjectConfig
+    artifacts: Sequence[Mapping[str, Any]],
+    targets: Sequence[str],
+    config: ProjectConfig,
 ) -> dict[str, Any]:
     diagnostics: list[ProjectDiagnostic] = []
     toolchains = [_tool_status(target) for target in targets]
@@ -599,7 +640,11 @@ def _validate_artifacts(
                 "target": artifact["target"],
                 "path": artifact["path"],
                 "exists": exists,
-                "status": "ok" if exists and artifact.get("status") == "translated" else "failed",
+                "status": (
+                    "ok"
+                    if exists and artifact.get("status") == "translated"
+                    else "failed"
+                ),
             }
         )
         if not exists and artifact.get("status") == "translated":
@@ -642,17 +687,25 @@ def validate_project_report(
     report = json.loads(path.read_text(encoding="utf-8"))
     root = Path(report["project"]["root"])
     targets = report["project"].get("targets", [])
-    config = ProjectConfig(root=root, output_dir=report["project"].get("outputDir", DEFAULT_OUTPUT_DIR))
+    config = ProjectConfig(
+        root=root, output_dir=report["project"].get("outputDir", DEFAULT_OUTPUT_DIR)
+    )
     validation = _validate_artifacts(report.get("artifacts", []), targets, config)
     if run_toolchains:
-        validation["toolchainRuns"] = _run_toolchain_smoke(report.get("artifacts", []), root)
-    diagnostics = [diagnostic.to_json() for diagnostic in validation.pop("_diagnostics", [])]
+        validation["toolchainRuns"] = _run_toolchain_smoke(
+            report.get("artifacts", []), root
+        )
+    diagnostics = [
+        diagnostic.to_json() for diagnostic in validation.pop("_diagnostics", [])
+    ]
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": "crosstl-project-validation-report",
         "sourceReport": str(path),
         "generatedAt": int(time.time()),
-        "success": not any(diagnostic["severity"] == "error" for diagnostic in diagnostics),
+        "success": not any(
+            diagnostic["severity"] == "error" for diagnostic in diagnostics
+        ),
         "diagnosticCounts": _diagnostic_counts(
             [
                 ProjectDiagnostic(
@@ -696,9 +749,11 @@ def _run_toolchain_smoke(
         completed = subprocess.run(
             command,
             cwd=str(root),
-            input=artifact_path.read_text(encoding="utf-8", errors="replace")
-            if command[-1] == "--stdin"
-            else None,
+            input=(
+                artifact_path.read_text(encoding="utf-8", errors="replace")
+                if command[-1] == "--stdin"
+                else None
+            ),
             capture_output=True,
             text=True,
             check=False,
