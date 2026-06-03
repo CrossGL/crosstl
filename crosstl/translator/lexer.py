@@ -183,6 +183,7 @@ TOKENS = OrderedDict(
         (
             "FLOAT_NUMBER",
             r"0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)[pP][+-]?\d+[fF]?"
+            r"|(?:\d+\.\d*|\.\d+|\d+)[eE][+-]?\d+[fF]?"
             r"|\d*\.\d+[fF]?|\d+\.(?!\.)\d*[fF]?|\d+[fF]",
         ),
         ("HEX_NUMBER", r"0[xX][0-9a-fA-F]+[uU]?"),

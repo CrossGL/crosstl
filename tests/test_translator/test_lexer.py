@@ -96,6 +96,21 @@ def test_range_tokenization():
     assert token_types.index("RANGE_INCLUSIVE") > token_types.index("RANGE")
 
 
+def test_scientific_float_literal_tokenization():
+    code = """
+    float tiny = 1e-3;
+    float large = 2.0E+4;
+    float signed = .5e+2f;
+    """
+
+    tokens = tokenize_code(code)
+
+    assert ("FLOAT_NUMBER", "1e-3") in tokens
+    assert ("FLOAT_NUMBER", "2.0E+4") in tokens
+    assert ("FLOAT_NUMBER", ".5e+2f") in tokens
+    assert ("IDENTIFIER", "e") not in tokens
+
+
 def test_unsigned_integer_literal_tokenization():
     code = """
     uint a = 7u;

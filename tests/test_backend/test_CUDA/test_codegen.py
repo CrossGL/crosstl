@@ -297,6 +297,7 @@ class TestCudaCodeGen:
 
         # Test basic types
         assert codegen.convert_cuda_type_to_crossgl("int") == "i32"
+        assert codegen.convert_cuda_type_to_crossgl("uint") == "u32"
         assert codegen.convert_cuda_type_to_crossgl("float") == "f32"
         assert codegen.convert_cuda_type_to_crossgl("double") == "f64"
         assert codegen.convert_cuda_type_to_crossgl("bool") == "bool"
@@ -314,6 +315,56 @@ class TestCudaCodeGen:
         assert codegen.convert_cuda_type_to_crossgl("half2 *") == "ptr<vec2<f16>>"
         assert codegen.convert_cuda_type_to_crossgl("void * *") == "ptr<ptr<void>>"
         assert codegen.convert_cuda_type_to_crossgl("void * []") == "array<ptr<void>>"
+
+    def test_public_cuda_scan_uint_shared_barrier_loop_conversion(self):
+        """Covers cuda-samples scan.cu uint shared-memory barrier loops."""
+        code = """
+        #define THREADBLOCK_SIZE 256
+        inline __device__ uint scan1Inclusive(
+            uint idata,
+            volatile uint *s_Data,
+            uint size) {
+            uint pos = 2 * threadIdx.x - (threadIdx.x & (size - 1));
+            for (uint offset = 1; offset < size; offset <<= 1) {
+                __syncthreads();
+                uint t = s_Data[pos] + s_Data[pos - offset];
+                __syncthreads();
+                s_Data[pos] = t;
+            }
+            return s_Data[pos];
+        }
+
+        __global__ void scanExclusiveShared(
+            uint4 *d_Dst,
+            uint4 *d_Src,
+            uint size) {
+            __shared__ uint s_Data[2 * THREADBLOCK_SIZE];
+            uint pos = blockIdx.x * blockDim.x + threadIdx.x;
+            uint4 idata4 = d_Src[pos];
+            uint oval = scan1Inclusive(idata4.w, s_Data, size / 4);
+            idata4.x += oval;
+            d_Dst[pos] = idata4;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "u32 scan1Inclusive(u32 idata, ptr<u32> s_Data, u32 size)" in result
+        assert "var<workgroup> s_Data: array<u32, (2 * 256)>;" in result
+        expected_pos = (
+            "var pos: u32 = "
+            "((gl_WorkGroupID.x * gl_WorkGroupSize.x) + gl_LocalInvocationID.x);"
+        )
+        assert expected_pos in result
+        assert "for (var offset: u32 = 1; (offset < size); offset <<= 1)" in result
+        assert result.count("workgroupBarrier();") == 2
+        assert "uint scan1Inclusive" not in result
+        assert "ptr<uint>" not in result
+        assert "array<uint" not in result
 
     def test_cuda_fp16_half2_types_and_intrinsics_convert_to_crossgl(self):
         code = """

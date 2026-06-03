@@ -319,6 +319,27 @@ def test_codegen_hex_float_literals_import_to_parseable_crossgl():
     parse_crossgl(crossgl)
 
 
+def test_codegen_scientific_float_literals_import_to_parseable_crossgl():
+    code = textwrap.dedent("""
+        #version 450
+        void main() {
+            float tiny = 1e-3;
+            float large = 2.0E+4;
+            gl_Position = vec4(tiny + large);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+    shader_ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "float tiny = 1e-3;" in crossgl
+    assert "float large = 2.0E+4;" in crossgl
+    assert "float tiny = 0.001;" in glsl
+    assert "float large = 20000.0;" in glsl
+    assert "gl_Position" in glsl
+
+
 def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
     code = textwrap.dedent("""
         #version 450

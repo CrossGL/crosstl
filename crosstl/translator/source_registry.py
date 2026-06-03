@@ -248,6 +248,7 @@ def _reverse_glsl():
 
 
 _GLSL_EXTENSION_SHADER_TYPES = {
+    ".glsl": "auto",
     ".vs": "vertex",
     ".vert": "vertex",
     ".fs": "fragment",

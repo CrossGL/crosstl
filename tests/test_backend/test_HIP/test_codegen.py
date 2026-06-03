@@ -359,6 +359,7 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
 
         assert codegen.convert_hip_type_to_crossgl("int") == "i32"
+        assert codegen.convert_hip_type_to_crossgl("uint") == "u32"
         assert codegen.convert_hip_type_to_crossgl("float") == "f32"
         assert codegen.convert_hip_type_to_crossgl("double") == "f64"
         assert codegen.convert_hip_type_to_crossgl("bool") == "bool"
@@ -405,6 +406,49 @@ class TestHipCodeGen:
             )
             == "imageCubeArray"
         )
+
+    def test_public_rocm_histogram_uint_shared_barrier_loop_conversion(self):
+        """Covers HIP-Examples Histogram.cpp uint shared-memory barrier loops."""
+        code = """
+        #define BIN_SIZE 256
+        __global__ void histogram256(uint* data, uint* binResult) {
+            size_t localId = hipThreadIdx_x;
+            size_t globalId = hipThreadIdx_x + hipBlockIdx_x * hipBlockDim_x;
+            size_t groupSize = hipBlockDim_x;
+            __shared__ uint sharedBins[64];
+
+            for(int i = 0; i < 64; ++i) {
+                sharedBins[i] = 0;
+            }
+            __syncthreads();
+
+            for(int i = 0; i < BIN_SIZE / groupSize; ++i) {
+                uint value = data[globalId + i * 4096];
+                sharedBins[value] += 1;
+            }
+            __syncthreads();
+
+            uint result = sharedBins[localId];
+            binResult[globalId] = result;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "@group(0) @binding(0) var<storage, read_write> data: array<u32>" in result
+        )
+        assert "var<workgroup> sharedBins: array<u32, 64>;" in result
+        assert "var value: u32 = data[(globalId + (i * 4096))];" in result
+        assert "var result: u32 = sharedBins[localId];" in result
+        assert result.count("workgroupBarrier();") == 2
+        assert "array<uint" not in result
+        assert "var value: uint" not in result
+        assert "var result: uint" not in result
 
     def test_hip_fp16_half2_types_and_intrinsics_convert_to_crossgl(self):
         code = """

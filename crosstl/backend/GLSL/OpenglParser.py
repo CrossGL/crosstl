@@ -183,6 +183,87 @@ ASSIGNMENT_TOKENS = {
     "ASSIGN_SHIFT_RIGHT": ">>=",
 }
 
+AUTO_SHADER_TYPES = {None, "", "auto", "infer", "inferred"}
+COMPUTE_LAYOUT_QUALIFIERS = {
+    "local_size_x",
+    "local_size_y",
+    "local_size_z",
+    "local_size_x_id",
+    "local_size_y_id",
+    "local_size_z_id",
+}
+COMPUTE_BUILTINS = {
+    "gl_NumWorkGroups",
+    "gl_WorkGroupID",
+    "gl_LocalInvocationID",
+    "gl_GlobalInvocationID",
+    "gl_LocalInvocationIndex",
+    "gl_WorkGroupSize",
+}
+TESS_CONTROL_LAYOUT_QUALIFIERS = {"vertices"}
+TESS_CONTROL_BUILTINS = {
+    "gl_InvocationID",
+    "gl_TessLevelOuter",
+    "gl_TessLevelInner",
+}
+TESS_EVALUATION_LAYOUT_QUALIFIERS = {
+    "quads",
+    "isolines",
+    "equal_spacing",
+    "fractional_odd_spacing",
+    "fractional_even_spacing",
+    "cw",
+    "ccw",
+    "point_mode",
+}
+TESS_EVALUATION_BUILTINS = {"gl_TessCoord", "gl_PatchVerticesIn"}
+GEOMETRY_INPUT_LAYOUT_QUALIFIERS = {
+    "points",
+    "lines",
+    "lines_adjacency",
+    "triangles",
+    "triangles_adjacency",
+    "invocations",
+}
+GEOMETRY_OUTPUT_LAYOUT_QUALIFIERS = {
+    "points",
+    "line_strip",
+    "triangle_strip",
+    "max_vertices",
+}
+GEOMETRY_BUILTINS = {
+    "EmitVertex",
+    "EndPrimitive",
+    "EmitStreamVertex",
+    "EndStreamPrimitive",
+    "gl_PrimitiveIDIn",
+}
+FRAGMENT_LAYOUT_QUALIFIERS = {
+    "early_fragment_tests",
+    "depth_any",
+    "depth_greater",
+    "depth_less",
+    "depth_unchanged",
+}
+FRAGMENT_BUILTINS = {
+    "gl_FragCoord",
+    "gl_FragColor",
+    "gl_FragDepth",
+    "gl_FrontFacing",
+    "gl_PointCoord",
+    "gl_SampleID",
+    "gl_SamplePosition",
+    "gl_SampleMask",
+    "gl_SampleMaskIn",
+}
+VERTEX_BUILTINS = {
+    "gl_VertexID",
+    "gl_InstanceID",
+    "gl_BaseVertex",
+    "gl_BaseInstance",
+    "gl_DrawID",
+}
+
 
 class GLSLParser:
     """Parse GLSL tokens into the OpenGL backend shader AST."""
@@ -190,8 +271,12 @@ class GLSLParser:
     def __init__(self, tokens, shader_type="vertex"):
         self.tokens = tokens or [("EOF", "")]
         self.shader_type = shader_type
+        self.should_infer_shader_type = self.is_auto_shader_type(shader_type)
         self.index = 0
         self.current_token = self.tokens[self.index]
+
+    def is_auto_shader_type(self, shader_type):
+        return shader_type in AUTO_SHADER_TYPES
 
     def advance(self):
         self.index += 1
@@ -375,7 +460,106 @@ class GLSLParser:
             preprocessor=preprocessor,
             layouts=layouts,
         )
+        if self.should_infer_shader_type:
+            inferred_shader_type = self.infer_shader_type(shader)
+            shader.shader_type = inferred_shader_type
+            self.shader_type = inferred_shader_type
+            self.apply_main_shader_type(shader, inferred_shader_type)
         return shader
+
+    def apply_main_shader_type(self, shader, shader_type):
+        for function in shader.functions:
+            if function.name != "main":
+                continue
+            qualifiers = [
+                qualifier
+                for qualifier in function.qualifiers
+                if not self.is_auto_shader_type(qualifier)
+            ]
+            if shader_type not in qualifiers:
+                qualifiers.append(shader_type)
+            function.qualifiers = qualifiers
+
+    def infer_shader_type(self, shader):
+        layout_shader_type = self.infer_shader_type_from_layouts(
+            getattr(shader, "layouts", []) or []
+        )
+        if layout_shader_type:
+            return layout_shader_type
+
+        identifiers = self.collect_shader_identifiers(shader)
+        if identifiers & COMPUTE_BUILTINS:
+            return "compute"
+        if identifiers & TESS_EVALUATION_BUILTINS:
+            return "tessellation_evaluation"
+        if identifiers & TESS_CONTROL_BUILTINS:
+            return "tessellation_control"
+        if identifiers & GEOMETRY_BUILTINS:
+            return "geometry"
+        if identifiers & FRAGMENT_BUILTINS:
+            return "fragment"
+        if identifiers & VERTEX_BUILTINS or "gl_Position" in identifiers:
+            return "vertex"
+        return "vertex"
+
+    def infer_shader_type_from_layouts(self, layouts):
+        saw_geometry_input_layout = False
+        for layout_entry in layouts:
+            layout = layout_entry.get("layout") or {}
+            keys = {str(key).lower() for key in layout}
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in layout_entry.get("qualifiers", []) or []
+            }
+
+            if keys & COMPUTE_LAYOUT_QUALIFIERS:
+                return "compute"
+            if "out" in qualifiers and keys & TESS_CONTROL_LAYOUT_QUALIFIERS:
+                return "tessellation_control"
+            if keys & TESS_EVALUATION_LAYOUT_QUALIFIERS:
+                return "tessellation_evaluation"
+            if "out" in qualifiers and keys & GEOMETRY_OUTPUT_LAYOUT_QUALIFIERS:
+                return "geometry"
+            if "in" in qualifiers and keys & GEOMETRY_INPUT_LAYOUT_QUALIFIERS:
+                saw_geometry_input_layout = True
+            if keys & FRAGMENT_LAYOUT_QUALIFIERS:
+                return "fragment"
+
+        if saw_geometry_input_layout:
+            return "geometry"
+        return None
+
+    def collect_shader_identifiers(self, shader):
+        identifiers = set()
+        visited = set()
+
+        def visit(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            value_id = id(value)
+            if value_id in visited:
+                return
+            visited.add(value_id)
+
+            if isinstance(value, VariableNode):
+                identifiers.add(value.name)
+            elif isinstance(value, FunctionCallNode):
+                visit(value.name)
+
+            if isinstance(value, dict):
+                for item in value.values():
+                    visit(item)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    visit(item)
+                return
+            if hasattr(value, "__dict__"):
+                for item in vars(value).values():
+                    visit(item)
+
+        visit(shader)
+        return identifiers
 
     def append_interface_block_vars(
         self, block_vars, uniforms, io_variables, global_variables
@@ -821,7 +1005,7 @@ class GLSLParser:
     def parse_function(self, return_type):
         name = self.current_token[1]
         qualifier = None
-        if name == "main":
+        if name == "main" and not self.should_infer_shader_type:
             qualifier = self.shader_type
         self.eat("IDENTIFIER")
         params = self.parse_parameters()
