@@ -5,7 +5,6 @@ from crosstl.backend.HIP.HipParser import HipParser
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
-
 EXTERNAL_FIXTURE_SOURCES = {
     "rocm_examples": {
         "url": "https://github.com/ROCm/rocm-examples",

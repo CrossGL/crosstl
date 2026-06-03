@@ -6,7 +6,6 @@ from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
-
 APPLE_SAMPLE_REPO = "https://github.com/donaldwuid/apple_metal_sample_code"
 APPLE_SAMPLE_COMMIT = "0bc50e5b3670b3169855ab260e8da5ff07b53749"
 FILAMENT_REPO = "https://github.com/google/filament"
@@ -27,7 +26,8 @@ EXTERNAL_FIXTURES = [
             "Renderer/Shaders/AAPLMeshRenderer.metal"
         ),
         "roundtrip": True,
-        "source": """
+        "source": (
+            """
             struct Camera { float4x4 invViewMatrix; };
             struct Input { float3 position; };
             struct Output { xhalf3 viewDir; };
@@ -39,7 +39,8 @@ EXTERNAL_FIXTURES = [
                     (xhalf3)normalize(camera.invViewMatrix[3].xyz - in.position);
                 return out;
             }
-        """,
+        """
+        ),
     },
     {
         "name": "apple_raytracing_dependent_types_and_ray_payloads",
@@ -50,7 +51,8 @@ EXTERNAL_FIXTURES = [
             "ControlTheRayTracingProcessUsingIntersectionQueries/Renderer/Shaders.metal"
         ),
         "roundtrip": False,
-        "source": """
+        "source": (
+            """
             #include <metal_stdlib>
             using namespace metal;
             using namespace raytracing;
@@ -82,7 +84,8 @@ EXTERNAL_FIXTURES = [
                                               ray_data float3& normal [[payload]]) {
                 return true;
             }
-        """,
+        """
+        ),
     },
     {
         "name": "apple_dynamic_library_scoped_member_definition",
@@ -93,13 +96,15 @@ EXTERNAL_FIXTURES = [
             "Renderer/AAPLUserDylib.metal"
         ),
         "roundtrip": True,
-        "source": """
+        "source": (
+            """
             using namespace metal;
 
             float4 AAPLUserDylib::getFullScreenColor(float4 inColor) {
                 return float4(inColor.r, inColor.g, inColor.b, 0);
             }
-        """,
+        """
+        ),
     },
     {
         "name": "moltenvk_embedded_watermark_shader",
@@ -107,7 +112,8 @@ EXTERNAL_FIXTURES = [
         "commit": MOLTENVK_COMMIT,
         "source_path": "MoltenVK/MoltenVK/Utility/MVKWatermarkShaderSource.h",
         "roundtrip": True,
-        "source": """
+        "source": (
+            """
             #include <metal_stdlib>
             using namespace metal;
 
@@ -140,18 +146,19 @@ EXTERNAL_FIXTURES = [
                 return varyings.v_fragColor
                     * texture.sample(sampler, varyings.v_texCoord);
             }
-        """,
+        """
+        ),
     },
     {
         "name": "moltenvk_command_shader_typedefs_and_reinterpret_cast",
         "repo_url": MOLTENVK_REPO,
         "commit": MOLTENVK_COMMIT,
         "source_path": (
-            "MoltenVK/MoltenVK/Commands/"
-            "MVKCommandPipelineStateFactoryShaderSource.h"
+            "MoltenVK/MoltenVK/Commands/" "MVKCommandPipelineStateFactoryShaderSource.h"
         ),
         "roundtrip": False,
-        "source": """
+        "source": (
+            """
             #include <metal_stdlib>
             using namespace metal;
 
@@ -178,7 +185,8 @@ EXTERNAL_FIXTURES = [
                 device auto& dst = destBuff[idx];
                 dst.indexCount = src.vertexCount;
             }
-        """,
+        """
+        ),
     },
     {
         "name": "filament_sdl_metal_texture_array_sample",
@@ -186,7 +194,8 @@ EXTERNAL_FIXTURES = [
         "commit": FILAMENT_COMMIT,
         "source_path": "third_party/libsdl2/src/render/metal/SDL_shaders_metal.metal",
         "roundtrip": True,
-        "source": """
+        "source": (
+            """
             #include <metal_texture>
             using namespace metal;
 
@@ -207,7 +216,8 @@ EXTERNAL_FIXTURES = [
                 yuv.z = texUV.sample(s, vert.texcoord, 1).r;
                 return col * float4(yuv, 1.0);
             }
-        """,
+        """
+        ),
     },
     {
         "name": "sample_metal_texturing_designated_initializers",
@@ -215,7 +225,8 @@ EXTERNAL_FIXTURES = [
         "commit": SAMPLE_METAL_COMMIT,
         "source_path": "Metal By Example/Texturing/Shader.metal",
         "roundtrip": True,
-        "source": """
+        "source": (
+            """
             #include <metal_stdlib>
             using namespace metal;
 
@@ -245,7 +256,8 @@ EXTERNAL_FIXTURES = [
                 float3 diffuseColor = diffuseTexture.sample(samplr, v.texCoords).rgb;
                 return float4(diffuseColor, 1);
             }
-        """,
+        """
+        ),
     },
 ]
 

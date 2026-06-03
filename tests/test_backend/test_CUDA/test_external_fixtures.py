@@ -5,7 +5,6 @@ from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
-
 EXTERNAL_SAMPLES = [
     {
         "repo": "https://github.com/NVIDIA/cuda-samples",
@@ -55,7 +54,9 @@ def assert_crossgl_reparse(source):
 
 
 def test_external_fixture_metadata_records_repositories_and_commits():
-    assert all(sample["repo"].startswith("https://github.com/") for sample in EXTERNAL_SAMPLES)
+    assert all(
+        sample["repo"].startswith("https://github.com/") for sample in EXTERNAL_SAMPLES
+    )
     assert all(len(sample["commit"]) == 40 for sample in EXTERNAL_SAMPLES)
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
 

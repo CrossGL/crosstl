@@ -3,7 +3,6 @@ import pytest
 import crosstl.translator as cgl_translator
 from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 
-
 EXTERNAL_REPOS = {
     "shader-slang/slang": {
         "url": "https://github.com/shader-slang/slang",
@@ -26,7 +25,8 @@ EXTERNAL_FIXTURES = [
         "id": "slang_default_parameter",
         "repo": "shader-slang/slang",
         "path": "tests/compute/default-parameter.slang",
-        "source": """
+        "source": (
+            """
             RWStructuredBuffer<int> outputBuffer;
 
             int helper(int val, int a = 16)
@@ -44,7 +44,8 @@ EXTERNAL_FIXTURES = [
             {
                 outputBuffer[dispatchThreadID.x] = test((int)dispatchThreadID.x);
             }
-        """,
+        """
+        ),
         "crossgl": True,
         "contains": [
             "int helper(int val, int a)",
@@ -56,7 +57,8 @@ EXTERNAL_FIXTURES = [
         "id": "slang_tbuffer",
         "repo": "shader-slang/slang",
         "path": "tests/hlsl/tbuffer.slang",
-        "source": """
+        "source": (
+            """
             tbuffer tbuf : register(t0)
             {
                 float4 tb_val1;
@@ -75,7 +77,8 @@ EXTERNAL_FIXTURES = [
             {
                 outputBuffer[0] = tb_val1 + texture2D[0] + tb_val2;
             }
-        """,
+        """
+        ),
         "crossgl": True,
         "contains": [
             "cbuffer tbuf @register(t0)",
@@ -87,7 +90,8 @@ EXTERNAL_FIXTURES = [
         "id": "falcor_texture_load",
         "repo": "NVIDIAGameWorks/Falcor",
         "path": "Source/Tools/FalcorTest/Tests/Core/TextureLoadTests.cs.slang",
-        "source": """
+        "source": (
+            """
             Texture2D<float4> gTex;
             RWStructuredBuffer<float4> result;
 
@@ -96,7 +100,8 @@ EXTERNAL_FIXTURES = [
             {
                 result[dispatchThreadID.x] = gTex.Load(int3(0, 0, 0));
             }
-        """,
+        """
+        ),
         "crossgl": True,
         "contains": [
             "sampler2D gTex;",
