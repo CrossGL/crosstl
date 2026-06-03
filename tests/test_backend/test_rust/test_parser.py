@@ -1077,6 +1077,72 @@ def test_rust_gpu_builtin_spirv_parameter_attributes_parse():
     assert compute.params[0].attributes[0].args == ["local_invocation_index"]
 
 
+def test_rust_gpu_reduce_subgroup_builtins_parse_from_upstream_example():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/reduce/src/lib.rs compute subgroup reduction entry point.
+    code = """
+    use spirv_std::glam::UVec3;
+    use spirv_std::spirv;
+
+    #[spirv(compute(threads(256)))]
+    pub fn main(
+        #[spirv(global_invocation_id)] global_invocation_id: UVec3,
+        #[spirv(local_invocation_id)] local_invocation_id: UVec3,
+        #[spirv(subgroup_local_invocation_id)] subgroup_local_invocation_id: u32,
+        #[spirv(workgroup_id)] workgroup_id: UVec3,
+        #[spirv(subgroup_id)] subgroup_id: u32,
+        #[spirv(num_subgroups)] num_subgroups: u32,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] input: &[u32],
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] output: &mut [u32],
+        #[spirv(workgroup)] shared: &mut [u32; 256],
+    ) {
+        let local_invocation_id_x = local_invocation_id.x as usize;
+        if subgroup_local_invocation_id == 0 {
+            shared[subgroup_id as usize] = 0;
+        }
+        if local_invocation_id_x == 0 {
+            output[workgroup_id.x as usize] = input[0];
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.attributes[0].args == [
+        "compute",
+        "(",
+        "threads",
+        "(",
+        "256",
+        ")",
+        ")",
+    ]
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("global_invocation_id", "UVec3"),
+        ("local_invocation_id", "UVec3"),
+        ("subgroup_local_invocation_id", "u32"),
+        ("workgroup_id", "UVec3"),
+        ("subgroup_id", "u32"),
+        ("num_subgroups", "u32"),
+        ("input", "&u32[]"),
+        ("output", "&mut u32[]"),
+        ("shared", "&mut u32[256]"),
+    ]
+    assert [param.attributes[0].args[0] for param in function.params] == [
+        "global_invocation_id",
+        "local_invocation_id",
+        "subgroup_local_invocation_id",
+        "workgroup_id",
+        "subgroup_id",
+        "num_subgroups",
+        "storage_buffer",
+        "storage_buffer",
+        "workgroup",
+    ]
+
+
 def test_restricted_visibility_parsing():
     code = """
     #[inline]

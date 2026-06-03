@@ -1998,6 +1998,83 @@ def test_nested_decorator_and_generic_function_signature_parse():
     assert [attr.name for attr in function.body[0].attributes] == ["parameter"]
 
 
+def test_modular_histogram_nested_gpu_kernel_metadata_parse():
+    # Reduced from modularml/mojo commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/histogram.mojo GPU histogram launch.
+    code = """
+    from std.gpu import MAX_THREADS_PER_BLOCK_METADATA, global_idx, thread_idx
+    from std.gpu.host import DeviceContext
+    from std.gpu.memory import AddressSpace
+    from std.memory import stack_allocation
+    from std.utils import StaticTuple
+
+    comptime bin_width = Int(UInt8.MAX) + 1
+
+    @compiler.register("histogram")
+    struct Histogram:
+        @staticmethod
+        def execute[target: StaticString](ctx: DeviceContext) raises:
+            comptime block_dim = bin_width
+
+            @__llvm_metadata(
+                MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(block_dim))
+            )
+            def kernel(
+                output: UnsafePointer[Int64, MutAnyOrigin],
+                input: UnsafePointer[UInt8, MutAnyOrigin],
+                n: Int,
+            ):
+                var tid = global_idx.x
+                if tid >= n:
+                    return
+                var shared_mem = stack_allocation[
+                    bin_width, Int64, address_space=AddressSpace.SHARED
+                ]()
+                shared_mem[thread_idx.x] = 0
+                barrier()
+                _ = Atomic.fetch_add(output + thread_idx.x, shared_mem[thread_idx.x])
+
+            ctx.enqueue_function[kernel](
+                output,
+                input,
+                n,
+                block_dim=block_dim,
+                grid_dim=grid_dim,
+            )
+    """
+
+    ast = parse_code(tokenize_code(code))
+    struct_node = find_struct(ast, "Histogram")
+    execute = struct_node.methods[0]
+    block_dim, kernel, launch = execute.body
+    metadata = kernel.attributes[0].args[0]
+
+    assert [attr.name for attr in struct_node.attributes] == ["compiler.register"]
+    assert struct_node.attributes[0].args == ['"histogram"']
+    assert [attr.name for attr in execute.attributes] == ["staticmethod"]
+    assert block_dim.name == "block_dim"
+    assert getattr(block_dim, "is_comptime", False)
+
+    assert isinstance(kernel, FunctionNode)
+    assert kernel.name == "kernel"
+    assert [attr.name for attr in kernel.attributes] == ["__llvm_metadata"]
+    assert isinstance(metadata, AssignmentNode)
+    assert metadata.left.name == "MAX_THREADS_PER_BLOCK_METADATA"
+    assert isinstance(metadata.right, VectorConstructorNode)
+    assert metadata.right.type_name == "StaticTuple[Int32, 1]"
+    assert [(param.name, param.vtype) for param in kernel.params] == [
+        ("output", "UnsafePointer[Int64, MutAnyOrigin]"),
+        ("input", "UnsafePointer[UInt8, MutAnyOrigin]"),
+        ("n", "Int"),
+    ]
+    assert isinstance(kernel.body[2].initial_value, VectorConstructorNode)
+    assert kernel.body[2].initial_value.type_name == (
+        "stack_allocation[bin_width, Int64, address_space=AddressSpace.SHARED]"
+    )
+    assert [arg.left.name for arg in launch.args[3:]] == ["block_dim", "grid_dim"]
+
+
 def test_variable_declarations_parsing():
     code = """
     fn main():

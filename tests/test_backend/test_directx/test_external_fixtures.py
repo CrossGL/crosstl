@@ -137,6 +137,39 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_non_uniform_dynamic_resource_heap",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path=(
+            "tools/clang/test/HLSLFileCheck/hlsl/intrinsics/"
+            "createHandleFromHeap/NonUniformDynamic.hlsl"
+        ),
+        code=textwrap.dedent("""
+            float read(uint ID) {
+              Buffer<float> buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];
+              return buf[0];
+            }
+
+            void write(uint ID, float f) {
+              RWBuffer<float> buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];
+              buf[0] = f;
+            }
+
+            [numthreads(8, 8, 1)]
+            void main( uint2 ID : SV_DispatchThreadID) {
+              float v = read(ID.x);
+              write(ID.y, v);
+            }
+        """).strip(),
+        contains=(
+            "Buffer<float> buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
+            "RWBuffer<float> buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
+            "buf[0] = f;",
+            "@ numthreads(8, 8, 1)",
+            "void main(uvec2 ID @ gl_GlobalInvocationID)",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_sampler_kind_modifiers",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

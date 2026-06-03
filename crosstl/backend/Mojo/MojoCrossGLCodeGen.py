@@ -412,6 +412,11 @@ class MojoToCrossGLConverter:
                 if isinstance(stmt, PassNode):
                     continue
 
+                if isinstance(stmt, FunctionNode):
+                    code += self.generate_function(stmt, indent)
+                    self.add_scoped_value_name(stmt.name)
+                    continue
+
                 code += indent_str
                 if isinstance(stmt, VariableDeclarationNode):
                     code += self.generate_variable_declaration(stmt) + ";\n"

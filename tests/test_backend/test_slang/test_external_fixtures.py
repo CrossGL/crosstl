@@ -17,6 +17,10 @@ EXTERNAL_REPOS = {
         "commit": "10b5770b8eaddfc1faab82b65f799ac6f47dcc44",
         "note": "searched; current tree has no .slang/.slangh files",
     },
+    "nvpro-samples/vk_slang_editor": {
+        "url": "https://github.com/nvpro-samples/vk_slang_editor",
+        "commit": "620f60e4f724c4d06b1e7251c3fac6ee4d96cb54",
+    },
 }
 
 
@@ -231,6 +235,106 @@ EXTERNAL_FIXTURES = [
             "sampler2D gStatsRayCount[uint(PixelStatsRayType::Count)];",
             "image2D gStatsRayCountTotal;",
             "totalRays += gStatsRayCount[i][pixel];",
+        ],
+    },
+    {
+        "id": "vk_slang_editor_mandelbrot_inout_texture_write",
+        "repo": "nvpro-samples/vk_slang_editor",
+        "path": "examples/Basics/Mandelbrot.slang",
+        "source": (
+            """
+            RWTexture2D<float4> texFrame;
+            uniform float2 iResolution;
+
+            bool mandelbrot(inout float2 z, out int i)
+            {
+                const float2 c = z;
+                for(i = 0; i < 64; i++)
+                {
+                    if(dot(z, z) > 256.0)
+                    {
+                        return true;
+                    }
+                    z = c + float2(z.x * z.x - z.y * z.y, 2 * z.x * z.y);
+                }
+                return false;
+            }
+
+            [shader("compute")]
+            [numthreads(16, 16, 1)]
+            void render(uint2 thread: SV_DispatchThreadID)
+            {
+                float2 uv =
+                    (float2(thread) - .5 * iResolution.xy) / iResolution.y;
+                float2 z = 2.5 * uv - float2(.5, 0);
+                int i;
+                float3 color = float3(0.0);
+                if(mandelbrot(z, i))
+                {
+                    color = 0.5 + 0.5 * sin(
+                        i + float3(0, .5, 1) - log2(log2(dot(z,z))));
+                }
+                texFrame[thread] = float4(color, 1.0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "image2D texFrame;",
+            "bool mandelbrot(vec2 z, int i)",
+            "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;",
+            "texFrame[thread] = vec4(color, 1.0);",
+        ],
+    },
+    {
+        "id": "vk_slang_editor_rasterization_semantics",
+        "repo": "nvpro-samples/vk_slang_editor",
+        "path": "examples/Basics/Rasterization.slang",
+        "source": (
+            """
+            uniform float4x4 iViewProjection;
+
+            struct Vertex {
+                float3 position : POSITION;
+                float3 normal : NORMAL;
+                float4 tangent : TANGENT;
+                float2 uv0 : TEXCOORD0;
+            };
+            struct VsOutput {
+                Vertex vertex;
+                float4 svPosition : SV_Position;
+            };
+
+            [shader("vertex")]
+            VsOutput vertexMain(Vertex input)
+            {
+                VsOutput o;
+                o.vertex = input;
+                o.svPosition = mul(float4(o.vertex.position, 1.0),
+                                   iViewProjection);
+                return o;
+            }
+
+            [shader("fragment")]
+            float4 fragmentMain(Vertex v,
+                                float2 fragCoord : SV_Position,
+                                float3 barycentrics : SV_Barycentrics,
+                                uint triangleId : SV_PrimitiveID)
+            {
+                uint2 xy = uint2(fragCoord);
+                bool sierpinski = ((xy.x & xy.y) == 0);
+                float3 color = float3(sierpinski);
+                return float4(color, 1.0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct Vertex {",
+            "vec3 position @ in_Position;",
+            "vec4 svPosition @ Out_Position;",
+            "vec3 barycentrics @ SV_Barycentrics",
+            "bool sierpinski = (xy.x & xy.y) == 0;",
         ],
     },
 ]

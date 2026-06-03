@@ -10,6 +10,7 @@ EXTERNAL_SAMPLES = [
         "repo": "https://github.com/NVIDIA/cuda-samples",
         "commit": "b7c5481c556c3fe98db060207ecaa41a4b9a9abc",
         "paths": [
+            "cpp/0_Introduction/simpleSurfaceWrite/simpleSurfaceWrite.cu",
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
             "cpp/3_CUDA_Features/cudaCompressibleMemory/saxpy.cu",
@@ -230,3 +231,53 @@ def test_cuda_samples_compressible_memory_grid_stride_float4_codegen_reparse():
     ) in crossgl
     assert "x[i] = y[i] = val4;" in crossgl
     assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_simple_surface_write_texture_object_codegen_reparse():
+    source = """
+    __global__ void surfaceWriteKernel(float *gIData,
+                                       int width,
+                                       int height,
+                                       cudaSurfaceObject_t outputSurface) {
+        unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+        unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+        surf2Dwrite(gIData[y * width + x],
+                    outputSurface,
+                    x * 4,
+                    y,
+                    cudaBoundaryModeTrap);
+    }
+
+    __global__ void transformKernel(float *gOData,
+                                    int width,
+                                    int height,
+                                    float theta,
+                                    cudaTextureObject_t tex) {
+        unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+        unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+        float u = x / (float)width;
+        float v = y / (float)height;
+
+        u -= 0.5f;
+        v -= 0.5f;
+        float tu = u * cosf(theta) - v * sinf(theta) + 0.5f;
+        float tv = v * cosf(theta) + u * sinf(theta) + 0.5f;
+
+        gOData[y * width + x] = tex2D<float>(tex, tu, tv);
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "image2D outputSurface" in crossgl
+    assert (
+        "imageStore(outputSurface, vec2<i32>((x * 4), y), "
+        "gIData[((y * width) + x)]);"
+    ) in crossgl
+    assert "sampler2D tex" in crossgl
+    assert "gOData[((y * width) + x)] = texture(tex, vec2<f32>(tu, tv));" in crossgl
+    assert "surf2Dwrite" not in crossgl
+    assert "tex2D<float>" not in crossgl

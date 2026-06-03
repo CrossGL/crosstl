@@ -122,6 +122,41 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_SIMPLE_MAT_MATRIX_TIMES_VECTOR_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/spv.simpleMat.vert.out
+; Reduced from MatrixTimesVector in the vertex main body.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %glPos %mvp %v
+OpName %glPos "glPos"
+OpName %mvp "mvp"
+OpName %v "v"
+OpDecorate %glPos Location 5
+OpDecorate %mvp Location 0
+OpDecorate %v Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%mat4 = OpTypeMatrix %v4float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%ptr_output_mat4 = OpTypePointer Output %mat4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%glPos = OpVariable %ptr_output_v4float Output
+%mvp = OpVariable %ptr_output_mat4 Output
+%v = OpVariable %ptr_input_v4float Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_mvp = OpLoad %mat4 %mvp
+%loaded_v = OpLoad %v4float %v
+%transformed = OpMatrixTimesVector %v4float %loaded_mvp %loaded_v
+OpStore %glPos %transformed
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_PUSH_CONSTANT_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -1134,6 +1169,20 @@ def test_spirv_assembly_matrix_interface_codegen():
 
     assert "float4x4 model @input @location(0);" in generated_code
     assert "%model" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_simple_mat_matrix_times_vector_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_SIMPLE_MAT_MATRIX_TIMES_VECTOR_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 glPos @output @location(5);" in generated_code
+    assert "float4x4 mvp @output @location(0);" in generated_code
+    assert "float4 v @input @location(0);" in generated_code
+    assert "glPos = (mvp * v);" in generated_code
+    assert "glPos = transformed;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

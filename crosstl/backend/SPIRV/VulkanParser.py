@@ -178,6 +178,9 @@ class VulkanParser:
         "LogicalEqual": "==",
         "LogicalNotEqual": "!=",
         "LogicalOr": "||",
+        "MatrixTimesMatrix": "*",
+        "MatrixTimesScalar": "*",
+        "MatrixTimesVector": "*",
         "SDiv": "/",
         "SGreaterThan": ">",
         "SGreaterThanEqual": ">=",
@@ -194,6 +197,8 @@ class VulkanParser:
         "ULessThan": "<",
         "ULessThanEqual": "<=",
         "UMod": "%",
+        "VectorTimesMatrix": "*",
+        "VectorTimesScalar": "*",
     }
     SPIRV_SPEC_CONSTANT_UNARY_OPS = {
         "FNegate": "-",

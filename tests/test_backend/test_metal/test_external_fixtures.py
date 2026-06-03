@@ -14,6 +14,10 @@ MOLTENVK_REPO = "https://github.com/KhronosGroup/MoltenVK"
 MOLTENVK_COMMIT = "9d5d89a2a1954ae8fe73fd2a97a4f3d862319eee"
 SAMPLE_METAL_REPO = "https://github.com/dehesa/sample-metal"
 SAMPLE_METAL_COMMIT = "0003824a52516052f2d28503f576907e03425dd3"
+BOOK_OF_SHADERS_METAL_REPO = "https://github.com/metal-by-example/book-of-shaders-metal"
+BOOK_OF_SHADERS_METAL_COMMIT = "12bb2366697cba9c5f660d54fead7bdcd73b6b8a"
+MLX_REPO = "https://github.com/ml-explore/mlx"
+MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
 
 
 EXTERNAL_FIXTURES = [
@@ -418,6 +422,75 @@ EXTERNAL_FIXTURES = [
                 sampler samplr [[sampler(0)]]) {
                 float3 diffuseColor = diffuseTexture.sample(samplr, v.texCoords).rgb;
                 return float4(diffuseColor, 1);
+            }
+        """
+        ),
+    },
+    {
+        "name": "book_of_shaders_global_vector_brace_initializers",
+        "repo_url": BOOK_OF_SHADERS_METAL_REPO,
+        "commit": BOOK_OF_SHADERS_METAL_COMMIT,
+        "source_path": "BookOfShaders/Shaders/06a-color-mix.metal",
+        "roundtrip": True,
+        "contains": [
+            "constant vec3 colorA = vec3(0.000f, 0.129f, 0.647f);",
+            "vec3 color = mix(colorA, colorB, fraction);",
+            "vec4 fragment_main(FragmentIn in_, constant Uniforms& uniforms @buffer(0))",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct Uniforms {
+                float2 resolution;
+                float2 mouse;
+                float time;
+            };
+            struct FragmentIn {
+                float4 position [[position]];
+                float2 st;
+            };
+
+            constant float3 colorA { 0.000f, 0.129f, 0.647f };
+            constant float3 colorB { 0.980f, 0.275f, 0.090f };
+
+            [[fragment]]
+            float4 fragment_main(FragmentIn in [[stage_in]],
+                                 constant Uniforms &uniforms [[buffer(0)]]) {
+                float fraction = sin(uniforms.time) * 0.5 + 0.5f;
+                float3 color = mix(colorA, colorB, fraction);
+                return float4(color, 1.0);
+            }
+        """
+        ),
+    },
+    {
+        "name": "mlx_axpby_template_static_cast_buffer_store",
+        "repo_url": MLX_REPO,
+        "commit": MLX_COMMIT,
+        "source_path": "examples/extensions/axpby/axpby.metal",
+        "roundtrip": True,
+        "contains": [
+            "StructuredBuffer<T> x @buffer(0)",
+            "RWStructuredBuffer<T> out_ @buffer(2)",
+            "buffer_store(out_, index, T(alpha) * buffer_load(x, index) + T(beta) * buffer_load(y, index));",
+        ],
+        "not_contains": ["static_cast", "device const"],
+        "source": (
+            """
+            #include <metal_stdlib>
+
+            template <typename T>
+            [[kernel]] void axpby_contiguous(
+                device const T* x [[buffer(0)]],
+                device const T* y [[buffer(1)]],
+                device T* out [[buffer(2)]],
+                constant const float& alpha [[buffer(3)]],
+                constant const float& beta [[buffer(4)]],
+                uint index [[thread_position_in_grid]]) {
+                out[index] = static_cast<T>(alpha) * x[index]
+                    + static_cast<T>(beta) * y[index];
             }
         """
         ),

@@ -236,10 +236,12 @@ class HipToCrossGLConverter:
         "lastMipmapLevel",
         "width",
     }
+    CROSSGL_RESERVED_IDENTIFIERS = {"in"}
 
     def __init__(self):
         self.indent_level = 0
         self.output = []
+        self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
@@ -255,10 +257,12 @@ class HipToCrossGLConverter:
         self.suppress_device_property_member_access = 0
         self.suppress_device_attribute_value_access = 0
         self.suppress_device_query_value_access = 0
+        self.suppress_identifier_name_rewrite = 0
 
     def generate(self, ast_node):
         self.output = []
         self.indent_level = 0
+        self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
@@ -276,6 +280,7 @@ class HipToCrossGLConverter:
         self.suppress_device_property_member_access = 0
         self.suppress_device_attribute_value_access = 0
         self.suppress_device_query_value_access = 0
+        self.suppress_identifier_name_rewrite = 0
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -295,7 +300,7 @@ class HipToCrossGLConverter:
             query_expression = self.format_hip_device_query_read(node)
             if query_expression is not None:
                 return query_expression
-            return node
+            return self.output_identifier_name(node)
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
         else:
@@ -681,6 +686,37 @@ class HipToCrossGLConverter:
             return node
         return None
 
+    def push_identifier_name_scope(self):
+        self.identifier_name_scopes.append({})
+
+    def pop_identifier_name_scope(self):
+        if len(self.identifier_name_scopes) > 1:
+            self.identifier_name_scopes.pop()
+
+    def register_identifier_name(self, name):
+        if not self.is_simple_identifier(name):
+            return name
+        output_name = self.sanitize_identifier_name(name)
+        if not self.identifier_name_scopes:
+            self.identifier_name_scopes.append({})
+        self.identifier_name_scopes[-1][name] = output_name
+        return output_name
+
+    def output_identifier_name(self, name):
+        if not self.is_simple_identifier(name):
+            return name
+        if self.suppress_identifier_name_rewrite != 0:
+            return name
+        for scope in reversed(self.identifier_name_scopes):
+            if name in scope:
+                return scope[name]
+        return name
+
+    def sanitize_identifier_name(self, name):
+        if name in self.CROSSGL_RESERVED_IDENTIFIERS:
+            return f"{name}_"
+        return name
+
     def visit_lvalue_expression(self, node):
         self.suppress_device_property_member_access += 1
         self.suppress_device_attribute_value_access += 1
@@ -702,6 +738,13 @@ class HipToCrossGLConverter:
             self.suppress_device_property_member_access -= 1
             self.suppress_device_attribute_value_access -= 1
             self.suppress_device_query_value_access -= 1
+
+    def visit_source_comment_expression(self, node):
+        self.suppress_identifier_name_rewrite += 1
+        try:
+            return self.visit(node)
+        finally:
+            self.suppress_identifier_name_rewrite -= 1
 
     def emit_statement(self, stmt):
         """Render and append one converted statement."""
@@ -4028,6 +4071,7 @@ class HipToCrossGLConverter:
             )
         )
         self.push_variable_type_scope()
+        self.push_identifier_name_scope()
         try:
             params = []
 
@@ -4046,8 +4090,9 @@ class HipToCrossGLConverter:
                     param_type = self.convert_hip_variable_type_to_crossgl(
                         raw_type, param_name
                     )
+                    output_name = self.register_identifier_name(param_name)
                     self.register_variable_type(param_name, param_type)
-                    params.append(f"{param_type} {param_name}")
+                    params.append(f"{param_type} {output_name}")
 
             param_str = ", ".join(params)
             self.emit(f"{return_type} {node.name}({param_str}) {{")
@@ -4080,6 +4125,7 @@ class HipToCrossGLConverter:
                 self.pop_packed_argument_scope()
                 self.indent_level -= 1
         finally:
+            self.pop_identifier_name_scope()
             self.pop_variable_type_scope()
             self.pop_resource_object_hint_scope()
 
@@ -4103,6 +4149,7 @@ class HipToCrossGLConverter:
             )
         )
         self.push_variable_type_scope()
+        self.push_identifier_name_scope()
         try:
             if hasattr(kernel, "params") and kernel.params:
                 for param in kernel.params:
@@ -4115,18 +4162,20 @@ class HipToCrossGLConverter:
 
                     if "*" in raw_type:
                         element_type = self.convert_hip_pointer_element_type(raw_type)
+                        output_name = self.register_identifier_name(param_name)
                         self.register_variable_type(
                             param_name, f"array<{element_type}>"
                         )
                         params.append(
-                            f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: array<{element_type}>"
+                            f"@group(0) @binding({len(params)}) var<storage, read_write> {output_name}: array<{element_type}>"
                         )
                     else:
                         param_type = self.convert_hip_variable_type_to_crossgl(
                             raw_type, param_name
                         )
+                        output_name = self.register_identifier_name(param_name)
                         self.register_variable_type(param_name, param_type)
-                        params.append(f"{param_type} {param_name}")
+                        params.append(f"{param_type} {output_name}")
 
             self.emit(f"fn {kernel.name}(")
             self.indent_level += 1
@@ -4168,6 +4217,7 @@ class HipToCrossGLConverter:
             self.indent_level -= 1
             self.emit("}")
         finally:
+            self.pop_identifier_name_scope()
             self.pop_variable_type_scope()
             self.pop_resource_object_hint_scope()
 
@@ -4187,13 +4237,14 @@ class HipToCrossGLConverter:
         self.emit("};")
 
     def visit_VariableNode(self, node):
+        output_name = self.register_identifier_name(node.name)
         cooperative_group = self.cooperative_group_declaration_metadata(node)
         if cooperative_group is not None:
             group_kind = cooperative_group["kind"]
             self.register_cooperative_group_name(node.name, cooperative_group)
             if group_kind == "thread_block":
                 self.emit(
-                    f"// cooperative_groups thread_block {node.name} maps to the current workgroup"
+                    f"// cooperative_groups thread_block {output_name} maps to the current workgroup"
                 )
             elif (
                 group_kind == "thread_block_tile"
@@ -4202,11 +4253,11 @@ class HipToCrossGLConverter:
             ):
                 self.emit(
                     f"// cooperative_groups thread_block_tile<{cooperative_group['tile_size']}> "
-                    f"{node.name} maps to a tiled partition of the current workgroup"
+                    f"{output_name} maps to a tiled partition of the current workgroup"
                 )
             else:
                 self.emit(
-                    f"// cooperative_groups {group_kind} for {node.name} not directly supported in CrossGL"
+                    f"// cooperative_groups {group_kind} for {output_name} not directly supported in CrossGL"
                 )
             return
 
@@ -4221,27 +4272,27 @@ class HipToCrossGLConverter:
         if "__shared__" in qualifiers:
             if getattr(node, "is_dynamic_shared_memory", False):
                 self.emit(
-                    f"// HIP dynamic shared memory: {node.name} uses launch-time "
+                    f"// HIP dynamic shared memory: {output_name} uses launch-time "
                     "shared memory size"
                 )
-            self.emit(f"var<workgroup> {node.name}: {var_type};")
+            self.emit(f"var<workgroup> {output_name}: {var_type};")
             return
 
         if "__constant__" in qualifiers:
             if hasattr(node, "value") and node.value:
                 value = self.visit(node.value)
                 self.emit(
-                    f"@group(0) @binding(0) var<uniform> {node.name}: "
+                    f"@group(0) @binding(0) var<uniform> {output_name}: "
                     f"{var_type} = {value};"
                 )
             else:
                 self.emit(
-                    f"@group(0) @binding(0) var<uniform> {node.name}: {var_type};"
+                    f"@group(0) @binding(0) var<uniform> {output_name}: {var_type};"
                 )
             return
 
         if "__managed__" in qualifiers:
-            self.emit(f"// HIP managed memory: {node.name}")
+            self.emit(f"// HIP managed memory: {output_name}")
 
         if hasattr(node, "value") and node.value:
             runtime_status = self.format_hip_runtime_status_expression(node.value)
@@ -4249,13 +4300,13 @@ class HipToCrossGLConverter:
                 comments, value = runtime_status
                 for comment in comments:
                     self.emit(comment)
-                self.emit(f"var {node.name}: {var_type} = {value};")
+                self.emit(f"var {output_name}: {var_type} = {value};")
                 return
 
             value = self.visit(node.value)
-            self.emit(f"var {node.name}: {var_type} = {value};")
+            self.emit(f"var {output_name}: {var_type} = {value};")
         else:
-            self.emit(f"var {node.name}: {var_type};")
+            self.emit(f"var {output_name}: {var_type};")
 
     def visit_TextureAccessNode(self, node):
         texture_name = self.visit(node.texture_name)
@@ -4276,29 +4327,31 @@ class HipToCrossGLConverter:
 
     def visit_SharedMemoryNode(self, node):
         var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
+        output_name = self.register_identifier_name(node.name)
         self.register_variable_type(node.name, var_type)
         if getattr(node, "is_dynamic_shared_memory", False):
             self.emit(
-                f"// HIP dynamic shared memory: {node.name} uses launch-time "
+                f"// HIP dynamic shared memory: {output_name} uses launch-time "
                 "shared memory size"
             )
         if node.size is not None:
             size = self.visit(node.size)
-            self.emit(f"var<workgroup> {node.name}: array<{var_type}, {size}>;")
+            self.emit(f"var<workgroup> {output_name}: array<{var_type}, {size}>;")
         else:
-            self.emit(f"var<workgroup> {node.name}: {var_type};")
+            self.emit(f"var<workgroup> {output_name}: {var_type};")
 
     def visit_ConstantMemoryNode(self, node):
         var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
+        output_name = self.register_identifier_name(node.name)
         self.register_variable_type(node.name, var_type)
         if node.value is not None:
             value = self.visit(node.value)
             self.emit(
-                f"@group(0) @binding(0) var<uniform> {node.name}: "
+                f"@group(0) @binding(0) var<uniform> {output_name}: "
                 f"{var_type} = {value};"
             )
         else:
-            self.emit(f"@group(0) @binding(0) var<uniform> {node.name}: {var_type};")
+            self.emit(f"@group(0) @binding(0) var<uniform> {output_name}: {var_type};")
 
     def visit_HipErrorHandlingNode(self, node):
         error_type = self.visit(node.error_type)
@@ -5493,7 +5546,7 @@ class HipToCrossGLConverter:
                 else ""
             )
             expression = (
-                self.visit(operand.expression)
+                self.visit_source_comment_expression(operand.expression)
                 if operand.expression is not None
                 else None
             )

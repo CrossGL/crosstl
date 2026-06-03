@@ -527,6 +527,69 @@ def test_rust_gpu_builtin_spirv_aliases_drive_parameter_semantics():
     assert "uint local_index @ gl_LocalInvocationIndex" in result
 
 
+def test_rust_gpu_reduce_subgroup_builtins_codegen_from_upstream_example():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/reduce/src/lib.rs compute subgroup reduction entry point.
+    code = """
+    use spirv_std::glam::UVec3;
+    use spirv_std::spirv;
+
+    #[spirv(compute(threads(256)))]
+    pub fn main(
+        #[spirv(global_invocation_id)] global_invocation_id: UVec3,
+        #[spirv(local_invocation_id)] local_invocation_id: UVec3,
+        #[spirv(subgroup_local_invocation_id)] subgroup_local_invocation_id: u32,
+        #[spirv(workgroup_id)] workgroup_id: UVec3,
+        #[spirv(subgroup_id)] subgroup_id: u32,
+        #[spirv(num_subgroups)] num_subgroups: u32,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] input: &[u32],
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] output: &mut [u32],
+        #[spirv(workgroup)] shared: &mut [u32; 256],
+    ) {
+        let global_invocation_id_x = global_invocation_id.x as usize;
+        let local_invocation_id_x = local_invocation_id.x as usize;
+        let workgroup_id_x = workgroup_id.x as usize;
+
+        let mut sum = 0;
+        if global_invocation_id_x < input.len() {
+            sum = input[global_invocation_id_x];
+        }
+        sum = unsafe { subgroup_add(sum) };
+        if subgroup_local_invocation_id == 0 {
+            shared[subgroup_id as usize] = sum;
+        }
+        spirv_std::arch::workgroup_memory_barrier_with_group_sync();
+        let mut sum = 0;
+        if subgroup_id == 0 {
+            if subgroup_local_invocation_id < num_subgroups {
+                sum = shared[subgroup_local_invocation_id as usize];
+            }
+            sum = unsafe { subgroup_add(sum) };
+        }
+        if local_invocation_id_x == 0 {
+            output[workgroup_id_x] = sum;
+        }
+    }
+    """
+    result = parse_and_generate(code)
+
+    assert "compute {" in result
+    assert "void main(uvec3 global_invocation_id @ gl_GlobalInvocationID" in result
+    assert "uvec3 local_invocation_id @ gl_LocalInvocationID" in result
+    assert "uint subgroup_local_invocation_id @ gl_SubgroupInvocationID" in result
+    assert "uvec3 workgroup_id @ gl_WorkGroupID" in result
+    assert "uint subgroup_id @ gl_SubgroupID" in result
+    assert "uint num_subgroups @ gl_NumSubgroups" in result
+    assert "uint input[] @ set(0) @ binding(0)" in result
+    assert "uint output[] @ set(0) @ binding(1)" in result
+    assert "uint shared_[256] @ workgroup" in result
+    assert "@numthreads(256, 1, 1)" in result
+    assert "sum = subgroup_add(sum);" in result
+    assert "spirv_std::arch::workgroup_memory_barrier_with_group_sync();" in result
+    assert "output[workgroup_id_x] = sum_;" in result
+
+
 def test_rust_shader_stage_local_aliases_shadow_parameter_after_initializer(tmp_path):
     code = """
     #[vertex_shader]

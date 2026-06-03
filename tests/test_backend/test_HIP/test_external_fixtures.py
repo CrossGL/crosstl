@@ -18,6 +18,7 @@ EXTERNAL_FIXTURE_SOURCES = {
             "HIP-Basic/bit_extract/main.hip",
             "HIP-Basic/dynamic_shared/main.hip",
             "HIP-Basic/texture_management/main.hip",
+            "HIP-Basic/warp_shuffle/main.hip",
         ],
     },
     "hip_examples": {
@@ -270,3 +271,42 @@ def test_external_rocm_texture_management_tex2d_atomic_codegen_reparse():
     assert "sampler2D tex_obj" in crossgl
     assert "var val: u8 = texture(tex_obj, vec2<f32>(u, v));" in crossgl
     assert "atomicAdd((&histogram[bin_idx]), 1);" in crossgl
+
+
+def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
+    source = """
+    __global__ void matrix_transpose_kernel(float* out,
+                                            const float* in,
+                                            const unsigned int width) {
+        const unsigned int x = threadIdx.x;
+        const unsigned int y = threadIdx.y;
+
+        if(x < width && y < width) {
+            const float val = in[y * width + x];
+            out[x * width + y] = __shfl(val, y * width + x);
+            out[x * width + y] = __shfl_sync(__activemask(), val, y * width + x);
+        }
+    }
+
+    void host(float* d_transposed_matrix, float* d_matrix, unsigned int width) {
+        const dim3 block_dim(width, width);
+        const dim3 grid_dim(1);
+        matrix_transpose_kernel<<<grid_dim, block_dim, 0, hipStreamDefault>>>(
+            d_transposed_matrix,
+            d_matrix,
+            width);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    kernel = ast.statements[0]
+
+    assert kernel.params[1]["name"] == "in"
+    assert "@group(0) @binding(1) var<storage, read_write> in_: array<f32>" in crossgl
+    assert "var val: f32 = in_[((y * width) + x)];" in crossgl
+    assert "hip warp intrinsic __shfl(val, ((y * width) + x))" in crossgl
+    assert "hip warp intrinsic __shfl_sync" in crossgl
+    assert (
+        "// Kernel launch: matrix_transpose_kernel<<<grid_dim, block_dim, "
+        "0, hipStreamDefault>>>()"
+    ) in crossgl

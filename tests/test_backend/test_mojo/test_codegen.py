@@ -407,6 +407,80 @@ def test_gpu_fundamentals_launch_keyword_tuple_args_codegen():
     assert "comptime" not in generated_code
 
 
+def test_modular_histogram_nested_gpu_kernel_metadata_codegen():
+    # Reduced from modularml/mojo commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/histogram.mojo GPU histogram launch.
+    code = """
+    from std.gpu import MAX_THREADS_PER_BLOCK_METADATA, global_idx, thread_idx
+    from std.gpu.host import DeviceContext
+    from std.gpu.memory import AddressSpace
+    from std.memory import stack_allocation
+    from std.utils import StaticTuple
+
+    comptime bin_width = Int(UInt8.MAX) + 1
+
+    @compiler.register("histogram")
+    struct Histogram:
+        @staticmethod
+        def execute[target: StaticString](ctx: DeviceContext) raises:
+            comptime block_dim = bin_width
+
+            @__llvm_metadata(
+                MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(block_dim))
+            )
+            def kernel(
+                output: UnsafePointer[Int64, MutAnyOrigin],
+                input: UnsafePointer[UInt8, MutAnyOrigin],
+                n: Int,
+            ):
+                var tid = global_idx.x
+                if tid >= n:
+                    return
+                var shared_mem = stack_allocation[
+                    bin_width, Int64, address_space=AddressSpace.SHARED
+                ]()
+                shared_mem[thread_idx.x] = 0
+                barrier()
+                _ = Atomic.fetch_add(output + thread_idx.x, shared_mem[thread_idx.x])
+
+            ctx.enqueue_function[kernel](
+                output,
+                input,
+                n,
+                block_dim=block_dim,
+                grid_dim=grid_dim,
+            )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "// from std.gpu import MAX_THREADS_PER_BLOCK_METADATA" in generated_code
+    assert "let bin_width = (int(UInt8.MAX) + 1);" in generated_code
+    assert "void execute(DeviceContext ctx) @ staticmethod" in generated_code
+    assert (
+        "void kernel(UnsafePointer[Int64, MutAnyOrigin] output, "
+        "UnsafePointer[UInt8, MutAnyOrigin] input, int n) "
+        "@ __llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA = "
+        "StaticTuple[Int32, 1](Int32(block_dim)))"
+    ) in generated_code
+    assert (
+        "stack_allocation[bin_width, Int64, "
+        "address_space=AddressSpace.SHARED]()" in generated_code
+    )
+    assert "shared_mem[thread_idx.x] = 0;" in generated_code
+    assert "barrier();" in generated_code
+    assert (
+        "Atomic.fetch_add((output + thread_idx.x), shared_mem[thread_idx.x]);"
+        in generated_code
+    )
+    assert (
+        "ctx.enqueue_function[kernel](output, input, n, block_dim = block_dim, "
+        "grid_dim = grid_dim);"
+    ) in generated_code
+    assert "Unhandled statement type: FunctionNode" not in generated_code
+
+
 def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
     code = """
     def matmul_idiomatic_tiled[
