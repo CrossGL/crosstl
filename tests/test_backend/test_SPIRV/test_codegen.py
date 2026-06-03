@@ -368,6 +368,52 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_STORE_BODY_ASSEMBLY = """
+; Reduced from a fragment output store.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %frag_color
+OpExecutionMode %main OriginUpperLeft
+OpName %frag_color "fragColor"
+OpDecorate %frag_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%one = OpConstant %float 1.0
+%zero = OpConstant %float 0.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%frag_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpStore %frag_color %red
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_LOCAL_SIZE_ID_ASSEMBLY = """
+; Reduced from specialization-driven compute local sizes.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionModeId %main LocalSizeId %width %height %depth
+OpName %width "WORKGROUP_WIDTH"
+OpName %height "WORKGROUP_HEIGHT"
+OpDecorate %width SpecId 0
+OpDecorate %height SpecId 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%width = OpSpecConstant %uint 8
+%height = OpSpecConstant %uint 4
+%depth = OpConstant %uint 1
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_FLAT_LOCATION_ASSEMBLY = """
 ; Reduced from Khronos SPIRV-Tools test/val/val_image_test.cpp CommonTypes.
 OpCapability Shader
@@ -759,12 +805,38 @@ def test_spirv_assembly_storage_image_format_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "RWTexture2D<uint> storageImage @binding(0) @r32ui @readonly;" in (
-        generated_code
+    assert (
+        "RWTexture2D<uint> storageImage @set(0) @binding(0) @r32ui @readonly;"
+        in generated_code
     )
-    assert "@set(0)" not in generated_code
     assert "%storage_image" not in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_opstore_body_codegen():
+    tokens = tokenize_code(SPIRV_STORE_BODY_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.functions[0].body
+    assert "fragColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "fragment {" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_local_size_id_codegen():
+    tokens = tokenize_code(SPIRV_LOCAL_SIZE_ID_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "compute {" in generated_code
+    assert (
+        "layout(local_size_x = WORKGROUP_WIDTH, local_size_y = WORKGROUP_HEIGHT, "
+        "local_size_z = 1) in;" in generated_code
+    )
+    assert "const uint WORKGROUP_WIDTH @constant_id(0) = 8;" in generated_code
+    assert "const uint WORKGROUP_HEIGHT @constant_id(1) = 4;" in generated_code
+    assert "fragment {" not in generated_code
 
 
 def test_spirv_assembly_flat_location_interface_codegen():
@@ -1359,8 +1431,8 @@ def test_vulkan_typed_2d_image_uniforms_emit_crossgl_resources():
 
 def test_vulkan_storage_image_layout_and_access_qualifiers_codegen():
     code = """
-    layout(set = 0, binding = 0, r32ui) coherent readonly uniform uimage2D counters;
-    layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D outImage;
+    layout(set = 3, binding = 7, r32ui) coherent readonly uniform uimage2D counters;
+    layout(set = 4, binding = 8, rgba32f) writeonly uniform image2D outImage;
     void main() {}
     """
     tokens = tokenize_code(code)
@@ -1368,11 +1440,13 @@ def test_vulkan_storage_image_layout_and_access_qualifiers_codegen():
     generated_code = generate_code(ast)
 
     assert (
-        "RWTexture2D<uint> counters @binding(0) @r32ui @coherent @readonly;"
+        "RWTexture2D<uint> counters @set(3) @binding(7) @r32ui @coherent @readonly;"
         in generated_code
     )
-    assert "RWTexture2D outImage @binding(1) @rgba32f @writeonly;" in generated_code
-    assert "@set(0)" not in generated_code
+    assert (
+        "RWTexture2D outImage @set(4) @binding(8) @rgba32f @writeonly;"
+        in generated_code
+    )
     assert "uimage2D counters @binding" not in generated_code
     assert "image2D outImage @binding" not in generated_code
 
@@ -1387,8 +1461,8 @@ def test_vulkan_storage_image_symbolic_binding_codegen():
     generated_code = generate_code(ast)
 
     assert (
-        "RWTexture2D outImage @binding(OUT_IMAGE_BINDING) @rgba32f @writeonly;"
-        in generated_code
+        "RWTexture2D outImage @set(RESOURCE_SET) @binding(OUT_IMAGE_BINDING) "
+        "@rgba32f @writeonly;" in generated_code
     )
 
 

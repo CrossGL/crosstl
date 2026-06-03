@@ -8,13 +8,15 @@ from .preprocessor import GLSLPreprocessor
 # Tokens to skip entirely
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
+HEX_FLOAT = r"0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)[pP][+-]?\d+"
 HEX_NUMBER = r"0[xX][0-9a-fA-F]+"
 DECIMAL_FLOAT = r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?"
 DECIMAL_EXP = r"\d+[eE][+-]?\d+"
 DECIMAL_INT = r"\d+"
 NUMBER_SUFFIX = r"(?:[fF]|[hH][fF]|[lL][fF]|[uU](?:[lL]{1,2})?|[lL]{1,2}[uU]?)?"
 NUMBER_PATTERN = (
-    rf"(?:{HEX_NUMBER}|{DECIMAL_FLOAT}|{DECIMAL_EXP}|{DECIMAL_INT}){NUMBER_SUFFIX}"
+    rf"(?:{HEX_FLOAT}|{HEX_NUMBER}|{DECIMAL_FLOAT}|{DECIMAL_EXP}|{DECIMAL_INT})"
+    rf"{NUMBER_SUFFIX}"
 )
 
 # Order matters: longer tokens first

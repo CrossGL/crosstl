@@ -980,8 +980,23 @@ def test_bound_generic_resource_global_codegen():
 
     assert ast.global_vars[0].register == "t0"
     assert ast.global_vars[1].register == "s0"
-    assert "sampler2D albedo;" in generated_code
-    assert "sampler linearSampler;" in generated_code
+    assert "sampler2D albedo @register(t0);" in generated_code
+    assert "sampler linearSampler @register(s0);" in generated_code
+
+
+def test_resource_binding_metadata_round_trips_to_crossgl_attributes():
+    code = """
+    layout(set = 2, binding = 7) uniform sampler2D sourceTexture;
+    Texture2D<float4> albedo : register(t3);
+    SamplerState linearSampler : register(s4);
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D sourceTexture @set(2) @binding(7);" in generated_code
+    assert "sampler2D albedo @register(t3);" in generated_code
+    assert "sampler linearSampler @register(s4);" in generated_code
 
 
 def test_vulkan_binding_attribute_global_resource_codegen():
@@ -996,7 +1011,7 @@ def test_vulkan_binding_attribute_global_resource_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "sampler2D albedo @set(1) @binding(0);" in generated_code
+    assert "sampler2D albedo @set(1) @binding(0) @register(t0);" in generated_code
     assert "sampler linearSampler @binding(2);" in generated_code
 
 
@@ -1048,7 +1063,7 @@ def test_global_resource_array_codegen():
     generated_code = generate_code(ast)
 
     assert "StructuredBuffer<float> inputs[2];" in generated_code
-    assert "sampler2D textures[3];" in generated_code
+    assert "sampler2D textures[3] @register(t0);" in generated_code
     assert "sampler samplers[];" in generated_code
 
 

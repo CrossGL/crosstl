@@ -364,6 +364,20 @@ def test_parse_float_suffix_literals():
     parse_ok(code, "geometry")
 
 
+def test_parse_hex_float_literals():
+    code = textwrap.dedent("""
+        #version 450
+        void main(void)
+        {
+            float exposure = 0x1.8p+1;
+            float bias = 0x1p-2;
+            float gain = 0X1.Ap+2f;
+        }
+        """)
+
+    parse_ok(code, "geometry")
+
+
 def test_parse_const_array_initializers():
     code = textwrap.dedent("""
         #version 460 core

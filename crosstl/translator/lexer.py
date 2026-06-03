@@ -180,7 +180,11 @@ TOKENS = OrderedDict(
         ("ATTRIBUTE", r"@[a-zA-Z_][a-zA-Z_0-9]*"),
         ("HASH", r"#"),
         ("DOLLAR", r"\$"),
-        ("FLOAT_NUMBER", r"\d*\.\d+[fF]?|\d+\.(?!\.)\d*[fF]?|\d+[fF]"),
+        (
+            "FLOAT_NUMBER",
+            r"0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)[pP][+-]?\d+[fF]?"
+            r"|\d*\.\d+[fF]?|\d+\.(?!\.)\d*[fF]?|\d+[fF]",
+        ),
         ("HEX_NUMBER", r"0[xX][0-9a-fA-F]+[uU]?"),
         ("BIN_NUMBER", r"0[bB][01]+[uU]?"),
         ("OCT_NUMBER", r"0[oO][0-7]+[uU]?"),

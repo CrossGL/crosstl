@@ -302,6 +302,23 @@ def test_codegen_array_of_arrays_return_type_from_glslang_spv_aofa():
     assert "float u[][7];" in crossgl
 
 
+def test_codegen_hex_float_literals_import_to_parseable_crossgl():
+    code = textwrap.dedent("""
+        #version 450
+        void main() {
+            float exposure = 0x1.8p+1;
+            float bias = 0x1p-2;
+            gl_Position = vec4(exposure + bias);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "float exposure = 0x1.8p+1;" in crossgl
+    assert "float bias = 0x1p-2;" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
     code = textwrap.dedent("""
         #version 450

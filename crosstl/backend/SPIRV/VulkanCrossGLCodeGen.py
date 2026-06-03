@@ -281,11 +281,16 @@ class VulkanToCrossGLConverter:
     def spirv_compute_execution_layouts(self, node):
         layouts = []
         for mode in getattr(node, "spirv_execution_modes", []) or []:
-            if mode.get("mode") != "LocalSize":
+            if mode.get("mode") not in {"LocalSize", "LocalSizeId"}:
                 continue
             operands = mode.get("operands", [])
             if len(operands) < 3:
                 continue
+            if mode.get("mode") == "LocalSizeId":
+                operands = [
+                    self.spirv_execution_mode_id_operand(node, operand)
+                    for operand in operands
+                ]
             layouts.append(
                 LayoutNode(
                     [
@@ -297,6 +302,17 @@ class VulkanToCrossGLConverter:
                 )
             )
         return layouts
+
+    def spirv_execution_mode_id_operand(self, node, operand):
+        names = getattr(node, "spirv_names", {}) or {}
+        constants = getattr(node, "spirv_constants", {}) or {}
+        if operand in names and names[operand]:
+            return names[operand]
+        if operand in constants:
+            return self.generate_expression(constants[operand])
+        if isinstance(operand, str) and operand.startswith("%"):
+            return operand.lstrip("%")
+        return operand
 
     def spirv_fragment_execution_layouts(self, node):
         layouts = []
@@ -463,11 +479,14 @@ class VulkanToCrossGLConverter:
             return ""
 
         attributes = []
+        descriptor_set = None
         binding = None
         image_format = None
         for name, value in getattr(node, "qualifiers", []) or []:
             qualifier_name = str(name).lower()
-            if qualifier_name == "binding" and value is not None:
+            if qualifier_name == "set" and value is not None:
+                descriptor_set = value
+            elif qualifier_name == "binding" and value is not None:
                 binding = value
             elif qualifier_name in self.supported_image_formats():
                 image_format = qualifier_name
@@ -487,6 +506,8 @@ class VulkanToCrossGLConverter:
         if image_format is None and not declaration_attributes:
             return ""
 
+        if descriptor_set is not None:
+            attributes.append(f"@set({descriptor_set})")
         if binding is not None:
             attributes.append(f"@binding({binding})")
         if image_format is not None:

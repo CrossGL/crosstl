@@ -606,19 +606,87 @@ class SlangToCrossGLConverter:
 
     def format_variable_metadata(self, node):
         metadata = []
+        seen = set()
+
+        def append_metadata(key, text):
+            if key in seen:
+                return
+            seen.add(key)
+            metadata.append(text)
+
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            for name, value in self.layout_metadata_entries(qualifier):
+                if name in {"set", "group"} and value:
+                    append_metadata("set", f"@set({value})")
+                elif name == "binding" and value:
+                    append_metadata("binding", f"@binding({value})")
+                elif name == "push_constant":
+                    append_metadata("push_constant", "@push_constant")
+
         for attribute in getattr(node, "attributes", []) or []:
             name = str(attribute.get("name", "")).lower()
             arguments = attribute.get("arguments", [])
             if name == "vk::binding" and arguments:
                 if len(arguments) > 1:
-                    metadata.append(f"@set({arguments[1]})")
-                metadata.append(f"@binding({arguments[0]})")
+                    append_metadata("set", f"@set({arguments[1]})")
+                append_metadata("binding", f"@binding({arguments[0]})")
             elif name == "vk::push_constant":
-                metadata.append("@push_constant")
+                append_metadata("push_constant", "@push_constant")
+
+        register_name = getattr(node, "register", None)
+        if self.should_emit_register_metadata(register_name):
+            register_arguments = self.format_register_metadata_arguments(register_name)
+            append_metadata("register", f"@register({register_arguments})")
 
         if not metadata:
             return ""
         return " " + " ".join(metadata)
+
+    def layout_metadata_entries(self, qualifier):
+        text = str(qualifier).strip()
+        if not text.lower().startswith("layout(") or not text.endswith(")"):
+            return []
+
+        inner = text[text.find("(") + 1 : -1]
+        entries = []
+        for entry in self.split_top_level_commas(inner):
+            if not entry:
+                continue
+            if "=" in entry:
+                name, value = entry.split("=", 1)
+                entries.append((name.strip().lower(), value.strip()))
+            else:
+                entries.append((entry.strip().lower(), None))
+        return entries
+
+    def split_top_level_commas(self, text):
+        parts = []
+        current = []
+        depth = 0
+        for char in str(text):
+            if char in "([{":
+                depth += 1
+            elif char in ")]}" and depth > 0:
+                depth -= 1
+
+            if char == "," and depth == 0:
+                parts.append("".join(current).strip())
+                current = []
+                continue
+            current.append(char)
+
+        if current or not parts:
+            parts.append("".join(current).strip())
+        return parts
+
+    def should_emit_register_metadata(self, register_name):
+        if not register_name:
+            return False
+        register_name = str(register_name).strip().lower()
+        return register_name.startswith(("t", "s"))
+
+    def format_register_metadata_arguments(self, register_name):
+        return ", ".join(self.split_top_level_commas(str(register_name)))
 
     def binary_precedence(self, op):
         return self.BINARY_PRECEDENCE.get(op, 0)

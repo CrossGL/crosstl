@@ -3406,7 +3406,13 @@ class Parser:
 
         elif token_type == "FLOAT_NUMBER":
             self.eat("FLOAT_NUMBER")
-            return LiteralNode(float(value.rstrip("fF")), PrimitiveType("float"))
+            literal_text = value.rstrip("fF")
+            literal_value = (
+                float.fromhex(literal_text)
+                if literal_text.lower().startswith("0x")
+                else float(literal_text)
+            )
+            return LiteralNode(literal_value, PrimitiveType("float"))
 
         elif token_type == "BOOLEAN_LITERAL":
             self.eat("BOOLEAN_LITERAL")

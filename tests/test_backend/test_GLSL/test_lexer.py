@@ -170,7 +170,19 @@ def test_builtin_types_are_reserved(dtype):
 
 
 @pytest.mark.parametrize(
-    "literal", ["0", "42", "0xFF", "1.0", ".5", "1.", "1e-3", "2E+4"]
+    "literal",
+    [
+        "0",
+        "42",
+        "0xFF",
+        "0x1.8p+1",
+        "0x1p-2",
+        "1.0",
+        ".5",
+        "1.",
+        "1e-3",
+        "2E+4",
+    ],
 )
 def test_numeric_literals_tokenize(literal):
     tokens = strip_ignored(normalize_tokens(tokenize_code(f"float x = {literal};")))

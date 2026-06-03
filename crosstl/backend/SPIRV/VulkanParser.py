@@ -612,7 +612,13 @@ class VulkanParser:
             + global_variables
         )
         functions = self.spirv_assembly_functions(
-            instructions, names, types, entry_points, execution_modes
+            instructions,
+            names,
+            decorations,
+            types,
+            entry_points,
+            execution_modes,
+            constants,
         )
         if not global_variables and not structs and not functions:
             raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
@@ -635,7 +641,14 @@ class VulkanParser:
         )
 
     def spirv_assembly_functions(
-        self, instructions, names, types, entry_points, execution_modes
+        self,
+        instructions,
+        names,
+        decorations,
+        types,
+        entry_points,
+        execution_modes,
+        constants,
     ):
         functions = []
         entry_points_by_id = {}
@@ -698,7 +711,13 @@ class VulkanParser:
                     self.spirv_function_name_fallback(function_id, entry_points_by_id),
                 ),
                 params,
-                body=[],
+                body=self.spirv_assembly_function_body(
+                    raw_instructions,
+                    names,
+                    decorations,
+                    types,
+                    constants,
+                ),
             )
             function_entry_points = entry_points_by_id.get(function_id, [])
             node.spirv_id = function_id
@@ -715,6 +734,9 @@ class VulkanParser:
                 else None
             )
             node.spirv_execution_modes = execution_modes.get(function_id, [])
+            node.spirv_names = names
+            node.spirv_constants = constants
+            node.spirv_decorations = decorations
             node.spirv_instructions = list(raw_instructions)
             node.spirv_raw_instructions = [
                 {
@@ -731,6 +753,260 @@ class VulkanParser:
             entry_instruction = None
             raw_instructions = []
         return functions
+
+    def spirv_assembly_function_body(
+        self,
+        raw_instructions,
+        names,
+        decorations,
+        types,
+        constants,
+    ):
+        statements = []
+        expressions = {}
+
+        for result_id, opcode, operands, _line_number in raw_instructions:
+            if result_id and opcode == "OpFunctionParameter":
+                expressions[result_id] = VariableNode(
+                    "",
+                    self.spirv_assembly_value_name(result_id, names, decorations),
+                )
+                continue
+
+            if result_id and opcode == "OpVariable" and len(operands) >= 2:
+                pointer_type = types.get(operands[0], {})
+                storage_class = operands[1]
+                variable_name = self.spirv_assembly_value_name(
+                    result_id, names, decorations
+                )
+                expressions[result_id] = VariableNode("", variable_name)
+                if storage_class == "Function":
+                    variable_type = (
+                        self.spirv_type_name(pointer_type.get("type_id"), types)
+                        or pointer_type.get("type_id")
+                        or ""
+                    )
+                    declaration = VariableNode(
+                        variable_type,
+                        variable_name,
+                        spirv_id=result_id,
+                        spirv_type_id=pointer_type.get("type_id"),
+                    )
+                    if len(operands) >= 3:
+                        statements.append(
+                            AssignmentNode(
+                                declaration,
+                                self.spirv_assembly_operand_expression(
+                                    operands[2],
+                                    expressions,
+                                    names,
+                                    decorations,
+                                    constants,
+                                ),
+                            )
+                        )
+                    else:
+                        statements.append(declaration)
+                continue
+
+            if result_id and opcode == "OpLoad" and len(operands) >= 2:
+                expressions[result_id] = self.spirv_assembly_operand_expression(
+                    operands[1],
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                continue
+
+            if result_id and opcode in {"OpAccessChain", "OpInBoundsAccessChain"}:
+                if len(operands) >= 2:
+                    access = self.spirv_assembly_operand_expression(
+                        operands[1],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                    for index_operand in operands[2:]:
+                        access = ArrayAccessNode(
+                            access,
+                            self.spirv_assembly_operand_expression(
+                                index_operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                        )
+                    expressions[result_id] = access
+                continue
+
+            if result_id and opcode == "OpCompositeConstruct" and operands:
+                expressions[result_id] = FunctionCallNode(
+                    self.spirv_type_name(operands[0], types) or operands[0],
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operand,
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                        for operand in operands[1:]
+                    ],
+                )
+                continue
+
+            if result_id and opcode == "OpCompositeExtract" and len(operands) >= 2:
+                expression = self.spirv_assembly_operand_expression(
+                    operands[1],
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                for index_operand in operands[2:]:
+                    expression = ArrayAccessNode(expression, index_operand)
+                expressions[result_id] = expression
+                continue
+
+            operation = opcode[2:] if opcode.startswith("Op") else opcode
+            if (
+                result_id
+                and operation in self.SPIRV_SPEC_CONSTANT_BINARY_OPS
+                and len(operands) >= 3
+            ):
+                expressions[result_id] = BinaryOpNode(
+                    self.spirv_assembly_operand_expression(
+                        operands[1],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                    self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation],
+                    self.spirv_assembly_operand_expression(
+                        operands[2],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                )
+                continue
+
+            if (
+                result_id
+                and operation in self.SPIRV_SPEC_CONSTANT_UNARY_OPS
+                and len(operands) >= 2
+            ):
+                expressions[result_id] = UnaryOpNode(
+                    self.SPIRV_SPEC_CONSTANT_UNARY_OPS[operation],
+                    self.spirv_assembly_operand_expression(
+                        operands[1],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                )
+                continue
+
+            if result_id and opcode == "OpFunctionCall" and len(operands) >= 2:
+                expressions[result_id] = FunctionCallNode(
+                    self.spirv_assembly_value_name(
+                        operands[1], names, decorations, prefix="function"
+                    ),
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operand,
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                        for operand in operands[2:]
+                    ],
+                )
+                continue
+
+            if opcode == "OpStore" and len(operands) >= 2:
+                statements.append(
+                    AssignmentNode(
+                        self.spirv_assembly_operand_expression(
+                            operands[0],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                    )
+                )
+                continue
+
+            if opcode == "OpReturnValue" and operands:
+                statements.append(
+                    ReturnNode(
+                        self.spirv_assembly_operand_expression(
+                            operands[0],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                    )
+                )
+                continue
+
+            if opcode == "OpReturn":
+                statements.append(ReturnNode())
+
+        return statements
+
+    def spirv_assembly_operand_expression(
+        self,
+        operand,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        if operand in expressions:
+            return expressions[operand]
+
+        if operand in constants:
+            return self.spirv_constant_operand_expression(operand, names, constants)
+
+        if isinstance(operand, str) and operand.startswith("%"):
+            return VariableNode(
+                "",
+                self.spirv_assembly_value_name(operand, names, decorations),
+            )
+
+        return operand
+
+    def spirv_assembly_value_name(
+        self,
+        value_id,
+        names,
+        decorations,
+        prefix="value",
+    ):
+        qualifiers = self.spirv_layout_qualifiers(decorations.get(value_id, []))
+        builtin_name = self.spirv_builtin_variable_name_from_qualifiers(qualifiers)
+        if builtin_name:
+            return builtin_name
+        if value_id in names and names[value_id]:
+            return names[value_id]
+        return self.spirv_fallback_identifier(value_id, prefix)
 
     def spirv_function_name_fallback(self, function_id, entry_points_by_id):
         if function_id in entry_points_by_id:
