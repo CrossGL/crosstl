@@ -54,6 +54,34 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["int a, = , 16", "int a = 16"],
     },
     {
+        "id": "slang_autodiff_generic_where_clause",
+        "repo": "shader-slang/slang",
+        "path": "tests/autodiff/autodiff-generic-where-clause.slang",
+        "source": (
+            """
+            [ForwardDifferentiable]
+            T genericCalc<T : IDifferentiable & IFloat>(T val, T x)
+            {
+                return val * x * x + x;
+            }
+
+            void main()
+            {
+                let result = fwd_diff(genericCalc<float>)(
+                    DifferentialPair<float>(2.0, 0.0),
+                    DifferentialPair<float>(3.0, 1.0));
+                printf("%f\\n", result.d);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "T genericCalc(T val, T x)",
+            "let result = fwd_diff(genericCalc<float>)",
+            'printf("%f\\n", result.d);',
+        ],
+    },
+    {
         "id": "slang_tbuffer",
         "repo": "shader-slang/slang",
         "path": "tests/hlsl/tbuffer.slang",
@@ -108,6 +136,76 @@ EXTERNAL_FIXTURES = [
             "texelFetch(gTex, ivec2(0, 0), 0)",
         ],
         "not_contains": ["gTex.Load"],
+    },
+    {
+        "id": "falcor_texture_brace_vector_initializer",
+        "repo": "NVIDIAGameWorks/Falcor",
+        "path": "Source/Tools/FalcorTest/Tests/Core/TextureLoadTests.cs.slang",
+        "source": (
+            """
+            RWStructuredBuffer<uint4> result;
+
+            Texture2D<float4> texUnorm;
+            Texture2D<uint4> texUnormAsUint;
+            Texture2D<uint4> texUint;
+
+            [numthreads(256, 1, 1)]
+            void testLoadFormat(uint3 threadId: SV_DispatchThreadID)
+            {
+                float4 f = texUnorm[threadId.xy];
+                uint4 u = texUnormAsUint[threadId.xy];
+                uint4 v = texUint[threadId.xy];
+
+                result[threadId.x] =
+                    { asuint(f.x), u.x, (uint)(f.x * 255.f), v.x };
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "sampler2D texUnorm;",
+            "result[threadId.x] = {asuint(f.x), u.x, uint(f.x * 255.0), v.x};",
+        ],
+        "not_contains": ["255.f"],
+    },
+    {
+        "id": "falcor_pixel_stats_resource_array",
+        "repo": "NVIDIAGameWorks/Falcor",
+        "path": "Source/Falcor/Rendering/Utils/PixelStats.cs.slang",
+        "source": (
+            """
+            import PixelStatsShared;
+
+            cbuffer CB
+            {
+                uint2 gFrameDim;
+            }
+
+            Texture2D<uint> gStatsRayCount[(uint)PixelStatsRayType::Count];
+            RWTexture2D<uint> gStatsRayCountTotal;
+
+            [numthreads(16, 16, 1)]
+            void main(uint3 dispatchThreadId : SV_DispatchThreadID)
+            {
+                uint2 pixel = dispatchThreadId.xy;
+                if (any(pixel > gFrameDim)) return;
+
+                uint totalRays = 0;
+                for (uint i = 0; i < (uint)PixelStatsRayType::Count; i++)
+                {
+                    totalRays += gStatsRayCount[i][pixel];
+                }
+                gStatsRayCountTotal[pixel] = totalRays;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "import PixelStatsShared;",
+            "sampler2D gStatsRayCount[uint(PixelStatsRayType::Count)];",
+            "image2D gStatsRayCountTotal;",
+            "totalRays += gStatsRayCount[i][pixel];",
+        ],
     },
 ]
 

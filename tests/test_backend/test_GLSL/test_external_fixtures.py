@@ -189,6 +189,89 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    ExternalFixture(
+        name="godot-gles3-particles-precision-ubo-hash",
+        repo="https://github.com/godotengine/godot",
+        commit="3badc0ee23caf1e5269fe90f8ee17e09d4d2b682",
+        path="drivers/gles3/shaders/particles.glsl",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #version 300 es
+            precision highp float;
+            #define MAX_ATTRACTORS 32
+
+            struct Attractor {
+                mat4 transform;
+                vec4 extents;
+
+                uint type;
+                float strength;
+            };
+
+            layout(std140) uniform FrameData {
+                uint random_seed;
+                uint attractor_count;
+
+                Attractor attractors[MAX_ATTRACTORS];
+            };
+
+            layout(location = 0) in highp vec4 color;
+            out highp vec4 out_color;
+
+            uint hash(uint x) {
+                x = ((x >> uint(16)) ^ x) * uint(0x45d9f3b);
+                x = (x >> uint(16)) ^ x;
+                return x;
+            }
+
+            void main() {
+                mat4 xform = mat4(1.0);
+                xform[0] = color;
+                out_color = vec4(float(hash(random_seed)));
+            }
+        """).strip(),
+    ),
+    ExternalFixture(
+        name="filament-surface-instancing-highp-object-uniforms",
+        repo="https://github.com/google/filament",
+        commit="48881c840bca50da515f0df82b61c9a5b996b19a",
+        path="shaders/src/surface_instancing.glsl",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #version 300 es
+            precision highp float;
+
+            highp mat4 object_uniforms_worldFromModelMatrix;
+            highp mat3 object_uniforms_worldFromModelNormalMatrix;
+            highp int object_uniforms_flagsChannels;
+
+            struct ObjectData {
+                highp mat4 worldFromModelMatrix;
+                highp int flagsChannels;
+            };
+
+            layout(std140) uniform ObjectUniforms {
+                ObjectData data[4];
+            } objectUniforms;
+
+            highp mat4 getWorldFromModelMatrix() {
+                return object_uniforms_worldFromModelMatrix;
+            }
+
+            void initObjectUniforms() {
+                highp int i = 0;
+                if ((objectUniforms.data[0].flagsChannels & 1) != 0) {
+                    i = 1;
+                }
+                object_uniforms_worldFromModelMatrix =
+                    objectUniforms.data[i].worldFromModelMatrix;
+            }
+
+            void main() {
+                initObjectUniforms();
+            }
+        """).strip(),
+    ),
 ]
 
 
@@ -228,6 +311,48 @@ def test_parse_glslang_layout_only_builtin_spec_constant_fixture():
 
     assert builtin.vtype == ""
     assert builtin.layout == {"constant_id": "24"}
+
+
+def test_parse_godot_particles_precision_ubo_hash_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "godot-gles3-particles-precision-ubo-hash"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    frame_data = next(struct for struct in ast.structs if struct.name == "FrameData")
+    color = next(var for var in ast.io_variables if var.name == "color")
+    out_color = next(var for var in ast.io_variables if var.name == "out_color")
+
+    assert frame_data.interface_block is True
+    assert frame_data.interface_layout == {"std140": None}
+    assert frame_data.members[2].name == "attractors"
+    assert frame_data.members[2].array_size.value == "32"
+    assert color.qualifiers == ["in", "highp"]
+    assert out_color.qualifiers == ["out", "highp"]
+
+
+def test_parse_filament_instancing_highp_object_uniforms_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "filament-surface-instancing-highp-object-uniforms"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    world_matrix = next(
+        var
+        for var in ast.global_variables
+        if var.name == "object_uniforms_worldFromModelMatrix"
+    )
+    object_uniforms = next(var for var in ast.uniforms if var.name == "objectUniforms")
+    object_data = next(struct for struct in ast.structs if struct.name == "ObjectData")
+
+    assert world_matrix.qualifiers == ["highp"]
+    assert object_uniforms.vtype == "ObjectUniforms"
+    assert object_uniforms.layout == {"std140": None}
+    assert object_data.members[0].qualifiers == ["highp"]
 
 
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda fixture: fixture.name)

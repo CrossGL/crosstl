@@ -88,6 +88,45 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "apple_raytracing_template_and_function_constants",
+        "repo_url": APPLE_SAMPLE_REPO,
+        "commit": APPLE_SAMPLE_COMMIT,
+        "source_path": (
+            "MetalSampleCodeLibrary/RayTracing/"
+            "ControlTheRayTracingProcessUsingIntersectionQueries/Renderer/Shaders.metal"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "constant uint resourcesStride @function_constant(0);",
+            "constant uint[] primes = {2, 3, 5, 7};",
+            "T interpolateVertexAttribute(device T* attributes",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant unsigned int resourcesStride [[function_constant(0)]];
+            constant bool useIntersectionFunctions [[function_constant(1)]];
+            constant unsigned int primes[] = { 2, 3, 5, 7 };
+
+            template<typename T>
+            inline T interpolateVertexAttribute(device T *attributes,
+                                                unsigned int primitiveIndex,
+                                                float2 uv) {
+                T T0 = attributes[primitiveIndex * 3 + 0];
+                T T1 = attributes[primitiveIndex * 3 + 1];
+                T T2 = attributes[primitiveIndex * 3 + 2];
+                return (1.0f - uv.x - uv.y) * T0 + uv.x * T1 + uv.y * T2;
+            }
+
+            float halton(unsigned int i, unsigned int d) {
+                return (float)primes[d];
+            }
+        """
+        ),
+    },
+    {
         "name": "apple_dynamic_library_scoped_member_definition",
         "repo_url": APPLE_SAMPLE_REPO,
         "commit": APPLE_SAMPLE_COMMIT,
@@ -150,6 +189,33 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "moltenvk_msaa_texture_access_qualifiers",
+        "repo_url": MOLTENVK_REPO,
+        "commit": MOLTENVK_COMMIT,
+        "source_path": (
+            "MoltenVK/MoltenVK/Commands/" "MVKCommandPipelineStateFactoryShaderSource.h"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "image2D dst @texture(0) @writeonly",
+            "sampler2DMS src @texture(1)",
+            "imageStore(dst, pos, texelFetch(src, pos, 0));",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void cmdResolveColorImage2DFloat(
+                texture2d<float, access::write> dst [[ texture(0) ]],
+                texture2d_ms<float, access::read> src [[ texture(1) ]],
+                uint2 pos [[thread_position_in_grid]]) {
+                dst.write(src.read(pos, 0), pos);
+            }
+        """
+        ),
+    },
+    {
         "name": "moltenvk_command_shader_typedefs_and_reinterpret_cast",
         "repo_url": MOLTENVK_REPO,
         "commit": MOLTENVK_COMMIT,
@@ -184,6 +250,51 @@ EXTERNAL_FIXTURES = [
                         MTLDrawPrimitivesIndirectArguments*>(srcBuff + idx * srcStride);
                 device auto& dst = destBuff[idx];
                 dst.indexCount = src.vertexCount;
+            }
+        """
+        ),
+    },
+    {
+        "name": "filament_sdl_metal_nv12_swizzle_assignment",
+        "repo_url": FILAMENT_REPO,
+        "commit": FILAMENT_COMMIT,
+        "source_path": "third_party/libsdl2/src/render/metal/SDL_shaders_metal.metal",
+        "roundtrip": True,
+        "contains": [
+            "yuv.yz = texture(texUV, s, vert.texcoord).rg;",
+            "return col * vec4(dot(yuv, decode.Rcoeff)",
+        ],
+        "source": (
+            """
+            #include <metal_texture>
+            using namespace metal;
+
+            struct CopyVertexOutput {
+                float4 position [[position]];
+                float2 texcoord;
+            };
+            struct YUVDecode {
+                float3 offset;
+                float3 Rcoeff;
+                float3 Gcoeff;
+                float3 Bcoeff;
+            };
+
+            fragment float4 SDL_NV12_fragment(
+                CopyVertexOutput vert [[stage_in]],
+                constant float4 &col [[buffer(0)]],
+                constant YUVDecode &decode [[buffer(1)]],
+                texture2d<float> texY [[texture(0)]],
+                texture2d<float> texUV [[texture(1)]],
+                sampler s [[sampler(0)]]) {
+                float3 yuv;
+                yuv.x = texY.sample(s, vert.texcoord).r;
+                yuv.yz = texUV.sample(s, vert.texcoord).rg;
+                yuv += decode.offset;
+                return col * float4(dot(yuv, decode.Rcoeff),
+                                    dot(yuv, decode.Gcoeff),
+                                    dot(yuv, decode.Bcoeff),
+                                    1.0);
             }
         """
         ),
@@ -287,4 +398,8 @@ def test_external_metal_fixture_parse_and_roundtrip(fixture):
 
     crossgl = MetalToCrossGLConverter().generate(ast)
     assert crossgl.strip()
+    for expected in fixture.get("contains", []):
+        assert expected in crossgl
+    for rejected in fixture.get("not_contains", []):
+        assert rejected not in crossgl
     parse_crossgl(crossgl)

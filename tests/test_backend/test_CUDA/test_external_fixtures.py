@@ -1,4 +1,4 @@
-from crosstl.backend.CUDA.CudaAst import SharedMemoryNode, TypeAliasNode
+from crosstl.backend.CUDA.CudaAst import SharedMemoryNode, StructNode, TypeAliasNode
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
@@ -19,6 +19,7 @@ EXTERNAL_SAMPLES = [
         "commit": "5a9ea633bfe63f113f4e99ecd505985ec2c38206",
         "paths": [
             "cudax/test/stf/examples/05-stencil.cu",
+            "cub/examples/block/example_block_reduce_dyn_smem.cu",
             "thrust/examples/cuda/async_reduce.cu",
         ],
     },
@@ -144,4 +145,46 @@ def test_empty_for_body_from_cuda_samples_does_not_emit_none_statement():
 
     assert "None;" not in crossgl
     assert "for (log2L = 0; ((L & 1) == 0); L >>= 1, (log2L++)) {" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cccl_cub_local_union_aligned_dynamic_shared_codegen_reparse():
+    source = """
+    template <int BLOCK_THREADS>
+    __global__ void BlockReduceKernel(int* d_in, int* d_out) {
+        using BlockReduceT = cub::BlockReduce<int, BLOCK_THREADS>;
+        using TempStorageT = typename BlockReduceT::TempStorage;
+
+        union ShmemLayout {
+            TempStorageT reduce;
+            int aggregate;
+        };
+
+        extern __shared__ __align__(alignof(ShmemLayout)) char smem[];
+        auto& temp_storage = reinterpret_cast<TempStorageT&>(smem);
+        int data = d_in[threadIdx.x];
+        int aggregate = BlockReduceT(temp_storage).Sum(data);
+        __syncthreads();
+        int* smem_integers = reinterpret_cast<int*>(smem);
+        if (threadIdx.x == 0) {
+            smem_integers[0] = aggregate;
+        }
+        __syncthreads();
+        d_out[threadIdx.x] = smem_integers[0];
+    }
+    """
+
+    ast = parse_cuda(source)
+    kernel_body = ast.kernels[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(kernel_body[2], StructNode)
+    assert kernel_body[2].name == "ShmemLayout"
+    assert isinstance(kernel_body[3], SharedMemoryNode)
+    assert kernel_body[3].vtype == "char[]"
+    assert kernel_body[3].name == "smem"
+    assert getattr(kernel_body[3], "is_dynamic_shared_memory", False)
+    assert "struct ShmemLayout" in crossgl
+    assert "var<workgroup> smem: array<i8>;" in crossgl
+    assert "workgroupBarrier();" in crossgl
     assert_crossgl_reparse(crossgl)

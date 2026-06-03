@@ -1,4 +1,4 @@
-from crosstl.backend.HIP.HipAst import FunctionCallNode, KernelLaunchNode
+from crosstl.backend.HIP.HipAst import FunctionCallNode, KernelLaunchNode, VariableNode
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
@@ -9,10 +9,15 @@ EXTERNAL_FIXTURE_SOURCES = {
     "rocm_examples": {
         "url": "https://github.com/ROCm/rocm-examples",
         "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
+        "paths": [
+            "HIP-Basic/bit_extract/main.hip",
+            "HIP-Basic/dynamic_shared/main.hip",
+        ],
     },
     "hip_examples": {
         "url": "https://github.com/ROCm/HIP-Examples",
         "commit": "cdf9d101acd9a3fc89ee750f73c1f1958cbd5cc3",
+        "paths": ["HIP-Examples-Applications/Histogram/Histogram.cpp"],
     },
     "hpc_training": {
         "url": "https://github.com/amd/HPCTrainingExamples",
@@ -172,3 +177,55 @@ def test_external_hpc_training_double2_launch_codegen():
     assert "// HIP launch bounds: (256, 1)" in crossgl
     assert "array<vec2<f64>>" in crossgl
     assert "ptr<vec2<f64>>(d_x)" in crossgl
+
+
+def test_external_rocm_dynamic_shared_extern_crossgl_reparse():
+    source = """
+    __global__ void matrix_transpose_kernel(
+        float* out,
+        const float* in_matrix,
+        const unsigned int width) {
+        extern __shared__ float shared_matrix_memory[];
+        const unsigned int x = blockDim.x * blockIdx.x + threadIdx.x;
+        const unsigned int y = blockDim.y * blockIdx.y + threadIdx.y;
+        shared_matrix_memory[y * width + x] = in_matrix[x * width + y];
+        __syncthreads();
+        out[y * width + x] = shared_matrix_memory[y * width + x];
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    shared = ast.statements[0].body[0]
+
+    assert isinstance(shared, VariableNode)
+    assert shared.vtype == "float[]"
+    assert shared.name == "shared_matrix_memory"
+    assert set(shared.qualifiers) == {"extern", "__shared__"}
+    assert (
+        "// HIP dynamic shared memory: shared_matrix_memory uses launch-time "
+        "shared memory size"
+    ) in crossgl
+    assert "var<workgroup> shared_matrix_memory: array<f32>;" in crossgl
+
+
+def test_external_rocm_bit_extract_builtin_crossgl_reparse():
+    source = """
+    __global__ void bit_extract_kernel(
+        uint32_t* d_output,
+        const uint32_t* d_input,
+        size_t size) {
+        const size_t offset = blockIdx.x * blockDim.x + threadIdx.x;
+        const size_t stride = blockDim.x * gridDim.x;
+        for(size_t i = offset; i < size; i += stride) {
+            d_output[i] = __bitextract_u32(d_input[i], 8, 4);
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    bit_extract_call = ast.statements[0].body[2].body[0].right
+
+    assert isinstance(bit_extract_call, FunctionCallNode)
+    assert bit_extract_call.name == "__bitextract_u32"
+    assert "gl_NumWorkGroups.x" in crossgl
+    assert "__bitextract_u32(d_input[i], 8, 4)" in crossgl

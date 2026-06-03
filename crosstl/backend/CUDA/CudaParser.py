@@ -1479,7 +1479,7 @@ class CudaParser:
         return None
 
     def is_struct_or_class_declaration_start(self):
-        if self.current_token[0] not in {"CLASS", "STRUCT"}:
+        if self.current_token[0] not in {"CLASS", "STRUCT", "UNION"}:
             return False
 
         index = self.current_index + 1
@@ -2506,6 +2506,8 @@ class CudaParser:
             declaration = self.parse_function_pointer_variable_declaration()
             self.eat("SEMICOLON")
             return declaration
+        elif self.is_struct_or_class_declaration_start():
+            return self.parse_struct()
         elif self.is_variable_declaration():
             declarations = self.parse_variable_declaration_list()
             self.eat("SEMICOLON")
