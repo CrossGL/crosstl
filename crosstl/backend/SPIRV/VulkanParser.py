@@ -128,6 +128,61 @@ class VulkanParser:
         "SubgroupSize": "gl_SubgroupSize",
         "VertexIndex": "gl_VertexID",
         "WorkgroupId": "gl_WorkGroupID",
+        "WorkgroupSize": "gl_WorkGroupSize",
+    }
+    SPIRV_SPEC_CONSTANT_BINARY_OPS = {
+        "BitwiseAnd": "&",
+        "BitwiseOr": "|",
+        "BitwiseXor": "^",
+        "FAdd": "+",
+        "FDiv": "/",
+        "FMod": "%",
+        "FMul": "*",
+        "FOrdEqual": "==",
+        "FOrdGreaterThan": ">",
+        "FOrdGreaterThanEqual": ">=",
+        "FOrdLessThan": "<",
+        "FOrdLessThanEqual": "<=",
+        "FOrdNotEqual": "!=",
+        "FRem": "%",
+        "FSub": "-",
+        "FUnordEqual": "==",
+        "FUnordGreaterThan": ">",
+        "FUnordGreaterThanEqual": ">=",
+        "FUnordLessThan": "<",
+        "FUnordLessThanEqual": "<=",
+        "FUnordNotEqual": "!=",
+        "IAdd": "+",
+        "IEqual": "==",
+        "IMul": "*",
+        "INotEqual": "!=",
+        "ISub": "-",
+        "LogicalAnd": "&&",
+        "LogicalEqual": "==",
+        "LogicalNotEqual": "!=",
+        "LogicalOr": "||",
+        "SDiv": "/",
+        "SGreaterThan": ">",
+        "SGreaterThanEqual": ">=",
+        "SLessThan": "<",
+        "SLessThanEqual": "<=",
+        "SMod": "%",
+        "SRem": "%",
+        "ShiftLeftLogical": "<<",
+        "ShiftRightArithmetic": ">>",
+        "ShiftRightLogical": ">>",
+        "UDiv": "/",
+        "UGreaterThan": ">",
+        "UGreaterThanEqual": ">=",
+        "ULessThan": "<",
+        "ULessThanEqual": "<=",
+        "UMod": "%",
+    }
+    SPIRV_SPEC_CONSTANT_UNARY_OPS = {
+        "FNegate": "-",
+        "LogicalNot": "!",
+        "Not": "~",
+        "SNegate": "-",
     }
 
     def __init__(self, tokens):
@@ -501,6 +556,24 @@ class VulkanParser:
                     )
                     if opcode.startswith("OpSpecConstant"):
                         spec_constant_ids.append(result_id)
+            elif result_id and opcode in {
+                "OpConstantComposite",
+                "OpSpecConstantComposite",
+            }:
+                if operands:
+                    constant_types[result_id] = operands[0]
+                    constants[result_id] = self.spirv_constant_composite_expression(
+                        operands[0], operands[1:], names, types, constants
+                    )
+                    if opcode == "OpSpecConstantComposite":
+                        spec_constant_ids.append(result_id)
+            elif result_id and opcode == "OpSpecConstantOp":
+                if len(operands) >= 2:
+                    constant_types[result_id] = operands[0]
+                    constants[result_id] = self.spirv_spec_constant_op_expression(
+                        operands[1], operands[2:], names, constants
+                    )
+                    spec_constant_ids.append(result_id)
             elif result_id and opcode == "OpVariable" and len(operands) >= 2:
                 variables.append(
                     {
@@ -556,6 +629,9 @@ class VulkanParser:
             spirv_member_decorations=member_decorations,
             spirv_member_names=member_names,
             spirv_types=types,
+            spirv_constants=constants,
+            spirv_constant_types=constant_types,
+            spirv_spec_constant_ids=spec_constant_ids,
         )
 
     def spirv_assembly_functions(
@@ -838,28 +914,38 @@ class VulkanParser:
     ):
         layouts = []
         for result_id in spec_constant_ids:
-            constant_id = self.spirv_spec_constant_id(decorations.get(result_id, []))
-            if constant_id is None:
-                continue
-
+            constant_decorations = decorations.get(result_id, [])
+            constant_id = self.spirv_spec_constant_id(constant_decorations)
             data_type = self.spirv_type_name(constant_types.get(result_id), types)
             if data_type is None:
                 continue
 
-            variable_name = names.get(result_id) or self.spirv_fallback_identifier(
-                constant_id, "spec_constant"
-            )
+            qualifiers = []
+            if constant_id is not None:
+                qualifiers.append(("constant_id", constant_id))
+            qualifiers.extend(self.spirv_layout_qualifiers(constant_decorations))
+
+            variable_name = self.spirv_builtin_variable_name_from_qualifiers(qualifiers)
+            if variable_name is None:
+                variable_name = names.get(result_id)
+            if variable_name is None:
+                if constant_id is None:
+                    continue
+                variable_name = self.spirv_fallback_identifier(
+                    constant_id, "spec_constant"
+                )
+
             declaration = AssignmentNode(
                 VariableNode(f"const {data_type}", variable_name),
                 constants.get(result_id),
             )
             layouts.append(
                 LayoutNode(
-                    [("constant_id", constant_id)],
+                    qualifiers,
                     declaration=declaration,
                     layout_type="CONST",
                     spirv_id=result_id,
-                    spirv_decorations=decorations.get(result_id, []),
+                    spirv_decorations=constant_decorations,
                 )
             )
 
@@ -904,6 +990,76 @@ class VulkanParser:
             if decoration == "SpecId" and operands:
                 return operands[0]
         return None
+
+    def spirv_constant_composite_expression(
+        self, type_id, constituent_ids, names, types, constants
+    ):
+        type_name = self.spirv_type_name(type_id, types)
+        args = [
+            self.spirv_constant_operand_expression(constituent_id, names, constants)
+            for constituent_id in constituent_ids
+        ]
+        return FunctionCallNode(type_name or "spirv_constant_composite", args)
+
+    def spirv_spec_constant_op_expression(self, operation, operands, names, constants):
+        args = [
+            self.spirv_constant_operand_expression(operand, names, constants)
+            for operand in operands
+        ]
+        if operation in self.SPIRV_SPEC_CONSTANT_BINARY_OPS and len(args) == 2:
+            return BinaryOpNode(
+                args[0], self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation], args[1]
+            )
+        if operation in self.SPIRV_SPEC_CONSTANT_UNARY_OPS and len(args) == 1:
+            return UnaryOpNode(self.SPIRV_SPEC_CONSTANT_UNARY_OPS[operation], args[0])
+        if operation == "Select" and len(args) == 3:
+            return TernaryOpNode(args[0], args[1], args[2])
+        if operation == "CompositeExtract" and len(args) >= 2:
+            expression = args[0]
+            for index in args[1:]:
+                expression = ArrayAccessNode(expression, index)
+            return expression
+        return FunctionCallNode(f"spirv_{operation}", args)
+
+    def spirv_constant_operand_expression(self, operand, names, constants):
+        if names and operand in names:
+            return names[operand]
+        value = constants.get(operand)
+        if value is not None:
+            return value
+        if isinstance(operand, str) and operand.startswith("%"):
+            return operand.lstrip("%")
+        return operand
+
+    def spirv_constant_expression_text(self, value):
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, VariableNode):
+            return value.name
+        if isinstance(value, BinaryOpNode):
+            left = self.spirv_constant_expression_text(value.left)
+            right = self.spirv_constant_expression_text(value.right)
+            return f"({left} {value.op} {right})"
+        if isinstance(value, UnaryOpNode):
+            operand = self.spirv_constant_expression_text(value.operand)
+            return f"{value.op}{operand}"
+        if isinstance(value, TernaryOpNode):
+            condition = self.spirv_constant_expression_text(value.condition)
+            true_expr = self.spirv_constant_expression_text(value.true_expr)
+            false_expr = self.spirv_constant_expression_text(value.false_expr)
+            return f"({condition} ? {true_expr} : {false_expr})"
+        if isinstance(value, FunctionCallNode):
+            args = ", ".join(
+                self.spirv_constant_expression_text(arg) for arg in value.args
+            )
+            return f"{value.name}({args})"
+        if isinstance(value, ArrayAccessNode):
+            array = self.spirv_constant_expression_text(value.array)
+            index = self.spirv_constant_expression_text(value.index)
+            return f"{array}[{index}]"
+        return str(value)
 
     def spirv_fallback_identifier(self, raw_value, prefix):
         identifier = re.sub(r"\W", "_", str(raw_value or "").lstrip("%"))
@@ -1145,7 +1301,9 @@ class VulkanParser:
             if base_type is None:
                 return None, ""
             length_id = type_info.get("length_id")
-            length = constants.get(length_id, str(length_id).lstrip("%"))
+            length = self.spirv_constant_expression_text(
+                constants.get(length_id, str(length_id).lstrip("%"))
+            )
             return base_type, f"[{length}]{suffix}"
 
         if type_info.get("kind") == "runtime_array":

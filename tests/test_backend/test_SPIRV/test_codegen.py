@@ -289,6 +289,37 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_CONSTANT_COMPOSITE_OP_ASSEMBLY = """
+; Reduced from Vulkan compute shaders with specialization-driven local size.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %Block "SizedBlock"
+OpMemberName %Block 0 "values"
+OpName %width "WORKGROUP_WIDTH"
+OpName %height "WORKGROUP_HEIGHT"
+OpName %total "WORKGROUP_TOTAL"
+OpDecorate %width SpecId 0
+OpDecorate %height SpecId 1
+OpDecorate %size BuiltIn WorkgroupSize
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%v3uint = OpTypeVector %uint 3
+%arr = OpTypeArray %uint %total
+%Block = OpTypeStruct %arr
+%width = OpSpecConstant %uint 8
+%height = OpSpecConstant %uint 4
+%one = OpConstant %uint 1
+%total = OpSpecConstantOp %uint IAdd %width %height
+%size = OpSpecConstantComposite %v3uint %width %height %one
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
 ; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
 OpCapability Shader
@@ -688,6 +719,27 @@ def test_spirv_assembly_numeric_id_specialization_constant_codegen():
 
     assert "const uint spec_constant_0 @constant_id(0) = 1;" in generated_code
     assert "const uint 104" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_specialization_constant_composite_and_op_codegen():
+    tokens = tokenize_code(SPIRV_SPEC_CONSTANT_COMPOSITE_OP_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct SizedBlock" in generated_code
+    assert "uint values[(WORKGROUP_WIDTH + WORKGROUP_HEIGHT)];" in generated_code
+    assert "const uint WORKGROUP_WIDTH @constant_id(0) = 8;" in generated_code
+    assert "const uint WORKGROUP_HEIGHT @constant_id(1) = 4;" in generated_code
+    assert (
+        "const uint WORKGROUP_TOTAL = (WORKGROUP_WIDTH + WORKGROUP_HEIGHT);"
+        in generated_code
+    )
+    assert (
+        "const uint3 gl_WorkGroupSize @gl_WorkGroupSize = "
+        "uint3(WORKGROUP_WIDTH, WORKGROUP_HEIGHT, 1);" in generated_code
+    )
+    assert "OpSpecConstant" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

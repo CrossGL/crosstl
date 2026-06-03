@@ -748,6 +748,37 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_CONSTANT_COMPOSITE_OP_ASSEMBLY = """
+; Reduced from Vulkan compute shaders with specialization-driven local size.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %Block "SizedBlock"
+OpMemberName %Block 0 "values"
+OpName %width "WORKGROUP_WIDTH"
+OpName %height "WORKGROUP_HEIGHT"
+OpName %total "WORKGROUP_TOTAL"
+OpDecorate %width SpecId 0
+OpDecorate %height SpecId 1
+OpDecorate %size BuiltIn WorkgroupSize
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%v3uint = OpTypeVector %uint 3
+%arr = OpTypeArray %uint %total
+%Block = OpTypeStruct %arr
+%width = OpSpecConstant %uint 8
+%height = OpSpecConstant %uint 4
+%one = OpConstant %uint 1
+%total = OpSpecConstantOp %uint IAdd %width %height
+%size = OpSpecConstantComposite %v3uint %width %height %one
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
 ; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
 OpCapability Shader
@@ -1023,6 +1054,52 @@ def test_spirv_assembly_numeric_id_specialization_constant_parse():
     assert constant.declaration.left.vtype == "const uint"
     assert constant.declaration.left.name == "spec_constant_0"
     assert constant.declaration.right == "1"
+
+
+def test_spirv_assembly_specialization_constant_composite_and_op_parse():
+    tokens = tokenize_code(SPIRV_SPEC_CONSTANT_COMPOSITE_OP_ASSEMBLY)
+    ast = parse_code(tokens)
+    layouts = {
+        layout.declaration.left.name: layout
+        for layout in ast.global_variables
+        if isinstance(layout, LayoutNode)
+    }
+    total = layouts["WORKGROUP_TOTAL"]
+    workgroup_size = layouts["gl_WorkGroupSize"]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_spec_constant_ids == [
+        "%width",
+        "%height",
+        "%total",
+        "%size",
+    ]
+    assert ast.spirv_constant_types["%size"] == "%v3uint"
+    assert ast.spirv_constants["%total"] is total.declaration.right
+    assert ast.structs[0].name == "SizedBlock"
+    assert ast.structs[0].members[0].name == (
+        "values[(WORKGROUP_WIDTH + WORKGROUP_HEIGHT)]"
+    )
+
+    assert total.layout_type == "CONST"
+    assert total.qualifiers == []
+    assert total.declaration.left.vtype == "const uint"
+    assert isinstance(total.declaration.right, BinaryOpNode)
+    assert total.declaration.right.left == "WORKGROUP_WIDTH"
+    assert total.declaration.right.op == "+"
+    assert total.declaration.right.right == "WORKGROUP_HEIGHT"
+
+    assert workgroup_size.layout_type == "CONST"
+    assert workgroup_size.qualifiers == [("builtin", "WorkgroupSize")]
+    assert workgroup_size.spirv_decorations == [("BuiltIn", ["WorkgroupSize"])]
+    assert workgroup_size.declaration.left.vtype == "const uvec3"
+    assert isinstance(workgroup_size.declaration.right, FunctionCallNode)
+    assert workgroup_size.declaration.right.name == "uvec3"
+    assert workgroup_size.declaration.right.args == [
+        "WORKGROUP_WIDTH",
+        "WORKGROUP_HEIGHT",
+        "1",
+    ]
 
 
 def test_spirv_assembly_uniform_constant_resources_parse():

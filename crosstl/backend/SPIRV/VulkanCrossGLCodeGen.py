@@ -357,7 +357,7 @@ class VulkanToCrossGLConverter:
 
     def generate_layout(self, node):
         code = ""
-        if self.is_specialization_constant_layout(node):
+        if (getattr(node, "layout_type", None) or "").lower() == "const":
             return self.generate_specialization_constant_layout(node)
 
         layout_type = node.layout_type.lower() if node.layout_type else ""
@@ -418,15 +418,7 @@ class VulkanToCrossGLConverter:
         if declaration is None:
             return ""
 
-        constant_id = next(
-            (
-                value
-                for name, value in getattr(node, "qualifiers", []) or []
-                if str(name).lower() == "constant_id"
-            ),
-            None,
-        )
-        metadata = f" @constant_id({constant_id})" if constant_id is not None else ""
+        metadata = self.const_layout_attribute_suffix(node)
 
         if isinstance(declaration, AssignmentNode):
             lhs = self.specialization_constant_declaration_lhs(
@@ -437,6 +429,18 @@ class VulkanToCrossGLConverter:
 
         lhs = self.specialization_constant_declaration_lhs(declaration, metadata)
         return f"    {lhs};\n"
+
+    def const_layout_attribute_suffix(self, node):
+        attributes = []
+        for name, value in getattr(node, "qualifiers", []) or []:
+            qualifier_name = str(name).lower()
+            if qualifier_name == "constant_id" and value is not None:
+                attributes.append(f"@constant_id({value})")
+            elif qualifier_name == "builtin" and value is not None:
+                attributes.append(self.crossgl_builtin_attribute(value))
+        if not attributes:
+            return ""
+        return " " + " ".join(attributes)
 
     def specialization_constant_declaration_lhs(self, declaration, metadata):
         if isinstance(declaration, VariableNode) and self.variable_type(declaration):
@@ -606,6 +610,7 @@ class VulkanToCrossGLConverter:
             "SubgroupSize": "gl_SubgroupSize",
             "VertexIndex": "gl_VertexID",
             "WorkgroupId": "gl_WorkGroupID",
+            "WorkgroupSize": "gl_WorkGroupSize",
         }
         mapped_name = mapped_builtins.get(str(builtin_name))
         if mapped_name:
