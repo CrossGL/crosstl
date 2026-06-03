@@ -24,9 +24,7 @@ class ExternalFixture:
         return f"{self.repo}/blob/{self.commit}/{self.path}"
 
 
-DIRECTX_GRAPHICS_SAMPLES_REPO = (
-    "https://github.com/microsoft/DirectX-Graphics-Samples"
-)
+DIRECTX_GRAPHICS_SAMPLES_REPO = "https://github.com/microsoft/DirectX-Graphics-Samples"
 DIRECTX_GRAPHICS_SAMPLES_COMMIT = "31ae3c91160d8634264004cdaf4e41a99c41243e"
 
 
@@ -106,7 +104,9 @@ def parse_crossgl(code):
 
 
 def test_external_fixture_metadata_records_repositories_and_commits():
-    assert all(fixture.repo.startswith("https://github.com/") for fixture in EXTERNAL_FIXTURES)
+    assert all(
+        fixture.repo.startswith("https://github.com/") for fixture in EXTERNAL_FIXTURES
+    )
     assert all(len(fixture.commit) == 40 for fixture in EXTERNAL_FIXTURES)
     assert all(fixture.path.endswith(".hlsl") for fixture in EXTERNAL_FIXTURES)
 
