@@ -152,6 +152,37 @@ def test_value_returning_function_uses_final_expression_as_return():
     assert "return fallback;" in result
 
 
+def test_value_returning_function_uses_final_literal_expression_as_return():
+    code = r"""
+    fn zero() -> u32 {
+        0
+    }
+
+    fn enabled() -> bool {
+        true
+    }
+
+    fn letter() -> char {
+        'z'
+    }
+
+    fn message() -> String {
+        r#"done"#
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint zero()" in result
+    assert "return 0;" in result
+    assert "bool enabled()" in result
+    assert "return true;" in result
+    assert "char letter()" in result
+    assert "return 'z';" in result
+    assert "String message()" in result
+    assert 'return "done";' in result
+
+
 def test_final_expression_return_is_limited_to_function_body():
     code = """
     fn value_after_branch(value: u32, ready: bool) -> u32 {

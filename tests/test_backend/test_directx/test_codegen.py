@@ -552,7 +552,42 @@ def test_codegen_clip_intrinsic_imports_to_parseable_crossgl():
         }
     """)
 
-    assert "clip(color.a < 0.1 ? -1 : 1);" in crossgl
+    assert "if ((color.a < 0.1 ? -1 : 1) < 0.0) {" in crossgl
+    assert "discard;" in crossgl
+    assert "clip(" not in crossgl
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "discard(" not in glsl
+    assert "discard;" in glsl
+
+
+def test_codegen_vector_clip_intrinsic_imports_to_conditional_discard():
+    crossgl = generate_crossgl("""
+        float4 PSMain(float4 color : COLOR0) : SV_Target {
+            clip(color);
+            return color;
+        }
+    """)
+
+    assert "if (any(lessThan(color, vec4(0.0)))) {" in crossgl
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "discard(" not in glsl
+    assert "any(lessThan(color, vec4(0.0)))" in glsl
+
+
+def test_codegen_mul_intrinsic_imports_to_multiply_expression():
+    crossgl = generate_crossgl("""
+        float4x4 viewProj;
+
+        float4 VSMain(float3 position : POSITION) : SV_Position {
+            return mul(viewProj, float4(position, 1.0));
+        }
+    """)
+
+    assert "return (viewProj * vec4(position, 1.0));" in crossgl
+    assert "*(viewProj" not in crossgl
+    assert "mul(" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -3741,7 +3776,7 @@ def test_codegen_math_intrinsics_mapping():
     output = generate_crossgl(MATH_INTRINSICS_HLSL)
     assert "dot" in output
     assert "normalize" in output
-    assert "mul" in output
+    assert "vec4 m = (a * b);" in output
     assert "mix" in output
     assert "clamp(" in output
 

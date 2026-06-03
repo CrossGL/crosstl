@@ -3848,6 +3848,21 @@ def test_hlsl_output_return_semantics_still_emit():
     assert "uint PSMain(): SV_TARGET3" in integer_target_output
     assert "gl_FragData" not in integer_target_output
 
+    location_code = """
+    shader ValidLocationReturnSemantic {
+        fragment {
+            vec4 main() @ location(0) {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    location_output = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(location_code), "fragment"
+    )
+    assert "float4 PSMain(): SV_Target0" in location_output
+    assert ": location" not in location_output
+
 
 @pytest.mark.parametrize(
     ("stage", "return_type", "semantic", "value", "hlsl_semantic", "expected_type"),

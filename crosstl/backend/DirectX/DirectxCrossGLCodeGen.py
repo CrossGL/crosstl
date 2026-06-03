@@ -2173,6 +2173,9 @@ class HLSLToCrossGLConverter:
         return code
 
     def generate_function_call_statement(self, stmt, indent=0, is_main=False):
+        clip_statement = self.generate_clip_statement(stmt, indent, is_main)
+        if clip_statement is not None:
+            return clip_statement
         lowered_sequence = self.generate_function_call_statement_sequence(stmt, indent)
         if lowered_sequence is not None:
             return lowered_sequence
@@ -2182,6 +2185,37 @@ class HLSLToCrossGLConverter:
         if lowered_get_dimensions is not None:
             return lowered_get_dimensions
         return "    " * indent + f"{self.generate_expression(stmt, is_main)};\n"
+
+    def generate_clip_statement(self, stmt, indent=0, is_main=False):
+        if not isinstance(stmt.name, str) or stmt.name != "clip" or not stmt.args:
+            return None
+        condition = self.generate_clip_condition(stmt.args[0], is_main)
+        indent_text = "    " * indent
+        return (
+            f"{indent_text}if ({condition}) {{\n"
+            f"{indent_text}    discard;\n"
+            f"{indent_text}}}\n"
+        )
+
+    def generate_clip_condition(self, operand_expr, is_main=False):
+        operand = self.generate_expression(operand_expr, is_main)
+        operand = self.maybe_parenthesize(operand_expr, operand)
+        component_count = self.clip_operand_component_count(operand_expr)
+        if component_count and component_count > 1:
+            return f"any(lessThan({operand}, vec{component_count}(0.0)))"
+        return f"{operand} < 0.0"
+
+    def clip_operand_component_count(self, operand_expr):
+        raw_type = self.expression_raw_type(operand_expr)
+        if raw_type is None:
+            return None
+        mapped_type = self.map_type(raw_type)
+        for prefix in ("vec", "ivec", "uvec", "bvec", "dvec", "f16vec"):
+            if mapped_type.startswith(prefix):
+                suffix = mapped_type[len(prefix) :]
+                if suffix.isdigit():
+                    return int(suffix)
+        return None
 
     def generate_function_call_statement_sequence(self, stmt, indent=0):
         if not isinstance(stmt.name, str):
@@ -2614,6 +2648,10 @@ class HLSLToCrossGLConverter:
                     self.generate_expression(arg, is_main) for arg in expr.args
                 ]
             args = ", ".join(rendered_args)
+            if func_name == "mul" and len(expr.args) == 2:
+                left = self.maybe_parenthesize(expr.args[0], rendered_args[0])
+                right = self.maybe_parenthesize(expr.args[1], rendered_args[1])
+                return f"({left} * {right})"
             if func_name == "saturate":
                 if expr.args:
                     return f"clamp({self.generate_expression(expr.args[0], is_main)}, 0.0, 1.0)"

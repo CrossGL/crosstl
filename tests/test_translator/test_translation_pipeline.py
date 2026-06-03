@@ -3,6 +3,7 @@ import pytest
 import crosstl
 import crosstl.translator
 import crosstl.translator.codegen as codegen
+from crosstl.translator.ast import ShaderStage
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
 NATIVE_SOURCE_SNIPPETS = {
@@ -113,6 +114,29 @@ def test_native_sources_translate_to_parseable_crossgl(tmp_path, source_name):
 
     _assert_generated_output_is_usable(generated)
     crosstl.translator.parse(generated)
+
+
+def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "shader.frag",
+        """
+        #version 450 core
+        layout(location = 0) in vec2 vUV;
+        layout(location = 0) out vec4 fragColor;
+        void main() { fragColor = vec4(vUV, 0.0, 1.0); }
+        """,
+    )
+
+    generated = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    shader_ast = crosstl.translator.parse(generated)
+    assert ShaderStage.FRAGMENT in shader_ast.stages
+    assert ShaderStage.VERTEX not in shader_ast.stages
+    assert "fragment {" in generated
+    assert "VertexOutput" not in generated
+    assert "gl_Position" not in generated
 
 
 def test_translate_decodes_legacy_hlsl_comment_bytes_with_replacement(tmp_path):

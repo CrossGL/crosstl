@@ -67,6 +67,7 @@ class SourceSpec:
     load_lexer_parser: Callable[[], tuple[type, type]]
     reverse_codegen_factory: Callable[[], Any] | None = None
     aliases: Sequence[str] = ()
+    shader_type_from_path: Callable[[str], str | None] | None = None
 
     def parse(self, code: str, file_path: str | None = None):
         """Parse source code into that source backend's AST."""
@@ -76,7 +77,16 @@ class SourceSpec:
             lexer_kwargs["file_path"] = file_path
         lexer = lexer_cls(code, **lexer_kwargs)
         tokens = _extract_tokens(lexer)
-        parser = parser_cls(tokens)
+        parser_kwargs = {}
+        if (
+            file_path is not None
+            and self.shader_type_from_path is not None
+            and _accepts_keyword(parser_cls, "shader_type")
+        ):
+            shader_type = self.shader_type_from_path(file_path)
+            if shader_type:
+                parser_kwargs["shader_type"] = shader_type
+        parser = parser_cls(tokens, **parser_kwargs)
         return parser.parse()
 
 
@@ -234,7 +244,24 @@ def _reverse_metal():
 def _reverse_glsl():
     from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 
-    return GLSLToCrossGLConverter()
+    return GLSLToCrossGLConverter(shader_type=None)
+
+
+_GLSL_EXTENSION_SHADER_TYPES = {
+    ".vs": "vertex",
+    ".vert": "vertex",
+    ".fs": "fragment",
+    ".frag": "fragment",
+    ".comp": "compute",
+    ".geom": "geometry",
+    ".tesc": "tessellation_control",
+    ".tese": "tessellation_evaluation",
+}
+
+
+def _glsl_shader_type_from_path(file_path: str) -> str | None:
+    _, ext = os.path.splitext(file_path)
+    return _GLSL_EXTENSION_SHADER_TYPES.get(_normalize_extension(ext))
 
 
 def _reverse_slang():
@@ -325,6 +352,7 @@ def register_default_sources() -> None:
             load_lexer_parser=_load_glsl,
             reverse_codegen_factory=_reverse_glsl,
             aliases=("glsl", "ogl"),
+            shader_type_from_path=_glsl_shader_type_from_path,
         )
     )
     _register(

@@ -186,6 +186,7 @@ class GLSLToCrossGLConverter:
         "rayQueryGetIntersectionObjectToWorldEXT",
         "rayQueryGetIntersectionWorldToObjectEXT",
     }
+    DEFAULT_SHADER_TYPE = "vertex"
 
     def __init__(self, shader_type="vertex"):
         self.shader_type = shader_type
@@ -1089,7 +1090,17 @@ class GLSLToCrossGLConverter:
         if not isinstance(ast, ShaderNode):
             return f"// Unexpected AST node type: {type(ast)}"
 
-        return self.generate_shader(ast)
+        previous_shader_type = self.shader_type
+        ast_shader_type = getattr(ast, "shader_type", None)
+        if self.shader_type is None:
+            self.shader_type = str(
+                getattr(ast_shader_type, "value", ast_shader_type)
+                or self.DEFAULT_SHADER_TYPE
+            )
+        try:
+            return self.generate_shader(ast)
+        finally:
+            self.shader_type = previous_shader_type
 
     def generate_shader(self, node):
         self.uniform_vars = []

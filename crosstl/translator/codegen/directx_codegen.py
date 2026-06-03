@@ -16735,6 +16735,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 or self.hlsl_mesh_payload_parameter_attribute_name(attr)
             ):
                 continue
+            location_semantic = self.hlsl_location_return_semantic(attr)
+            if location_semantic is not None:
+                return location_semantic
             if hasattr(attr, "name"):
                 return self.semantic_attribute_name(attr)
         return None
@@ -16774,6 +16777,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if index is not None:
                     return f"gl_FragData[{index}]"
         return name
+
+    def hlsl_location_return_semantic(self, attr):
+        name = getattr(attr, "name", None)
+        if str(name).lower() != "location":
+            return None
+        arguments = getattr(attr, "arguments", None) or getattr(attr, "args", None)
+        if not arguments:
+            return None
+        index_arg = arguments[0]
+        index = getattr(index_arg, "value", None)
+        if index is None:
+            index = getattr(index_arg, "name", None)
+        if index is None:
+            index = self.attribute_value_to_string(index_arg)
+        if index is None:
+            return None
+        return f"SV_Target{index}"
 
     def semantic_from_struct_member(self, member):
         if isinstance(member, ArrayNode):

@@ -116,12 +116,58 @@ class RustParser:
         "SHIFT_LEFT_EQUALS",
         "SHIFT_RIGHT_EQUALS",
     }
+    LITERAL_EXPRESSION_TOKENS = {
+        "NUMBER",
+        "STRING",
+        "BYTE_STRING",
+        "BYTE_RAW_STRING",
+        "RAW_STRING",
+        "BYTE_CHAR",
+        "CHAR_LIT",
+        "TRUE",
+        "FALSE",
+    }
+    PREFIX_EXPRESSION_TOKENS = {
+        "MINUS",
+        "EXCLAMATION",
+        "AMPERSAND",
+        "MULTIPLY",
+        "LOGICAL_AND",
+        "PIPE",
+        "LOGICAL_OR",
+        "MOVE",
+    }
+    BLOCK_EXPRESSION_START_TOKENS = (
+        NAME_TOKENS
+        | PRIMITIVE_PATH_SEGMENT_TOKENS
+        | LITERAL_EXPRESSION_TOKENS
+        | PREFIX_EXPRESSION_TOKENS
+        | {
+            "ASYNC",
+            "UNSAFE",
+            "LBRACE",
+            "LBRACKET",
+            "LPAREN",
+            "LESS_THAN",
+            "RANGE",
+            "RANGE_INCLUSIVE",
+            "SELF",
+            "CRATE",
+            "SUPER",
+            "TRY",
+        }
+    )
 
     def __init__(self, tokens):
         self.tokens = tokens
         self.current_index = 0
         self.current_token = tokens[0] if tokens else None
         self.expression_stops_at_lbrace = False
+
+    def current_starts_block_expression(self):
+        if self.current_token[0] == "CONST":
+            return self.peek_token_type() == "LBRACE"
+        return self.current_token[0] in self.BLOCK_EXPRESSION_START_TOKENS
 
     def parse(self):
         structs = []
@@ -1820,7 +1866,7 @@ class RustParser:
 
         return StaticNode(name, static_type, value, is_mutable, visibility)
 
-    def parse_block(self):
+    def parse_block(self, keep_trailing_expression=True):
         statements = []
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
@@ -1840,31 +1886,13 @@ class RustParser:
                 statements.append(self.parse_const())
             elif self.current_token[0] == "STATIC":
                 statements.append(self.parse_static())
-            elif (
-                self.current_token[0] == "IDENTIFIER"
-                or self.current_token[0]
-                in [
-                    "VEC2",
-                    "VEC3",
-                    "VEC4",
-                    "MAT2",
-                    "MAT3",
-                    "MAT4",
-                    "ASYNC",
-                    "UNSAFE",
-                    "LBRACE",
-                    "LPAREN",
-                    "LESS_THAN",
-                ]
-                or (
-                    self.current_token[0] == "CONST"
-                    and self.peek_token_type() == "LBRACE"
-                )
-            ):
+            elif self.current_starts_block_expression():
                 expression = self.parse_expression()
+                has_semicolon = self.current_token[0] == "SEMICOLON"
                 if self.current_token[0] == "SEMICOLON":
                     self.eat("SEMICOLON")
-                statements.append(expression)
+                if has_semicolon or keep_trailing_expression:
+                    statements.append(expression)
             elif self.current_token[0] == "RETURN":
                 statements.append(self.parse_return_statement())
             elif self.current_token[0] == "BREAK":
@@ -1955,23 +1983,31 @@ class RustParser:
 
         raise SyntaxError(f"Expected let pattern, got {self.current_token[0]}")
 
-    def parse_if_statement(self):
+    def parse_if_statement(self, keep_branch_trailing_expressions=True):
         self.eat("IF")
         condition = self.parse_if_condition()
 
         self.eat("LBRACE")
-        if_body = self.parse_block()
+        if_body = self.parse_block(
+            keep_trailing_expression=keep_branch_trailing_expressions
+        )
         self.eat("RBRACE")
 
         else_body = None
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
             if self.current_token[0] == "IF":
-                else_body = [self.parse_if_statement()]
+                else_body = [
+                    self.parse_if_statement(
+                        keep_branch_trailing_expressions=keep_branch_trailing_expressions
+                    )
+                ]
             else:
                 # else block
                 self.eat("LBRACE")
-                else_body = self.parse_block()
+                else_body = self.parse_block(
+                    keep_trailing_expression=keep_branch_trailing_expressions
+                )
                 self.eat("RBRACE")
 
         return IfNode(condition, if_body, else_body)
@@ -2066,13 +2102,16 @@ class RustParser:
             expression = self.parse_expression()
         return LetPatternConditionNode(pattern, expression)
 
-    def parse_match_statement(self):
-        return self.parse_match(result_mode=False)
+    def parse_match_statement(self, keep_arm_trailing_expressions=True):
+        return self.parse_match(
+            result_mode=False,
+            keep_arm_trailing_expressions=keep_arm_trailing_expressions,
+        )
 
     def parse_match_expression(self):
         return self.parse_match(result_mode=True)
 
-    def parse_match(self, result_mode=False):
+    def parse_match(self, result_mode=False, keep_arm_trailing_expressions=True):
         self.eat("MATCH")
         expression = self.parse_expression_before_block()
 
@@ -2097,7 +2136,9 @@ class RustParser:
                 body = self.parse_block_expression()
             elif self.current_token[0] == "LBRACE":
                 self.eat("LBRACE")
-                body = self.parse_block()
+                body = self.parse_block(
+                    keep_trailing_expression=keep_arm_trailing_expressions
+                )
                 self.eat("RBRACE")
             elif result_mode:
                 body = self.parse_match_arm_result_expression()
@@ -3144,7 +3185,7 @@ class RustParser:
                     break
 
             if self.peek_is_statement():
-                stmt = self.parse_statement()
+                stmt = self.parse_statement(keep_trailing_expression=False)
                 if self.current_token[0] == "RBRACE" and isinstance(stmt, LoopNode):
                     expression = stmt
                 else:
@@ -3253,7 +3294,7 @@ class RustParser:
             "LIFETIME",
         ]
 
-    def parse_statement(self):
+    def parse_statement(self, keep_trailing_expression=True):
         if self.current_starts_function():
             return self.parse_function_with_qualifiers()
         if self.current_token[0] == "LIFETIME":
@@ -3265,9 +3306,13 @@ class RustParser:
         elif self.current_token[0] == "STATIC":
             return self.parse_static()
         elif self.current_token[0] == "IF":
-            return self.parse_if_statement()
+            return self.parse_if_statement(
+                keep_branch_trailing_expressions=keep_trailing_expression
+            )
         elif self.current_token[0] == "MATCH":
-            return self.parse_match_statement()
+            return self.parse_match_statement(
+                keep_arm_trailing_expressions=keep_trailing_expression
+            )
         elif self.current_token[0] == "FOR":
             return self.parse_for_loop()
         elif self.current_token[0] == "WHILE":
