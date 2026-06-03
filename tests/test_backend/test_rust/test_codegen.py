@@ -398,6 +398,46 @@ def test_rust_gpu_image_macro_types_drive_resource_parameters():
     assert "sampler2D direct_tex @ set(4) @ binding(2)" in result
 
 
+def test_vulkan_shader_examples_oit_block_scoped_use_codegen():
+    code = """
+    use spirv_std::{spirv, glam::{IVec2, Vec4}, arch::atomic_i_add, Image};
+
+    type Image2d = Image!(2D, type=u32, sampled=false);
+
+    #[repr(C)]
+    pub struct GeometrySbo {
+        pub count: u32,
+        pub max_node_count: u32,
+    }
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(frag_coord)] frag_coord: Vec4,
+        #[spirv(descriptor_set = 0, binding = 1, storage_buffer)] geometry_sbo: &mut GeometrySbo,
+        #[spirv(descriptor_set = 0, binding = 2)] head_index_image: &Image2d,
+    ) {
+        let node_idx = unsafe { atomic_i_add(&mut geometry_sbo.count, 1) };
+        if node_idx < geometry_sbo.max_node_count {
+            let coord = IVec2::new(frag_coord.x as i32, frag_coord.y as i32);
+            let prev_head_idx = unsafe {
+                use spirv_std::memory::{Scope, Semantics};
+                use spirv_std::arch::atomic_exchange;
+                let current = head_index_image.read(coord).x;
+                current
+            };
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "fragment main_fs {" in result
+    assert "// use spirv_std::memory::{Scope, Semantics}" in result
+    assert "// use spirv_std::arch::atomic_exchange" in result
+    assert "current = head_index_image.read(coord).x;" in result
+    assert "prev_head_idx = current;" in result
+
+
 def test_rust_gpu_sampled_image_generic_type_drives_resource_parameter():
     code = """
     use spirv_std::{spirv, Image};

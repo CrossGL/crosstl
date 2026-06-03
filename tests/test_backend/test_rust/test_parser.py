@@ -776,6 +776,33 @@ def test_underscore_use_alias_parsing():
     ]
 
 
+def test_vulkan_shader_examples_block_scoped_use_parsing():
+    code = """
+    fn main_fs(head_index_image: &Image2d, coord: IVec2, node_idx: u32) -> u32 {
+        let prev_head_idx = unsafe {
+            use spirv_std::memory::{Scope, Semantics};
+            use spirv_std::arch::atomic_exchange;
+            let current = head_index_image.read(coord).x;
+            head_index_image.write(coord, node_idx.into());
+            current
+        };
+        prev_head_idx
+    }
+    """
+
+    ast = parse_code(code)
+    unsafe_block = ast.functions[0].body[0].value
+
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    assert isinstance(unsafe_block.block.statements[0], UseNode)
+    assert unsafe_block.block.statements[0].path == (
+        "spirv_std::memory::{Scope, Semantics}"
+    )
+    assert isinstance(unsafe_block.block.statements[1], UseNode)
+    assert unsafe_block.block.statements[1].path == "spirv_std::arch::atomic_exchange"
+    assert unsafe_block.block.expression == "current"
+
+
 def test_cfg_attributes_preserved_on_use_and_function_items():
     code = """
     #[cfg(feature = "gpu")]

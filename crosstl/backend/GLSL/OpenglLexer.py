@@ -22,7 +22,7 @@ NUMBER_PATTERN = (
 # Order matters: longer tokens first
 TOKENS = tuple(
     [
-        ("COMMENT_SINGLE", r"//[^\n]*"),
+        ("COMMENT_SINGLE", r"//(?:\\\r?\n|[^\n])*"),
         ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
         ("NEWLINE", r"\n+"),
         ("ASSIGN_SHIFT_LEFT", r"<<="),

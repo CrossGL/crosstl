@@ -3,6 +3,7 @@ from typing import List
 import pytest
 
 from crosstl.backend.common_ast import (
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
     CastNode,
@@ -306,6 +307,61 @@ def test_parse_imageblock_member_array_after_attribute_from_apple_sample():
     assert members[0].vtype == "rgba8unorm<half4>"
     assert members[0].array_sizes[0].name == "kNumLayers"
     assert members[1].array_sizes[0].name == "kNumLayers"
+
+
+def test_parse_typedef_struct_gnu_attribute_from_apple_deferred_sample():
+    code = """
+    typedef struct __attribute__ ((packed)) packed_float3 {
+        float x;
+        float y;
+        float z;
+    } packed_float3;
+    """
+    ast = parse_ok(code)
+    struct = ast.structs[0]
+
+    assert struct.name == "packed_float3"
+    assert struct.typedef_tag == "packed_float3"
+    assert struct.attributes[0].name == "packed"
+    assert [(member.vtype, member.name) for member in struct.members] == [
+        ("float", "x"),
+        ("float", "y"),
+        ("float", "z"),
+    ]
+
+
+def test_parse_leading_global_scope_expression_from_apple_hdr_sample():
+    code = """
+    struct GaussSample {
+        float2 offset;
+        float weight;
+    };
+
+    constant GaussSample GaussKernelX[] = {
+        {{-2.06278f, 0.f}, 0.05092f},
+        {{ 0.53805f, 0.f}, 0.44908f}
+    };
+    constant size_t GAUSS_KERNEL_SIZE_X = sizeof(GaussKernelX) / sizeof(GaussKernelX[0]);
+
+    half3 BlurredSampleX(float2 texCoords) {
+        half3 finalColor = half3(0.f);
+
+        for(uint32_t gaussSampleIdx = 0ul; gaussSampleIdx < ::GAUSS_KERNEL_SIZE_X; ++gaussSampleIdx) {
+            constant GaussSample & gaussSample = ::GaussKernelX[gaussSampleIdx];
+            finalColor += half3(gaussSample.weight);
+        }
+
+        return finalColor;
+    }
+    """
+    ast = parse_ok(code)
+    array_accesses = [
+        node for node in iter_ast_nodes(ast) if isinstance(node, ArrayAccessNode)
+    ]
+
+    assert any(
+        getattr(node.array, "name", None) == "GaussKernelX" for node in array_accesses
+    )
 
 
 def test_parse_fragment_output_color_and_depth_attributes():

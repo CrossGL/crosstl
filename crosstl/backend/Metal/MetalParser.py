@@ -100,6 +100,7 @@ IDENTIFIER_TYPE_QUALIFIERS = MACRO_QUALIFIERS | {"object_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
 KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER"}
+TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
 CONSTRUCTOR_TYPE_TOKENS = TYPE_TOKENS - {
     "VOID",
     "IDENTIFIER",
@@ -847,10 +848,11 @@ class MetalParser:
 
     def parse_typedef_struct(self):
         self.eat("STRUCT")
+        struct_attributes = self.parse_attributes()
         tag_name = None
-        if self.current_token[0] == "IDENTIFIER":
+        if self.is_current_name_token():
             tag_name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            self.eat(self.current_token[0])
             self.known_types.add(tag_name)
 
         if self.current_token[0] == "LBRACE":
@@ -865,6 +867,7 @@ class MetalParser:
             self.known_types.add(struct_name)
             struct_node = StructNode(struct_name, members)
             struct_node.typedef_tag = tag_name
+            struct_node.attributes = struct_attributes
             return struct_node
 
         if not tag_name:
@@ -1161,6 +1164,7 @@ class MetalParser:
             self.tokens[idx][0] == "IDENTIFIER"
             or self.tokens[idx][0] in STAGE_TOKENS
             or self.tokens[idx][0] in KEYWORD_IDENTIFIER_TOKENS
+            or self.tokens[idx][0] in TYPE_IDENTIFIER_TOKENS
             or self.tokens[idx][0] == "COMPUTE"
         )
 
@@ -1169,6 +1173,7 @@ class MetalParser:
             self.current_token[0] == "IDENTIFIER"
             or self.current_token[0] in STAGE_TOKENS
             or self.current_token[0] in KEYWORD_IDENTIFIER_TOKENS
+            or self.current_token[0] in TYPE_IDENTIFIER_TOKENS
             or self.current_token[0] == "COMPUTE"
         )
 
@@ -2317,7 +2322,7 @@ class MetalParser:
                 node.is_braced_constructor = True
                 return node
             raise SyntaxError(f"Unexpected type in expression: {type_name}")
-        if self.current_token[0] == "METAL" or self.is_current_name_token():
+        if self.current_token[0] in {"METAL", "SCOPE"} or self.is_current_name_token():
             name = self.parse_scoped_identifier()
             return VariableNode("", name)
         raise SyntaxError(f"Unexpected token in expression: {self.current_token[0]}")
@@ -2400,6 +2405,8 @@ class MetalParser:
 
     def parse_scoped_identifier(self):
         parts = []
+        if self.current_token[0] == "SCOPE":
+            self.eat("SCOPE")
         if self.current_token[0] == "METAL":
             parts.append("metal")
             self.eat("METAL")

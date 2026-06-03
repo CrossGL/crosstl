@@ -72,6 +72,22 @@ def test_whitespace_only_input():
     assert tokens == []
 
 
+def test_raw_line_comment_continuation_from_glslang_comment_frag():
+    code = """
+    // escape newline \\
+    still in a comment
+    #version 430 core
+    in vec4 v;
+    """
+
+    tokens = normalize_tokens(GLSLLexer(code, preprocess=False).tokenize())
+    values = token_values(tokens)
+
+    assert "still" not in values
+    assert "comment" not in values
+    assert "v" in values
+
+
 @pytest.mark.parametrize(
     "keyword",
     [

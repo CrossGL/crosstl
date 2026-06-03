@@ -111,6 +111,20 @@ def test_module_include_declarations_do_not_parse_as_globals():
     assert ast.global_vars == []
 
 
+def test_string_module_declarations_from_precompiled_module_tests():
+    code = """
+    module "precompiled-module-imported";
+    implementing "precompiled-module-imported";
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.modules == ["precompiled-module-imported"]
+    assert ast.implementing_modules == ["precompiled-module-imported"]
+    assert ast.global_vars == []
+
+
 def test_glsl_layout_qualifiers_and_uniform_blocks_from_libretro_shader():
     code = """
     layout(push_constant) uniform Push
@@ -193,6 +207,32 @@ def test_struct_comma_member_declarators_from_ray_tracing_example():
         ("float", "screenHeight"),
         ("float", "focalLength"),
         ("float", "frameHeight"),
+    ]
+
+
+def test_pervertex_struct_member_qualifier_from_barycentric_tests():
+    code = """
+    struct Input
+    {
+        pervertex float4 color : COLOR;
+        noperspective float3 baryNoPerspective : SV_Barycentrics;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    members = ast.structs[0].members
+
+    assert [
+        (member.qualifiers, member.vtype, member.name, member.semantic)
+        for member in members
+    ] == [
+        (["pervertex"], "float4", "color", "COLOR"),
+        (
+            ["noperspective"],
+            "float3",
+            "baryNoPerspective",
+            "SV_Barycentrics",
+        ),
     ]
 
 
@@ -2097,6 +2137,23 @@ def test_standalone_postfix_call_parsing():
     assert call.args == ["1.0"]
 
 
+def test_intrinsic_asm_string_statement_from_link_time_options():
+    code = """
+    float getMacroDefinedForDownstream()
+    {
+        __intrinsic_asm "(DOWNSTREAM_VALUE)";
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "getMacroDefinedForDownstream")
+    call = function.body[0]
+
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "__intrinsic_asm"
+    assert call.args == ['"(DOWNSTREAM_VALUE)"']
+
+
 def test_scalar_and_matrix_top_level_declarations_parsing():
     code = """
     uint addOne(uint x) { return x + 1; }
@@ -2144,6 +2201,32 @@ def test_initialized_top_level_global_parsing():
     assert isinstance(gain, AssignmentNode)
     assert gain.left.register == "c0"
     assert gain.right == "1f"
+
+
+def test_extern_static_const_globals_from_link_time_constant_tests():
+    code = """
+    extern static const bool turnOnFeature;
+    extern static const float constValue;
+    extern static const uint numthread = 0;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    turn_on_feature = ast.global_vars[0]
+    const_value = ast.global_vars[1]
+    numthread = ast.global_vars[2]
+
+    assert turn_on_feature.vtype == "bool"
+    assert turn_on_feature.name == "turnOnFeature"
+    assert turn_on_feature.qualifiers == ["extern", "static", "const"]
+    assert const_value.vtype == "float"
+    assert const_value.name == "constValue"
+    assert const_value.qualifiers == ["extern", "static", "const"]
+    assert isinstance(numthread, AssignmentNode)
+    assert numthread.left.vtype == "uint"
+    assert numthread.left.name == "numthread"
+    assert numthread.left.qualifiers == ["extern", "static", "const"]
+    assert numthread.right == "0"
 
 
 def test_comma_separated_global_declarations_parsing():

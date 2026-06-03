@@ -37,10 +37,16 @@ class _GLSLDirectivePreprocessor(HLSLPreprocessor):
         return "".join(result)
 
     def _skip_line_comment_text(self, code: str, start: int) -> int:
-        end = code.find("\n", start)
-        if end == -1:
-            return len(code)
-        return end
+        search_from = start
+        while True:
+            end = code.find("\n", search_from)
+            if end == -1:
+                return len(code)
+            previous = end - 2 if end > 0 and code[end - 1] == "\r" else end - 1
+            if previous >= 0 and code[previous] == "\\":
+                search_from = end + 1
+                continue
+            return end
 
     def _skip_block_comment_text(self, code: str, start: int) -> Tuple[int, int]:
         end = code.find("*/", start + 2)

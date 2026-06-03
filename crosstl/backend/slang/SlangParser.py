@@ -20,6 +20,7 @@ class SlangParser:
         "private",
         "__global",
         "__extern_cpp",
+        "extern",
         "groupshared",
         "globallycoherent",
         "flat",
@@ -30,6 +31,7 @@ class SlangParser:
         "nointerpolation",
         "noperspective",
         "override",
+        "pervertex",
         "__prefix",
         "__postfix",
         "__ref",
@@ -996,13 +998,13 @@ class SlangParser:
 
     def parse_module_declaration(self):
         self.eat("MODULE")
-        module_path = self.parse_module_path(allow_string=False)
+        module_path = self.parse_module_path()
         self.eat("SEMICOLON")
         return module_path
 
     def parse_implementing_declaration(self):
         self.eat("IMPLEMENTING")
-        module_path = self.parse_module_path(allow_string=False)
+        module_path = self.parse_module_path()
         self.eat("SEMICOLON")
         return module_path
 
@@ -2475,6 +2477,11 @@ class SlangParser:
         if self.current_token[0] == "LBRACKET" and self.is_array_constructor_suffix():
             name += self.parse_type_array_suffixes()
             return self.parse_vector_constructor(name)
+        if name == "__intrinsic_asm" and self.current_token[0] == "STRING":
+            arg = self.current_token[1]
+            self.eat("STRING")
+            node = FunctionCallNode(name, [arg])
+            return self.parse_postfix_suffixes(node)
         if self.current_token[0] == "LPAREN":
             node = self.parse_function_call(name)
         else:

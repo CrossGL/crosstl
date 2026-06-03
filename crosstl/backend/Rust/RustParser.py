@@ -1880,6 +1880,8 @@ class RustParser:
             elif self.current_token[0] == "LET":
                 stmt = self.parse_let_statement()
                 statements.append(stmt)
+            elif self.current_token[0] == "USE":
+                statements.append(self.parse_use_statement())
             elif (
                 self.current_token[0] == "CONST" and self.peek_token_type() != "LBRACE"
             ):
@@ -3282,6 +3284,7 @@ class RustParser:
             return True
 
         return self.current_token[0] in [
+            "USE",
             "LET",
             "IF",
             "MATCH",
@@ -3301,6 +3304,8 @@ class RustParser:
             return self.parse_labeled_statement()
         elif self.current_token[0] == "LET":
             return self.parse_let_statement()
+        elif self.current_token[0] == "USE":
+            return self.parse_use_statement()
         elif self.current_token[0] == "CONST":
             return self.parse_const()
         elif self.current_token[0] == "STATIC":

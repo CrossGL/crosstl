@@ -883,6 +883,33 @@ class TestCudaParser:
         assert import_buffer.body[0].vtype == "Vertex *"
         assert import_buffer.body[0].name == "cudaDevVertptr"
 
+    def test_nvidia_helper_cuda_drvapi_post_return_inline_function_parsing(
+        self,
+    ):
+        code = """
+        bool inline findFatbinPath(const char *module_file,
+                                   std::string &module_path,
+                                   char **argv,
+                                   std::ostringstream &ostrm) {
+            return true;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        function = ast.functions[0]
+        assert function.name == "findFatbinPath"
+        assert function.return_type == "bool"
+        assert function.qualifiers == ["inline"]
+        assert [(param.vtype, param.name) for param in function.params] == [
+            ("const char *", "module_file"),
+            ("std::string &", "module_path"),
+            ("char * *", "argv"),
+            ("std::ostringstream &", "ostrm"),
+        ]
+
     def test_public_cuda_samples_constructor_style_globals_are_not_functions(self):
         code = """
         int N = 1 << 22;

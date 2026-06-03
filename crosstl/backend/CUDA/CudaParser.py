@@ -184,6 +184,11 @@ class CudaParser:
         "NOINLINE",
         *FUNCTION_ATTRIBUTE_TOKENS,
     }
+    POST_RETURN_FUNCTION_SPECIFIER_TOKENS = {
+        "INLINE",
+        "FORCEINLINE",
+        "NOINLINE",
+    }
     TYPE_TOKENS = {
         "VOID",
         "CHAR",
@@ -342,6 +347,7 @@ class CudaParser:
 
         while index < len(self.tokens) and (
             self.tokens[index][0] in self.FUNCTION_ATTRIBUTE_TOKENS
+            or self.tokens[index][0] in self.POST_RETURN_FUNCTION_SPECIFIER_TOKENS
             or self.is_function_identifier_specifier_at_index(index)
         ):
             if self.tokens[index][0] in self.FUNCTION_ATTRIBUTE_TOKENS:
@@ -484,6 +490,8 @@ class CudaParser:
             and saved_index < len(self.tokens)
             and (
                 self.tokens[saved_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS
+                or self.tokens[saved_index][0]
+                in self.POST_RETURN_FUNCTION_SPECIFIER_TOKENS
                 or self.is_function_identifier_specifier_at_index(saved_index)
             )
         ):
@@ -1787,6 +1795,7 @@ class CudaParser:
         return_type = self.parse_type()
         while (
             self.current_token[0] in self.FUNCTION_ATTRIBUTE_TOKENS
+            or self.current_token[0] in self.POST_RETURN_FUNCTION_SPECIFIER_TOKENS
             or self.is_function_identifier_specifier()
         ):
             if self.current_token[0] in self.FUNCTION_ATTRIBUTE_TOKENS:
@@ -1794,7 +1803,7 @@ class CudaParser:
                 continue
 
             qualifiers.append(self.current_token[1])
-            self.eat("IDENTIFIER")
+            self.eat(self.current_token[0])
 
         name = self.consume_function_name()
         if self.current_token[0] == "LESS_THAN":

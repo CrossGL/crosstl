@@ -1989,6 +1989,8 @@ class RustToCrossGLConverter:
                     code += self.generate_static_statement(stmt, indent)
                 elif isinstance(stmt, FunctionNode):
                     code += self.generate_local_function_item(stmt)
+                elif isinstance(stmt, UseNode):
+                    code += f"{indent_str}// use {stmt.path}\n"
                 elif isinstance(stmt, LetNode):
                     code += self.generate_let_statement(stmt, indent, loop_contexts)
                 elif isinstance(stmt, AssignmentNode):

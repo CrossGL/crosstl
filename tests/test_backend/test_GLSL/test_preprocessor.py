@@ -36,6 +36,23 @@ def test_preprocessor_ifdef_trailing_comment_uses_identifier_only():
     assert "only_enabled" in values
 
 
+def test_preprocessor_line_comment_continuation_from_glslang_comment_frag():
+    code = """
+    // escape newline \\
+    still in a comment
+    #version 430 core
+    in vec4 v;
+    void main() {}
+    """
+
+    tokens = GLSLLexer(code).tokenize()
+    ast = GLSLParser(tokens, "fragment").parse()
+    values = [tok[1] for tok in tokens]
+
+    assert "still" not in values
+    assert ast.io_variables[0].name == "v"
+
+
 def test_preprocessor_include(tmp_path):
     include_file = tmp_path / "inc.glsl"
     include_file.write_text("int from_include = 1;")
