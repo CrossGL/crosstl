@@ -9781,6 +9781,35 @@ class TestHipCodeGen:
         assert "} while ((value < 4));" in hip_code
         assert "DoWhileNode" not in hip_code
 
+    def test_loop_statement_lowers_to_while_true(self):
+        source_code = """
+        shader LoopNodeSmoke {
+            int helper(int limit) {
+                int i = 0;
+                loop {
+                    i = i + 1;
+                    if (i >= limit) {
+                        break;
+                    }
+                }
+                return i;
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "while (true)" in hip_code
+        assert "i = (i + 1);" in hip_code
+        assert "if ((i >= limit))" in hip_code
+        assert "break;" in hip_code
+        assert "LoopNode" not in hip_code
+
     def test_switch_generation(self):
         source_code = """
         shader TestShader {

@@ -3217,6 +3217,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         return ""
 
+    def visit_LoopNode(self, node) -> str:
+        self.add_line("while (true)")
+        self.add_line("{")
+        self.indent_level += 1
+        self.emit_body(node.body)
+        self.indent_level -= 1
+        self.add_line("}")
+
+        return ""
+
     def visit_SwitchNode(self, node) -> str:
         expression = self.visit(node.expression)
 
