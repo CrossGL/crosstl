@@ -26,6 +26,7 @@ class MojoParser:
         self.tokens = tokens
         self.pos = 0
         self.current_token = self.tokens[self.pos]
+        self.expression_layout_depth = 0
         self.skip_comments()
 
     def skip_comments(self):
@@ -39,6 +40,10 @@ class MojoParser:
     def skip_layout_tokens(self):
         while self.current_token[0] in ["NEWLINE", "INDENT", "DEDENT"]:
             self.eat(self.current_token[0])
+
+    def skip_expression_layout(self):
+        if self.expression_layout_depth:
+            self.skip_layout_tokens()
 
     def consume_statement_terminator(self):
         if self.current_token[0] == "SEMICOLON":
@@ -790,6 +795,11 @@ class MojoParser:
 
     def parse_statement(self):
         self.skip_newlines()
+        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "try":
+            return self.parse_try_except_statement()
+        if self.current_token[0] in ["IMPORT", "FROM"]:
+            return self.parse_import_statement()
+
         if self.current_token[0] in [
             "FLOAT",
             "INT",
@@ -853,8 +863,7 @@ class MojoParser:
         if self.current_token[0] in ["LET", "VAR"]:
             var_type = self.current_token[0]
             self.eat(self.current_token[0])
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            name = self.parse_identifier_tuple()
 
             attributes = []
             vtype = None
@@ -866,7 +875,7 @@ class MojoParser:
             initial_value = None
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
-                initial_value = self.parse_expression()
+                initial_value = self.parse_expression_list_value()
                 attributes.extend(self.parse_attributes(skip_trailing_newlines=False))
 
             self.consume_statement_terminator()
@@ -878,6 +887,28 @@ class MojoParser:
                 is_var=var_type == "VAR",
                 attributes=attributes,
             )
+
+        if self.current_token[0] == "IDENTIFIER" and self.peek_token()[0] == "COMMA":
+            left = self.parse_identifier_tuple()
+            if self.current_token[0] not in [
+                "EQUALS",
+                "PLUS_EQUALS",
+                "MINUS_EQUALS",
+                "MULTIPLY_EQUALS",
+                "DIVIDE_EQUALS",
+                "ASSIGN_XOR",
+                "ASSIGN_OR",
+                "ASSIGN_AND",
+                "ASSIGN_SHIFT_LEFT",
+                "ASSIGN_SHIFT_RIGHT",
+                "ASSIGN_MOD",
+            ]:
+                raise SyntaxError("Expected assignment after identifier tuple")
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            right = self.parse_expression_list_value()
+            self.consume_statement_terminator()
+            return AssignmentNode(left, right, op)
 
         if self.current_token[0] == "IDENTIFIER" and self.peek_token()[0] == "COLON":
             name = self.current_token[1]
@@ -904,6 +935,35 @@ class MojoParser:
         statement = self.parse_assignment()
         self.consume_statement_terminator()
         return statement
+
+    def parse_identifier_tuple(self):
+        identifiers = [VariableNode("", self.current_token[1])]
+        self.eat("IDENTIFIER")
+
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            if self.current_token[0] != "IDENTIFIER":
+                raise SyntaxError(
+                    f"Expected IDENTIFIER after comma, got {self.current_token[0]}"
+                )
+            identifiers.append(VariableNode("", self.current_token[1]))
+            self.eat("IDENTIFIER")
+
+        if len(identifiers) == 1:
+            return identifiers[0].name
+        return TupleNode(identifiers)
+
+    def parse_expression_list_value(self):
+        values = [self.parse_expression()]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            if self.current_token[0] in self.STATEMENT_END_TOKENS | {"SEMICOLON"}:
+                break
+            values.append(self.parse_expression())
+
+        if len(values) == 1:
+            return values[0]
+        return TupleNode(values)
 
     def parse_comptime_or_alias_statement(self):
         if self.current_token[0] == "ALIAS":
@@ -1090,6 +1150,24 @@ class MojoParser:
         body = self.parse_block()
         return WithNode(context_expr, alias, body)
 
+    def parse_try_except_statement(self):
+        self.eat("IDENTIFIER")
+        self.eat("COLON")
+        try_body = self.parse_block()
+        self.skip_newlines()
+
+        except_body = []
+        exception_name = None
+        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "except":
+            self.eat("IDENTIFIER")
+            if self.current_token[0] == "IDENTIFIER":
+                exception_name = self.current_token[1]
+                self.eat("IDENTIFIER")
+            self.eat("COLON")
+            except_body = self.parse_block()
+
+        return TryExceptNode(try_body, except_body, exception_name)
+
     def parse_switch_statement(self):
         self.eat("SWITCH")
         expression = self.parse_expression()
@@ -1174,6 +1252,7 @@ class MojoParser:
 
     def parse_assignment(self):
         left = self.parse_logical_or()
+        self.skip_expression_layout()
         if self.current_token[0] in [
             "EQUALS",
             "PLUS_EQUALS",
@@ -1197,6 +1276,7 @@ class MojoParser:
             self.eat("COLON")
             false_expr = self.parse_expression()
             left = TernaryOpNode(left, true_expr, false_expr)
+        self.skip_expression_layout()
         if self.current_token[0] == "IF":
             true_expr = left
             self.eat("IF")
@@ -1208,60 +1288,73 @@ class MojoParser:
 
     def parse_logical_or(self):
         left = self.parse_logical_and()
+        self.skip_expression_layout()
         while self.current_token[0] == "OR":
             op = self.current_token[1]
             self.eat("OR")
             right = self.parse_logical_and()
             left = BinaryOpNode(left, op, right)
+            self.skip_expression_layout()
         return left
 
     def parse_logical_and(self):
         left = self.parse_bitwise_or()
+        self.skip_expression_layout()
         while self.current_token[0] == "AND":
             op = self.current_token[1]
             self.eat("AND")
             right = self.parse_bitwise_or()
             left = BinaryOpNode(left, op, right)
+            self.skip_expression_layout()
         return left
 
     def parse_bitwise_or(self):
         left = self.parse_bitwise_xor()
+        self.skip_expression_layout()
         while self.current_token[0] == "BITWISE_OR":
             op = self.current_token[1]
             self.eat("BITWISE_OR")
             right = self.parse_bitwise_xor()
             left = BinaryOpNode(left, op, right)
+            self.skip_expression_layout()
         return left
 
     def parse_bitwise_xor(self):
         left = self.parse_bitwise_and()
+        self.skip_expression_layout()
         while self.current_token[0] == "BITWISE_XOR":
             op = self.current_token[1]
             self.eat("BITWISE_XOR")
             right = self.parse_bitwise_and()
             left = BinaryOpNode(left, op, right)
+            self.skip_expression_layout()
         return left
 
     def parse_bitwise_and(self):
         left = self.parse_equality()
+        self.skip_expression_layout()
         while self.current_token[0] == "BITWISE_AND":
             op = self.current_token[1]
             self.eat("BITWISE_AND")
             right = self.parse_equality()
             left = BinaryOpNode(left, op, right)
+            self.skip_expression_layout()
         return left
 
     def parse_equality(self):
         left = self.parse_relational()
+        self.skip_expression_layout()
         while self.current_token[0] in ["EQUAL", "NOT_EQUAL"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_relational()
             left = BinaryOpNode(left, op, right)
+            self.skip_expression_layout()
         return left
 
     def parse_relational(self):
         left = self.parse_shift()
+        self.skip_expression_layout()
         while self.current_token[0] in [
             "LESS_THAN",
             "GREATER_THAN",
@@ -1272,33 +1365,40 @@ class MojoParser:
             self.eat(self.current_token[0])
             right = self.parse_shift()
             left = BinaryOpNode(left, op, right)
+            self.skip_expression_layout()
         return left
 
     def parse_shift(self):
         left = self.parse_additive()
+        self.skip_expression_layout()
         while self.current_token[0] in ["SHIFT_LEFT", "SHIFT_RIGHT"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_additive()
             left = BinaryOpNode(left, op, right)
+            self.skip_expression_layout()
         return left
 
     def parse_additive(self):
         left = self.parse_multiplicative()
+        self.skip_expression_layout()
         while self.current_token[0] in ["PLUS", "MINUS"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_multiplicative()
             left = BinaryOpNode(left, op, right)
+            self.skip_expression_layout()
         return left
 
     def parse_multiplicative(self):
         left = self.parse_unary()
+        self.skip_expression_layout()
         while self.current_token[0] in ["MULTIPLY", "DIVIDE", "FLOOR_DIVIDE", "MOD"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_unary()
             left = BinaryOpNode(left, op, right)
+            self.skip_expression_layout()
         return left
 
     def parse_unary(self):
@@ -1358,7 +1458,11 @@ class MojoParser:
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
             self.skip_layout_tokens()
-            expr = self.parse_expression()
+            self.expression_layout_depth += 1
+            try:
+                expr = self.parse_expression()
+            finally:
+                self.expression_layout_depth -= 1
             self.skip_layout_tokens()
             if self.current_token[0] == "COMMA":
                 elements = [expr]
@@ -1529,6 +1633,9 @@ class MojoParser:
     def parse_array_access(self, array):
         self.eat("LBRACKET")
         self.skip_layout_tokens()
+        if self.current_token[0] == "RBRACKET":
+            self.eat("RBRACKET")
+            return ArrayAccessNode(array, TupleNode([]))
         indices = [self.parse_expression()]
         self.skip_layout_tokens()
         while self.current_token[0] == "COMMA":

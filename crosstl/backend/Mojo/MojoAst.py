@@ -107,6 +107,18 @@ class WithNode(ASTNode):
         return f"WithNode(alias={self.alias}, body={len(self.body)})"
 
 
+class TryExceptNode(ASTNode):
+    """Node representing a Mojo try/except block."""
+
+    def __init__(self, try_body, except_body=None, exception_name=None):
+        self.try_body = try_body
+        self.except_body = except_body or []
+        self.exception_name = exception_name
+
+    def __repr__(self):
+        return f"TryExceptNode(try_body={len(self.try_body)}, except_body={len(self.except_body)})"
+
+
 class ImportNode(ASTNode):
     """Node representing an import statement"""
 

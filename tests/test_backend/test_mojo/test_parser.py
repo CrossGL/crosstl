@@ -24,6 +24,7 @@ from crosstl.backend.Mojo.MojoAst import (
     StructNode,
     SwitchNode,
     TernaryOpNode,
+    TryExceptNode,
     TupleNode,
     UnaryOpNode,
     VariableDeclarationNode,
@@ -1183,6 +1184,21 @@ def test_parenthesized_call_indexing_parsing():
     assert expression.index.name == "i"
 
 
+def test_empty_index_access_parse_from_layout_tensor_iterator_docs():
+    code = """
+    def main():
+        var tile = iter[]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    expression = function.body[0].initial_value
+
+    assert isinstance(expression, ArrayAccessNode)
+    assert expression.array.name == "iter"
+    assert isinstance(expression.index, TupleNode)
+    assert expression.index.elements == []
+
+
 def test_member_access_parsing():
     code = """
     struct Vector3:
@@ -1365,6 +1381,80 @@ def test_adjacent_string_literals_in_call_parse_from_modular_tiled_matmul_exampl
     call = function.body[0]
 
     assert call.args == ['"Note: Expected formula is C[i,j] = (i+1) * 64 * (j+1)"']
+
+
+def test_identifier_tuple_declaration_and_assignment_parse_from_layout_tensor_docs():
+    code = """
+    def main():
+        var row, col = 0, 1
+        row, col = 0, 0
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+    assignment = function.body[1]
+
+    assert isinstance(declaration.name, TupleNode)
+    assert [element.name for element in declaration.name.elements] == ["row", "col"]
+    assert isinstance(declaration.initial_value, TupleNode)
+    assert declaration.initial_value.elements == ["0", "1"]
+    assert isinstance(assignment.left, TupleNode)
+    assert [element.name for element in assignment.left.elements] == ["row", "col"]
+    assert isinstance(assignment.right, TupleNode)
+    assert assignment.right.elements == ["0", "0"]
+
+
+def test_multiline_parenthesized_boolean_condition_parse_from_layout_tensor_docs():
+    code = """
+    def kernel(tensor: LayoutTensor):
+        if (
+            global_idx.y < tensor.shape[0]()
+            and global_idx.x < tensor.shape[1]()
+        ):
+            tensor[global_idx.y, global_idx.x] = tensor[global_idx.y, global_idx.x] + 1
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "kernel")
+    condition = function.body[0].condition
+
+    assert isinstance(condition, BinaryOpNode)
+    assert condition.op == "&&"
+
+
+def test_try_except_parse_from_layout_tensor_gpu_docs():
+    code = """
+    def main():
+        try:
+            run_kernel()
+        except error:
+            print(error)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    statement = function.body[0]
+
+    assert isinstance(statement, TryExceptNode)
+    assert statement.exception_name == "error"
+    assert isinstance(statement.try_body[0], FunctionCallNode)
+    assert isinstance(statement.except_body[0], FunctionCallNode)
+
+
+def test_function_local_imports_parse_from_layout_tensor_gpu_docs():
+    code = """
+    def simd_width_example():
+        from std.sys.info import simd_width_of
+        from std.gpu.host.compile import get_gpu_target
+        comptime simd_width = simd_width_of[DType.float32, get_gpu_target()]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "simd_width_example")
+
+    assert isinstance(function.body[0], ImportNode)
+    assert function.body[0].module_name == "std.sys.info"
+    assert function.body[0].items == ["simd_width_of"]
+    assert isinstance(function.body[1], ImportNode)
+    assert function.body[1].module_name == "std.gpu.host.compile"
+    assert function.body[1].items == ["get_gpu_target"]
 
 
 def test_alias_declarations_parse_as_comptime_aliases():

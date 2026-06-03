@@ -236,6 +236,83 @@ def test_adjacent_string_literals_in_call_codegen_from_modular_tiled_matmul_exam
     )
 
 
+def test_identifier_tuple_declaration_and_assignment_codegen_from_layout_tensor_docs():
+    code = """
+    def main():
+        var row, col = 0, 1
+        row, col = 0, 0
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var (row, col) = (0, 1);" in generated_code
+    assert "(row, col) = (0, 0);" in generated_code
+
+
+def test_multiline_parenthesized_boolean_condition_codegen_from_layout_tensor_docs():
+    code = """
+    def kernel(tensor: LayoutTensor):
+        if (
+            global_idx.y < tensor.shape[0]()
+            and global_idx.x < tensor.shape[1]()
+        ):
+            tensor[global_idx.y, global_idx.x] = tensor[global_idx.y, global_idx.x] + 1
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "if (((global_idx.y < tensor.shape[0]()) && "
+        "(global_idx.x < tensor.shape[1]())))"
+    ) in generated_code
+
+
+def test_empty_index_access_codegen_from_layout_tensor_iterator_docs():
+    code = """
+    def main():
+        var tile = iter[]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var tile = iter[];" in generated_code
+
+
+def test_try_except_codegen_from_layout_tensor_gpu_docs():
+    code = """
+    def main():
+        try:
+            run_kernel()
+        except error:
+            print(error)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "try {" in generated_code
+    assert "run_kernel();" in generated_code
+    assert "catch (error)" in generated_code
+    assert "print(error);" in generated_code
+
+
+def test_function_local_imports_codegen_from_layout_tensor_gpu_docs():
+    code = """
+    def simd_width_example():
+        from std.sys.info import simd_width_of
+        from std.gpu.host.compile import get_gpu_target
+        comptime simd_width = simd_width_of[DType.float32, get_gpu_target()]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "// from std.sys.info import simd_width_of" in generated_code
+    assert "// from std.gpu.host.compile import get_gpu_target" in generated_code
+    assert (
+        "let simd_width = simd_width_of[DType.float32, get_gpu_target()];"
+        in generated_code
+    )
+
+
 def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     code = """
     struct Resources {

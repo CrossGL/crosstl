@@ -1372,6 +1372,29 @@ def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
     assert isinstance(body[1], IfNode)
 
 
+def test_parse_empty_for_condition_before_type_trait_from_llama_cpp():
+    code = """
+    void flash_attn_ext(uint iwg, uint sgitg) {
+        for (int ic0 = iwg * NSG + sgitg; ; ic0 += NWG * NSG) {
+            int ic = ic0;
+            if (ic0 >= D) {
+                break;
+            }
+        }
+
+        if (is_same<float4, T0>::value) {
+            return;
+        }
+    }
+    """
+    ast = parse_ok(code)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop, ForNode)
+    assert loop.condition is None
+    assert isinstance(ast.functions[0].body[1], IfNode)
+
+
 def test_parse_qualified_casts_and_range_designator_from_llama_cpp():
     code = """
     void load_block(device const void* src0, uint offset0, short r1ptg) {

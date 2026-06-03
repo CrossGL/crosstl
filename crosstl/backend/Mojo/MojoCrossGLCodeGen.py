@@ -173,14 +173,7 @@ class MojoToCrossGLConverter:
             if imports:
                 code += "    // Imports\n"
                 for imp in imports:
-                    if getattr(imp, "items", None):
-                        items = ", ".join(imp.items)
-                        code += f"    // from {imp.module_name} import {items}"
-                    else:
-                        code += f"    // import {imp.module_name}"
-                    if imp.alias and not getattr(imp, "items", None):
-                        code += f" as {imp.alias}"
-                    code += "\n"
+                    code += f"    {self.generate_import_comment(imp)}\n"
                 code += "\n"
 
         if hasattr(ast, "functions"):
@@ -421,7 +414,7 @@ class MojoToCrossGLConverter:
                 code += indent_str
                 if isinstance(stmt, VariableDeclarationNode):
                     code += self.generate_variable_declaration(stmt) + ";\n"
-                    self.add_scoped_value_name(stmt.name)
+                    self.add_scoped_declaration_names(stmt.name)
                 elif isinstance(stmt, VariableNode):
                     if hasattr(stmt, "vtype") and stmt.vtype:
                         code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
@@ -449,6 +442,10 @@ class MojoToCrossGLConverter:
                     code += self.generate_while_loop(stmt, indent)
                 elif isinstance(stmt, WithNode):
                     code += self.generate_with_block(stmt, indent)
+                elif isinstance(stmt, TryExceptNode):
+                    code += self.generate_try_except_block(stmt, indent)
+                elif isinstance(stmt, ImportNode):
+                    code += f"{self.generate_import_comment(stmt)}\n"
                 elif isinstance(stmt, IfNode):
                     code += self.generate_if_statement(stmt, indent)
                 elif isinstance(stmt, SwitchNode):
@@ -465,12 +462,22 @@ class MojoToCrossGLConverter:
 
         return code
 
+    def generate_import_comment(self, node):
+        if getattr(node, "items", None):
+            items = ", ".join(node.items)
+            return f"// from {node.module_name} import {items}"
+        comment = f"// import {node.module_name}"
+        if node.alias:
+            comment += f" as {node.alias}"
+        return comment
+
     def generate_variable_declaration(self, node):
+        name = self.generate_declaration_name(node.name)
         if node.vtype:
-            declaration = f"{self.map_type(node.vtype)} {node.name}"
+            declaration = f"{self.map_type(node.vtype)} {name}"
         else:
             var_type = "var" if node.var_type == "var" else "let"
-            declaration = f"{var_type} {node.name}"
+            declaration = f"{var_type} {name}"
 
         attributes = self.map_attributes(getattr(node, "attributes", []))
         if attributes:
@@ -480,6 +487,19 @@ class MojoToCrossGLConverter:
             value = self.generate_expression(node.initial_value)
             declaration += f" = {value}"
         return declaration
+
+    def generate_declaration_name(self, name):
+        if isinstance(name, TupleNode):
+            return self.generate_expression(name)
+        return name
+
+    def add_scoped_declaration_names(self, name):
+        if isinstance(name, TupleNode):
+            for element in name.elements:
+                if isinstance(element, VariableNode):
+                    self.add_scoped_value_name(element.name)
+            return
+        self.add_scoped_value_name(name)
 
     def generate_assignment(self, node):
         left = self.generate_expression(node.left)
@@ -515,6 +535,20 @@ class MojoToCrossGLConverter:
         if getattr(node, "body", None):
             code += self.generate_function_body(node.body, indent + 1)
         code += indent_str + "}\n"
+        return code
+
+    def generate_try_except_block(self, node, indent):
+        indent_str = "    " * indent
+        code = "try {\n"
+        if getattr(node, "try_body", None):
+            code += self.generate_function_body(node.try_body, indent + 1)
+        code += indent_str + "}"
+        if getattr(node, "except_body", None):
+            exception_name = f" ({node.exception_name})" if node.exception_name else ""
+            code += f" catch{exception_name} {{\n"
+            code += self.generate_function_body(node.except_body, indent + 1)
+            code += indent_str + "}"
+        code += "\n"
         return code
 
     def generate_for_initializer(self, node):

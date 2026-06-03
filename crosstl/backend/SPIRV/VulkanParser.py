@@ -239,6 +239,7 @@ class VulkanParser:
         "Sin": "sin",
         "Sinh": "sinh",
         "SmoothStep": "smoothstep",
+        "Sqrt": "sqrt",
         "Step": "step",
         "Tan": "tan",
         "Tanh": "tanh",

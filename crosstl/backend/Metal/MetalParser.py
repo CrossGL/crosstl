@@ -2212,6 +2212,8 @@ class MetalParser:
     def template_argument_list_followed_by_call(
         self, follow_token_types=None, require_type_like_argument=False
     ):
+        if self.current_token[0] != "LESS_THAN":
+            return False
         follow_token_types = follow_token_types or {"LPAREN"}
         idx = self.pos
         depth = 0
