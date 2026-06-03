@@ -486,6 +486,78 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="fidelityfx_sdk_fullscreen_triangle_vertex",
+        repo=FIDELITYFX_SDK_REPO,
+        commit=FIDELITYFX_SDK_COMMIT,
+        path="Kits/Cauldron2/dx12/framework/shaders/fullscreen.hlsl",
+        code=textwrap.dedent("""
+            #define FAR_DEPTH 1.0
+
+            float2 GetUV(uint2 coord, float2 texelSize)
+            {
+                return (coord + 0.5f) * texelSize;
+            }
+
+            int2 GetScreenCoordinates(float2 uv, int2 textureDims)
+            {
+                return floor(uv * textureDims);
+            }
+
+            struct VertexOut
+            {
+                float4 PosOut   : SV_Position;
+                float2 UVOut    : TEXCOORD;
+            };
+
+            static const float4 FullScreenVertsPos[3] = { float4(-1.0, 1.0, FAR_DEPTH, 1.0), float4(3.0, 1.0, FAR_DEPTH, 1.0), float4(-1.0, -3.0, FAR_DEPTH, 1.0) };
+            static const float2 FullScreenVertsUVs[3] = { float2(0.0, 0.0), float2(2.0, 0.0), float2(0.0, 2.0) };
+
+            VertexOut FullscreenVS(uint vertexId : SV_VertexID)
+            {
+                VertexOut outVert;
+                outVert.PosOut = FullScreenVertsPos[vertexId];
+                outVert.UVOut = FullScreenVertsUVs[vertexId];
+                return outVert;
+            }
+        """).strip(),
+        contains=(
+            "static const vec4 FullScreenVertsPos[3] = {vec4(-1.0, 1.0, 1.0, 1.0), vec4(3.0, 1.0, 1.0, 1.0), vec4(-1.0, -3.0, 1.0, 1.0)};",
+            "VertexOut FullscreenVS(uint vertexId @ gl_VertexID)",
+            "outVert.UVOut = FullScreenVertsUVs[vertexId];",
+        ),
+    ),
+    ExternalFixture(
+        name="fidelityfx_sdk_fpslimiter_rwstructuredbuffer",
+        repo=FIDELITYFX_SDK_REPO,
+        commit=FIDELITYFX_SDK_COMMIT,
+        path="Kits/Cauldron2/dx12/framework/shaders/fpslimiter.hlsl",
+        code=textwrap.dedent("""
+            RWStructuredBuffer<float> DataBuffer : register(u0);
+
+            cbuffer cb : register(b0)
+            {
+                uint NumLoops;
+            }
+
+            [numthreads(32,1,1)]
+            void CSMain(uint dtID : SV_DispatchThreadID)
+            {
+                float tmp = DataBuffer[dtID];
+                for (uint i = 0; i < NumLoops; i++)
+                {
+                    tmp = sin(tmp) + 1.5f;
+                }
+                DataBuffer[dtID] = tmp;
+            }
+        """).strip(),
+        contains=(
+            "RWStructuredBuffer<float> DataBuffer;",
+            "@ numthreads(32, 1, 1)",
+            "for (uint i = 0; i < NumLoops; i++)",
+            "DataBuffer[dtID] = tmp;",
+        ),
+    ),
+    ExternalFixture(
         name="fidelityfx_sdk_taa_tile_cache",
         repo=FIDELITYFX_SDK_REPO,
         commit=FIDELITYFX_SDK_COMMIT,

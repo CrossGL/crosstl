@@ -50,6 +50,11 @@ EXTERNAL_SAMPLES = [
             "cuTENSOR/reduction.cu",
         ],
     },
+    {
+        "repo": "https://github.com/Madreag/turbo3-cuda",
+        "commit": "ae6ee21b92bc3e0fb4e6a5ab7383497861e644cc",
+        "paths": ["ggml/src/ggml-cuda/fattn-vec.cuh"],
+    },
 ]
 
 
@@ -449,3 +454,25 @@ def test_cuda_samples_simple_texture3d_umul24_codegen_reparse():
     assert "(gl_WorkGroupID.x & 0x00ffffffu)" in crossgl
     assert "(gl_WorkGroupSize.x & 0x00ffffffu)" in crossgl
     assert "__umul24" not in crossgl
+
+
+def test_external_turbo3_fast_exp_softmax_codegen_reparse():
+    source = """
+    __global__ void softmax_update(float* kq,
+                                   float* kq_max,
+                                   float* kq_sum,
+                                   int nthreads) {
+        int tid = threadIdx.x;
+        int j = blockIdx.x;
+        const float kq_max_scale = __expf(kq_max[j] - kq[tid]);
+        float reg = __expf(kq[(j * nthreads) + tid] - kq_max[j]);
+        kq_sum[j] = kq_sum[j] * kq_max_scale + reg;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "var kq_max_scale: f32 = exp((kq_max[j] - kq[tid]));" in crossgl
+    assert "var reg: f32 = exp((kq[((j * nthreads) + tid)] - kq_max[j]));" in crossgl
+    assert "__expf" not in crossgl

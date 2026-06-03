@@ -6047,6 +6047,7 @@ class HipToCrossGLConverter:
             "logf": "log",
             "log2f": "log2",
             "expf": "exp",
+            "__expf": "exp",
             "exp2f": "exp2",
             "fabsf": "abs",
             "rsqrtf": "inversesqrt",

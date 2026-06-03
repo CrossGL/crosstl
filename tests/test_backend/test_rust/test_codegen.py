@@ -8139,6 +8139,37 @@ def test_rust_gpu_sky_shader_hex_default_spec_constant_codegen():
     )
 
 
+def test_rust_gpu_mouse_shader_tuple_struct_destructure_codegen():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/mouse-shader/src/lib.rs Line::distance.
+    code = """
+    struct Line(Vec2, Vec2);
+
+    impl Shape for Line {
+        fn distance(self, p: Vec2) -> f32 {
+            let Line(a, b) = self;
+            let ap = p - a;
+            ap.x
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "struct Line {" in result
+    assert "vec2 field0;" in result
+    assert "vec2 field1;" in result
+    assert "float Line_distance(Line self, vec2 p)" in result
+    assert "auto _rust_match_subject_0 = self;" in result
+    assert "if (is_Line(_rust_match_subject_0))" in result
+    assert "a = unwrap_Line_0(_rust_match_subject_0);" in result
+    assert "b = unwrap_Line_1(_rust_match_subject_0);" in result
+    assert "let ap = (p - a);" in result
+    assert "return ap.x;" in result
+    crosstl.translator.parse(result)
+
+
 def test_complex_shader_conversion():
     code = """
     #[repr(C)]

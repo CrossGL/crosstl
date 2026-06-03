@@ -603,6 +603,60 @@ def test_modular_vector_addition_nested_gpu_launch_codegen():
     assert "Unhandled statement type: FunctionNode" not in generated_code
 
 
+def test_modular_mandelbrot_nested_parameter_kernel_codegen():
+    # Reduced from modular/modular commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/mandelbrot.mojo elementwise kernel.
+    code = """
+    import compiler
+    from std.gpu.host import DeviceContext
+    from extensibility import OutputTensor, foreach
+    from std.utils.index import IndexList
+
+    @compiler.register("mandelbrot")
+    struct Mandelbrot:
+        @staticmethod
+        def execute[target: StaticString](
+            output: OutputTensor, ctx: DeviceContext
+        ) raises:
+            @parameter
+            @always_inline
+            def elementwise_mandelbrot[
+                width: Int
+            ](idx: IndexList[output.rank]) -> SIMD[output.dtype, width]:
+                var row = idx[0]
+                var iters = SIMD[output.dtype, width](0)
+                var in_set_mask = SIMD[DType.bool, width](fill=True)
+                for _ in range(max_iterations):
+                    if not any(in_set_mask):
+                        break
+                    iters = in_set_mask.select(iters + 1, iters)
+                return iters
+
+            foreach[elementwise_mandelbrot, target=target](output, ctx)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "// from std.gpu.host import DeviceContext" in generated_code
+    assert "void execute(OutputTensor output, DeviceContext ctx) @ staticmethod" in (
+        generated_code
+    )
+    assert (
+        "SIMD[output.dtype, width] elementwise_mandelbrot"
+        "(IndexList[output.rank] idx) @ parameter @ always_inline"
+    ) in generated_code
+    assert "var in_set_mask = SIMD[DType.bool, width](fill = true);" in generated_code
+    assert "for (int _ = 0; _ < max_iterations; _++)" in generated_code
+    assert "if ((!any(in_set_mask)))" in generated_code
+    assert "break;" in generated_code
+    assert "iters = in_set_mask.select((iters + 1), iters);" in generated_code
+    assert "foreach[elementwise_mandelbrot, target=target](output, ctx);" in (
+        generated_code
+    )
+    assert "Unhandled statement type: FunctionNode" not in generated_code
+
+
 def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
     code = """
     def matmul_idiomatic_tiled[

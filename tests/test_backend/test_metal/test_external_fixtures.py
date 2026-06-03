@@ -18,6 +18,8 @@ BOOK_OF_SHADERS_METAL_REPO = "https://github.com/metal-by-example/book-of-shader
 BOOK_OF_SHADERS_METAL_COMMIT = "12bb2366697cba9c5f660d54fead7bdcd73b6b8a"
 MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
+PMETAL_REPO = "https://github.com/Epistates/pmetal"
+PMETAL_COMMIT = "089171635d1b9c9b7a58b575cf7d522834022cd3"
 IMGUI_REPO = "https://github.com/ocornut/imgui"
 IMGUI_COMMIT = "7950c96f0e86b761607a34601f19e90afa825bd6"
 METALPETAL_REPO = "https://github.com/MetalPetal/MetalPetal"
@@ -737,6 +739,51 @@ EXTERNAL_FIXTURES = [
         """
         ),
     },
+    {
+        "name": "pmetal_fused_lora_threadgroup_casted_half4_load",
+        "repo_url": PMETAL_REPO,
+        "commit": PMETAL_COMMIT,
+        "source_path": "crates/pmetal-metal/src/kernels/metal/fused_lora.metal",
+        "roundtrip": False,
+        "contains": [
+            "constant uint TILE_M @function_constant(0);",
+            "threadgroup float* scratch @threadgroup(0)",
+            "vec4((*(f16vec4*)(x_row + simd_lane_id)))",
+            "vec4((*(f16vec4*)(A + simd_lane_id)))",
+            "xA_tile[tid.x] = acc_a4.x;",
+        ],
+        "not_contains": [
+            "(*(f16vec4*)x_row + simd_lane_id)",
+            "(*(f16vec4*)A + simd_lane_id)",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct FusedLoraParams { uint rank; };
+            constant uint TILE_M [[function_constant(0)]];
+            constant uint SIMD_SIZE = 32;
+
+            kernel void fused_lora_forward(
+                device const half* x [[buffer(0)]],
+                device const half* A [[buffer(2)]],
+                device half* xA [[buffer(5)]],
+                constant FusedLoraParams& params [[buffer(6)]],
+                threadgroup float* scratch [[threadgroup(0)]],
+                uint3 tid [[thread_position_in_threadgroup]],
+                uint simd_lane_id [[thread_index_in_simdgroup]]) {
+                threadgroup float* xA_tile = scratch;
+                device const half* x_row = x + tid.x * TILE_M;
+                float4 acc_a4 =
+                    float4(*(device const half4*)(x_row + simd_lane_id))
+                    * float4(*(device const half4*)(A + simd_lane_id));
+                xA_tile[tid.x] = acc_a4.x;
+                xA[tid.x] = half(params.rank);
+            }
+        """
+        ),
+    },
 ]
 
 
@@ -760,13 +807,16 @@ def test_external_metal_fixture_parse_and_roundtrip(fixture):
     assert fixture["commit"]
     assert fixture["source_path"]
 
-    if not fixture["roundtrip"]:
-        return
+    should_generate = (
+        fixture["roundtrip"] or fixture.get("contains") or fixture.get("not_contains")
+    )
+    if should_generate:
+        crossgl = MetalToCrossGLConverter().generate(ast)
+        assert crossgl.strip()
+        for expected in fixture.get("contains", []):
+            assert expected in crossgl
+        for rejected in fixture.get("not_contains", []):
+            assert rejected not in crossgl
 
-    crossgl = MetalToCrossGLConverter().generate(ast)
-    assert crossgl.strip()
-    for expected in fixture.get("contains", []):
-        assert expected in crossgl
-    for rejected in fixture.get("not_contains", []):
-        assert rejected not in crossgl
-    parse_crossgl(crossgl)
+    if fixture["roundtrip"]:
+        parse_crossgl(crossgl)

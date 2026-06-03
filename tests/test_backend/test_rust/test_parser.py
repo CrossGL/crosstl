@@ -4905,6 +4905,36 @@ def test_rust_gpu_sky_shader_hex_default_spec_constant_parse():
     assert isinstance(function.body[-1].left, DereferenceNode)
 
 
+def test_rust_gpu_mouse_shader_tuple_struct_destructure_parse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/mouse-shader/src/lib.rs Line::distance.
+    code = """
+    struct Line(Vec2, Vec2);
+
+    impl Shape for Line {
+        fn distance(self, p: Vec2) -> f32 {
+            let Line(a, b) = self;
+            let ap = p - a;
+            ap.x
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    method = ast.impl_blocks[0].methods[0]
+    destructure = method.body[0]
+
+    assert isinstance(destructure, LetNode)
+    assert isinstance(destructure.name, FunctionCallNode)
+    assert destructure.name.name == "Line"
+    assert destructure.name.args == ["a", "b"]
+    assert destructure.value == "self"
+    assert method.body[1].name == "ap"
+    assert isinstance(method.body[1].value, BinaryOpNode)
+    assert method.body[1].value.op == "-"
+
+
 def test_error_handling():
     invalid_codes = [
         "fn incomplete(",

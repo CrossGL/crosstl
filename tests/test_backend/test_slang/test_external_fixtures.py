@@ -16,6 +16,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/optix-examples",
         "commit": "02fa85ae2f39400ced9a602531aa096589055076",
     },
+    "shader-slang/slang-rhi": {
+        "url": "https://github.com/shader-slang/slang-rhi",
+        "commit": "9aa67530649c52b4a057a2fba185cf9247c33ec0",
+    },
     "NVIDIAGameWorks/Falcor": {
         "url": "https://github.com/NVIDIAGameWorks/Falcor",
         "commit": "eb540f6748774680ce0039aaf3ac9279266ec521",
@@ -512,6 +516,50 @@ EXTERNAL_FIXTURES = [
             "vec3 barycentrics @ SV_Barycentrics",
             "bool sierpinski = (xy.x & xy.y) == 0;",
         ],
+    },
+    {
+        "id": "slang_rhi_root_parameter_block_attributes",
+        "repo": "shader-slang/slang-rhi",
+        "path": "tests/test-root-shader-parameter.slang",
+        "source": (
+            """
+            [__AttributeUsage(_AttributeTargets.Var)]
+            struct rootAttribute {};
+
+            struct S1
+            {
+                StructuredBuffer<uint> c0;
+                [root] RWStructuredBuffer<uint> c1;
+            }
+
+            struct S0
+            {
+                StructuredBuffer<uint> b0;
+                [root] StructuredBuffer<uint> b1;
+                ParameterBlock<S1> s1;
+                ConstantBuffer<S1> s2;
+            }
+
+            ParameterBlock<S0> g;
+            [root] RWStructuredBuffer<uint> buffer;
+
+            [shader("compute")]
+            [numthreads(1,1,1)]
+            void computeMain(uint3 sv_dispatchThreadID : SV_DispatchThreadID)
+            {
+                buffer[0] = g.b0[0] - g.b1[0] + g.s1.c0[0]
+                    - g.s1.c1[0] + g.s2.c0[0];
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct rootAttribute {",
+            "ParameterBlock<S0> g;",
+            "RWStructuredBuffer<uint> buffer_;",
+            "buffer_[0] = g.b0[0] - g.b1[0] + g.s1.c0[0] - g.s1.c1[0] + g.s2.c0[0];",
+        ],
+        "not_contains": ["[root]", "__AttributeUsage"],
     },
 ]
 

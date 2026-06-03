@@ -684,6 +684,83 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_CROSS_IMAGE_QUERY_SIZE_LOD_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
+; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
+; Source path: shaders/asm/frag/image-extract-reuse.asm.frag
+; Reduced from OpImageQuerySizeLod on a sampled 2D image.
+OpCapability Shader
+OpCapability ImageQuery
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %Size
+OpExecutionMode %main OriginUpperLeft
+OpName %Size "Size"
+OpName %uTexture "uTexture"
+OpDecorate %Size Location 0
+OpDecorate %uTexture DescriptorSet 0
+OpDecorate %uTexture Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%v2int = OpTypeVector %int 2
+%ptr_output_v2int = OpTypePointer Output %v2int
+%Size = OpVariable %ptr_output_v2int Output
+%float = OpTypeFloat 32
+%image_type = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled_type = OpTypeSampledImage %image_type
+%ptr_sampled = OpTypePointer UniformConstant %sampled_type
+%uTexture = OpVariable %ptr_sampled UniformConstant
+%zero = OpConstant %int 0
+%one = OpConstant %int 1
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %sampled_type %uTexture
+%image = OpImage %image_type %loaded
+%size0 = OpImageQuerySizeLod %v2int %image %zero
+%size1 = OpImageQuerySizeLod %v2int %image %one
+%sum = OpIAdd %v2int %size0 %size1
+OpStore %Size %sum
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_CROSS_COMPOSITE_INSERT_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
+; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
+; Source path: shaders-no-opt/asm/frag/composite-insert-hoisted-temporaries-2.asm.frag
+; Reduced from chained OpCompositeInsert rebuilding a vec2.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %value0 %value1 %FragColor
+OpExecutionMode %main OriginUpperLeft
+OpName %value0 "value0"
+OpName %value1 "value1"
+OpName %FragColor "FragColor"
+OpDecorate %value0 Location 0
+OpDecorate %value1 Location 1
+OpDecorate %FragColor Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v2float = OpTypeVector %float 2
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_v2float = OpTypePointer Output %v2float
+%zero = OpConstant %float 0.0
+%base = OpConstantComposite %v2float %zero %zero
+%value0 = OpVariable %ptr_input_float Input
+%value1 = OpVariable %ptr_input_float Input
+%FragColor = OpVariable %ptr_output_v2float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded0 = OpLoad %float %value0
+%loaded1 = OpLoad %float %value1
+%a = OpCompositeInsert %v2float %loaded0 %base 0
+%b = OpCompositeInsert %v2float %loaded1 %a 1
+OpStore %FragColor %b
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSL_STD450_EXTINST_BODY_ASSEMBLY = """
 ; Reduced from Khronos glslang Test/baseResults/web.basic.vert.out Normalize.
 OpCapability Shader
@@ -1496,6 +1573,35 @@ def test_spirv_assembly_vector_shuffle_swizzle_body_codegen():
     assert "float3 color @output @location(0);" in generated_code
     assert "color = value.xyz;" in generated_code
     assert "color = rgb;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_cross_image_query_size_lod_codegen():
+    tokens = tokenize_code(SPIRV_CROSS_IMAGE_QUERY_SIZE_LOD_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int2 Size @output @location(0);" in generated_code
+    assert "Texture2D uTexture @set(0) @binding(0);" in generated_code
+    assert (
+        "Size = (textureSize(uTexture, 0) + textureSize(uTexture, 1));"
+        in generated_code
+    )
+    assert "Size = (size0 + size1);" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_cross_composite_insert_vector_codegen():
+    tokens = tokenize_code(SPIRV_CROSS_COMPOSITE_INSERT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float value0 @input @location(0);" in generated_code
+    assert "float value1 @input @location(1);" in generated_code
+    assert "float2 FragColor @output @location(0);" in generated_code
+    assert "FragColor = float2(value0, value1);" in generated_code
+    assert "FragColor = b;" not in generated_code
+    assert "spirvCompositeInsert" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

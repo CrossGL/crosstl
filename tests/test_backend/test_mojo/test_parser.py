@@ -2175,6 +2175,60 @@ def test_modular_vector_addition_nested_gpu_launch_parse():
     assert [arg.left.name for arg in launch.args[1:]] == ["grid_dim", "block_dim"]
 
 
+def test_modular_mandelbrot_nested_parameter_kernel_parse():
+    # Reduced from modular/modular commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/mandelbrot.mojo elementwise kernel.
+    code = """
+    import compiler
+    from std.gpu.host import DeviceContext
+    from extensibility import OutputTensor, foreach
+    from std.utils.index import IndexList
+
+    @compiler.register("mandelbrot")
+    struct Mandelbrot:
+        @staticmethod
+        def execute[target: StaticString](
+            output: OutputTensor, ctx: DeviceContext
+        ) raises:
+            @parameter
+            @always_inline
+            def elementwise_mandelbrot[
+                width: Int
+            ](idx: IndexList[output.rank]) -> SIMD[output.dtype, width]:
+                var row = idx[0]
+                var iters = SIMD[output.dtype, width](0)
+                var in_set_mask = SIMD[DType.bool, width](fill=True)
+                for _ in range(max_iterations):
+                    if not any(in_set_mask):
+                        break
+                    iters = in_set_mask.select(iters + 1, iters)
+                return iters
+
+            foreach[elementwise_mandelbrot, target=target](output, ctx)
+    """
+    ast = parse_code(tokenize_code(code))
+    execute = find_struct(ast, "Mandelbrot").methods[0]
+    kernel = execute.body[0]
+    launch = execute.body[1]
+    loop = kernel.body[3]
+
+    assert [attr.name for attr in kernel.attributes] == ["parameter", "always_inline"]
+    assert kernel.return_type == "SIMD[output.dtype, width]"
+    assert [(param.name, param.vtype) for param in kernel.params] == [
+        ("idx", "IndexList[output.rank]")
+    ]
+    assert isinstance(loop, RangeForNode)
+    assert loop.name == "_"
+    assert loop.iterable.name == "range"
+    assert loop.iterable.args[0].name == "max_iterations"
+    assert isinstance(loop.body[0], IfNode)
+    assert isinstance(loop.body[0].if_body[0], BreakNode)
+    assert isinstance(loop.body[1].right, MethodCallNode)
+    assert isinstance(launch, VectorConstructorNode)
+    assert launch.type_name == "foreach[elementwise_mandelbrot, target=target]"
+
+
 def test_variable_declarations_parsing():
     code = """
     fn main():

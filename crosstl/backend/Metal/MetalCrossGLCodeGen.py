@@ -1488,7 +1488,9 @@ class MetalToCrossGLConverter:
             value = self.generate_expression(expr.expression, is_main)
             if mapped_type == expr.target_type and "::" not in str(mapped_type):
                 return f"{self.sanitize_identifier(mapped_type)}({value})"
-            return f"({mapped_type}){value}"
+            return (
+                f"({mapped_type}){self.generate_cast_operand(expr.expression, value)}"
+            )
         elif isinstance(expr, VectorConstructorNode):
             size_query = self.texture_size_constructor_expression(expr, is_main)
             if size_query is not None:
@@ -1577,6 +1579,11 @@ class MetalToCrossGLConverter:
         ):
             return f"({text})"
         return text
+
+    def generate_cast_operand(self, operand, rendered_operand):
+        if isinstance(operand, (AssignmentNode, BinaryOpNode, TernaryOpNode)):
+            return f"({rendered_operand})"
+        return rendered_operand
 
     def map_type(self, metal_type):
         """Map a Metal type name to the closest CrossGL type name."""

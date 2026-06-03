@@ -43,6 +43,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "url": "https://github.com/ROCm/HIP",
         "commit": "0447ec8e079d9cd0a2bc966124977a0b92fac472",
     },
+    "hip_kittens": {
+        "url": "https://github.com/HazyResearch/HipKittens",
+        "commit": "cd090ae98ee4e7b8d3d5291fc62cfd716aecb946",
+        "paths": ["include/common/base_ops.cuh"],
+    },
 }
 
 
@@ -556,3 +561,21 @@ def test_external_rocm_image_convolution_continue_codegen_reparse():
     assert "sum += ((image[image_index] / 255.0f) * mask[mask_index]);" in crossgl
     assert "output[output_index] = u8((sum * 255.0f));" in crossgl
     assert "static_cast" not in crossgl
+
+
+def test_external_hip_kittens_fast_exp_vector_codegen_reparse():
+    source = """
+    __device__ float hk_exp(float x) {
+        return __expf(x);
+    }
+
+    __device__ float2 hk_exp2(float2 x) {
+        return float2{__expf(x.x), __expf(x.y)};
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "return exp(x);" in crossgl
+    assert "return vec2<f32>(exp(x.x), exp(x.y));" in crossgl
+    assert "__expf" not in crossgl

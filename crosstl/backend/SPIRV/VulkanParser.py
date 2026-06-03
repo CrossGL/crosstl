@@ -1112,6 +1112,29 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode == "OpImageQuerySizeLod" and len(operands) >= 3:
+                expressions[result_id] = FunctionCallNode(
+                    "textureSize",
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[2],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             if result_id and opcode == "OpImageRead" and len(operands) >= 3:
                 expressions[result_id] = FunctionCallNode(
                     "imageLoad",
@@ -1197,6 +1220,23 @@ class VulkanParser:
                 for index_operand in operands[2:]:
                     expression = ArrayAccessNode(expression, index_operand)
                 expressions[result_id] = expression
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode == "OpCompositeInsert" and len(operands) >= 3:
+                expressions[result_id] = (
+                    self.spirv_assembly_composite_insert_expression(
+                        operands[0],
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                        types,
+                    )
+                )
                 expression_type_ids[result_id] = operands[0]
                 continue
 
@@ -1629,6 +1669,75 @@ class VulkanParser:
         if "Lod" in parsed_operands and parsed_operands["Lod"]:
             args.append(parsed_operands["Lod"][0])
         return FunctionCallNode("texelFetch", args)
+
+    def spirv_assembly_composite_insert_expression(
+        self,
+        result_type_id,
+        object_operand,
+        composite_operand,
+        index_operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+        types,
+    ):
+        inserted = self.spirv_assembly_operand_expression(
+            object_operand, expressions, names, decorations, constants
+        )
+        composite = self.spirv_assembly_operand_expression(
+            composite_operand, expressions, names, decorations, constants
+        )
+        result_type_name = self.spirv_type_name(result_type_id, types)
+        result_component_count = self.spirv_vector_component_count(
+            result_type_id, types
+        )
+
+        if len(index_operands) == 1 and result_component_count is not None:
+            component_index = self.spirv_vector_shuffle_component_index(
+                index_operands[0]
+            )
+            if (
+                component_index is not None
+                and 0 <= component_index < result_component_count
+            ):
+                return FunctionCallNode(
+                    result_type_name or result_type_id,
+                    [
+                        (
+                            inserted
+                            if index == component_index
+                            else self.spirv_composite_component_expression(
+                                composite,
+                                index,
+                                result_component_count,
+                                result_type_name,
+                            )
+                        )
+                        for index in range(result_component_count)
+                    ],
+                )
+
+        return FunctionCallNode(
+            "spirvCompositeInsert",
+            [composite, inserted, *index_operands],
+        )
+
+    def spirv_composite_component_expression(
+        self, composite, component, component_count, result_type_name
+    ):
+        if (
+            isinstance(composite, FunctionCallNode)
+            and composite.name == result_type_name
+            and component < len(composite.args)
+        ):
+            return composite.args[component]
+
+        if component_count <= 4:
+            return MemberAccessNode(
+                composite, self.spirv_vector_component_name(component)
+            )
+        return ArrayAccessNode(composite, str(component))
 
     def spirv_assembly_image_operands(
         self, operands, expressions, names, decorations, constants
