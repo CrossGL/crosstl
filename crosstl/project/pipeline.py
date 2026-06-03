@@ -565,6 +565,7 @@ def translate_project(
                     backend=target,
                     save_shader=str(output_path),
                     format_output=format_output,
+                    source_backend=unit.source_backend,
                 )
             except Exception as exc:  # noqa: BLE001
                 # Project translation reports per-artifact failures so one bad

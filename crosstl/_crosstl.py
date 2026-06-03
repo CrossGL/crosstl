@@ -29,6 +29,7 @@ def translate(
     backend: str = "cgl",
     save_shader: Optional[str] = None,
     format_output: bool = True,
+    source_backend: Optional[str] = None,
 ) -> str:
     """Translate a shader file to another language.
 
@@ -37,6 +38,8 @@ def translate(
         backend (str, optional): The target language to translate to. Defaults to "cgl".
         save_shader (str, optional): The path to save the translated shader. Defaults to None.
         format_output (bool, optional): Whether to format the generated code. Defaults to True.
+        source_backend (str, optional): Override the source parser instead of inferring it
+            from the file extension. Defaults to None.
 
     Returns:
         str: The translated shader code
@@ -45,8 +48,17 @@ def translate(
     discover_backend_plugins()
     backend = (backend or "cgl").strip().lower()
 
-    source_spec = SOURCE_REGISTRY.get_by_extension(file_path)
+    source_spec = (
+        SOURCE_REGISTRY.get(source_backend)
+        if source_backend
+        else SOURCE_REGISTRY.get_by_extension(file_path)
+    )
     if not source_spec:
+        if source_backend:
+            supported = ", ".join(SOURCE_REGISTRY.names())
+            raise ValueError(
+                f"Unsupported source backend: {source_backend}. Supported: {supported}"
+            )
         supported = ", ".join(SOURCE_REGISTRY.extensions())
         raise ValueError(
             f"Unsupported shader file type: {file_path}. Supported: {supported}"

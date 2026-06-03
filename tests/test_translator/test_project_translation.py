@@ -117,6 +117,38 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     ]
 
 
+def test_translate_project_honors_source_backend_overrides(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            include = ["**/*"]
+            targets = ["opengl"]
+            output_dir = "translated"
+
+            [project.sources]
+            "gpu/*.shader" = "cgl"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    config = load_project_config(repo)
+    report = translate_project(config)
+    payload = report.to_json()
+
+    output = repo / "translated" / "opengl" / "gpu" / "kernel.glsl"
+    assert output.exists()
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["units"][0]["sourceOverride"] == "cgl"
+    assert payload["artifacts"][0]["sourceBackend"] == "cgl"
+    assert payload["artifacts"][0]["path"] == "translated/opengl/gpu/kernel.glsl"
+
+
 def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders" / "graphics"
