@@ -1313,6 +1313,28 @@ def test_alias_declarations_parse_as_comptime_aliases():
     assert not local_alias.is_var
 
 
+def test_struct_comptime_member_from_modular_custom_ops_parse():
+    code = """
+    @fieldwise_init
+    struct Tensor[dtype: DType, rank: Int](ImplicitlyCopyable):
+        comptime size = product(Self.static_spec.shape_tuple)
+        var buffer: DeviceBuffer[Self.dtype]
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = find_struct(ast, "Tensor")
+
+    assert struct_node.base_classes == ["ImplicitlyCopyable"]
+    assert struct_node.generic_parameters == "[dtype:DType, rank:Int]"
+    size_member = struct_node.members[0]
+    assert isinstance(size_member, VariableDeclarationNode)
+    assert size_member.name == "size"
+    assert getattr(size_member, "is_comptime", False)
+    assert not size_member.is_var
+    assert isinstance(size_member.initial_value, FunctionCallNode)
+    assert size_member.initial_value.name == "product"
+    assert struct_node.members[1].vtype == "DeviceBuffer[Self.dtype]"
+
+
 def test_bare_annotated_assignment_with_initializer_parsing():
     code = """
     from std.gpu import global_idx

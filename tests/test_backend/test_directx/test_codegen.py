@@ -508,6 +508,25 @@ def test_hlsl_psize_roundtrips_to_gl_point_size():
     assert "@ PointSize" not in crossgl
 
 
+def test_codegen_pragma_once_from_directx_fallback_samples():
+    hlsl = textwrap.dedent("""
+        #pragma once
+
+        struct RWByteAddressBufferPointer {
+            RWByteAddressBuffer buffer;
+            uint offsetInBytes;
+        };
+        """).strip()
+
+    crossgl = generate_crossgl(hlsl)
+
+    assert "#pragma once\n" in crossgl
+    assert "#pragma once None" not in crossgl
+    assert "#pragma once;" not in crossgl
+    assert "struct RWByteAddressBufferPointer" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_preserves_interpolation_modifiers_as_crossgl_metadata():
     crossgl = generate_crossgl("""
         struct PSInput {

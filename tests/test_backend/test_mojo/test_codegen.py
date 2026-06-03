@@ -862,6 +862,24 @@ def test_alias_declaration_codegen_matches_comptime_declarations():
     assert "for (int i = 0; i < LOCAL_BLOCK; i++)" in generated_code
 
 
+def test_struct_comptime_member_codegen_skips_metadata_field():
+    code = """
+    @fieldwise_init
+    struct Tensor[dtype: DType, rank: Int](ImplicitlyCopyable):
+        comptime size = product(Self.static_spec.shape_tuple)
+        var buffer: DeviceBuffer[Self.dtype]
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct Tensor" in generated_code
+    assert "DeviceBuffer[Self.dtype] buffer;" in generated_code
+    assert "void size;" not in generated_code
+    assert "let size" not in generated_code
+
+
 def test_user_defined_lerp_matching_arity_does_not_lower_to_mix():
     code = """
     fn lerp(a: Float32, b: Float32, t: Float32) -> Float32:

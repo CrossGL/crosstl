@@ -667,6 +667,22 @@ def test_parse_preprocessor_directives():
     assert_parses(PREPROCESSOR_HLSL)
 
 
+def test_parse_pragma_once_from_directx_fallback_samples():
+    ast = parse_code("""
+    #pragma once
+
+    struct RWByteAddressBufferPointer {
+        RWByteAddressBuffer buffer;
+        uint offsetInBytes;
+    };
+    """)
+
+    pragma = ast.structs[0]
+
+    assert pragma.directive == "once"
+    assert pragma.value is None
+
+
 def test_preprocessor_evaluates_conditionals():
     code = """
     #define ENABLE_BAD 0

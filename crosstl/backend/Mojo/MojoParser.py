@@ -315,6 +315,9 @@ class MojoParser:
         attributes = self.parse_attributes()
         if self.current_token[0] in self.FUNCTION_TOKENS:
             return self.parse_function(attributes)
+        if self.current_token[0] in ["COMPTIME", "ALIAS"]:
+            member = self.parse_comptime_or_alias_statement()
+            return self.attach_attributes(member, attributes)
         return self.parse_typed_member("struct", attributes)
 
     def add_struct_item(self, members, methods, node):
@@ -419,6 +422,9 @@ class MojoParser:
             return self.parse_function(attributes)
         if self.current_token[0] == "CLASS":
             return self.parse_class(attributes)
+        if self.current_token[0] in ["COMPTIME", "ALIAS"]:
+            member = self.parse_comptime_or_alias_statement()
+            return self.attach_attributes(member, attributes)
         if self.current_token[0] in ["LET", "VAR"]:
             member = self.parse_variable_declaration_or_assignment()
             return self.attach_attributes(member, attributes)

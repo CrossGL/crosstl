@@ -1363,6 +1363,34 @@ class TestCudaCodeGen:
         assert "// Arguments: params" in result
         assert "cudaLaunchCooperativeKernel" not in result
 
+    def test_cuda_launch_cooperative_kernel_error_wrapper_from_nvidia_sample(self):
+        code = """
+        void host(void** kernelArgs, dim3 dimGrid, dim3 dimBlock) {
+            checkCudaErrors(cudaLaunchCooperativeKernel(
+                (void*)normVecByDotProductAWBarrier,
+                dimGrid,
+                dimBlock,
+                kernelArgs,
+                0,
+                0));
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// Kernel launch: normVecByDotProductAWBarrier<<<dimGrid, dimBlock, 0, 0>>>()"
+            in result
+        )
+        assert "// Arguments: kernelArgs" in result
+        assert "checkCudaErrors" not in result
+        assert "cudaLaunchCooperativeKernel" not in result
+
     def test_user_defined_cuda_launch_kernel_call_is_not_kernel_launch(self):
         code = """
         void cudaLaunchKernel(float* out, int grid, int block, void* args, int shared, int stream) {

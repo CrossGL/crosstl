@@ -7,6 +7,7 @@ from .CudaAst import (
     EnumNode,
     FunctionCallNode,
     InitializerListNode,
+    KernelLaunchNode,
     MemberAccessNode,
     TypeAliasNode,
     UnaryOpNode,
@@ -627,6 +628,9 @@ class CudaToCrossGLConverter:
         return "cudaSuccess"
 
     def format_cuda_runtime_expression(self, value):
+        if isinstance(value, KernelLaunchNode):
+            return self.format_kernel_launch_comments(value), "cudaSuccess"
+
         runtime_value = self.format_cuda_runtime_value_expression(value)
         if runtime_value is not None:
             return runtime_value
@@ -3702,6 +3706,10 @@ class CudaToCrossGLConverter:
         self.emit("}")
 
     def visit_KernelLaunchNode(self, node):
+        for comment in self.format_kernel_launch_comments(node):
+            self.emit(comment)
+
+    def format_kernel_launch_comments(self, node):
         kernel_name = self.visit(node.kernel_name)
         config = [self.visit(node.blocks), self.visit(node.threads)]
         if node.shared_mem is not None:
@@ -3709,11 +3717,12 @@ class CudaToCrossGLConverter:
         if node.stream is not None:
             config.append(self.visit(node.stream))
 
-        self.emit(f"// Kernel launch: {kernel_name}<<<{', '.join(config)}>>>()")
+        comments = [f"// Kernel launch: {kernel_name}<<<{', '.join(config)}>>>()"]
         if node.args:
             args = self.resolve_packed_launch_args(node.args)
             args_str = ", ".join([self.format_kernel_launch_arg(arg) for arg in args])
-            self.emit(f"// Arguments: {args_str}")
+            comments.append(f"// Arguments: {args_str}")
+        return comments
 
     def visit_VariableNode(self, node):
         cuda_async_sync = self.cuda_async_sync_declaration_metadata(node)

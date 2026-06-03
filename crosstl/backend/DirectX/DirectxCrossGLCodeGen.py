@@ -2005,7 +2005,8 @@ class HLSLToCrossGLConverter:
                     )
                 code += "    }\n"
             elif isinstance(node, PragmaNode):
-                code += f"    #pragma {node.directive} {node.value};\n"
+                value = f" {node.value}" if node.value else ""
+                code += f"    #pragma {node.directive}{value}\n"
             elif isinstance(node, IncludeNode):
                 code += f"    #include {node.path}\n"
         for node in ast.global_variables:

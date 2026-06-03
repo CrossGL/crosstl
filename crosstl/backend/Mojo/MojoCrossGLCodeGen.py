@@ -311,6 +311,10 @@ class MojoToCrossGLConverter:
         for member in members:
             if not isinstance(member, (VariableDeclarationNode, VariableNode)):
                 continue
+            if getattr(member, "is_comptime", False) or getattr(
+                member, "is_alias", False
+            ):
+                continue
 
             semantic = (
                 self.map_attributes(member.attributes)
