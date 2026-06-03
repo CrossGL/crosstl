@@ -852,9 +852,35 @@ def test_codegen_preserves_leading_decimal_float_literals():
     """
     result = convert(code)
 
+    assert "constant float[4] kvalues_mxfp4_f = {0, .5f, 1.f, (-.5f)};" in result
+    assert "const constant" not in result
+    assert "float(0, .5f" not in result
     assert ".5f" in result
     assert "1.f" in result
     assert "(-.5f)" in result
+
+    metal = MetalCodeGen().generate(parse_crossgl(result))
+    assert "constant float kvalues_mxfp4_f[4] = {0, 0.5, 1.0, -0.5};" in metal
+
+
+def test_codegen_roundtrips_global_constant_half_vector_initializer():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constant half3 luminanceWeighting = half3(0.2126h, 0.7152h, 0.0722h);
+    """
+    crossgl = convert(code)
+
+    assert (
+        "constant f16vec3 luminanceWeighting = " "f16vec3(0.2126, 0.7152, 0.0722);"
+    ) in crossgl
+    assert "0.2126h" not in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert (
+        "constant half3 luminanceWeighting = " "half3(0.2126, 0.7152, 0.0722);"
+    ) in metal
 
 
 def test_codegen_lowers_as_type_float_template_call():

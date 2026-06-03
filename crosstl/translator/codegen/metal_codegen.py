@@ -1791,7 +1791,21 @@ class MetalCodeGen:
                 self.sampler_variables.append((node, binding, array_size))
                 sampler_register = max(sampler_register, binding + resource_count)
             else:
-                code += f"{self.map_type(vtype)} {node.name}{array_suffix};\n"
+                declaration = format_c_style_array_declaration(
+                    self.map_type(vtype), node.name
+                )
+                if array_suffix:
+                    declaration = f"{declaration}{array_suffix}"
+                declaration = f"{self.global_variable_qualifier(node)}{declaration}"
+                initial_value = getattr(node, "initial_value", None)
+                if initial_value is not None:
+                    expected_type = getattr(node, "var_type", vtype)
+                    init_expr = self.generate_expression_with_expected(
+                        initial_value, expected_type
+                    )
+                    code += f"{declaration} = {init_expr};\n"
+                else:
+                    code += f"{declaration};\n"
 
         self.function_global_resource_dependencies = (
             self.collect_function_global_resource_dependencies(all_functions)
@@ -1915,9 +1929,12 @@ class MetalCodeGen:
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
             value_code = self.generate_constant_expression(value)
+            declaration = format_c_style_array_declaration(
+                self.map_type(const_type), name
+            )
             code += (
                 f"{self.metal_unused_declaration_qualifier('constant')} "
-                f"{self.map_type(const_type)} {name} = {value_code};\n"
+                f"{declaration} = {value_code};\n"
             )
 
         used_function_constant_ids = {}
@@ -5177,6 +5194,18 @@ class MetalCodeGen:
 
         mapped_type = self.map_type(type_name)
         return f"{qualifier} {mapped_type}& {name} = {rhs}"
+
+    def global_variable_qualifier(self, node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        for address_space in ("constant", "device", "threadgroup", "thread"):
+            if address_space in qualifiers:
+                return f"{address_space} "
+        if qualifiers & {"const", "readonly"}:
+            return "const "
+        return ""
 
     def local_variable_qualifier(self, node):
         qualifiers = {

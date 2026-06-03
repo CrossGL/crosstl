@@ -849,6 +849,11 @@ class MetalToCrossGLConverter:
                             if isinstance(glob.left, VariableNode)
                             else None
                         ),
+                        (
+                            self.variable_has_array_initializer_shape(glob.left)
+                            if isinstance(glob.left, VariableNode)
+                            else False
+                        ),
                     )
                     code += f"    {left} {glob.operator} {right};\n"
                 elif isinstance(glob, VariableNode):
@@ -983,6 +988,11 @@ class MetalToCrossGLConverter:
             return False
         return str(mapped_type).rstrip().endswith(("*", "&"))
 
+    def variable_has_array_initializer_shape(self, var):
+        return bool(getattr(var, "array_sizes", None)) or bool(
+            self.metal_array_type_parts(getattr(var, "vtype", None))
+        )
+
     def map_variable_type(self, var):
         raw_type = getattr(var, "vtype", None)
         structured_buffer_type = self.structured_buffer_pointer_type(var)
@@ -1034,8 +1044,14 @@ class MetalToCrossGLConverter:
             name_array_suffix = self.format_declarator_array_suffix(var)
         type_array_suffix = self.format_array_suffix(var, include_declarator_arrays)
         type_str = f"{mapped_type}{type_array_suffix}"
-        const_str = "const " if hasattr(var, "is_const") and var.is_const else ""
         address_space = self.address_space_qualifier_prefix(var)
+        const_str = (
+            "const "
+            if hasattr(var, "is_const")
+            and var.is_const
+            and address_space.strip() != "constant"
+            else ""
+        )
         semantic = (
             self.map_semantic(getattr(var, "attributes", None))
             if include_semantic
@@ -1263,16 +1279,27 @@ class MetalToCrossGLConverter:
                 if isinstance(node.left, VariableNode)
                 else None
             ),
+            (
+                self.variable_has_array_initializer_shape(node.left)
+                if isinstance(node.left, VariableNode)
+                else False
+            ),
         )
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
-    def generate_initializer_value(self, expr, is_main=False, expected_type=None):
+    def generate_initializer_value(
+        self, expr, is_main=False, expected_type=None, expected_array=False
+    ):
         if isinstance(expr, InitializerListNode):
-            return self.generate_initializer_list(expr, is_main, expected_type)
+            return self.generate_initializer_list(
+                expr, is_main, expected_type, expected_array
+            )
         return self.generate_expression(expr, is_main)
 
-    def generate_initializer_list(self, node, is_main=False, expected_type=None):
+    def generate_initializer_list(
+        self, node, is_main=False, expected_type=None, expected_array=False
+    ):
         mapped_type = self.map_type(expected_type) if expected_type else None
         member_types = {}
         if expected_type:
@@ -1293,6 +1320,8 @@ class MetalToCrossGLConverter:
                 )
 
         elements = named_elements + positional_elements
+        if expected_array:
+            return "{" + ", ".join(elements) + "}"
         if mapped_type and mapped_type.startswith(("vec", "ivec", "uvec", "bvec")):
             return f"{mapped_type}({', '.join(elements)})"
         if mapped_type and named_elements:
@@ -1319,12 +1348,17 @@ class MetalToCrossGLConverter:
         value = self.generate_initializer_value(node.value, is_main)
         return f"{''.join(designators)} = {value}"
 
+    def normalize_literal_string(self, value):
+        if re.fullmatch(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[hH]", value):
+            return value[:-1]
+        return value
+
     def generate_expression(self, expr, is_main=False):
         """Render a Metal backend expression node as CrossGL syntax."""
         if expr is None:
             return ""
         elif isinstance(expr, str):
-            return expr
+            return self.normalize_literal_string(expr)
         elif isinstance(expr, VariableNode):
             if expr.vtype:
                 return self.format_decl(expr, include_semantic=False)
