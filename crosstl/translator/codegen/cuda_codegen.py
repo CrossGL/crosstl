@@ -115,6 +115,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         "memoryBarrierShared",
         "memoryBarrierBuffer",
         "memoryBarrierImage",
+        "allMemoryBarrier",
+        "deviceMemoryBarrier",
         "workgroupBarrier",
     }
     sampled_resource_type_aliases = {
@@ -8542,6 +8544,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "memoryBarrierShared": "__threadfence_block",
             "memoryBarrierBuffer": "__threadfence",
             "memoryBarrierImage": "__threadfence",
+            "allMemoryBarrier": "__threadfence",
+            "deviceMemoryBarrier": "__threadfence",
             "workgroupBarrier": "__syncthreads",
             # Ray tracing placeholders
             "RayDesc": "CglRayDesc",

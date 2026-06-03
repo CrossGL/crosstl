@@ -881,6 +881,10 @@ class TestCudaCodeGen:
             codegen.convert_builtin_function("memoryBarrierBuffer") == "__threadfence"
         )
         assert codegen.convert_builtin_function("memoryBarrierImage") == "__threadfence"
+        assert codegen.convert_builtin_function("allMemoryBarrier") == "__threadfence"
+        assert (
+            codegen.convert_builtin_function("deviceMemoryBarrier") == "__threadfence"
+        )
         assert codegen.convert_builtin_function("workgroupBarrier") == "__syncthreads"
 
         assert codegen.convert_builtin_function("texture") == "tex2D"
@@ -930,6 +934,8 @@ class TestCudaCodeGen:
                     memoryBarrierShared();
                     memoryBarrierBuffer();
                     memoryBarrierImage();
+                    allMemoryBarrier();
+                    deviceMemoryBarrier();
                     workgroupBarrier();
                 }
             }
@@ -945,7 +951,7 @@ class TestCudaCodeGen:
 
         assert "__syncthreads();" in cuda_code
         assert cuda_code.count("__syncthreads();") == 2
-        assert cuda_code.count("__threadfence();") == 3
+        assert cuda_code.count("__threadfence();") == 5
         assert cuda_code.count("__threadfence_block();") == 2
         assert "barrier();" not in cuda_code
         assert "groupMemoryBarrier();" not in cuda_code
@@ -953,6 +959,8 @@ class TestCudaCodeGen:
         assert "memoryBarrierShared();" not in cuda_code
         assert "memoryBarrierBuffer();" not in cuda_code
         assert "memoryBarrierImage();" not in cuda_code
+        assert "allMemoryBarrier();" not in cuda_code
+        assert "deviceMemoryBarrier();" not in cuda_code
         assert "workgroupBarrier();" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
@@ -1164,6 +1172,14 @@ class TestCudaCodeGen:
                     return;
                 }
 
+                void allMemoryBarrier() {
+                    return;
+                }
+
+                void deviceMemoryBarrier() {
+                    return;
+                }
+
                 void main() {
                     barrier();
                     memoryBarrier();
@@ -1172,6 +1188,8 @@ class TestCudaCodeGen:
                     memoryBarrierShared();
                     memoryBarrierBuffer();
                     memoryBarrierImage();
+                    allMemoryBarrier();
+                    deviceMemoryBarrier();
                 }
             }
         }
@@ -1187,6 +1205,8 @@ class TestCudaCodeGen:
         assert "void memoryBarrierShared()" in cuda_code
         assert "void memoryBarrierBuffer()" in cuda_code
         assert "void memoryBarrierImage()" in cuda_code
+        assert "void allMemoryBarrier()" in cuda_code
+        assert "void deviceMemoryBarrier()" in cuda_code
         assert "barrier();" in cuda_code
         assert "memoryBarrier();" in cuda_code
         assert "workgroupBarrier();" in cuda_code
@@ -1194,6 +1214,8 @@ class TestCudaCodeGen:
         assert "memoryBarrierShared();" in cuda_code
         assert "memoryBarrierBuffer();" in cuda_code
         assert "memoryBarrierImage();" in cuda_code
+        assert "allMemoryBarrier();" in cuda_code
+        assert "deviceMemoryBarrier();" in cuda_code
         assert "__syncthreads();" not in cuda_code
         assert "__threadfence();" not in cuda_code
         assert "__threadfence_block();" not in cuda_code
@@ -1207,6 +1229,8 @@ class TestCudaCodeGen:
             "memoryBarrierShared",
             "memoryBarrierBuffer",
             "memoryBarrierImage",
+            "allMemoryBarrier",
+            "deviceMemoryBarrier",
             "workgroupBarrier",
         ],
     )
