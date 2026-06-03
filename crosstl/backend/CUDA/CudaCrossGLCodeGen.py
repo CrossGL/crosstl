@@ -565,6 +565,8 @@ class CudaToCrossGLConverter:
         return self.global_resource_object_type_hints.get(name)
 
     def emit_statement(self, stmt):
+        if stmt is None:
+            return
         if isinstance(stmt, list):
             for item in stmt:
                 self.emit_statement(item)
@@ -3611,6 +3613,7 @@ class CudaToCrossGLConverter:
             self.push_cuda_async_sync_scope()
             for param in node.params:
                 self.register_unique_ptr_name(param.name, param.vtype)
+                self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
             try:
                 for stmt in node.body:
@@ -3656,13 +3659,17 @@ class CudaToCrossGLConverter:
             for param in kernel.params:
                 if "*" in param.vtype:
                     element_type = self.convert_cuda_pointer_element_type(param.vtype)
+                    storage_type = self.format_crossgl_type_syntax(
+                        f"array<{element_type}>"
+                    )
                     params.append(
-                        f"@group(0) @binding({len(params)}) var<storage, read_write> {param.name}: array<{element_type}>"
+                        f"@group(0) @binding({len(params)}) var<storage, read_write> {param.name}: {storage_type}"
                     )
                 else:
                     param_type = self.convert_cuda_variable_type_to_crossgl(
                         param.vtype, param.name
                     )
+                    param_type = self.format_crossgl_type_syntax(param_type)
                     params.append(f"{param_type} {param.name}")
 
             self.emit(f"fn {kernel.name}(")
@@ -3689,6 +3696,7 @@ class CudaToCrossGLConverter:
             self.push_cuda_async_sync_scope()
             for param in kernel.params:
                 self.register_unique_ptr_name(param.name, param.vtype)
+                self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
             try:
                 for stmt in kernel.body:
@@ -3820,6 +3828,11 @@ class CudaToCrossGLConverter:
     def register_cooperative_group_name(self, name, group_metadata):
         if name:
             self.cooperative_group_scopes[-1][name] = group_metadata
+
+    def register_cooperative_group_parameter(self, param):
+        metadata = self.cooperative_group_metadata_from_type(param.vtype)
+        if metadata is not None:
+            self.register_cooperative_group_name(param.name, metadata)
 
     def lookup_cooperative_group_name(self, name):
         metadata = self.lookup_cooperative_group_metadata(name)
@@ -4373,6 +4386,7 @@ class CudaToCrossGLConverter:
         return metadata["kind"] if metadata is not None else None
 
     def cooperative_group_metadata_from_type(self, type_name):
+        type_name = self.strip_type_qualifiers(type_name)
         base_type, template_args = self.parse_cpp_template(type_name)
         base_name = self.cooperative_group_base_name(type_name)
         if base_name in {
@@ -5127,6 +5141,10 @@ class CudaToCrossGLConverter:
             "dim3": "vec3<u32>",
         }
 
+        cooperative_group_type = self.convert_cooperative_group_type(cuda_type)
+        if cooperative_group_type is not None:
+            return cooperative_group_type
+
         resource_type = self.convert_cuda_resource_type(cuda_type)
         if resource_type is not None:
             return resource_type
@@ -5142,6 +5160,18 @@ class CudaToCrossGLConverter:
             return self.convert_cuda_pointer_type(cuda_type)
 
         return type_mapping.get(cuda_type, cuda_type)
+
+    def convert_cooperative_group_type(self, cuda_type):
+        metadata = self.cooperative_group_metadata_from_type(cuda_type)
+        if metadata is None:
+            return None
+        group_kind = metadata["kind"]
+        if group_kind == "thread_block_tile" and metadata.get("tile_size"):
+            return f"cooperative_groups_thread_block_tile_{metadata['tile_size']}"
+        return f"cooperative_groups_{group_kind}"
+
+    def format_crossgl_type_syntax(self, type_name):
+        return str(type_name).replace(">>", "> >")
 
     def convert_cuda_resource_type(self, cuda_type):
         base_name, template_args = self.parse_cpp_template(cuda_type)

@@ -2958,6 +2958,32 @@ class HipParser:
                     }
                 if depth < 0:
                     return False
+            elif token_type == "KERNEL_LAUNCH_END":
+                depth -= 3
+                if depth == 0:
+                    next_index = index + 1
+                    while (
+                        next_index < len(self.tokens)
+                        and self.tokens[next_index].type == "NEWLINE"
+                    ):
+                        next_index += 1
+                    next_type = (
+                        self.tokens[next_index].type
+                        if next_index < len(self.tokens)
+                        else "EOF"
+                    )
+                    return next_type in {
+                        "LPAREN",
+                        "SCOPE",
+                        "DOT",
+                        "LBRACKET",
+                        "LBRACE",
+                        "KERNEL_LAUNCH_START",
+                        "COMMA",
+                        "RPAREN",
+                    }
+                if depth < 0:
+                    return False
             elif token_type in {"SEMICOLON", "ASSIGN"}:
                 return False
             index += 1
@@ -2992,6 +3018,13 @@ class HipParser:
             elif token_type == "RSHIFT":
                 self.consume("RSHIFT")
                 for _ in range(2):
+                    depth -= 1
+                    if depth == 0:
+                        break
+                    parts.append(">")
+            elif token_type == "KERNEL_LAUNCH_END":
+                self.consume("KERNEL_LAUNCH_END")
+                for _ in range(3):
                     depth -= 1
                     if depth == 0:
                         break
@@ -4168,6 +4201,12 @@ class HipParser:
                     return index + 1
             elif token_type == "RSHIFT":
                 depth -= 2
+                if depth == 0:
+                    return index + 1
+                if depth < 0:
+                    return None
+            elif token_type == "KERNEL_LAUNCH_END":
+                depth -= 3
                 if depth == 0:
                     return index + 1
                 if depth < 0:

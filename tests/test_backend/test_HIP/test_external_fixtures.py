@@ -1,0 +1,175 @@
+from crosstl.backend.HIP.HipAst import FunctionCallNode, KernelLaunchNode
+from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
+from crosstl.backend.HIP.HipLexer import HipLexer
+from crosstl.backend.HIP.HipParser import HipParser
+from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import Parser as CrossGLParser
+
+
+EXTERNAL_FIXTURE_SOURCES = {
+    "rocm_examples": {
+        "url": "https://github.com/ROCm/rocm-examples",
+        "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
+    },
+    "hip_examples": {
+        "url": "https://github.com/ROCm/HIP-Examples",
+        "commit": "cdf9d101acd9a3fc89ee750f73c1f1958cbd5cc3",
+    },
+    "hpc_training": {
+        "url": "https://github.com/amd/HPCTrainingExamples",
+        "commit": "56b903adadb113097ed4333d0bdc3e3bc537c8a2",
+    },
+    "hip": {
+        "url": "https://github.com/ROCm/HIP",
+        "commit": "0447ec8e079d9cd0a2bc966124977a0b92fac472",
+    },
+}
+
+
+def parse_hip_source(source):
+    tokens = HipLexer(source).tokenize()
+    return HipParser(tokens).parse()
+
+
+def generate_crossgl_from_hip(source):
+    ast = parse_hip_source(source)
+    return ast, HipToCrossGLConverter().generate(ast)
+
+
+def assert_crossgl_reparses(source):
+    ast, crossgl = generate_crossgl_from_hip(source)
+    CrossGLParser(CrossGLLexer(crossgl).tokens).parse()
+    return ast, crossgl
+
+
+def test_external_rocm_saxpy_kernel_launch_crossgl_reparse():
+    source = """
+    __global__ void saxpy_kernel(
+        const float a,
+        const float* d_x,
+        float* d_y,
+        const unsigned int size) {
+        const unsigned int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if(global_idx < size) {
+            d_y[global_idx] = a * d_x[global_idx] + d_y[global_idx];
+        }
+    }
+
+    void host(float a, float* d_x, float* d_y, unsigned int size) {
+        saxpy_kernel<<<dim3(ceiling_div(size, 256)),
+                       dim3(256),
+                       0,
+                       hipStreamDefault>>>(a, d_x, d_y, size);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    launch = ast.statements[1].body[0]
+    assert isinstance(launch, KernelLaunchNode)
+    assert launch.kernel_name == "saxpy_kernel"
+    assert "fn saxpy_kernel(" in crossgl
+    assert "Kernel launch: saxpy_kernel<<<" in crossgl
+
+
+def test_external_rocm_reduction_nested_template_static_for_crossgl_reparse():
+    source = """
+    template<uint32_t WarpCount, uint32_t WarpSize>
+    __global__ void kernel(unsigned* out) {
+        unsigned res = 0;
+        tmp::static_for<WarpCount,
+                        tmp::not_equal<0>,
+                        tmp::select<tmp::not_equal<1>,
+                                    tmp::divide_ceil<WarpSize>,
+                                    tmp::constant<0>>>(
+            [&]<uint32_t ActiveWarps>()
+            {
+                if(threadIdx.x < ActiveWarps) {
+                    res = max(res, __shfl_down(res, 1));
+                }
+            });
+        out[threadIdx.x] = res;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    static_for = ast.statements[0].body[1]
+    assert isinstance(static_for, FunctionCallNode)
+    assert static_for.name == (
+        "tmp::static_for<WarpCount, tmp::not_equal<0>, "
+        "tmp::select<tmp::not_equal<1>, tmp::divide_ceil<WarpSize>, "
+        "tmp::constant<0>>>"
+    )
+    assert "tmp::static_for<WarpCount, tmp::not_equal<0>" in crossgl
+
+
+def test_external_rocm_reduction_digit_separator_literals_crossgl_reparse():
+    source = """
+    __global__ void kernel(unsigned* out) {
+        constexpr unsigned input_count = 100'000'000;
+        out[0] = input_count;
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "100000000" in crossgl
+    assert "100'000'000" not in crossgl
+
+
+def test_external_hip_examples_histogram_dynamic_shared_crossgl_reparse():
+    source = """
+    #define BIN_SIZE 256
+    __global__ void histogram256(unsigned int* data, unsigned int* binResult) {
+        HIP_DYNAMIC_SHARED(unsigned char, sharedArray);
+        size_t localId = hipThreadIdx_x;
+        uchar4* input = (uchar4*)sharedArray;
+        for(int i = 0; i < 64; ++i) {
+            input[localId + i] = make_uchar4(0, 0, 0, 0);
+        }
+        __syncthreads();
+        uint4 binCount = make_uint4(0, 0, 0, 0);
+        uint result = binCount.x + binCount.y + binCount.z + binCount.w;
+        binResult[localId] = result;
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "var<workgroup> sharedArray: array<u8>;" in crossgl
+    assert "var input: ptr<vec4<u8>> = ptr<vec4<u8>>(sharedArray);" in crossgl
+    assert "workgroupBarrier();" in crossgl
+    assert "var binCount: vec4<u32> = vec4<u32>(0, 0, 0, 0);" in crossgl
+
+
+def test_external_hpc_training_double2_launch_codegen():
+    source = """
+    __launch_bounds__(256,1)
+    __global__ void kernel_5(
+        double2* d_x,
+        double2* d_y,
+        double2* d_z,
+        double a,
+        size_t N) {
+        size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if(idx >= N) return;
+        d_z[idx] = d_x[idx] * a + d_y[idx];
+    }
+
+    void host(double* d_x, double* d_y, double* d_z, double a, size_t N) {
+        dim3 grid_5(((N/2)+255)/256, 1, 1);
+        dim3 block_5(256, 1, 1);
+        kernel_5 <<< grid_5, block_5 >>> (
+            (double2*)d_x, (double2*)d_y, (double2*)d_z, a, N/2);
+    }
+    """
+
+    ast, crossgl = generate_crossgl_from_hip(source)
+
+    launch = ast.statements[1].body[2]
+    assert isinstance(launch, KernelLaunchNode)
+    assert launch.kernel_name == "kernel_5"
+    assert "// HIP launch bounds: (256, 1)" in crossgl
+    assert "array<vec2<f64>>" in crossgl
+    assert "ptr<vec2<f64>>(d_x)" in crossgl

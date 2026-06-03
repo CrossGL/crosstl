@@ -1,5 +1,7 @@
 """HIP to CrossGL Code Generator"""
 
+import re
+
 from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -19,6 +21,18 @@ from .HipAst import (
 
 class HipToCrossGLConverter:
     """Serialize HIP backend AST nodes back into CrossGL source."""
+
+    CPP_NUMERIC_LITERAL_WITH_SEPARATOR = re.compile(
+        r"^(?=.*')"
+        r"(?:"
+        r"0[xX][0-9a-fA-F](?:'?[0-9a-fA-F])*"
+        r"|0[bB][01](?:'?[01])*"
+        r"|(?:\d(?:'?\d)*)(?:\.(?:\d(?:'?\d)*)?)?"
+        r"(?:[eE][+-]?\d(?:'?\d)*)?"
+        r"|(?:\d(?:'?\d)*)?\.(?:\d(?:'?\d)*)(?:[eE][+-]?\d(?:'?\d)*)?"
+        r")"
+        r"[fFdDlLuU]*$"
+    )
 
     HIP_RUNTIME_ERROR_WRAPPER_NAMES = {
         "CHECK_HIP",
@@ -274,6 +288,7 @@ class HipToCrossGLConverter:
     def generic_visit(self, node):
         """Fallback converter for primitive values, lists, and unknown nodes."""
         if isinstance(node, str):
+            node = self.normalize_cpp_numeric_literal(node)
             attribute_expression = self.format_hip_device_attribute_read(node)
             if attribute_expression is not None:
                 return attribute_expression
@@ -285,6 +300,13 @@ class HipToCrossGLConverter:
             return [self.visit(item) for item in node]
         else:
             return str(node)
+
+    def normalize_cpp_numeric_literal(self, value):
+        if "'" not in value:
+            return value
+        if self.CPP_NUMERIC_LITERAL_WITH_SEPARATOR.match(value):
+            return value.replace("'", "")
+        return value
 
     def emit(self, code):
         """Append a line of CrossGL output using the current indentation level."""

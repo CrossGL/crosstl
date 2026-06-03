@@ -34,6 +34,7 @@ class SlangParser:
         "pervertex",
         "__prefix",
         "__postfix",
+        "__exported",
         "__ref",
         "__func_extension",
         "expand",
@@ -170,10 +171,10 @@ class SlangParser:
 
             declaration_token = self.peek_declaration_token_type()
 
-            if self.current_token[0] == "IMPORT":
-                imports.append(self.parse_import())
-            elif self.current_token[0] == "INCLUDE":
-                includes.append(self.parse_include())
+            if declaration_token == "IMPORT":
+                imports.append(self.parse_qualified_import())
+            elif declaration_token == "INCLUDE":
+                includes.append(self.parse_qualified_include())
             elif self.current_token[0] == "MODULE":
                 modules.append(self.parse_module_declaration())
             elif self.current_token[0] == "IMPLEMENTING":
@@ -188,7 +189,7 @@ class SlangParser:
                 structs.append(self.parse_struct())
             elif declaration_token == "EXTENSION":
                 extensions.append(self.parse_extension())
-            elif declaration_token == "CBUFFER":
+            elif declaration_token in {"CBUFFER", "TBUFFER"}:
                 cbuffers.append(self.parse_cbuffer(attributes=pending_attributes))
             elif self.is_glsl_uniform_block_declaration_start():
                 cbuffers.append(
@@ -867,7 +868,11 @@ class SlangParser:
     def parse_cbuffer(self, attributes=None):
         attributes = attributes or []
         qualifiers = self.parse_qualifiers()
-        self.eat("CBUFFER")
+        buffer_token = self.current_token[0]
+        if buffer_token not in {"CBUFFER", "TBUFFER"}:
+            raise SyntaxError(f"Expected buffer declaration, got {buffer_token}")
+        buffer_kind = self.current_token[1]
+        self.eat(buffer_token)
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         register_name = self.parse_register_annotation()
@@ -882,6 +887,7 @@ class SlangParser:
         node.register = register_name
         node.attributes = attributes
         node.qualifiers = qualifiers
+        node.buffer_kind = buffer_kind
         return node
 
     def is_glsl_uniform_block_declaration_start(self):
@@ -990,11 +996,21 @@ class SlangParser:
         self.eat("SEMICOLON")
         return ImportNode(module_path)
 
+    def parse_qualified_import(self):
+        qualifiers = self.parse_qualifiers()
+        node = self.parse_import()
+        node.qualifiers = qualifiers
+        return node
+
     def parse_include(self):
         self.eat("INCLUDE")
         include_path = self.parse_module_path()
         self.eat("SEMICOLON")
         return include_path
+
+    def parse_qualified_include(self):
+        self.parse_qualifiers()
+        return self.parse_include()
 
     def parse_module_declaration(self):
         self.eat("MODULE")
@@ -1666,8 +1682,15 @@ class SlangParser:
             if name and self.current_token[0] == "IDENTIFIER":
                 struct_def = f" {self.current_token[1]}"
                 self.eat("IDENTIFIER")
+            default_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_value = self.parse_expression()
             if self.current_token[0] == "COLON":
                 semantic = self.parse_semantic_annotations()
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_value = self.parse_expression()
             params.append(
                 VariableNode(
                     vtype + struct_def,
@@ -1675,6 +1698,7 @@ class SlangParser:
                     qualifiers=qualifiers,
                     semantic=semantic,
                     array_sizes=array_sizes,
+                    value=default_value,
                 )
             )
             if self.current_token[0] == "COMMA":

@@ -1378,6 +1378,12 @@ class CudaParser:
             return None
 
         self.eat("ASSIGN")
+        if self.is_decltype_alias_type_start():
+            alias_type = self.parse_alias_type_expression_until_semicolon()
+            self.eat("SEMICOLON")
+            self.type_aliases.add(name)
+            return TypeAliasNode(alias_type, name)
+
         alias_type = self.parse_type()
         if self.is_unnamed_function_pointer_alias_declarator():
             return self.parse_using_function_pointer_alias_declarator(name, alias_type)
@@ -1385,6 +1391,55 @@ class CudaParser:
         self.eat("SEMICOLON")
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
+
+    def is_decltype_alias_type_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "decltype"
+            and self.current_index + 1 < len(self.tokens)
+            and self.tokens[self.current_index + 1][0] == "LPAREN"
+        )
+
+    def parse_alias_type_expression_until_semicolon(self):
+        parts = []
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+        template_depth = 0
+
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if (
+                token_type == "SEMICOLON"
+                and paren_depth == 0
+                and bracket_depth == 0
+                and brace_depth == 0
+                and template_depth == 0
+            ):
+                break
+
+            parts.append(token_value)
+            if token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN" and paren_depth > 0:
+                paren_depth -= 1
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET" and bracket_depth > 0:
+                bracket_depth -= 1
+            elif token_type == "LBRACE":
+                brace_depth += 1
+            elif token_type == "RBRACE" and brace_depth > 0:
+                brace_depth -= 1
+            elif token_type == "LESS_THAN":
+                template_depth += 1
+            elif token_type == "GREATER_THAN" and template_depth > 0:
+                template_depth -= 1
+            elif token_type == "SHIFT_RIGHT" and template_depth > 0:
+                template_depth = max(0, template_depth - 2)
+            self.eat(token_type)
+
+        return self.format_template_parts(parts)
 
     def is_unnamed_function_pointer_alias_declarator(self):
         return (
@@ -3280,6 +3335,7 @@ class CudaParser:
                         "KERNEL_LAUNCH_START",
                         "COMMA",
                         "RPAREN",
+                        "RBRACKET",
                     }
             elif token_type == "SHIFT_RIGHT":
                 depth -= 2
@@ -3297,6 +3353,7 @@ class CudaParser:
                         "KERNEL_LAUNCH_START",
                         "COMMA",
                         "RPAREN",
+                        "RBRACKET",
                     }
                 if depth < 0:
                     return False
@@ -3316,6 +3373,7 @@ class CudaParser:
                         "KERNEL_LAUNCH_START",
                         "COMMA",
                         "RPAREN",
+                        "RBRACKET",
                     }
                 if depth < 0:
                     return False

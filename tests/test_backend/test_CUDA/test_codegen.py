@@ -7610,7 +7610,7 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "out: array<vec2<f32>>" in result
+        assert "out: array<vec2<f32> >" in result
         assert "indices: array<i32>" in result
         assert "var a: ptr<f32> = data;" in result
         assert "var b: ptr<f32> = data;" in result
