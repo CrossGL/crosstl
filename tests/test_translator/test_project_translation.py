@@ -126,6 +126,31 @@ def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tm
     ] == ["repo.scan"]
 
 
+def test_scan_project_accepts_repository_relative_include_patterns(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    other_dir = repo / "other"
+    shader_dir.mkdir(parents=True)
+    other_dir.mkdir()
+    (shader_dir / "main.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (other_dir / "ignored.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include = ["shaders/**/*.cgl", "other/**/*.cgl"]
+            exclude = []
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+
+    assert [unit.relative_path for unit in scan.units] == ["shaders/main.cgl"]
+    assert scan.skipped == []
+    assert {diagnostic.code for diagnostic in scan.diagnostics} == set()
+
+
 def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"

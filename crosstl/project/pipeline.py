@@ -497,7 +497,8 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
     discover_backend_plugins()
     known_extensions = tuple(SOURCE_REGISTRY.extensions())
     include_patterns = list(config.include_patterns)
-    if not include_patterns:
+    explicit_include_patterns = bool(include_patterns)
+    if not explicit_include_patterns:
         include_patterns = [f"**/*{extension}" for extension in known_extensions]
 
     candidates: set[Path] = set()
@@ -508,6 +509,12 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
         if not absolute_root.exists():
             continue
         for pattern in include_patterns:
+            if explicit_include_patterns:
+                candidates.update(
+                    path
+                    for path in config.root.glob(pattern)
+                    if path.is_file() and _is_relative_to(path, absolute_root)
+                )
             candidates.update(
                 path for path in absolute_root.glob(pattern) if path.is_file()
             )
