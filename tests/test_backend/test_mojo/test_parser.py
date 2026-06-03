@@ -1678,6 +1678,37 @@ def test_multiline_parenthesized_boolean_condition_parse_from_layout_tensor_docs
     assert condition.op == "&&"
 
 
+def test_modular_image_pipeline_blur_chained_bounds_parse():
+    # Reduced from modularml/mojo commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/image_pipeline.mojo blur kernel bounds check.
+    code = """
+    def blur_kernel():
+        if 0 <= cur_row < height and 0 <= cur_col < width:
+            pix_val_accum += Int(img_in[cur_row, cur_col])
+    """
+    ast = parse_code(tokenize_code(code))
+    condition = find_function(ast, "blur_kernel").body[0].condition
+    row_bounds = condition.left
+    col_bounds = condition.right
+
+    assert condition.op == "&&"
+    assert row_bounds.op == "&&"
+    assert row_bounds.left.op == "<="
+    assert row_bounds.left.left == "0"
+    assert row_bounds.left.right.name == "cur_row"
+    assert row_bounds.right.op == "<"
+    assert row_bounds.right.left.name == "cur_row"
+    assert row_bounds.right.right.name == "height"
+
+    assert col_bounds.op == "&&"
+    assert col_bounds.left.op == "<="
+    assert col_bounds.left.right.name == "cur_col"
+    assert col_bounds.right.op == "<"
+    assert col_bounds.right.left.name == "cur_col"
+    assert col_bounds.right.right.name == "width"
+
+
 def test_try_except_parse_from_layout_tensor_gpu_docs():
     code = """
     def main():

@@ -4864,6 +4864,47 @@ def test_spirv_specialization_and_workgroup_attributes_parse_from_dev_guide():
     assert shared.params[0].attributes[0].args == ["workgroup"]
 
 
+def test_rust_gpu_sky_shader_hex_default_spec_constant_parse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/sky-shader/src/lib.rs fragment specialization constant.
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(frag_coord)] in_frag_coord: Vec4,
+        #[spirv(push_constant)] constants: &ShaderConstants,
+        output: &mut Vec4,
+        #[spirv(spec_constant(id = 0x5007, default = 100))]
+        sun_intensity_extra_spec_const_factor: u32,
+    ) {
+        let frag_coord = vec2(in_frag_coord.x, in_frag_coord.y);
+        *output = fs(constants, frag_coord, sun_intensity_extra_spec_const_factor);
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.name == "main_fs"
+    assert function.attributes[0].args == ["fragment"]
+    assert function.params[3].name == "sun_intensity_extra_spec_const_factor"
+    assert function.params[3].vtype == "u32"
+    assert function.params[3].attributes[0].args == [
+        "spec_constant",
+        "(",
+        "id",
+        "=",
+        "0x5007",
+        "default",
+        "=",
+        "100",
+        ")",
+    ]
+    assert isinstance(function.body[-1].left, DereferenceNode)
+
+
 def test_error_handling():
     invalid_codes = [
         "fn incomplete(",

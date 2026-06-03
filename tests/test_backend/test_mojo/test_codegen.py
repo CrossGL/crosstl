@@ -292,6 +292,27 @@ def test_multiline_parenthesized_boolean_condition_codegen_from_layout_tensor_do
     ) in generated_code
 
 
+def test_modular_image_pipeline_blur_chained_bounds_codegen():
+    # Reduced from modularml/mojo commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/image_pipeline.mojo blur kernel bounds check.
+    code = """
+    def blur_kernel():
+        if 0 <= cur_row < height and 0 <= cur_col < width:
+            pix_val_accum += Int(img_in[cur_row, cur_col])
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "if ((((0 <= cur_row) && (cur_row < height)) && "
+        "((0 <= cur_col) && (cur_col < width))))"
+    ) in generated_code
+    assert "((0 <= cur_row) < height)" not in generated_code
+    assert "((0 <= cur_col) < width)" not in generated_code
+    assert "pix_val_accum += int(img_in[cur_row, cur_col]);" in generated_code
+
+
 def test_empty_index_access_codegen_from_layout_tensor_iterator_docs():
     code = """
     def main():

@@ -24,6 +24,7 @@ METALPETAL_REPO = "https://github.com/MetalPetal/MetalPetal"
 METALPETAL_COMMIT = "f9b78897bd4214bb097f352a1bde0a4f4a1e2ddb"
 BLENDER_REPO = "https://github.com/blender/blender"
 BLENDER_COMMIT = "2d196d20b93a9f6e596e6d451c5e845d84f21c89"
+BLENDER_TEXTURE_READ_COMMIT = "38657e6c5ccb9968bfcc55b4fd384ca528c71d10"
 
 
 EXTERNAL_FIXTURES = [
@@ -678,6 +679,60 @@ EXTERNAL_FIXTURES = [
                 update_tex.write(
                     output,
                     uint2(params.offset[0], params.offset[1]) + uint2(xx, yy));
+            }
+        """
+        ),
+    },
+    {
+        "name": "blender_texture_read_template_specialization_array_read",
+        "repo_url": BLENDER_REPO,
+        "commit": BLENDER_TEXTURE_READ_COMMIT,
+        "source_path": "source/blender/gpu/metal/kernels/compute_texture_read.msl",
+        "roundtrip": True,
+        "contains": [
+            "uint convert_type_u3cuint_u3e(float val)",
+            "image2DArray read_tex @texture(0) @readonly",
+            "imageLoad(read_tex, uvec3(uvec2(params.offset[0], params.offset[1]) + uvec2(xx, yy), uint(params.offset[2] + layer)))",
+            "buffer_store(output_data, index + i, convert_type_u3cuint_u3e(read_colour[i]));",
+        ],
+        "not_contains": ["convert_type<uint>"],
+        "source": (
+            """
+            using namespace metal;
+
+            template<typename T> T convert_type(float type)
+            {
+                return T(type);
+            }
+
+            template<> uint convert_type<uint>(float val)
+            {
+                return uint(val * float(0xFFFFFFFFu));
+            }
+
+            struct TextureReadParams {
+                int extent[3];
+                int offset[3];
+            };
+
+            kernel void compute_texture_read(
+                constant TextureReadParams &params [[buffer(0)]],
+                device uint *output_data [[buffer(1)]],
+                texture2d_array<float, access::read> read_tex [[texture(0)]],
+                uint3 position [[thread_position_in_grid]]) {
+                uint xx = position[0];
+                uint yy = position[1];
+                uint layer = position[2];
+                int index =
+                    (layer * (params.extent[0] * params.extent[1])
+                        + yy * params.extent[0] + xx) * 4;
+                float4 read_colour = read_tex.read(
+                    uint2(params.offset[0], params.offset[1]) + uint2(xx, yy),
+                    uint(params.offset[2] + layer));
+                for (int i = 0; i < 4; i++) {
+                    output_data[index + i] =
+                        convert_type<uint>(read_colour[i]);
+                }
             }
         """
         ),

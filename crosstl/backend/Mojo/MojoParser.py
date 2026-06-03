@@ -1456,6 +1456,7 @@ class MojoParser:
     def parse_relational(self):
         left = self.parse_shift()
         self.skip_expression_layout()
+        comparisons = []
         while (
             self.current_token[0]
             in [
@@ -1473,9 +1474,21 @@ class MojoParser:
                 op = self.current_token[1]
                 self.eat(self.current_token[0])
             right = self.parse_shift()
-            left = BinaryOpNode(left, op, right)
+            comparisons.append((left, op, right))
+            left = right
             self.skip_expression_layout()
-        return left
+        if not comparisons:
+            return left
+
+        left, op, right = comparisons[0]
+        expression = BinaryOpNode(left, op, right)
+        for left, op, right in comparisons[1:]:
+            expression = BinaryOpNode(
+                expression,
+                "&&",
+                BinaryOpNode(left, op, right),
+            )
+        return expression
 
     def is_identity_operator(self):
         return self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "is"

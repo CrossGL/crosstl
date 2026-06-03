@@ -8074,6 +8074,38 @@ def test_spirv_specialization_and_workgroup_attribute_codegen_from_dev_guide():
     assert "void main(vec4 tile[4] @ workgroup) @numthreads(32, 1, 1)" in result
 
 
+def test_rust_gpu_sky_shader_hex_default_spec_constant_codegen():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/sky-shader/src/lib.rs fragment specialization constant.
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(frag_coord)] in_frag_coord: Vec4,
+        #[spirv(push_constant)] constants: &ShaderConstants,
+        output: &mut Vec4,
+        #[spirv(spec_constant(id = 0x5007, default = 100))]
+        sun_intensity_extra_spec_const_factor: u32,
+    ) {
+        let frag_coord = vec2(in_frag_coord.x, in_frag_coord.y);
+        *output = fs(constants, frag_coord, sun_intensity_extra_spec_const_factor);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "fragment main_fs {" in result
+    assert "vec4 in_frag_coord @ gl_FragCoord" in result
+    assert "ShaderConstants constants @ push_constant" in result
+    assert "uint sun_intensity_extra_spec_const_factor @ constant_id(0x5007)" in result
+    assert (
+        "output = fs(constants, frag_coord, sun_intensity_extra_spec_const_factor);"
+        in result
+    )
+
+
 def test_complex_shader_conversion():
     code = """
     #[repr(C)]

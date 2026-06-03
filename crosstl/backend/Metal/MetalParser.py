@@ -622,10 +622,45 @@ class MetalParser:
             idx += 1
 
         if idx >= len(self.tokens) or self.tokens[idx][0] != "LPAREN":
+            if (
+                idx < len(self.tokens)
+                and self.tokens[idx][0] == "LESS_THAN"
+                and self.template_argument_list_at_followed_by(idx, {"LPAREN"})
+            ):
+                idx = self.skip_template_argument_list_at(idx)
+            else:
+                return False
+
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "LPAREN":
             return False
         if type_name == "sampler" and self.parenthesized_list_ends_with_semicolon(idx):
             return False
         return True
+
+    def template_argument_list_at_followed_by(self, idx, follow_token_types):
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "LESS_THAN":
+            return False
+        end = self.skip_template_argument_list_at(idx)
+        return (
+            end > idx
+            and end < len(self.tokens)
+            and self.tokens[end][0] in follow_token_types
+        )
+
+    def skip_template_argument_list_at(self, idx):
+        depth = 0
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    return idx + 1
+            elif depth > 0 and token_type in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
+                return idx
+            idx += 1
+        return idx
 
     def skip_scoped_type_suffix_at(self, idx):
         while idx < len(self.tokens) and self.tokens[idx][0] == "SCOPE":
@@ -1389,6 +1424,9 @@ class MetalParser:
                 )
             name += f"::{self.current_token[1]}"
             self.eat(self.current_token[0])
+        if self.template_argument_list_followed_by_call(follow_token_types={"LPAREN"}):
+            template_args = self.parse_template_argument_suffix()
+            name += f"<{self.format_generic_type_tokens(template_args)}>"
 
         self.eat("LPAREN")
         params = self.parse_parameters()

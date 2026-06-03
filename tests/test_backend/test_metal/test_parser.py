@@ -1303,6 +1303,29 @@ def test_parse_template_kernel_typename_without_space_from_llama_cpp():
     assert ast.functions[0].params[1].qualifiers == ["device"]
 
 
+def test_parse_explicit_template_specialization_from_blender_texture_read():
+    code = """
+    template<typename T> T convert_type(float type)
+    {
+        return T(type);
+    }
+
+    template<> uint convert_type<uint>(float val)
+    {
+        return uint(val * float(0xFFFFFFFFu));
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [func.name for func in ast.functions] == [
+        "convert_type",
+        "convert_type<uint>",
+    ]
+    assert ast.functions[0].generics == ["T"]
+    assert ast.functions[1].return_type == "uint"
+    assert ast.functions[1].generics == []
+
+
 def test_parse_template_struct_from_mlx_arg_reduce():
     code = """
     template <typename U>

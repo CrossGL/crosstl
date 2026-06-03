@@ -157,6 +157,36 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_PRECISE_DOT_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/spv.precise.dot.vert.out
+; Reduced from Test/spv.precise.dot.vert precise dot(v, v).
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %out_value %input_vec
+OpName %out_value "outValue"
+OpName %input_vec "inputVec"
+OpDecorate %out_value Location 0
+OpDecorate %input_vec Location 0
+OpDecorate %dot NoContraction
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_float = OpTypePointer Output %float
+%ptr_input_v4float = OpTypePointer Input %v4float
+%out_value = OpVariable %ptr_output_float Output
+%input_vec = OpVariable %ptr_input_v4float Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %input_vec
+%dot = OpDot %float %loaded %loaded
+OpStore %out_value %dot
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_PUSH_CONSTANT_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -1183,6 +1213,19 @@ def test_glslang_simple_mat_matrix_times_vector_codegen_reparse():
     assert "float4 v @input @location(0);" in generated_code
     assert "glPos = (mvp * v);" in generated_code
     assert "glPos = transformed;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_precise_dot_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_PRECISE_DOT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float outValue @output @location(0);" in generated_code
+    assert "float4 inputVec @input @location(0);" in generated_code
+    assert "outValue = dot(inputVec, inputVec);" in generated_code
+    assert "outValue = dot;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

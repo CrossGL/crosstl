@@ -1,4 +1,9 @@
-from crosstl.backend.CUDA.CudaAst import SharedMemoryNode, StructNode, TypeAliasNode
+from crosstl.backend.CUDA.CudaAst import (
+    AtomicOperationNode,
+    SharedMemoryNode,
+    StructNode,
+    TypeAliasNode,
+)
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
@@ -10,6 +15,7 @@ EXTERNAL_SAMPLES = [
         "repo": "https://github.com/NVIDIA/cuda-samples",
         "commit": "b7c5481c556c3fe98db060207ecaa41a4b9a9abc",
         "paths": [
+            "cpp/0_Introduction/simpleAtomicIntrinsics/simpleAtomicIntrinsics_kernel.cuh",
             "cpp/0_Introduction/simpleSurfaceWrite/simpleSurfaceWrite.cu",
             "cpp/0_Introduction/simpleVoteIntrinsics/simpleVote_kernel.cuh",
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
@@ -95,6 +101,52 @@ def test_cuda_samples_simple_vote_intrinsics_warp_vote_codegen_reparse():
     assert "cuda warp intrinsic __all_sync(mask, input[tx])" in crossgl
     assert "__any_sync(mask, input[tx]);" not in crossgl
     assert "__all_sync(mask, input[tx]);" not in crossgl
+
+
+def test_cuda_samples_simple_atomic_intrinsics_codegen_reparse():
+    source = """
+    __global__ void testKernel(int *g_odata) {
+        const unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+
+        atomicAdd(&g_odata[0], 10);
+        atomicSub(&g_odata[1], 10);
+        atomicExch(&g_odata[2], tid);
+        atomicMax(&g_odata[3], tid);
+        atomicMin(&g_odata[4], tid);
+        atomicInc((unsigned int *)&g_odata[5], 17);
+        atomicDec((unsigned int *)&g_odata[6], 137);
+        atomicCAS(&g_odata[7], tid - 1, tid);
+        atomicAnd(&g_odata[8], 2 * tid + 7);
+        atomicOr(&g_odata[9], 1 << tid);
+        atomicXor(&g_odata[10], tid);
+    }
+    """
+
+    ast = parse_cuda(source)
+    atomic_ops = [
+        stmt.operation
+        for stmt in ast.kernels[0].body
+        if isinstance(stmt, AtomicOperationNode)
+    ]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert atomic_ops == [
+        "atomicAdd",
+        "atomicSub",
+        "atomicExch",
+        "atomicMax",
+        "atomicMin",
+        "atomicInc",
+        "atomicDec",
+        "atomicCAS",
+        "atomicAnd",
+        "atomicOr",
+        "atomicXor",
+    ]
+    assert "atomicExchange(g_odata[2], tid);" in crossgl
+    assert "atomicCompareExchange(g_odata[7], (tid - 1), tid);" in crossgl
+    assert "atomicOr(g_odata[9], (1 << tid));" in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_samples_scan_cooperative_group_parameter_codegen_reparse():

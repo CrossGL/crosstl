@@ -1212,9 +1212,49 @@ class HLSLParser:
             if semantic_upper == "SV_POSITION":
                 return "vertex"
         for param in params:
+            if not getattr(param, "semantic", None):
+                continue
+
+            semantic_names = self.semantic_names_for_stage_inference(param.semantic)
+            if self.parameter_has_output_qualifier(param):
+                if any(
+                    self.is_fragment_output_semantic(name) for name in semantic_names
+                ):
+                    return "fragment"
+                if any(self.is_vertex_output_semantic(name) for name in semantic_names):
+                    return "vertex"
+            if any(self.is_vertex_input_semantic(name) for name in semantic_names):
+                return "vertex"
+        for param in params:
             if getattr(param, "semantic", None) == "SV_DispatchThreadID":
                 return "compute"
         return None
+
+    def semantic_names_for_stage_inference(self, semantic):
+        return [
+            part.strip().upper() for part in str(semantic).split(":") if part.strip()
+        ]
+
+    def parameter_has_output_qualifier(self, param):
+        return any(
+            str(qualifier).lower() in {"out", "inout"}
+            for qualifier in getattr(param, "qualifiers", []) or []
+        )
+
+    def is_fragment_output_semantic(self, semantic):
+        return (
+            semantic.startswith("SV_TARGET")
+            or semantic.startswith("SV_DEPTH")
+            or semantic == "SV_COVERAGE"
+        )
+
+    def is_vertex_output_semantic(self, semantic):
+        return semantic == "SV_POSITION" or semantic.startswith(
+            ("SV_CLIPDISTANCE", "SV_CULLDISTANCE")
+        )
+
+    def is_vertex_input_semantic(self, semantic):
+        return semantic in {"SV_VERTEXID", "SV_INSTANCEID"}
 
     def parse_parameters(self):
         self.eat("LPAREN")

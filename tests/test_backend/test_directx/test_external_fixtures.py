@@ -92,6 +92,32 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_graphics_samples_miniengine_screen_quad_common_vs",
+        repo=DIRECTX_GRAPHICS_SAMPLES_REPO,
+        commit=DIRECTX_GRAPHICS_SAMPLES_COMMIT,
+        path="MiniEngine/Core/Shaders/ScreenQuadCommonVS.hlsl",
+        code=textwrap.dedent("""
+            #include "CommonRS.hlsli"
+
+            [RootSignature(Common_RootSig)]
+            void main(
+                in uint VertID : SV_VertexID,
+                out float4 Pos : SV_Position,
+                out float2 Tex : TexCoord0
+            )
+            {
+                Tex = float2(uint2(VertID, VertID << 1) & 2);
+                Pos = float4(lerp(float2(-1, 1), float2(1, -1), Tex), 0, 1);
+            }
+        """).strip(),
+        contains=(
+            "vertex {",
+            "uint VertID @ gl_VertexID",
+            "out vec4 Pos @ gl_Position",
+            "Tex = vec2(uvec2(VertID, VertID << 1) & 2);",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_groupshared_splat",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

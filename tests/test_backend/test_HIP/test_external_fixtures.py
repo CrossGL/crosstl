@@ -1,6 +1,7 @@
 from crosstl.backend.HIP.HipAst import (
     AtomicOperationNode,
     FunctionCallNode,
+    HipAsmNode,
     KernelLaunchNode,
     VariableNode,
 )
@@ -22,6 +23,11 @@ EXTERNAL_FIXTURE_SOURCES = {
             "HIP-Basic/texture_management/main.hip",
             "HIP-Basic/warp_shuffle/main.hip",
         ],
+    },
+    "rocm_examples_inline_assembly": {
+        "url": "https://github.com/ROCm/rocm-examples",
+        "commit": "b4ee9992e851a078c99d93de59d6142a51f5e3a1",
+        "paths": ["HIP-Basic/inline_assembly/main.hip"],
     },
     "hip_examples": {
         "url": "https://github.com/ROCm/HIP-Examples",
@@ -224,6 +230,50 @@ def test_external_rocm_saxpy_kernel_launch_crossgl_reparse():
     assert launch.kernel_name == "saxpy_kernel"
     assert "fn saxpy_kernel(" in crossgl
     assert "Kernel launch: saxpy_kernel<<<" in crossgl
+
+
+def test_external_rocm_inline_assembly_kernel_codegen_reparse():
+    source = """
+    __global__ void matrix_transpose_kernel(float* out,
+                                            const float* in,
+                                            const unsigned int width) {
+        int x = blockDim.x * blockIdx.x + threadIdx.x;
+        int y = blockDim.y * blockIdx.y + threadIdx.y;
+
+        asm volatile("v_mov_b32_e32 %0, %1"
+                     : "=v"(out[x * width + y])
+                     : "v"(in[y * width + x]));
+    }
+
+    void host(float* d_transposed_matrix, float* d_matrix, unsigned int width) {
+        matrix_transpose_kernel<<<dim3(width / 8, width / 8),
+                                  dim3(8, 8),
+                                  0,
+                                  hipStreamDefault>>>(
+            d_transposed_matrix,
+            d_matrix,
+            width);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    asm_stmt = ast.statements[0].body[2]
+    launch = ast.statements[1].body[0]
+
+    assert isinstance(asm_stmt, HipAsmNode)
+    assert asm_stmt.is_volatile is True
+    assert asm_stmt.template == '"v_mov_b32_e32 %0, %1"'
+    assert asm_stmt.outputs[0].constraint == '"=v"'
+    assert asm_stmt.outputs[0].expression.array == "out"
+    assert asm_stmt.inputs[0].constraint == '"v"'
+    assert asm_stmt.inputs[0].expression.array == "in"
+    assert isinstance(launch, KernelLaunchNode)
+    assert '// HIP inline assembly volatile: "v_mov_b32_e32 %0, %1"' in crossgl
+    assert '// HIP inline assembly outputs: "=v"(out[((x * width) + y)])' in crossgl
+    assert (
+        "// Kernel launch: matrix_transpose_kernel<<<vec3<u32>((width / 8), "
+        "(width / 8)), vec3<u32>(8, 8), 0, hipStreamDefault>>>()" in crossgl
+    )
 
 
 def test_external_rocm_reduction_nested_template_static_for_crossgl_reparse():
