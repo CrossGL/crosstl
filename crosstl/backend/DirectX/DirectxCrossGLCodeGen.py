@@ -2085,7 +2085,11 @@ class HLSLToCrossGLConverter:
                     alias, "original_type", None
                 )
                 if alias_type is not None:
-                    code += f"    type {alias.name} = {self.map_type(alias_type)};\n"
+                    array_suffix = self.format_array_suffixes(alias)
+                    code += (
+                        f"    type {alias.name} = "
+                        f"{self.map_type(alias_type)}{array_suffix};\n"
+                    )
         if enums:
             for enum in enums:
                 if isinstance(enum, EnumNode):

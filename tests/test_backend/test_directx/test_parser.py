@@ -2539,6 +2539,34 @@ def test_parse_top_level_anonymous_struct_variable_from_dxc_rewriter_samples():
     assert isinstance(anonymous.variable_declarations[0].value, InitializerListNode)
 
 
+def test_parse_anonymous_struct_array_typedef_from_dxc_codegen_debug_tests():
+    # Source: microsoft/DirectXShaderCompiler
+    # tools/clang/test/CodeGenHLSL/debug/locals/array_of_structs_nested_noopt.hlsl
+    ast = parse_code("""
+        typedef struct { int a[4]; float2 b[2]; } type[3];
+
+        int main() : OUT {
+            type var = (type)0;
+            return var[0].a[0];
+        }
+        """)
+
+    typedef = ast.typedefs[0]
+    anonymous = ast.structs[0]
+    local_var = ast.functions[0].body[0]
+
+    assert typedef.name == "type"
+    assert typedef.alias_type == "AnonymousStruct_type"
+    assert typedef.array_sizes == [3]
+    assert anonymous.name == "AnonymousStruct_type"
+    assert [member.name for member in anonymous.members] == ["a", "b"]
+    assert anonymous.members[0].array_sizes == [4]
+    assert anonymous.members[1].array_sizes == [2]
+    assert local_var.vtype == "type"
+    assert isinstance(local_var.value, CastNode)
+    assert local_var.value.target_type == "type"
+
+
 def test_hlsl_define_skips_cpp_compatibility_branch_from_directx_samples():
     code = textwrap.dedent("""
         #ifndef HLSL

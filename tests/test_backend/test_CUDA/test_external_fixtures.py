@@ -650,6 +650,28 @@ def test_cuda_samples_cdp_advanced_quicksort_popc_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_samples_sobol_qrng_ffs_codegen_reparse():
+    source = """
+    __global__ void sobol(unsigned int *v,
+                          unsigned int *out,
+                          unsigned int stride) {
+        for (unsigned int k = 0; k < __ffs(stride) - 1; k++) {
+            out[k] = v[k];
+        }
+
+        unsigned int v_log2stridem1 = v[__ffs(stride) - 2];
+        out[threadIdx.x] = v_log2stridem1;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "(k < ((findLSB(stride) + 1) - 1))" in crossgl
+    assert "v[((findLSB(stride) + 1) - 2)]" in crossgl
+    assert "__ffs" not in crossgl
+
+
 def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():
     source = """
     namespace cg = cooperative_groups;

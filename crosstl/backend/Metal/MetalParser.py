@@ -1385,6 +1385,9 @@ class MetalParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
+        base_types = []
+        if self.current_token[0] == "COLON":
+            base_types = self.parse_struct_base_clause()
         self.eat("LBRACE")
 
         members = self.parse_struct_members()
@@ -1394,7 +1397,44 @@ class MetalParser:
 
         struct_node = StructNode(name, members)
         struct_node.alignas = alignas_specs
+        struct_node.base_types = base_types
         return struct_node
+
+    def parse_struct_base_clause(self):
+        self.eat("COLON")
+        bases = []
+        parts = []
+        depth = 0
+        paired_closers = {
+            "LESS_THAN": "GREATER_THAN",
+            "LPAREN": "RPAREN",
+            "LBRACKET": "RBRACKET",
+        }
+        open_tokens = set(paired_closers)
+        close_tokens = set(paired_closers.values())
+
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if token_type == "LBRACE" or (depth == 0 and token_type == "COMMA"):
+                if parts:
+                    bases.append(self.format_generic_type_tokens(parts))
+                    parts = []
+                if token_type == "COMMA":
+                    self.eat("COMMA")
+                    continue
+                break
+            if token_type in open_tokens:
+                depth += 1
+            elif token_type == "SHIFT_RIGHT" and depth > 0:
+                depth = max(0, depth - 2)
+            elif token_type in close_tokens and depth > 0:
+                depth -= 1
+            parts.append(token_value)
+            self.eat(token_type)
+
+        if parts:
+            bases.append(self.format_generic_type_tokens(parts))
+        return bases
 
     def parse_union(self):
         self.eat("IDENTIFIER")
@@ -1426,6 +1466,9 @@ class MetalParser:
                 continue
             if self.current_token[0] == "USING":
                 self.parse_using_statement()
+                continue
+            if self.current_token[0] == "TYPEDEF":
+                self.parse_typedef()
                 continue
             if self.is_template_declaration_start():
                 self.skip_template_declaration()

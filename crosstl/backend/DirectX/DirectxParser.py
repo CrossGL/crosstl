@@ -257,7 +257,9 @@ class HLSLParser:
                 continue
 
             if self.current_token[0] == "TYPEDEF":
+                synthetic_start = len(self.synthetic_structs)
                 typedefs.append(self.parse_typedef())
+                structs.extend(self.synthetic_structs[synthetic_start:])
                 continue
 
             if self.is_class_declaration_prefix():
@@ -1064,13 +1066,96 @@ class HLSLParser:
     def parse_typedef(self):
         self.eat("TYPEDEF")
         qualifiers = self.parse_qualifiers()
+
+        if self.is_struct_typedef_with_body():
+            return self.parse_struct_typedef(qualifiers)
+
         alias_type = self.parse_type()
         qualifiers.extend(self.parse_post_type_qualifiers())
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_identifier()
+        array_sizes = self.parse_array_suffixes()
         self.eat("SEMICOLON")
         alias = TypeAliasNode(alias_type, name)
         alias.qualifiers = qualifiers
+        alias.array_sizes = array_sizes
+        return alias
+
+    def is_struct_typedef_with_body(self):
+        if self.current_token[0] != "STRUCT":
+            return False
+        return self.peek()[0] == "LBRACE" or (
+            self.is_identifier_token(self.peek()[0]) and self.peek(2)[0] == "LBRACE"
+        )
+
+    def parse_struct_typedef(self, qualifiers):
+        self.eat("STRUCT")
+        struct_attributes = self.parse_attribute_list()
+
+        explicit_name = None
+        if (
+            self.is_identifier_token(self.current_token[0])
+            and self.peek()[0] == "LBRACE"
+        ):
+            explicit_name = self.parse_identifier()
+
+        self.eat("LBRACE")
+        members = []
+        methods = []
+        while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            attributes = self.parse_attribute_list()
+            member_qualifiers = self.parse_qualifiers()
+            if self.current_token[0] == "STRUCT":
+                declarations = self.parse_nested_struct_member(
+                    explicit_name or "AnonymousStruct",
+                    qualifiers=member_qualifiers,
+                    attributes=attributes,
+                    allow_semantic=True,
+                )
+                members.extend(self.ensure_statement_list(declarations))
+                continue
+            if not self.is_type_token(self.current_token[0]):
+                raise SyntaxError(
+                    f"Expected type in typedef struct member, got {self.current_token[0]}"
+                )
+            return_type = self.parse_type()
+            member_qualifiers.extend(self.parse_post_type_qualifiers())
+            member_name = self.parse_member_declarator_name()
+            if self.current_token[0] == "LPAREN":
+                methods.append(
+                    self.parse_function(
+                        return_type,
+                        member_name,
+                        qualifiers=member_qualifiers,
+                        attributes=attributes,
+                    )
+                )
+            else:
+                declarations = self.parse_variable_declaration_list_rest(
+                    return_type,
+                    member_name,
+                    qualifiers=member_qualifiers,
+                    attributes=attributes,
+                    allow_semantic=True,
+                    consume_semicolon=True,
+                )
+                members.extend(self.ensure_statement_list(declarations))
+
+        self.eat("RBRACE")
+        alias_name = self.parse_identifier()
+        array_sizes = self.parse_array_suffixes()
+        self.eat("SEMICOLON")
+
+        struct_name = explicit_name or self.synthetic_struct_type_name(
+            "AnonymousStruct", alias_name
+        )
+        struct_node = StructNode(struct_name, members)
+        struct_node.attributes = struct_attributes
+        struct_node.methods = methods
+        self.synthetic_structs.append(struct_node)
+
+        alias = TypeAliasNode(struct_name, alias_name)
+        alias.qualifiers = qualifiers
+        alias.array_sizes = array_sizes
         return alias
 
     def parse_cbuffer(self, attributes=None):

@@ -897,6 +897,36 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_COPY_OBJECT_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
+; Source path: test/opt/fold_test.cpp
+; Reduced from RedundantBitcastTest/MergeNegateTest CHECK patterns expecting
+; OpCopyObject to preserve the original value after folding.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %color
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %color "color"
+OpDecorate %input_value Location 0
+OpDecorate %color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_float = OpTypePointer Output %float
+%input_value = OpVariable %ptr_input_float Input
+%color = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %input_value
+%copy = OpCopyObject %float %loaded
+OpStore %color %copy
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_CROSS_COMPOSITE_INSERT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
 ; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
@@ -1828,6 +1858,19 @@ def test_spirv_tools_bitcast_success_codegen_reparse():
     assert "vecOut = uintBitsToFloat(uint2(1, 2));" in generated_code
     assert "float_value" not in generated_code
     assert "vec_value" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_copy_object_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_COPY_OBJECT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float inputValue @input @location(0);" in generated_code
+    assert "float color @output @location(0);" in generated_code
+    assert "color = inputValue;" in generated_code
+    assert "color = copy;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
