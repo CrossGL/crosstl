@@ -216,7 +216,7 @@ def test_rust_gpu_ray_query_parenthesized_statement_macro_codegen():
     result = parse_and_generate(code)
 
     assert "fragment {" in result
-    assert "AccelerationStructure accel @ binding(0)" in result
+    assert "AccelerationStructure accel @ set(0) @ binding(0)" in result
     assert "spirv_std::ray_query!(let mut handle);" in result
     assert (
         "handle.initialize(accel, RayFlags::NONE, 0, Vec3::ZERO, 0.0, Vec3::ZERO, 0.0);"
@@ -324,7 +324,7 @@ def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
     assert "vec4 out_pos @ gl_Position" in result
     assert "compute main_cs {" in result
     assert "uvec3 id @ gl_GlobalInvocationID" in result
-    assert "uint values[] @ binding(0)" in result
+    assert "uint values[] @ set(0) @ binding(0)" in result
 
 
 def test_rust_gpu_spirv_entry_point_name_drives_stage_name():
@@ -353,18 +353,18 @@ def test_rust_gpu_image_macro_types_drive_resource_parameters():
 
     #[spirv(fragment)]
     pub fn main_fs(
-        #[spirv(descriptor_set = 0, binding = 0)] sampled_tex: &Image2d,
-        #[spirv(descriptor_set = 0, binding = 1)] storage_tex: &Image!(2D, format=rgba16f, sampled=false),
-        #[spirv(descriptor_set = 0, binding = 2)] direct_tex: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 2, binding = 5)] sampled_tex: &Image2d,
+        #[spirv(descriptor_set = 3, binding = 1)] storage_tex: &Image!(2D, format=rgba16f, sampled=false),
+        #[spirv(descriptor_set = 4, binding = 2)] direct_tex: &Image!(2D, type=f32, sampled),
     ) {}
     """
     result = parse_and_generate(code)
 
     assert "typedef sampler2D Image2d;" in result
     assert "fragment main_fs {" in result
-    assert "Image2d sampled_tex @ binding(0)" in result
-    assert "image2D storage_tex @ binding(1)" in result
-    assert "sampler2D direct_tex @ binding(2)" in result
+    assert "Image2d sampled_tex @ set(2) @ binding(5)" in result
+    assert "image2D storage_tex @ set(3) @ binding(1)" in result
+    assert "sampler2D direct_tex @ set(4) @ binding(2)" in result
 
 
 def test_rust_gpu_sampled_image_generic_type_drives_resource_parameter():
@@ -380,7 +380,7 @@ def test_rust_gpu_sampled_image_generic_type_drives_resource_parameter():
     result = parse_and_generate(code)
 
     assert "fragment main_fs {" in result
-    assert "sampler2D tex @ binding(0)" in result
+    assert "sampler2D tex @ set(0) @ binding(0)" in result
     assert "void main(SampledImage" not in result
 
 

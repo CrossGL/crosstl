@@ -9107,8 +9107,16 @@ class RustToCrossGLConverter:
                             return f" @ {self.semantic_map[arg]}"
 
                     binding_index = self.attribute_arg_value(attr.args, "binding")
+                    descriptor_set = self.attribute_arg_value(
+                        attr.args, "descriptor_set"
+                    )
+                    semantics = []
+                    if descriptor_set is not None:
+                        semantics.append(f"set({descriptor_set})")
                     if binding_index is not None:
-                        return f" @ binding({binding_index})"
+                        semantics.append(f"binding({binding_index})")
+                    if semantics:
+                        return "".join(f" @ {semantic}" for semantic in semantics)
                 elif attr.name == "location" and attr.args:
                     return f" @ location({attr.args[0]})"
                 elif attr.name == "binding" and attr.args:
