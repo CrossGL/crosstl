@@ -7857,6 +7857,64 @@ def test_try_block_final_result_expression_conversion():
         pytest.fail(f"Try block final result expression conversion failed: {e}")
 
 
+def test_spirv_std_fragment_example_codegen_from_docs():
+    code = """
+    use spirv_std::spirv;
+    use glam::{Vec3, Vec4, vec2, vec3};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(frag_coord)] in_frag_coord: &Vec4,
+        #[spirv(push_constant)] constants: &ShaderConstants,
+        output: &mut Vec4,
+    ) {
+        let frag_coord = vec2(in_frag_coord.x, in_frag_coord.y);
+        let mut uv = (frag_coord - 0.5 * vec2(constants.width as f32, constants.height as f32))
+            / constants.height as f32;
+        uv.y = -uv.y;
+        let eye_pos = vec3(0.0, 0.0997, 0.2);
+        let sun_pos = vec3(0.0, 75.0, -1000.0);
+        let dir = get_ray_dir(uv, eye_pos, sun_pos);
+        let color = sky(dir, sun_pos);
+        *output = tonemap(color).extend(1.0)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "fragment {" in result
+    assert "vec4 in_frag_coord @ gl_FragCoord" in result
+    assert "ShaderConstants constants @ push_constant" in result
+    assert "vec2((float)constants.width, (float)constants.height)" in result
+    assert "uv.y = (-uv.y);" in result
+    assert "output = tonemap(color).extend(1.0);" in result
+
+
+def test_spirv_specialization_and_workgroup_attribute_codegen_from_dev_guide():
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(vertex)]
+    fn specialize(
+        #[spirv(spec_constant(id = 100))] x_u64_lo: u32,
+        #[spirv(spec_constant(id = 101))] x_u64_hi: u32,
+    ) {
+        let x_u64 = ((x_u64_hi as u64) << 32) | (x_u64_lo as u64);
+    }
+
+    #[spirv(compute(threads(32)))]
+    fn shared(#[spirv(workgroup)] tile: &mut [Vec4; 4]) {}
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint x_u64_lo @ constant_id(100)" in result
+    assert "uint x_u64_hi @ constant_id(101)" in result
+    assert "let x_u64 = (((uint64_t)x_u64_hi << 32) | (uint64_t)x_u64_lo);" in result
+    assert "compute shared_" in result
+    assert "void main(vec4 tile[4] @ workgroup) @numthreads(32, 1, 1)" in result
+
+
 def test_complex_shader_conversion():
     code = """
     #[repr(C)]

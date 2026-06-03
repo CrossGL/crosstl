@@ -1033,6 +1033,106 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode == "OpImage" and len(operands) >= 2:
+                expressions[result_id] = self.spirv_assembly_operand_expression(
+                    operands[1],
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode == "OpSampledImage" and len(operands) >= 3:
+                expressions[result_id] = FunctionCallNode(
+                    self.spirv_type_name(operands[0], types) or operands[0],
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[2],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode.startswith("OpImageSample") and len(operands) >= 3:
+                expressions[result_id] = self.spirv_assembly_image_sample_expression(
+                    opcode,
+                    operands[1],
+                    operands[2],
+                    operands[3:],
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode == "OpImageFetch" and len(operands) >= 3:
+                expressions[result_id] = self.spirv_assembly_image_fetch_expression(
+                    operands[1],
+                    operands[2],
+                    operands[3:],
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode == "OpImageRead" and len(operands) >= 3:
+                expressions[result_id] = FunctionCallNode(
+                    "imageLoad",
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[2],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode.startswith("OpConvert") and len(operands) >= 2:
+                expressions[result_id] = FunctionCallNode(
+                    self.spirv_type_name(operands[0], types) or operands[0],
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             if result_id and opcode in {"OpAccessChain", "OpInBoundsAccessChain"}:
                 if len(operands) >= 2:
                     access = self.spirv_assembly_operand_expression(
@@ -1187,6 +1287,37 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if opcode == "OpImageWrite" and len(operands) >= 3:
+                statements.append(
+                    FunctionCallNode(
+                        "imageStore",
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[0],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                            self.spirv_assembly_operand_expression(
+                                operands[1],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                            self.spirv_assembly_operand_expression(
+                                operands[2],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                        ],
+                    )
+                )
+                continue
+
             if opcode == "OpStore" and len(operands) >= 2:
                 statements.append(
                     AssignmentNode(
@@ -1226,6 +1357,106 @@ class VulkanParser:
                 statements.append(ReturnNode())
 
         return statements
+
+    def spirv_assembly_image_sample_expression(
+        self,
+        opcode,
+        image_operand,
+        coordinate_operand,
+        image_operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        image = self.spirv_assembly_operand_expression(
+            image_operand, expressions, names, decorations, constants
+        )
+        coordinate = self.spirv_assembly_operand_expression(
+            coordinate_operand, expressions, names, decorations, constants
+        )
+        parsed_operands = self.spirv_assembly_image_operands(
+            image_operands, expressions, names, decorations, constants
+        )
+
+        if "Grad" in parsed_operands and len(parsed_operands["Grad"]) >= 2:
+            function_name = "textureProjGrad" if "Proj" in opcode else "textureGrad"
+            return FunctionCallNode(
+                function_name,
+                [image, coordinate, *parsed_operands["Grad"][:2]],
+            )
+
+        if "Lod" in parsed_operands and parsed_operands["Lod"]:
+            function_name = "textureProjLod" if "Proj" in opcode else "textureLod"
+            return FunctionCallNode(
+                function_name,
+                [image, coordinate, parsed_operands["Lod"][0]],
+            )
+
+        function_name = "textureProj" if "Proj" in opcode else "texture"
+        return FunctionCallNode(function_name, [image, coordinate])
+
+    def spirv_assembly_image_fetch_expression(
+        self,
+        image_operand,
+        coordinate_operand,
+        image_operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        image = self.spirv_assembly_operand_expression(
+            image_operand, expressions, names, decorations, constants
+        )
+        coordinate = self.spirv_assembly_operand_expression(
+            coordinate_operand, expressions, names, decorations, constants
+        )
+        parsed_operands = self.spirv_assembly_image_operands(
+            image_operands, expressions, names, decorations, constants
+        )
+        args = [image, coordinate]
+        if "Lod" in parsed_operands and parsed_operands["Lod"]:
+            args.append(parsed_operands["Lod"][0])
+        return FunctionCallNode("texelFetch", args)
+
+    def spirv_assembly_image_operands(
+        self, operands, expressions, names, decorations, constants
+    ):
+        parsed = {}
+        index = 0
+        operand_counts = {
+            "Bias": 1,
+            "ConstOffset": 1,
+            "Grad": 2,
+            "Lod": 1,
+            "Offset": 1,
+            "Sample": 1,
+        }
+        while index < len(operands):
+            operand = operands[index]
+            operand_names = str(operand).split("|")
+            if any(name in operand_counts for name in operand_names):
+                index += 1
+                for name in operand_names:
+                    count = operand_counts.get(name, 0)
+                    if count == 0:
+                        continue
+                    values = [
+                        self.spirv_assembly_operand_expression(
+                            value,
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                        for value in operands[index : index + count]
+                    ]
+                    parsed[name] = values
+                    index += count
+            else:
+                index += 1
+        return parsed
 
     def spirv_ext_inst_function_name(self, instruction_set, instruction):
         if instruction_set == "GLSL.std.450":

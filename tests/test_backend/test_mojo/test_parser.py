@@ -1879,6 +1879,58 @@ def test_comptime_in_expression_and_parameterized_declaration_parse():
     assert assertion.args[1] == '"MmaOpSM100 only supports cta_group 1 or 2"'
 
 
+def test_gpu_fundamentals_launch_keyword_tuple_args_parse():
+    code = """
+    from std.sys import has_accelerator
+    from std.gpu.host import DeviceContext
+    from std.gpu import block_dim, block_idx, global_idx, thread_idx
+
+    def print_threads():
+        print(
+            block_idx.x,
+            block_idx.y,
+            block_idx.z,
+            thread_idx.x,
+            thread_idx.y,
+            thread_idx.z,
+            global_idx.x,
+            global_idx.y,
+            global_idx.z,
+            block_dim.x * block_idx.x + thread_idx.x,
+            block_dim.y * block_idx.y + thread_idx.y,
+            block_dim.z * block_idx.z + thread_idx.z,
+            sep="\\t",
+        )
+
+    def main() raises:
+        comptime if not has_accelerator():
+            print("No compatible GPU found")
+        else:
+            ctx = DeviceContext()
+            ctx.enqueue_function[print_threads, print_threads](
+                grid_dim=(2, 2, 1),
+                block_dim=(4, 4, 2),
+            )
+            ctx.synchronize()
+    """
+
+    ast = parse_code(tokenize_code(code))
+    print_threads = find_function(ast, "print_threads")
+    main = find_function(ast, "main")
+
+    print_call = print_threads.body[0]
+    assert print_call.args[-1].left.name == "sep"
+    assert print_call.args[-1].right == '"\\t"'
+
+    assert isinstance(main.body[0], IfNode)
+    launch_call = main.body[0].else_body[1]
+    assert len(launch_call.args) == 2
+    assert [arg.left.name for arg in launch_call.args] == ["grid_dim", "block_dim"]
+    assert all(isinstance(arg.right, TupleNode) for arg in launch_call.args)
+    assert launch_call.args[0].right.elements == ["2", "2", "1"]
+    assert launch_call.args[1].right.elements == ["4", "4", "2"]
+
+
 def test_nested_decorator_and_generic_function_signature_parse():
     code = """
     @compiler.register("vector_addition")

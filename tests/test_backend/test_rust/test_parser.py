@@ -4595,6 +4595,86 @@ def test_for_loop_reference_binding_patterns():
     assert ref_pair_pattern.elements == ["name", "tag"]
 
 
+def test_spirv_std_fragment_example_parses_deref_output_and_casts():
+    code = """
+    use spirv_std::spirv;
+    use glam::{Vec3, Vec4, vec2, vec3};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(frag_coord)] in_frag_coord: &Vec4,
+        #[spirv(push_constant)] constants: &ShaderConstants,
+        output: &mut Vec4,
+    ) {
+        let frag_coord = vec2(in_frag_coord.x, in_frag_coord.y);
+        let mut uv = (frag_coord - 0.5 * vec2(constants.width as f32, constants.height as f32))
+            / constants.height as f32;
+        uv.y = -uv.y;
+        let eye_pos = vec3(0.0, 0.0997, 0.2);
+        let sun_pos = vec3(0.0, 75.0, -1000.0);
+        let dir = get_ray_dir(uv, eye_pos, sun_pos);
+        let color = sky(dir, sun_pos);
+        *output = tonemap(color).extend(1.0)
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.attributes[0].name == "spirv"
+    assert function.attributes[0].args == ["fragment"]
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("in_frag_coord", "&Vec4"),
+        ("constants", "&ShaderConstants"),
+        ("output", "&mut Vec4"),
+    ]
+    assert function.params[0].attributes[0].args == ["frag_coord"]
+    assert function.params[1].attributes[0].args == ["push_constant"]
+    assert isinstance(function.body[1].value, BinaryOpNode)
+    assert isinstance(function.body[1].value.right, CastNode)
+    assert isinstance(function.body[-1], AssignmentNode)
+    assert isinstance(function.body[-1].left, DereferenceNode)
+
+
+def test_spirv_specialization_and_workgroup_attributes_parse_from_dev_guide():
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(vertex)]
+    fn specialize(
+        #[spirv(spec_constant(id = 100))] x_u64_lo: u32,
+        #[spirv(spec_constant(id = 101))] x_u64_hi: u32,
+    ) {
+        let x_u64 = ((x_u64_hi as u64) << 32) | (x_u64_lo as u64);
+    }
+
+    #[spirv(compute(threads(32)))]
+    fn shared(#[spirv(workgroup)] tile: &mut [Vec4; 4]) {}
+    """
+
+    ast = parse_code(code)
+    specialize, shared = ast.functions
+
+    assert [param.attributes[0].args for param in specialize.params] == [
+        ["spec_constant", "(", "id", "=", "100", ")"],
+        ["spec_constant", "(", "id", "=", "101", ")"],
+    ]
+    assert isinstance(specialize.body[0].value, BinaryOpNode)
+    assert specialize.body[0].value.op == "|"
+
+    assert shared.attributes[0].args == [
+        "compute",
+        "(",
+        "threads",
+        "(",
+        "32",
+        ")",
+        ")",
+    ]
+    assert shared.params[0].vtype == "&mut Vec4[4]"
+    assert shared.params[0].attributes[0].args == ["workgroup"]
+
+
 def test_error_handling():
     invalid_codes = [
         "fn incomplete(",

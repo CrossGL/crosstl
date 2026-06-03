@@ -355,6 +355,58 @@ def test_postfix_transfer_marker_codegen_from_life_examples():
     assert "grid^" not in generated_code
 
 
+def test_gpu_fundamentals_launch_keyword_tuple_args_codegen():
+    code = """
+    from std.sys import has_accelerator
+    from std.gpu.host import DeviceContext
+    from std.gpu import block_dim, block_idx, global_idx, thread_idx
+
+    def print_threads():
+        print(
+            block_idx.x,
+            block_idx.y,
+            block_idx.z,
+            thread_idx.x,
+            thread_idx.y,
+            thread_idx.z,
+            global_idx.x,
+            global_idx.y,
+            global_idx.z,
+            block_dim.x * block_idx.x + thread_idx.x,
+            block_dim.y * block_idx.y + thread_idx.y,
+            block_dim.z * block_idx.z + thread_idx.z,
+            sep="\\t",
+        )
+
+    def main() raises:
+        comptime if not has_accelerator():
+            print("No compatible GPU found")
+        else:
+            ctx = DeviceContext()
+            ctx.enqueue_function[print_threads, print_threads](
+                grid_dim=(2, 2, 1),
+                block_dim=(4, 4, 2),
+            )
+            ctx.synchronize()
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "// from std.gpu import block_dim, block_idx, global_idx, thread_idx"
+        in generated_code
+    )
+    assert 'sep = "\\t"' in generated_code
+    assert "if ((!has_accelerator()))" in generated_code
+    assert (
+        "ctx.enqueue_function[print_threads, print_threads]"
+        "(grid_dim = (2, 2, 1), block_dim = (4, 4, 2));"
+    ) in generated_code
+    assert "ctx.synchronize();" in generated_code
+    assert "comptime" not in generated_code
+
+
 def test_type_member_expression_codegen_from_modular_testing_examples():
     code = """
     def inc(n: Int) raises -> Int:

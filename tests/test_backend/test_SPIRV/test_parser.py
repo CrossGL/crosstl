@@ -827,6 +827,100 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_SAMPLED_IMAGE_FETCH_ASSEMBLY = """
+; Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Test/baseResults/web.separate.frag.out OpSampledImage and
+; Test/baseResults/web.texture.frag.out OpImageSampleExplicitLod/OpImageFetch.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %sample_coord %fetch_coord %sample_color %fetch_color
+OpExecutionMode %main OriginUpperLeft
+OpName %texture_only "textureOnly"
+OpName %linear_sampler "linearSampler"
+OpName %sample_coord "sampleCoord"
+OpName %fetch_coord "fetchCoord"
+OpName %sample_color "sampleColor"
+OpName %fetch_color "fetchColor"
+OpDecorate %texture_only DescriptorSet 0
+OpDecorate %texture_only Binding 0
+OpDecorate %linear_sampler DescriptorSet 0
+OpDecorate %linear_sampler Binding 1
+OpDecorate %sample_coord Location 0
+OpDecorate %fetch_coord Location 1
+OpDecorate %sample_color Location 0
+OpDecorate %fetch_color Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2float = OpTypeVector %float 2
+%v2int = OpTypeVector %int 2
+%v4float = OpTypeVector %float 4
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%sampler = OpTypeSampler
+%ptr_texture = OpTypePointer UniformConstant %image
+%ptr_sampler = OpTypePointer UniformConstant %sampler
+%ptr_input_v2float = OpTypePointer Input %v2float
+%ptr_input_v2int = OpTypePointer Input %v2int
+%ptr_output_v4float = OpTypePointer Output %v4float
+%lod = OpConstant %float 1.0
+%zero = OpConstant %int 0
+%texture_only = OpVariable %ptr_texture UniformConstant
+%linear_sampler = OpVariable %ptr_sampler UniformConstant
+%sample_coord = OpVariable %ptr_input_v2float Input
+%fetch_coord = OpVariable %ptr_input_v2int Input
+%sample_color = OpVariable %ptr_output_v4float Output
+%fetch_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_texture = OpLoad %image %texture_only
+%loaded_sampler = OpLoad %sampler %linear_sampler
+%combined = OpSampledImage %sampled %loaded_texture %loaded_sampler
+%uv = OpLoad %v2float %sample_coord
+%sample = OpImageSampleExplicitLod %v4float %combined %uv Lod %lod
+OpStore %sample_color %sample
+%image_only = OpImage %image %combined
+%pixel = OpLoad %v2int %fetch_coord
+%fetch = OpImageFetch %v4float %image_only %pixel Lod %zero
+OpStore %fetch_color %fetch
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_VULKAN_SAMPLES_IMAGE_WRITE_ASSEMBLY = """
+; Reduced from KhronosGroup/Vulkan-Samples@ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a
+; shaders/timeline_semaphore/glsl/game_of_life_init.comp imageStore(Image, index, ...).
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 8 8 1
+OpName %image "Image"
+OpDecorate %image DescriptorSet 0
+OpDecorate %image Binding 0
+OpDecorate %image NonReadable
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2int = OpTypeVector %int 2
+%v4float = OpTypeVector %float 4
+%image_type = OpTypeImage %float 2D 0 0 0 2 Rgba8
+%ptr_image = OpTypePointer UniformConstant %image_type
+%zero_i = OpConstant %int 0
+%one_f = OpConstant %float 1.0
+%zero_f = OpConstant %float 0.0
+%coord = OpConstantComposite %v2int %zero_i %zero_i
+%texel = OpConstantComposite %v4float %one_f %one_f %one_f %zero_f
+%image = OpVariable %ptr_image UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_image = OpLoad %image_type %image
+OpImageWrite %loaded_image %coord %texel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_FLAT_LOCATION_ASSEMBLY = """
 ; Reduced from Khronos SPIRV-Tools test/val/val_image_test.cpp CommonTypes.
 OpCapability Shader

@@ -370,6 +370,19 @@ class GLSLParser:
                 continue
 
             if (
+                layout is not None
+                and self.current_token[0] == "IDENTIFIER"
+                and self.peek(1)[0] == "SEMICOLON"
+            ):
+                name = self.current_token[1]
+                self.eat("IDENTIFIER")
+                self.eat("SEMICOLON")
+                global_variables.append(
+                    VariableNode("", name, qualifiers=qualifiers, layout=layout)
+                )
+                continue
+
+            if (
                 self.current_token[0] == "IDENTIFIER"
                 and self.peek_non_newline()[0] == "LBRACE"
             ):
