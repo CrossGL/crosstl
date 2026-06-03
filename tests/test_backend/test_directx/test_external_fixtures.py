@@ -139,6 +139,33 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_graphics_samples_emulated_pointer_reserved_buffer_identifier",
+        repo=DIRECTX_GRAPHICS_SAMPLES_REPO,
+        commit=DIRECTX_GRAPHICS_SAMPLES_COMMIT,
+        path="Libraries/D3D12RaytracingFallback/src/EmulatedPointer.hlsli",
+        code=textwrap.dedent("""
+            struct RWByteAddressBufferPointer
+            {
+                RWByteAddressBuffer buffer;
+                uint offsetInBytes;
+            };
+
+            static
+            RWByteAddressBufferPointer CreateRWByteAddressBufferPointer(in RWByteAddressBuffer buffer, uint offsetInBytes)
+            {
+                RWByteAddressBufferPointer pointer;
+                pointer.buffer = buffer;
+                pointer.offsetInBytes = offsetInBytes;
+                return pointer;
+            }
+        """).strip(),
+        contains=(
+            "RWByteAddressBuffer buffer;",
+            "RWByteAddressBufferPointer CreateRWByteAddressBufferPointer(in RWByteAddressBuffer buffer_, uint offsetInBytes)",
+            "pointer.buffer = buffer_;",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_nbody_gravity_compute",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,
@@ -631,7 +658,9 @@ def test_external_fixture_metadata_records_repositories_and_commits():
         fixture.repo.startswith("https://github.com/") for fixture in EXTERNAL_FIXTURES
     )
     assert all(len(fixture.commit) == 40 for fixture in EXTERNAL_FIXTURES)
-    assert all(fixture.path.endswith(".hlsl") for fixture in EXTERNAL_FIXTURES)
+    assert all(
+        fixture.path.endswith((".hlsl", ".hlsli")) for fixture in EXTERNAL_FIXTURES
+    )
 
 
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda fixture: fixture.name)

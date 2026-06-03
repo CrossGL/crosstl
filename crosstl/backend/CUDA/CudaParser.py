@@ -1951,6 +1951,9 @@ class CudaParser:
             name += self.parse_template_suffix()
         self.user_function_names.add(name)
         params = self.parse_parameters()
+        return_type = self.parse_trailing_return_type(return_type)
+        self.skip_post_function_qualifiers()
+        return_type = self.parse_trailing_return_type(return_type)
         body = None
         if self.current_token[0] == "LBRACE":
             body = self.parse_block()
@@ -1973,6 +1976,30 @@ class CudaParser:
         function = FunctionNode(return_type, name, params, body, qualifiers, attributes)
         function.linkage = linkage
         return function
+
+    def parse_trailing_return_type(self, return_type):
+        if self.current_token[0] != "ARROW":
+            return return_type
+
+        self.eat("ARROW")
+        return self.parse_type()
+
+    def skip_post_function_qualifiers(self):
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if token_type in {"CONST", "VOLATILE", *self.TYPE_REFERENCE_TOKENS}:
+                self.eat(token_type)
+                continue
+            if token_type == "IDENTIFIER" and token_value in {
+                "noexcept",
+                "override",
+                "final",
+            }:
+                self.eat("IDENTIFIER")
+                if token_value == "noexcept" and self.current_token[0] == "LPAREN":
+                    self.skip_balanced_parentheses()
+                continue
+            break
 
     def parse_function_attribute(self):
         attribute_name = self.current_token[1]

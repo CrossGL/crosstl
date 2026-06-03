@@ -3796,9 +3796,10 @@ def test_codegen_shadow_inference_keeps_parameter_names_scoped():
     crossgl = generate_crossgl(code)
 
     assert "sampler2DShadow shared;" in crossgl
-    assert "vec4 readRegular(sampler2D shared, sampler localSampler" in crossgl
+    assert "vec4 readRegular(sampler2D shared_, sampler localSampler" in crossgl
     assert "textureCompare(shared, compareSampler, uv, depth)" in crossgl
-    assert "texture(shared, localSampler, uv)" in crossgl
+    assert "texture(shared_, localSampler, uv)" in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_sample_cmp_infers_cube_array_shadow_through_nested_wrappers():

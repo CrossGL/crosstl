@@ -32,6 +32,7 @@ EXTERNAL_SAMPLES = [
         "paths": [
             "cudax/test/stf/examples/05-stencil.cu",
             "cub/examples/block/example_block_reduce_dyn_smem.cu",
+            "cub/cub/device/dispatch/kernels/kernel_transform.cuh",
             "libcudacxx/include/cuda/std/__variant/comparison.h",
             "thrust/examples/cuda/async_reduce.cu",
         ],
@@ -357,6 +358,37 @@ def test_cccl_libcudacxx_templated_lambda_codegen_reparse():
     ]
     assert "lambda(_Type __v, _Type __w, (__v < __w))" in crossgl
     assert "out[gl_LocalInvocationID.x] = __three_way(1, 2);" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cccl_kernel_transform_trailing_return_type_codegen_reparse():
+    source = """
+    template <typename T>
+    _CCCL_HOST_DEVICE auto make_aligned_base_ptr(
+        const T* ptr,
+        int alignment) -> aligned_base_ptr<T> {
+        const auto raw_ptr = reinterpret_cast<const char*>(ptr);
+        const auto base_ptr = ::cuda::align_down(raw_ptr, alignment);
+        return aligned_base_ptr<T>{
+            base_ptr,
+            static_cast<int>(raw_ptr - base_ptr)};
+    }
+    """
+
+    ast = parse_cuda(source)
+    function = ast.functions[0]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert function.name == "make_aligned_base_ptr"
+    assert function.return_type == "aligned_base_ptr<T>"
+    assert function.params[0].vtype == "const T *"
+    assert function.params[1].vtype == "int"
+    assert (
+        "aligned_base_ptr<T> make_aligned_base_ptr(ptr<T> ptr, i32 alignment)"
+        in crossgl
+    )
+    assert "var raw_ptr: auto = ptr<i8>(ptr);" in crossgl
+    assert "return aligned_base_ptr<T>(base_ptr, i32((raw_ptr - base_ptr)));" in crossgl
     assert_crossgl_reparse(crossgl)
 
 

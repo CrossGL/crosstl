@@ -168,6 +168,14 @@ IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS
 CONTEXTUAL_QUALIFIERS = {"static"}
 
 NAME_TOKENS = {"IDENTIFIER", "SAMPLE", "BUFFER"}
+BRACKETED_STAGE_MARKERS = {
+    "vertex",
+    "fragment",
+    "compute",
+    "geometry",
+    "tessellation_control",
+    "tessellation_evaluation",
+}
 
 ASSIGNMENT_TOKENS = {
     "EQUALS": "=",
@@ -331,6 +339,10 @@ class GLSLParser:
             self.skip_newlines()
             if self.current_token[0] == "EOF":
                 break
+
+            if self.is_bracketed_stage_marker():
+                self.skip_bracketed_stage_marker()
+                continue
 
             if self.current_token[0] == "HASH":
                 preprocessor.append(self.parse_preprocessor())
@@ -615,6 +627,19 @@ class GLSLParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
         return " ".join(parts).strip() + ";"
+
+    def is_bracketed_stage_marker(self):
+        return (
+            self.current_token[0] == "LBRACKET"
+            and self.peek_non_newline()[0] == "IDENTIFIER"
+            and self.peek_non_newline()[1] in BRACKETED_STAGE_MARKERS
+            and self.peek_non_newline(2)[0] == "RBRACKET"
+        )
+
+    def skip_bracketed_stage_marker(self):
+        self.eat("LBRACKET")
+        self.eat("IDENTIFIER")
+        self.eat("RBRACKET")
 
     def parse_layout_qualifier(self):
         qualifiers = {}

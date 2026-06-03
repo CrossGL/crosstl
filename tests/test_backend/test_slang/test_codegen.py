@@ -253,7 +253,12 @@ def test_ray_payload_access_semantics_codegen_from_ray_tracing_sample():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 color @ read(caller):write(caller,closesthit,miss);" in generated_code
+    assert (
+        "vec4 color @ ray_payload_read(caller) "
+        "@ ray_payload_write(caller,closesthit,miss);" in generated_code
+    )
+    assert "@ read(caller):write" not in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_if_codegen():

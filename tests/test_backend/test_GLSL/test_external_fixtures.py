@@ -236,6 +236,29 @@ EXTERNAL_FIXTURES = [
         """).strip(),
     ),
     ExternalFixture(
+        name="godot-gles3-cube-to-dp-bracketed-stage-marker",
+        repo="https://github.com/godotengine/godot",
+        commit="bbd3f43b57db5008539e87bd86ef9e3cc7a44a23",
+        path="drivers/gles3/shaders/cube_to_dp.glsl",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            [vertex]
+
+            precision mediump float;
+            precision mediump int;
+
+            layout(location = 0) in highp vec4 vertex_attrib;
+            layout(location = 4) in vec2 uv_in;
+
+            out vec2 uv_interp;
+
+            void main() {
+                uv_interp = uv_in;
+                gl_Position = vertex_attrib;
+            }
+        """).strip(),
+    ),
+    ExternalFixture(
         name="filament-surface-instancing-highp-object-uniforms",
         repo="https://github.com/google/filament",
         commit="48881c840bca50da515f0df82b61c9a5b996b19a",
@@ -466,6 +489,23 @@ def test_parse_godot_particles_precision_ubo_hash_fixture():
     assert out_color.qualifiers == ["out", "highp"]
 
 
+def test_parse_godot_bracketed_stage_marker_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "godot-gles3-cube-to-dp-bracketed-stage-marker"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    vertex = next(var for var in ast.io_variables if var.name == "vertex_attrib")
+    uv = next(var for var in ast.io_variables if var.name == "uv_in")
+
+    assert vertex.layout == {"location": "0"}
+    assert vertex.qualifiers == ["in", "highp"]
+    assert uv.layout == {"location": "4"}
+    assert [function.name for function in ast.functions] == ["main"]
+
+
 def test_parse_filament_instancing_highp_object_uniforms_fixture():
     fixture = next(
         item
@@ -570,7 +610,8 @@ def test_parse_ekmett_vr_scan_multi_declarator_for_fixture():
 def test_codegen_external_glsl_fixture_to_parseable_crossgl(fixture):
     crossgl = generate_crossgl(fixture.code, fixture.shader_type)
 
-    assert "#version" in crossgl
+    if "#version" in fixture.code:
+        assert "#version" in crossgl
     assert fixture.shader_type in crossgl
     assert parse_crossgl(crossgl) is not None
 

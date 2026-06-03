@@ -2,6 +2,8 @@
 
 import re
 
+from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
+
 from ..common_ast import (
     ArrayAccessNode,
     BreakNode,
@@ -17,6 +19,8 @@ from .DirectxParser import *
 
 class HLSLToCrossGLConverter:
     """Serialize DirectX backend AST nodes back into CrossGL source."""
+
+    crossgl_reserved_identifiers = frozenset(CROSSGL_KEYWORDS)
 
     def __init__(self):
         self.structured_buffer_types = {
@@ -350,6 +354,7 @@ class HLSLToCrossGLConverter:
         self.global_resource_array_dims = {}
         self.current_variable_types = {}
         self.current_resource_array_dims = {}
+        self.current_identifier_renames = {}
         self.struct_member_types = {}
         self.suppress_storage_image_index_lowering = False
 
@@ -1031,6 +1036,29 @@ class HLSLToCrossGLConverter:
     def get_indent(self):
         return "    " * self.indentation
 
+    def render_identifier(self, name):
+        """Return the active CrossGL spelling for a user-declared identifier."""
+        if not isinstance(name, str):
+            return name
+        return self.current_identifier_renames.get(name, name)
+
+    def function_parameter_renames(self, params):
+        reserved_names = {param.name for param in params if param.name}
+        renames = {}
+        for param in params:
+            name = param.name
+            if (
+                not isinstance(name, str)
+                or not name.isidentifier()
+                or name not in self.crossgl_reserved_identifiers
+            ):
+                continue
+            candidate = f"{name}_"
+            while candidate in reserved_names or candidate in renames.values():
+                candidate = f"{candidate}_"
+            renames[name] = candidate
+        return renames
+
     def format_array_suffixes(self, node, is_main=False):
         sizes = getattr(node, "array_sizes", None)
         if not sizes:
@@ -1199,6 +1227,7 @@ class HLSLToCrossGLConverter:
         if qualifier_prefix:
             prefixes.append(qualifier_prefix)
         parameter_name = parameter.name or f"_param{parameter_index}"
+        parameter_name = self.render_identifier(parameter_name)
         parameter_text = (
             f"{self.map_variable_type(parameter)} {parameter_name}"
             f"{self.format_array_suffixes(parameter)}"
@@ -2004,7 +2033,8 @@ class HLSLToCrossGLConverter:
                     )
                     code += (
                         f"        {self.map_variable_type(member)} "
-                        f"{member.name}{array_suffix}{attributes};\n"
+                        f"{self.render_identifier(member.name)}"
+                        f"{array_suffix}{attributes};\n"
                     )
                 code += "    }\n"
             elif isinstance(node, PragmaNode):
@@ -2026,7 +2056,8 @@ class HLSLToCrossGLConverter:
                 initializer = f" = {self.generate_expression(node.value)}"
             code += (
                 f"    {storage_prefix}{self.map_variable_type(node)} "
-                f"{node.name}{array_suffix}{initializer};\n"
+                f"{self.render_identifier(node.name)}"
+                f"{array_suffix}{initializer};\n"
             )
         if ast.cbuffers:
             code += "    // Constant Buffers\n"
@@ -2085,7 +2116,7 @@ class HLSLToCrossGLConverter:
                     array_suffix = self.format_array_suffixes(member)
                     code += (
                         f"        {self.map_variable_type(member)} "
-                        f"{member.name}{array_suffix};\n"
+                        f"{self.render_identifier(member.name)}{array_suffix};\n"
                     )
                 code += "    }\n"
         return code
@@ -2100,8 +2131,10 @@ class HLSLToCrossGLConverter:
         code += "    " * indent
         previous_variable_types = self.current_variable_types
         previous_resource_array_dims = self.current_resource_array_dims
+        previous_identifier_renames = self.current_identifier_renames
         self.current_variable_types = dict(self.global_variable_types)
         self.current_resource_array_dims = dict(self.global_resource_array_dims)
+        self.current_identifier_renames = self.function_parameter_renames(func.params)
         for param in func.params:
             self.record_variable_type(param)
         qualifier = getattr(func, "qualifier", None)
@@ -2111,7 +2144,7 @@ class HLSLToCrossGLConverter:
         )
         semantic = self.map_semantic(func.semantic)
         semantic = f" {semantic}" if semantic else ""
-        function_name = entry_name or func.name
+        function_name = self.render_identifier(entry_name or func.name)
         code += (
             f"{self.map_type(func.return_type)} "
             f"{function_name}({params}){semantic} {{\n"
@@ -2120,6 +2153,7 @@ class HLSLToCrossGLConverter:
         code += "    " * indent + "}\n\n"
         self.current_variable_types = previous_variable_types
         self.current_resource_array_dims = previous_resource_array_dims
+        self.current_identifier_renames = previous_identifier_renames
         return code
 
     def generate_function_body(self, body, indent=0, is_main=False):
@@ -2135,14 +2169,15 @@ class HLSLToCrossGLConverter:
                     value = self.generate_expression(stmt.value, is_main)
                     self.record_variable_type(stmt)
                     code += (
-                        f"{self.map_variable_type(stmt)} {stmt.name}{array_suffix} = "
+                        f"{self.map_variable_type(stmt)} "
+                        f"{self.render_identifier(stmt.name)}{array_suffix} = "
                         f"{value};\n"
                     )
                 else:
                     self.record_variable_type(stmt)
                     code += (
                         f"{self.map_variable_type(stmt)} "
-                        f"{stmt.name}{array_suffix};\n"
+                        f"{self.render_identifier(stmt.name)}{array_suffix};\n"
                     )
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
@@ -2454,7 +2489,7 @@ class HLSLToCrossGLConverter:
                 array_suffix = self.format_array_suffixes(initializer, is_main)
                 text = (
                     f"{self.map_variable_type(initializer)} "
-                    f"{initializer.name}{array_suffix}"
+                    f"{self.render_identifier(initializer.name)}{array_suffix}"
                 )
                 if initializer.value is not None:
                     text += f" = {self.generate_expression(initializer.value, is_main)}"
@@ -2545,9 +2580,9 @@ class HLSLToCrossGLConverter:
     def generate_expression(self, expr, is_main=False):
         """Render a DirectX backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
-            return expr
+            return self.render_identifier(expr)
         elif isinstance(expr, VariableNode):
-            return expr.name
+            return self.render_identifier(expr.name)
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
@@ -2662,6 +2697,7 @@ class HLSLToCrossGLConverter:
                 return "clamp(0.0, 0.0, 1.0)"
             func_name = self.function_map.get(func_name, func_name)
             func_name = self.interlocked_map.get(func_name, func_name)
+            func_name = self.render_identifier(func_name)
             return f"{func_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object, is_main)
@@ -3027,7 +3063,8 @@ class HLSLToCrossGLConverter:
             array_suffix = self.format_array_suffixes(member)
             code += (
                 self.get_indent() + f"{self.map_variable_type(member)} "
-                f"{member.name}{array_suffix}{attributes};\n"
+                f"{self.render_identifier(member.name)}"
+                f"{array_suffix}{attributes};\n"
             )
 
         self.indentation -= 1

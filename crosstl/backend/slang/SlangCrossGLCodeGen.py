@@ -39,6 +39,7 @@ class SlangToCrossGLConverter:
         r"(?:[eE][+-]?\d+)?)(?P<suffix>[fFhHuUlL]*)$"
     )
     HEX_NUMERIC_LITERAL = re.compile(r"^0[xX][0-9a-fA-F]+[uUlL]*$")
+    RAY_PAYLOAD_ACCESS_SEMANTIC = re.compile(r"^(read|write)\((.*)\)$")
     SAMPLE_METHOD_MAP = {
         "Sample": "texture",
         "SampleBias": "texture",
@@ -1515,7 +1516,35 @@ class SlangToCrossGLConverter:
 
     def map_semantic(self, semantic):
         """Map a Slang semantic to CrossGL semantic annotation syntax."""
-        if semantic is not None:
-            return f"@ {self.semantic_map.get(semantic, semantic)}"
-        else:
+        if semantic is None:
             return ""
+        ray_payload_access = self.map_ray_payload_access_semantic(semantic)
+        if ray_payload_access:
+            return ray_payload_access
+        return f"@ {self.semantic_map.get(semantic, semantic)}"
+
+    def map_ray_payload_access_semantic(self, semantic):
+        access_parts = self.split_semantic_chain(semantic)
+        mapped = []
+        for part in access_parts:
+            match = self.RAY_PAYLOAD_ACCESS_SEMANTIC.match(part)
+            if not match:
+                return ""
+            access_kind, access_args = match.groups()
+            mapped.append(f"@ ray_payload_{access_kind}({access_args})")
+        return " ".join(mapped)
+
+    def split_semantic_chain(self, semantic):
+        parts = []
+        start = 0
+        depth = 0
+        for index, char in enumerate(semantic):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth = max(0, depth - 1)
+            elif char == ":" and depth == 0:
+                parts.append(semantic[start:index])
+                start = index + 1
+        parts.append(semantic[start:])
+        return parts

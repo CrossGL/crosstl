@@ -1876,6 +1876,9 @@ class RustParser:
             if self.current_token[0] == "POUND":
                 self.parse_attributes()
                 continue
+            if self.current_starts_local_item():
+                self.parse_local_item()
+                continue
             if self.current_starts_function():
                 statements.append(self.parse_function_with_qualifiers())
             elif self.current_token[0] == "LIFETIME":
@@ -3174,6 +3177,9 @@ class RustParser:
             if self.current_token[0] == "POUND":
                 self.parse_attributes()
                 continue
+            if self.current_starts_local_item():
+                self.parse_local_item()
+                continue
 
             if self.current_token[0] in [
                 "IF",
@@ -3221,6 +3227,23 @@ class RustParser:
             isinstance(expression, FunctionCallNode)
             and getattr(expression, "macro_delimiter", None) == "LBRACE"
         )
+
+    def current_starts_local_item(self):
+        return self.current_token[0] in {"STRUCT", "ENUM", "TRAIT", "TYPE", "IMPL"}
+
+    def parse_local_item(self):
+        if self.current_token[0] == "STRUCT":
+            self.parse_struct()
+        elif self.current_token[0] == "ENUM":
+            self.parse_enum()
+        elif self.current_token[0] == "TRAIT":
+            self.parse_trait()
+        elif self.current_token[0] == "TYPE":
+            self.parse_type_alias()
+        elif self.current_token[0] == "IMPL":
+            self.parse_impl_block()
+        else:
+            raise SyntaxError(f"Expected local item, got {self.current_token[0]}")
 
     def try_parse_block_final_expression(self):
         start_index = self.current_index

@@ -745,6 +745,39 @@ def test_attributed_impl_block_parsing_from_spirv_std_image():
     assert impl_block.functions[0].name == "sample"
 
 
+def test_rust_gpu_block_local_impl_item_is_not_parsed_as_for_loop():
+    # Reduced from https://github.com/Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/spirv-std/src/arch/subgroup.rs subgroup_all_equal helper item.
+    code = """
+    pub fn subgroup_all_equal<T: ScalarComposite>(value: T) -> bool {
+        struct Transform(bool);
+
+        impl ScalarOrVectorTransform for Transform {
+            fn transform<T: ScalarOrVector>(&mut self, value: T) -> T {
+                value
+            }
+        }
+
+        let mut transform = Transform(true);
+        value.transform(&mut transform);
+        transform.0
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.name == "subgroup_all_equal"
+    assert [type(stmt) for stmt in function.body] == [
+        LetNode,
+        FunctionCallNode,
+        MemberAccessNode,
+    ]
+    assert function.body[0].name == "transform"
+    assert isinstance(function.body[0].value, FunctionCallNode)
+
+
 def test_generic_impl_where_clause_parsing():
     code = """
     impl<T> Drawable for Sprite<T>

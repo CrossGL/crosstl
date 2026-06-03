@@ -8,6 +8,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "adc996670ec281aa8a4ee131f30b324648cbbe60",
     },
+    "shader-slang/slang-examples": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "bbc4b02787d427065d713c1820a33b66dc6c4117",
+    },
     "shader-slang/slang-generated": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "3dacd6028f380f3f2ff735516d39a1bdc05aeed2",
@@ -323,6 +327,42 @@ EXTERNAL_FIXTURES = [
             "uint rgba = 0xff000000 | r << 0 | g << 8 | b << 16;",
             "colorBuffer[fbIndex] = rgba;",
         ],
+    },
+    {
+        "id": "slang_examples_ray_payload_access_semantics",
+        "repo": "shader-slang/slang-examples",
+        "path": "examples/ray-tracing-pipeline/shaders.slang",
+        "source": (
+            """
+            [raypayload] struct RayPayload
+            {
+                float4 color : read(caller) : write(caller, closesthit, miss);
+            };
+
+            RWTexture2D resultTexture;
+
+            [shader("raygeneration")]
+            void rayGenShader()
+            {
+                RayPayload payload = { float4(0, 0, 0, 0) };
+                resultTexture[uint2(0, 0)] = payload.color;
+            }
+
+            [shader("miss")]
+            void missShader(inout RayPayload payload)
+            {
+                payload.color = float4(0, 0, 0, 1);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "vec4 color @ ray_payload_read(caller) @ ray_payload_write(caller,closesthit,miss);",
+            "ray_generation {",
+            "resultTexture[uvec2(0, 0)] = payload.color;",
+            "payload.color = vec4(0, 0, 0, 1);",
+        ],
+        "not_contains": ["@ read(caller):write"],
     },
     {
         "id": "falcor_pixel_stats_resource_array",
