@@ -420,7 +420,7 @@ def test_validate_project_report_preserves_source_diagnostics(tmp_path):
                 "kind": "crosstl-project-portability-report",
                 "project": {
                     "root": str(repo),
-                    "targets": ["opengl"],
+                    "targets": [],
                     "outputDir": "out",
                 },
                 "artifacts": [],
