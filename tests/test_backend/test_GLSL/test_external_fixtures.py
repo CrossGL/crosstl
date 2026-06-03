@@ -87,6 +87,36 @@ EXTERNAL_FIXTURES = [
         """).strip(),
     ),
     ExternalFixture(
+        name="glslang-spv-perprimitive-nv-interface-block",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.perprimitiveNV.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 460
+
+            #extension GL_NV_mesh_shader: require
+
+            layout(location=0)
+            in B {
+                perprimitiveNV float f;
+            };
+
+            layout(location=4)
+            in C {
+                flat centroid float h;
+            };
+
+            layout(location=8)
+            out float g;
+
+            void main()
+            {
+                g = f + h;
+            }
+        """).strip(),
+    ),
+    ExternalFixture(
         name="learnopengl-deferred-shading-fragment",
         repo="https://github.com/JoeyDeVries/LearnOpenGL",
         commit="a545a703f95893258d16dbe32f5ccbb6400fd213",
@@ -469,6 +499,26 @@ def test_parse_glslang_layout_only_builtin_spec_constant_fixture():
     assert builtin.layout == {"constant_id": "24"}
 
 
+def test_parse_glslang_perprimitive_nv_interface_block_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-perprimitive-nv-interface-block"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    block = next(struct for struct in ast.structs if struct.name == "B")
+    member = next(var for var in ast.io_variables if var.name == "f")
+    output = next(var for var in ast.io_variables if var.name == "g")
+
+    assert block.interface_qualifiers == ["in"]
+    assert member.vtype == "float"
+    assert member.qualifiers == ["perprimitiveNV", "in"]
+    assert member.layout == {"location": "0"}
+    assert output.qualifiers == ["out"]
+    assert output.layout == {"location": "8"}
+
+
 def test_parse_godot_particles_precision_ubo_hash_fixture():
     fixture = next(
         item
@@ -648,3 +698,16 @@ def test_codegen_ekmett_vr_scan_multi_declarator_for_fixture_snippet():
         "for (uint i = 1, i_max = min((N >> 1), 5u); (i < i_max); i <<= 1)" in crossgl
     )
     assert "for (uint i = 1; (i < i_max);" not in crossgl
+
+
+def test_codegen_glslang_perprimitive_nv_fixture_canonical_qualifier():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-perprimitive-nv-interface-block"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "perprimitive float f;" in crossgl
+    assert "perprimitiveNV float f;" not in crossgl

@@ -63,10 +63,13 @@ class GLSLToCrossGLConverter:
         "sample": "sample",
         "perprimitive": "perprimitive",
         "perprimitiveext": "perprimitive",
+        "perprimitivenv": "perprimitive",
         "pervertex": "pervertex",
         "pervertexext": "pervertex",
+        "pervertexnv": "pervertex",
         "perview": "perview",
         "perviewext": "perview",
+        "perviewnv": "perview",
     }
     VARIABLE_QUALIFIER_ATTRIBUTES = {
         "invariant": "invariant",

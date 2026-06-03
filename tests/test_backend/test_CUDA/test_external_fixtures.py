@@ -23,6 +23,7 @@ EXTERNAL_SAMPLES = [
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
             "cpp/3_CUDA_Features/cudaCompressibleMemory/saxpy.cu",
+            "cpp/3_CUDA_Features/cudaTensorCoreGemm/cudaTensorCoreGemm.cu",
             "cpp/6_Performance/transpose/transpose.cu",
         ],
     },
@@ -514,6 +515,32 @@ def test_cuda_samples_simple_texture3d_umul24_codegen_reparse():
     assert "(gl_WorkGroupID.x & 0x00ffffffu)" in crossgl
     assert "(gl_WorkGroupSize.x & 0x00ffffffu)" in crossgl
     assert "__umul24" not in crossgl
+
+
+def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():
+    source = """
+    __global__ void compute_gemm(const half *A) {
+        extern __shared__ half shmem[][CHUNK_K * K + SKEW_HALF];
+        shmem[threadIdx.y][threadIdx.x] = A[threadIdx.x];
+    }
+    """
+
+    ast = parse_cuda(source)
+    shared = ast.kernels[0].body[0]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(shared, SharedMemoryNode)
+    assert shared.vtype == "half[][((CHUNK_K * K) + SKEW_HALF)]"
+    assert shared.is_extern_shared_memory is True
+    assert shared.is_dynamic_shared_memory is True
+    assert (
+        "// CUDA dynamic shared memory: shmem uses launch-time shared memory size"
+        in crossgl
+    )
+    assert (
+        "var<workgroup> shmem: " "array<array<f16, ((CHUNK_K * K) + SKEW_HALF)>>;"
+    ) in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_external_turbo3_fast_exp_softmax_codegen_reparse():

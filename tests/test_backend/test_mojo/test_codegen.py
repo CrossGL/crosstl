@@ -113,6 +113,26 @@ def test_function_parameter_convention_codegen_drops_mojo_conventions():
     assert "self" not in generated_code
 
 
+def test_bracketed_ref_parameter_convention_codegen_from_modular_amd_helpers():
+    # Reduced from https://github.com/modular/mojo.git commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/amd_helpers.mojo MMATileBuffers.__init__.
+    code = """
+    def init_tile_buffer(
+        ref[Self.tensor_origin] tensor: Self.tensor_type,
+        warp_idx: Int,
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "void init_tile_buffer(Self.tensor_type tensor, int warp_idx)" in (
+        generated_code
+    )
+    assert "ref[Self.tensor_origin]" not in generated_code
+
+
 def test_variadic_and_reference_parameter_codegen_from_current_docs():
     code = """
     struct GenericArray[ElementType: Copyable & ImplicitlyDestructible]:

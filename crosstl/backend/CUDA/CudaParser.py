@@ -2353,13 +2353,20 @@ class CudaParser:
 
     def create_shared_memory_node(self, vtype, name, qualifiers):
         is_extern = "extern" in qualifiers
-        is_dynamic = is_extern and isinstance(vtype, str) and vtype.endswith("[]")
+        is_dynamic = (
+            is_extern
+            and isinstance(vtype, str)
+            and self.has_unsized_array_dimension(vtype)
+        )
         return SharedMemoryNode(
             vtype,
             name,
             is_extern=is_extern,
             is_dynamic=is_dynamic,
         )
+
+    def has_unsized_array_dimension(self, vtype):
+        return "[]" in vtype
 
     def parse_declarator_prefix(self, base_type):
         parts = [base_type] if base_type else []

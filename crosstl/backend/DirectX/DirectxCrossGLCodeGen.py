@@ -2750,7 +2750,7 @@ class HLSLToCrossGLConverter:
         """Map an HLSL type name to the closest CrossGL type name."""
         if not hlsl_type:
             return hlsl_type
-        type_name = str(hlsl_type)
+        type_name = self.canonical_composite_type(str(hlsl_type))
         if "<" in type_name and type_name.endswith(">"):
             base, generic_args = type_name.split("<", 1)
             base = base.strip()
@@ -2770,7 +2770,7 @@ class HLSLToCrossGLConverter:
                 return feedback_texture_type
             if base in self.structured_buffer_types:
                 mapped_args = ", ".join(
-                    self.sanitize_type_name(arg)
+                    self.sanitize_type_name(self.canonical_composite_type(arg))
                     for arg in self.split_generic_arguments(generic_type)
                 )
                 return f"{self.sanitize_type_name(base)}<{mapped_args}>"
@@ -2785,6 +2785,29 @@ class HLSLToCrossGLConverter:
         if default_template_type:
             return default_template_type
         return self.type_map.get(type_name, self.sanitize_type_name(type_name))
+
+    def canonical_composite_type(self, type_name):
+        """Normalize HLSL C-style signedness spellings before CrossGL mapping."""
+        text = str(type_name).strip()
+        match = re.fullmatch(r"(signed|unsigned)\s+(.+)", text)
+        if not match:
+            return text
+
+        signedness, base = match.groups()
+        base = base.strip()
+        if signedness == "unsigned":
+            if base == "int":
+                return "uint"
+            if re.fullmatch(r"int[2-4]", base):
+                return "u" + base
+            if base in {"uint", "dword"} or re.fullmatch(r"uint[2-4]", base):
+                return base
+
+        if signedness == "signed":
+            if base == "int" or re.fullmatch(r"int[2-4]", base):
+                return base
+
+        return text
 
     def sanitize_type_name(self, type_name):
         """Convert HLSL scoped type paths into CrossGL identifier-safe names."""
@@ -2830,7 +2853,7 @@ class HLSLToCrossGLConverter:
     def map_template_vector_type(self, scalar_type, components):
         if components is None or components < 1 or components > 4:
             return None
-        scalar = str(scalar_type).strip()
+        scalar = self.canonical_composite_type(scalar_type)
         if components == 1:
             return self.map_type(scalar)
         prefixes = {
@@ -2878,7 +2901,7 @@ class HLSLToCrossGLConverter:
         }.get(base_type)
         if buffer_type is None:
             return None
-        return f"{buffer_type}<{element_type}>"
+        return f"{buffer_type}<{self.canonical_composite_type(element_type)}>"
 
     def map_feedback_texture_type(self, base_type, feedback_type):
         texture_type = {
@@ -2909,7 +2932,7 @@ class HLSLToCrossGLConverter:
         if image_type is None:
             return None
 
-        element = element_type.strip()
+        element = self.canonical_composite_type(element_type)
         if element.startswith("uint"):
             return f"u{image_type}"
         if element.startswith("int"):

@@ -159,9 +159,14 @@ RAY_STORAGE_QUALIFIERS = {
 
 MESH_STORAGE_QUALIFIERS = {
     "perprimitiveEXT",
+    "perprimitiveNV",
     "pervertexEXT",
+    "pervertexNV",
     "perviewEXT",
+    "perviewNV",
     "taskPayloadSharedEXT",
+    "taskPayloadSharedNV",
+    "taskNV",
 }
 
 IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS

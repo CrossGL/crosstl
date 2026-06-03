@@ -736,6 +736,8 @@ class MojoParser:
             return None
 
         self.eat(token_type)
+        if self.current_token[0] == "LBRACKET":
+            convention += self.parse_generic_type_suffix()
         self.skip_layout_tokens()
         return convention
 
@@ -743,8 +745,34 @@ class MojoParser:
         next_token = self.peek_token()
         if next_token[0] in self.TYPE_START_TOKENS:
             return True
+        if next_token[0] == "LBRACKET":
+            return self.is_bracketed_parameter_convention_followed_by_parameter()
         if next_token[0] == "MULTIPLY":
             return self.peek_token(2)[0] in self.TYPE_START_TOKENS
+        return False
+
+    def is_bracketed_parameter_convention_followed_by_parameter(self):
+        index = self.pos + 1
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LBRACKET":
+                depth += 1
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    index += 1
+                    while index < len(self.tokens) and self.tokens[index][0] in {
+                        "NEWLINE",
+                        "INDENT",
+                        "DEDENT",
+                    }:
+                        index += 1
+                    if index >= len(self.tokens):
+                        return False
+                    return self.tokens[index][0] in self.TYPE_START_TOKENS
+            index += 1
+
         return False
 
     def parse_variadic_parameter_marker(self):

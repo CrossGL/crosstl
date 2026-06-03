@@ -162,6 +162,31 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["gTex.Load"],
     },
     {
+        "id": "falcor_enum_class_underlying_type",
+        "repo": "NVIDIAGameWorks/Falcor",
+        "path": "Source/RenderPasses/DebugPasses/ColorMapPass/ColorMapParams.slang",
+        "source": (
+            """
+            enum class ColorMap : uint32_t
+            {
+                Grey,
+                Jet,
+                Viridis,
+                Plasma,
+                Magma,
+                Inferno,
+            };
+        """
+        ),
+        "crossgl": True,
+        "enum_underlying_types": {"ColorMap": "uint32_t"},
+        "contains": [
+            "enum ColorMap {",
+            "Grey,",
+            "Inferno,",
+        ],
+    },
+    {
         "id": "falcor_texture_brace_vector_initializer",
         "repo": "NVIDIAGameWorks/Falcor",
         "path": "Source/Tools/FalcorTest/Tests/Core/TextureLoadTests.cs.slang",
@@ -617,6 +642,14 @@ def generate_crossgl(ast):
 def test_external_fixture_codegen_crossgl_reparse(fixture):
     ast = parse_slang(fixture["source"])
     generated = generate_crossgl(ast)
+
+    enum_underlying_types = fixture.get("enum_underlying_types", {})
+    if enum_underlying_types:
+        enum_types = {
+            enum.name: getattr(enum, "underlying_type", None)
+            for enum in getattr(ast, "enums", [])
+        }
+        assert enum_types == enum_underlying_types
 
     for expected in fixture.get("contains", []):
         assert expected in generated

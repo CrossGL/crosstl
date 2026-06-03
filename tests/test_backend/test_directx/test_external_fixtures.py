@@ -166,6 +166,29 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_graphics_samples_build_bvh_splits_unsigned_int_parameter",
+        repo=DIRECTX_GRAPHICS_SAMPLES_REPO,
+        commit=DIRECTX_GRAPHICS_SAMPLES_COMMIT,
+        path="Libraries/D3D12RaytracingFallback/src/BuildBVHSplits.hlsli",
+        code=textwrap.dedent("""
+            uint2 DetermineRange(uint idx)
+            {
+                return uint2(idx, idx);
+            }
+
+            void GenerateHierarchy(unsigned int idx)
+            {
+                uint2 range = DetermineRange(idx);
+                uint first = range.x;
+            }
+        """).strip(),
+        contains=(
+            "uvec2 DetermineRange(uint idx)",
+            "void GenerateHierarchy(uint idx)",
+            "uvec2 range = DetermineRange(idx);",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_nbody_gravity_compute",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

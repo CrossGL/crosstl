@@ -116,6 +116,33 @@ def test_method_self_parameter_convention_without_type_parses():
     ]
 
 
+def test_bracketed_ref_parameter_convention_parse_from_modular_amd_helpers():
+    # Reduced from https://github.com/modular/mojo.git commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/amd_helpers.mojo MMATileBuffers.__init__.
+    code = """
+    struct MMATileBuffers:
+        @always_inline
+        def __init__(
+            out self,
+            ref[Self.tensor_origin] tensor: Self.tensor_type,
+            warp_idx: Int,
+        ):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    init_method = find_struct(ast, "MMATileBuffers").methods[0]
+
+    assert [
+        (param.name, param.vtype, param.parameter_convention)
+        for param in init_method.params
+    ] == [
+        ("self", "", "out"),
+        ("tensor", "Self.tensor_type", "ref[Self.tensor_origin]"),
+        ("warp_idx", "Int", None),
+    ]
+
+
 def test_variadic_and_deinit_parameters_parse_from_current_docs():
     code = """
     struct GenericArray[ElementType: Copyable & ImplicitlyDestructible]:

@@ -1380,6 +1380,11 @@ class SlangParser:
             self.eat("IDENTIFIER")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        underlying_type = None
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            underlying_type = self.parse_type_name(allow_array_suffix=True)
+            underlying_type += self.parse_pointer_suffix()
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":
@@ -1403,6 +1408,7 @@ class SlangParser:
             self.eat("SEMICOLON")
         enum = EnumNode(name, members)
         enum.kind = enum_kind
+        enum.underlying_type = underlying_type
         return enum
 
     def parse_typedef(self):
