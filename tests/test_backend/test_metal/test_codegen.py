@@ -250,6 +250,41 @@ def test_codegen_texture_sample_preserves_explicit_sampler_roundtrip():
     assert "albedo.sample(linearSampler, uv, level(lod))" in metal
 
 
+def test_codegen_return_type_before_stage_qualifier_from_metal_cpp_sample():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct v2f
+    {
+        float4 position [[position]];
+        half3 color;
+    };
+
+    v2f vertex vertexMain(uint vertexId [[vertex_id]],
+                          device const float3* positions [[buffer(0)]],
+                          device const float3* colors [[buffer(1)]])
+    {
+        v2f o;
+        o.position = float4(positions[vertexId], 1.0);
+        o.color = half3(colors[vertexId]);
+        return o;
+    }
+
+    half4 fragment fragmentMain(v2f in [[stage_in]])
+    {
+        return half4(in.color, 1.0);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "vertex {" in crossgl
+    assert "fragment {" in crossgl
+    assert "v2f vertexMain" in crossgl
+    assert "f16vec4 fragmentMain" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():
     code = """
     #include <metal_stdlib>

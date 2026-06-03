@@ -400,6 +400,77 @@ class TestCudaParser:
         assert ast.structs[0].members == []
         assert ast.kernels[0].name == "kernel"
 
+    def test_public_cccl_templated_attributed_functor_member_is_skipped(self):
+        code = """
+        template <class T>
+        struct plus_one
+        {
+          template <class U>
+          [[nodiscard]] _CCCL_API constexpr T operator()(const U val) const noexcept
+          {
+            return static_cast<T>(val + 1);
+          }
+        };
+
+        template <typename T>
+        static void unary(nvbench::state& state, nvbench::type_list<T>)
+        {
+          plus_one<T> op;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.structs) == 1
+        assert ast.structs[0].name == "plus_one"
+        assert ast.structs[0].members == []
+        assert ast.functions[0].name == "unary"
+        assert ast.functions[0].body[0].vtype == "plus_one<T>"
+        assert ast.functions[0].body[0].name == "op"
+
+    def test_public_cccl_maybe_unused_parameters_parse(self):
+        code = """
+        int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
+        {
+          stackable_ctx ctx;
+          return argc;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        main = ast.functions[0]
+        assert main.name == "main"
+        assert [(param.vtype, param.name) for param in main.params] == [
+            ("int", "argc"),
+            ("char * *", "argv"),
+        ]
+        assert main.body[0].vtype == "stackable_ctx"
+
+    def test_public_cub_macro_test_blocks_are_skipped_before_kernels(self):
+        code = """
+        C2H_TEST("DeviceAdjacentDifference::SubtractRight works with iterators",
+                 "[device][adjacent_difference]",
+                 types)
+        {
+          using type = typename c2h::get<0, TestType>;
+        }
+
+        __global__ void kernel(int* out) {
+            out[threadIdx.x] = 0;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [kernel.name for kernel in ast.kernels] == ["kernel"]
+
     def test_public_cuda_samples_braced_template_temporaries_parse_as_calls(self):
         code = """
         __global__ void mdspan_kernel(int* smem_storage, __half* X, int idx) {

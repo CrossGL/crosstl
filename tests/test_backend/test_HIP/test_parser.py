@@ -867,6 +867,86 @@ class TestHipParser:
         assert isinstance(hip_check, FunctionCallNode)
         assert hip_check.name == "HIP_CHECK"
 
+    def test_public_rocm_static_array_cpp_attributes_and_hip_qualifiers_parse(self):
+        code = """
+        namespace hip
+        {
+        template<class T, size_t Size>
+        class static_array
+        {
+        public:
+            using size_type       = size_t;
+            using reference       = T&;
+
+            [[nodiscard]] __device__ __host__ constexpr size_type size() const noexcept
+            {
+                return Size;
+            }
+            [[nodiscard]] __device__ __host__ constexpr reference front() noexcept
+            {
+                return _elems[0];
+            }
+
+            T _elems[Size];
+        };
+
+        template<size_t I, class T, size_t Size>
+        [[nodiscard]] constexpr T& get(static_array<T, Size>& arr) noexcept
+        {
+            static_assert(I < Size, "array index out of bounds");
+            return arr._elems[I];
+        }
+        }
+        """
+        ast = self.parse_code(code)
+
+        static_array = ast.statements[0]
+        get = ast.statements[1]
+        size = static_array.members[2]
+        front = static_array.members[3]
+        elems = static_array.members[4]
+
+        assert isinstance(static_array, StructNode)
+        assert static_array.name == "static_array"
+        assert isinstance(size, FunctionNode)
+        assert size.name == "size"
+        assert size.qualifiers == ["__device__", "__host__", "constexpr"]
+        assert isinstance(front, FunctionNode)
+        assert front.name == "front"
+        assert front.qualifiers == ["__device__", "__host__", "constexpr"]
+        assert isinstance(elems, VariableNode)
+        assert elems.vtype == "T[Size]"
+        assert elems.name == "_elems"
+        assert isinstance(get, FunctionNode)
+        assert get.return_type == "T &"
+        assert get.name == "get"
+        assert get.params[0] == {"type": "static_array<T, Size> &", "name": "arr"}
+
+    def test_public_rocm_callback_specifier_and_post_name_parameter_attributes_parse(
+        self,
+    ):
+        code = """
+        static void VX_CALLBACK log_callback(vx_context    context [[maybe_unused]],
+                                             vx_reference  ref [[maybe_unused]],
+                                             vx_status     status [[maybe_unused]],
+                                             const vx_char string[])
+        {
+            size_t len = strlen(string);
+        }
+        """
+        ast = self.parse_code(code)
+
+        callback = ast.statements[0]
+        assert isinstance(callback, FunctionNode)
+        assert callback.qualifiers == ["static", "VX_CALLBACK"]
+        assert callback.name == "log_callback"
+        assert callback.params == [
+            {"type": "vx_context", "name": "context"},
+            {"type": "vx_reference", "name": "ref"},
+            {"type": "vx_status", "name": "status"},
+            {"type": "const vx_char[]", "name": "string"},
+        ]
+
     def test_dynamic_shared_memory_parsing_marks_extern_unsized_array(self):
         code = """
         __global__ void kernel() {

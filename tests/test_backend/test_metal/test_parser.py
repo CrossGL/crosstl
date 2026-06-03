@@ -173,6 +173,43 @@ def test_parse_resource_bindings_and_address_spaces():
     parse_ok(code)
 
 
+def test_parse_return_type_before_stage_qualifier_from_metal_cpp_sample():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct v2f
+    {
+        float4 position [[position]];
+        half3 color;
+    };
+
+    v2f vertex vertexMain(uint vertexId [[vertex_id]],
+                          device const float3* positions [[buffer(0)]],
+                          device const float3* colors [[buffer(1)]])
+    {
+        v2f o;
+        o.position = float4(positions[vertexId], 1.0);
+        o.color = half3(colors[vertexId]);
+        return o;
+    }
+
+    half4 fragment fragmentMain(v2f in [[stage_in]])
+    {
+        return half4(in.color, 1.0);
+    }
+    """
+    ast = parse_ok(code)
+    vertex, fragment = ast.functions
+
+    assert vertex.return_type == "v2f"
+    assert vertex.qualifier == "vertex"
+    assert vertex.name == "vertexMain"
+    assert fragment.return_type == "half4"
+    assert fragment.qualifier == "fragment"
+    assert fragment.name == "fragmentMain"
+
+
 def test_parse_gnu_attribute_before_local_declaration():
     code = """
     void main(float b) {

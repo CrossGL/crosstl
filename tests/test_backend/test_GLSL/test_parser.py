@@ -288,6 +288,49 @@ def test_parse_array_of_arrays_return_type_from_glslang_spv_aofa():
     assert isinstance(return_stmt.value, InitializerListNode)
 
 
+def test_parse_unsized_array_constructor_statement_from_glslang_aofa():
+    code = textwrap.dedent("""
+        #version 430
+
+        float[4][7] foo(float a[5][7])
+        {
+            float r[7];
+            float[](a[0], a[1], r, a[3]);
+            return float[][7](a[0], a[1], r, a[3]);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    foo = next(function for function in ast.functions if function.name == "foo")
+
+    assert isinstance(foo.body[1], InitializerListNode)
+    assert isinstance(foo.body[2], ReturnNode)
+    assert isinstance(foo.body[2].value, InitializerListNode)
+
+
+def test_parse_default_function_argument_from_glslang_default_args():
+    code = textwrap.dedent("""
+        #version 450
+
+        void foo(int n, int x = 2)
+        {
+        }
+
+        void main()
+        {
+            foo(6);
+            foo(8, 3);
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+    foo = next(function for function in ast.functions if function.name == "foo")
+
+    assert foo.params[0].name == "n"
+    assert foo.params[1].name == "x"
+    assert foo.params[1].default_value.value == "2"
+
+
 def test_parse_control_flow_with_brace_on_next_line():
     code = textwrap.dedent("""
         #version 450

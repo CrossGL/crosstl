@@ -57,7 +57,21 @@ class HipParser:
     """Parse HIP tokens into the HIP backend AST."""
 
     FUNCTION_SPECIFIER_TOKENS = {"STATIC", "INLINE", "EXTERN", "CONSTEXPR"}
-    IDENTIFIER_FUNCTION_SPECIFIER_VALUES = {"ROCWMMA_KERNEL"}
+    FUNCTION_DECLARATION_SPECIFIER_TOKENS = {
+        *FUNCTION_SPECIFIER_TOKENS,
+        "__DEVICE__",
+        "__HOST__",
+        "__GLOBAL__",
+        "__FORCEINLINE__",
+        "__NOINLINE__",
+    }
+    IDENTIFIER_FUNCTION_SPECIFIER_VALUES = {
+        "APIENTRY",
+        "CALLBACK",
+        "ROCWMMA_KERNEL",
+        "VX_CALLBACK",
+        "WINAPI",
+    }
     KERNEL_FUNCTION_SPECIFIER_VALUES = {"__global__", "ROCWMMA_KERNEL"}
     DECLARATION_QUALIFIER_TOKENS = {
         "__SHARED__",
@@ -305,13 +319,9 @@ class HipParser:
             index = linkage_end
 
         index = self.skip_newlines_at_pos(index)
+        index = self.skip_cpp_attributes_at_pos(index)
         function_qualifiers = {
-            *self.FUNCTION_SPECIFIER_TOKENS,
-            "__DEVICE__",
-            "__HOST__",
-            "__GLOBAL__",
-            "__FORCEINLINE__",
-            "__NOINLINE__",
+            *self.FUNCTION_DECLARATION_SPECIFIER_TOKENS,
             "__LAUNCH_BOUNDS__",
         }
         while index < len(self.tokens) and (
@@ -334,6 +344,12 @@ class HipParser:
             index < len(self.tokens) and self.tokens[index].type == "__LAUNCH_BOUNDS__"
         ):
             index = self.skip_launch_bounds_at_pos(index)
+            index = self.skip_newlines_at_pos(index)
+
+        while index < len(self.tokens) and self.is_identifier_function_specifier_token(
+            self.tokens[index]
+        ):
+            index += 1
             index = self.skip_newlines_at_pos(index)
 
         if self.skip_function_name_at(index) is not None:
@@ -569,6 +585,10 @@ class HipParser:
         if self.match("HASH"):
             return self.parse_preprocessor()
 
+        if self.is_cpp_attribute_start():
+            self.skip_cpp_attributes()
+            return self.parse_statement()
+
         if self.is_linkage_specifier_start():
             return self.parse_linkage_specification()
 
@@ -687,6 +707,7 @@ class HipParser:
 
         self.parse_template_suffix()
         self.skip_newlines()
+        self.skip_cpp_attributes()
 
         if (
             self.match(
@@ -1093,6 +1114,7 @@ class HipParser:
 
         while True:
             self.skip_newlines()
+            self.skip_cpp_attributes()
             if (
                 not self.match(
                     *self.FUNCTION_SPECIFIER_TOKENS,
@@ -1118,6 +1140,11 @@ class HipParser:
 
         while self.match("__LAUNCH_BOUNDS__"):
             attributes.append(self.parse_launch_bounds_attribute())
+            self.skip_newlines()
+
+        while self.is_identifier_function_specifier_token():
+            qualifiers.append(self.current_token.value)
+            self.advance()
             self.skip_newlines()
 
         name = self.consume_function_name()
@@ -1175,12 +1202,22 @@ class HipParser:
 
     def parse_simple_function(self):
         qualifiers = []
-        while self.match(*self.FUNCTION_SPECIFIER_TOKENS):
+        self.skip_cpp_attributes()
+        while (
+            self.match(*self.FUNCTION_DECLARATION_SPECIFIER_TOKENS)
+            or self.is_identifier_function_specifier_token()
+        ):
             qualifiers.append(self.current_token.value)
             self.advance()
+            self.skip_cpp_attributes()
 
         return_type = self.parse_type()
         self.skip_newlines()
+        while self.is_identifier_function_specifier_token():
+            qualifiers.append(self.current_token.value)
+            self.advance()
+            self.skip_newlines()
+
         name = self.consume_function_name()
         self.user_function_names.add(name)
 
@@ -1500,6 +1537,10 @@ class HipParser:
                     self.advance()
                     continue
 
+                if self.is_cpp_attribute_start():
+                    self.skip_cpp_attributes()
+                    continue
+
                 if self.match("PUBLIC", "PRIVATE", "PROTECTED"):
                     self.advance()
                     if self.match("COLON"):
@@ -1600,6 +1641,7 @@ class HipParser:
         return FunctionNode("", function_name, params, body, list(qualifiers))
 
     def parse_struct_member(self):
+        saved_pos = self.pos
         try:
             member_type = self.parse_type()
             name = self.consume_declarator_name()
@@ -1610,10 +1652,9 @@ class HipParser:
 
             return VariableNode(member_type, name)
         except Exception:
-            while self.current_token and not self.match("SEMICOLON", "RBRACE"):
-                self.advance()
-            if self.match("SEMICOLON"):
-                self.advance()
+            self.pos = saved_pos
+            self.current_token = self.tokens[self.pos]
+            self.skip_unsupported_struct_member()
             return None
 
     def parse_variable_declaration(self, consume_semicolon=True):
@@ -2012,6 +2053,7 @@ class HipParser:
             if self.match("RPAREN"):
                 break
 
+            self.skip_cpp_attributes()
             if previous_base_type and self.is_parameter_declarator_continuation():
                 param_type = self.parse_declarator_prefix(previous_base_type)
             else:
@@ -2027,6 +2069,7 @@ class HipParser:
             elif self.is_declarator_name_token():
                 param_name = self.current_token.value
                 self.advance()
+                self.skip_cpp_attributes()
 
             param_type += self.parse_array_suffix()
             self.skip_default_parameter_value()
@@ -3700,15 +3743,21 @@ class HipParser:
         index = self.skip_cpp_attributes_at_pos(index)
         while (
             index < len(self.tokens)
-            and self.tokens[index].type in self.FUNCTION_SPECIFIER_TOKENS
+            and self.tokens[index].type in self.FUNCTION_DECLARATION_SPECIFIER_TOKENS
         ):
             index += 1
+            index = self.skip_cpp_attributes_at_pos(index)
 
         index = self.skip_type_at_pos(
             index, allow_unknown_identifier_pointers=self.block_depth == 0
         )
         if index is not None:
             index = self.skip_newlines_at_pos(index)
+            while index < len(
+                self.tokens
+            ) and self.is_identifier_function_specifier_token(self.tokens[index]):
+                index += 1
+                index = self.skip_newlines_at_pos(index)
             if self.skip_function_name_at(index) is not None:
                 return True
 

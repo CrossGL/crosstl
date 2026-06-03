@@ -1483,9 +1483,13 @@ class GLSLToCrossGLConverter:
             param_type, param_name = param
             return f"{self.convert_type(param_type)} {param_name}"
         if isinstance(param, VariableNode):
-            return self.generate_variable_declaration(
+            declaration = self.generate_variable_declaration(
                 param, array_before_attributes=True
             )
+            default_value = getattr(param, "default_value", None)
+            if default_value is not None:
+                declaration += f" = {self.generate_expression(default_value)}"
+            return declaration
         return None
 
     def generate_function(self, node):

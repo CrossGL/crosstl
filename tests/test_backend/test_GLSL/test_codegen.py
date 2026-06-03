@@ -163,6 +163,26 @@ def test_codegen_fragment_roundtrip():
         assert name in output
 
 
+def test_codegen_default_function_argument_from_glslang_default_args():
+    code = textwrap.dedent("""
+        #version 450
+
+        void foo(int n, int x = 2)
+        {
+        }
+
+        void main()
+        {
+            foo(6);
+            foo(8, 3);
+        }
+    """).strip()
+
+    output = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert "int x = 2" in output
+
+
 def test_codegen_resource_function_descriptors():
     converter = GLSLToCrossGLConverter(shader_type="fragment")
 

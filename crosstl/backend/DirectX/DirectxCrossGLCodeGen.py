@@ -1,5 +1,7 @@
 """Reverse code generator that emits CrossGL from HLSL AST nodes."""
 
+import re
+
 from ..common_ast import (
     ArrayAccessNode,
     BreakNode,
@@ -1976,7 +1978,7 @@ class HLSLToCrossGLConverter:
                     alias, "original_type", None
                 )
                 if alias_type is not None:
-                    code += f"    typedef {self.map_type(alias_type)} {alias.name};\n"
+                    code += f"    type {alias.name} = {self.map_type(alias_type)};\n"
         if enums:
             for enum in enums:
                 if isinstance(enum, EnumNode):
@@ -2730,7 +2732,11 @@ class HLSLToCrossGLConverter:
             if feedback_texture_type:
                 return feedback_texture_type
             if base in self.structured_buffer_types:
-                return type_name
+                mapped_args = ", ".join(
+                    self.sanitize_type_name(arg)
+                    for arg in self.split_generic_arguments(generic_type)
+                )
+                return f"{self.sanitize_type_name(base)}<{mapped_args}>"
             storage_image_type = self.map_rw_texture_type(base, generic_type)
             if storage_image_type:
                 return storage_image_type
@@ -2741,7 +2747,11 @@ class HLSLToCrossGLConverter:
         }.get(type_name)
         if default_template_type:
             return default_template_type
-        return self.type_map.get(type_name, type_name)
+        return self.type_map.get(type_name, self.sanitize_type_name(type_name))
+
+    def sanitize_type_name(self, type_name):
+        """Convert HLSL scoped type paths into CrossGL identifier-safe names."""
+        return str(type_name).replace("::", "_")
 
     def map_template_vector_or_matrix_type(self, base_type, generic_type):
         args = self.split_generic_arguments(generic_type)
@@ -2873,6 +2883,17 @@ class HLSLToCrossGLConverter:
         """Map an HLSL semantic to CrossGL semantic annotation syntax."""
         if not semantic:
             return ""
+        payload_access = []
+        if isinstance(semantic, str):
+            for access_name, access_args in re.findall(
+                r"\b(read|write)\s*\(([^)]*)\)", semantic
+            ):
+                args = ", ".join(
+                    arg.strip() for arg in access_args.split(",") if arg.strip()
+                )
+                payload_access.append(f"@ hlsl_{access_name}({args})")
+        if payload_access:
+            return " ".join(payload_access)
         mapped = self.semantic_map.get(semantic)
         if mapped is None and isinstance(semantic, str):
             semantic_upper = semantic.upper()

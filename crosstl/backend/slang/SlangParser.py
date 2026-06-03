@@ -1050,9 +1050,7 @@ class SlangParser:
         if self.current_token[0] == "LESS_THAN":
             generic_parameters = self.parse_generic_type_suffix()
         conformances = self.parse_conformance_clause()
-        generic_constraints = []
-        if self.current_token[0] == "WHERE":
-            generic_constraints = self.parse_generic_constraints()
+        generic_constraints = self.parse_generic_constraint_clauses()
 
         self.eat("LBRACE")
         methods = []
@@ -1102,9 +1100,7 @@ class SlangParser:
         if self.current_token[0] == "LESS_THAN":
             generic_parameters = self.parse_generic_type_suffix()
         conformances = self.parse_conformance_clause()
-        generic_constraints = []
-        if self.current_token[0] == "WHERE":
-            generic_constraints = self.parse_generic_constraints()
+        generic_constraints = self.parse_generic_constraint_clauses()
         self.eat("LBRACE")
         members = []
         methods = []
@@ -1278,9 +1274,7 @@ class SlangParser:
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
-        generic_constraints = []
-        if self.current_token[0] == "WHERE":
-            generic_constraints = self.parse_generic_constraints()
+        generic_constraints = self.parse_generic_constraint_clauses()
 
         if self.current_token[0] == "SEMICOLON":
             if not allow_signature:
@@ -1308,13 +1302,11 @@ class SlangParser:
         qualifiers = self.parse_qualifiers()
         self.eat("EXTENSION")
         generic_parameters = None
-        generic_constraints = []
         if self.current_token[0] == "LESS_THAN":
             generic_parameters = self.parse_generic_type_suffix()
         extended_type = self.parse_type_name()
         conformances = self.parse_conformance_clause()
-        if self.current_token[0] == "WHERE":
-            generic_constraints = self.parse_generic_constraints()
+        generic_constraints = self.parse_generic_constraint_clauses()
         self.eat("LBRACE")
         methods = []
         typedefs = []
@@ -1461,14 +1453,11 @@ class SlangParser:
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
-        generic_constraints = []
-        if self.current_token[0] == "WHERE":
-            generic_constraints = self.parse_generic_constraints()
+        generic_constraints = self.parse_generic_constraint_clauses()
         semantic = None
         if self.current_token[0] == "COLON":
             semantic = self.parse_semantic_annotations()
-        if self.current_token[0] == "WHERE":
-            generic_constraints.extend(self.parse_generic_constraints())
+        generic_constraints.extend(self.parse_generic_constraint_clauses())
         if self.current_token[0] == "SEMICOLON":
             if not allow_signature:
                 raise SyntaxError("Expected function body, got SEMICOLON")
@@ -1511,9 +1500,7 @@ class SlangParser:
         self.eat("GREATER_THAN")
         return_type = self.parse_type_name(allow_array_suffix=True)
         return_type += self.parse_pointer_suffix()
-        generic_constraints = []
-        if self.current_token[0] == "WHERE":
-            generic_constraints = self.parse_generic_constraints()
+        generic_constraints = self.parse_generic_constraint_clauses()
         if self.current_token[0] == "SEMICOLON":
             if not allow_signature:
                 raise SyntaxError("Expected function body, got SEMICOLON")
@@ -1651,6 +1638,12 @@ class SlangParser:
             if self.current_token[0] != "COMMA":
                 break
             self.eat("COMMA")
+        return constraints
+
+    def parse_generic_constraint_clauses(self):
+        constraints = []
+        while self.current_token[0] == "WHERE":
+            constraints.extend(self.parse_generic_constraints())
         return constraints
 
     def parse_parameters(self):

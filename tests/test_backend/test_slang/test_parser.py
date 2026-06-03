@@ -1442,6 +1442,42 @@ def test_function_generic_where_conformance_constraint_parsing():
     assert constraint.constraint_type == "IFoo"
 
 
+def test_multiple_generic_where_clauses_from_official_generic_test_parse():
+    code = """
+    interface IContainer
+    {
+        associatedtype ElementType;
+        ElementType getElement();
+    }
+
+    interface IScalable
+    {
+        int getScale();
+    }
+
+    int scaledElement<T, U>(T container, U scaler)
+        where T : IContainer
+        where U : IScalable
+        where T.ElementType == int
+    {
+        return container.getElement() * scaler.getScale();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "scaledElement")
+
+    assert [
+        (c.parameter, c.relation, c.constraint_type)
+        for c in function.generic_constraints
+    ] == [
+        ("T", ":", "IContainer"),
+        ("U", ":", "IScalable"),
+        ("T.ElementType", "==", "int"),
+    ]
+
+
 def test_for_update_parses_array_and_member_assignment_targets():
     code = """
     void main(){

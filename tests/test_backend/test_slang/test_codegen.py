@@ -186,6 +186,42 @@ def test_reserved_crossgl_names_are_sanitized_from_reflection_api_sample():
     cgl_translator.parse(generated_code)
 
 
+def test_reserved_function_name_and_register_space_from_parameter_block_sample():
+    code = """
+    struct A
+    {
+        float4 au;
+        Texture2D at1;
+        SamplerState as;
+    }
+
+    [[vk::binding(0, 2)]]
+    ParameterBlock<A> a : register(space2);
+
+    float4 use(float4 val) { return val; }
+    float4 use(Texture2D t, SamplerState s)
+    {
+        return t.Sample(s, 0.0);
+    }
+
+    float4 main() : SV_Target
+    {
+        return use(a.au) + use(a.at1, a.as);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "ParameterBlock<A> a @set(2) @binding(0);" in generated_code
+    assert "@register(space2)" not in generated_code
+    assert "vec4 use_(vec4 val)" in generated_code
+    assert "vec4 use_(sampler2D t, sampler s)" in generated_code
+    assert "return use_(a.au) + use_(a.at1, a.as_);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_struct_methods_do_not_break_field_codegen():
     code = """
     struct Primitive {

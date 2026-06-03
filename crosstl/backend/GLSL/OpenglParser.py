@@ -809,6 +809,14 @@ class GLSLParser:
             return next_token[0] in QUALIFIER_TOKENS or next_token[0] in TYPE_TOKENS
         return True
 
+    def is_constructor_expression_start(self):
+        index = self.skip_newline_index(self.index)
+        if self.token_at(index)[0] not in TYPE_TOKENS:
+            return False
+        index = self.skip_type_template_suffix_index(index + 1)
+        index = self.skip_array_suffixes_index(index)
+        return self.token_at(index)[0] == "LPAREN"
+
     def parse_variable_declarations(
         self,
         type_name,
@@ -1051,6 +1059,11 @@ class GLSLParser:
                     param_name = self.parse_identifier_name("parameter name")
                     array_sizes = type_array_sizes + self.parse_array_suffixes()
 
+                default_value = None
+                if self.current_token[0] == "EQUALS":
+                    self.eat("EQUALS")
+                    default_value = self.parse_assignment_expression()
+
                 array_size = array_sizes[0] if array_sizes else None
 
                 params.append(
@@ -1061,6 +1074,7 @@ class GLSLParser:
                         array_size=array_size,
                         array_sizes=array_sizes,
                         is_array=bool(array_sizes),
+                        default_value=default_value,
                     )
                 )
                 if self.current_token[0] == "COMMA":
@@ -1225,7 +1239,7 @@ class GLSLParser:
             struct_node, extra_vars = self.parse_struct()
             return [struct_node, *extra_vars]
 
-        if self.is_declaration_start():
+        if self.is_declaration_start() and not self.is_constructor_expression_start():
             qualifiers = self.parse_qualifiers()
             type_name = self.parse_type()
             self.skip_newlines()

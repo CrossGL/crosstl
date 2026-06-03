@@ -1114,7 +1114,34 @@ def test_codegen_numthreads_attribute_emitted():
 def test_codegen_enum_and_typedef():
     output = generate_crossgl(ENUM_TYPEDEF_HLSL)
     assert "enum BlendMode" in output
-    assert "typedef" in output
+    assert "type Color = vec4;" in output
+    parse_crossgl(output)
+
+
+def test_codegen_directx_samples_alias_and_scoped_types_parse_crossgl():
+    hlsl = textwrap.dedent("""
+        typedef BuiltInTriangleIntersectionAttributes MyAttributes;
+
+        float GetDistance(
+            in float3 position,
+            in SignedDistancePrimitive::Enum primitiveType
+        ) {
+            SignedDistancePrimitive::Enum localPrimitive =
+                (SignedDistancePrimitive::Enum) primitiveType;
+            return position.x;
+        }
+
+        void MyClosestHitShader(inout RayPayload payload, in MyAttributes attr) {
+        }
+    """)
+
+    output = generate_crossgl(hlsl)
+
+    assert "type MyAttributes = BuiltInTriangleIntersectionAttributes;" in output
+    assert "SignedDistancePrimitive_Enum primitiveType" in output
+    assert "SignedDistancePrimitive_Enum localPrimitive" in output
+    assert "SignedDistancePrimitive_Enum(primitiveType)" in output
+    parse_crossgl(output)
 
 
 def test_codegen_attributes_emitted():

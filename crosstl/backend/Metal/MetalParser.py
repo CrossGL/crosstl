@@ -600,6 +600,15 @@ class MetalParser:
 
         idx = self.skip_leading_attribute_tokens_at(idx)
 
+        if (
+            idx < len(self.tokens)
+            and self.tokens[idx][0] in STAGE_TOKENS
+            and idx + 1 < len(self.tokens)
+            and self.tokens[idx + 1][0] != "LPAREN"
+        ):
+            idx += 1
+            idx = self.skip_leading_attribute_tokens_at(idx)
+
         if idx >= len(self.tokens) or not self.is_name_token_at(idx):
             return False
         idx += 1

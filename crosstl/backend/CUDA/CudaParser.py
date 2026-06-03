@@ -132,6 +132,7 @@ class CudaParser:
         "NOINLINE",
     }
     LAMBDA_IDENTIFIER_SPECIFIERS = {
+        "_CCCL_DEVICE",
         "constexpr",
         "consteval",
         "noexcept",
@@ -141,6 +142,13 @@ class CudaParser:
         "APIENTRY",
         "CALLBACK",
         "CUDARTAPI",
+        "_CCCL_API",
+        "_CCCL_DEVICE",
+        "_CCCL_DEVICE_API",
+        "_CCCL_HOST_API",
+        "_CCCL_HOST_DEVICE",
+        "_CCCL_HOST_DEVICE_API",
+        "_CCCL_NODEBUG_HOST_API",
         "VKAPI_ATTR",
         "VKAPI_CALL",
         "WINAPI",
@@ -319,6 +327,7 @@ class CudaParser:
         return names
 
     def function_name_index_at(self, index):
+        index = self.skip_cpp_attribute_specifiers_at_index(index)
         while index < len(self.tokens) and (
             self.tokens[index][0] in self.FUNCTION_SPECIFIER_TOKENS
             or self.is_function_identifier_specifier_at_index(index)
@@ -335,6 +344,7 @@ class CudaParser:
                 continue
             index += 1
 
+        index = self.skip_cpp_attribute_specifiers_at_index(index)
         while (
             index < len(self.tokens)
             and self.tokens[index][0] in self.TYPE_QUALIFIER_TOKENS
@@ -418,6 +428,8 @@ class CudaParser:
                 self.skip_out_of_class_member_definition()
             elif self.is_function_pointer_declaration_start():
                 self.skip_out_of_class_member_definition()
+            elif self.is_macro_block_invocation_start():
+                self.skip_macro_block_invocation()
             elif self.peek_function():
                 func = self.parse_function()
                 if func is None:
@@ -459,6 +471,7 @@ class CudaParser:
     def peek_function(self):
         saved_index = self.current_index
 
+        saved_index = self.skip_cpp_attribute_specifiers_at_index(saved_index)
         while saved_index < len(self.tokens) and (
             self.tokens[saved_index][0] in self.FUNCTION_SPECIFIER_TOKENS
             or self.is_function_identifier_specifier_at_index(saved_index)
@@ -475,6 +488,7 @@ class CudaParser:
                 continue
             saved_index += 1
 
+        saved_index = self.skip_cpp_attribute_specifiers_at_index(saved_index)
         while (
             saved_index < len(self.tokens)
             and self.tokens[saved_index][0] in self.TYPE_QUALIFIER_TOKENS
@@ -784,6 +798,7 @@ class CudaParser:
             return False
 
         index += 1
+        index = self.skip_cpp_attribute_specifiers_at_index(index)
         if index >= len(self.tokens):
             return False
 
@@ -1296,6 +1311,28 @@ class CudaParser:
                     continue
                 self.eat(self.current_token[0])
 
+    def skip_cpp_attribute_specifiers_at_index(self, index):
+        while self.is_cpp_attribute_specifier_start_at_index(index):
+            index += 2
+            depth = 1
+
+            while index < len(self.tokens) and depth > 0:
+                if self.is_cpp_attribute_specifier_start_at_index(index):
+                    index += 2
+                    depth += 1
+                    continue
+                if (
+                    index + 1 < len(self.tokens)
+                    and self.tokens[index][0] == "RBRACKET"
+                    and self.tokens[index + 1][0] == "RBRACKET"
+                ):
+                    index += 2
+                    depth -= 1
+                    continue
+                index += 1
+
+        return index
+
     def collect_balanced_tokens_until(self, terminator):
         tokens = []
         paren_depth = 0
@@ -1602,7 +1639,9 @@ class CudaParser:
     def is_struct_method_start(self):
         index = self.current_index
         index = self.skip_optional_template_declaration_at_index(index)
+        index = self.skip_cpp_attribute_specifiers_at_index(index)
         index = self.skip_struct_method_specifiers_at_index(index)
+        index = self.skip_cpp_attribute_specifiers_at_index(index)
 
         if index >= len(self.tokens):
             return False
@@ -1648,6 +1687,51 @@ class CudaParser:
             and name_index + 1 < len(self.tokens)
             and self.tokens[name_index + 1][0] == "LPAREN"
         )
+
+    def is_macro_block_invocation_start(self):
+        return (
+            self.is_macro_block_invocation_at_index(self.current_index)
+            or self.is_bare_macro_before_block_invocation()
+        )
+
+    def is_macro_block_invocation_at_index(self, index):
+        if (
+            index + 1 >= len(self.tokens)
+            or self.tokens[index][0] != "IDENTIFIER"
+            or not self.is_macro_like_identifier(self.tokens[index][1])
+            or self.tokens[index + 1][0] != "LPAREN"
+        ):
+            return False
+
+        block_index = self.skip_balanced_tokens_at_index(index + 1, "LPAREN", "RPAREN")
+        return (
+            block_index < len(self.tokens) and self.tokens[block_index][0] == "LBRACE"
+        )
+
+    def is_bare_macro_before_block_invocation(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.is_macro_like_identifier(self.current_token[1])
+            and self.current_index + 1 < len(self.tokens)
+            and self.is_macro_block_invocation_at_index(self.current_index + 1)
+        )
+
+    def is_macro_like_identifier(self, name):
+        return any(character.isupper() for character in name) and all(
+            character.isupper() or character.isdigit() or character == "_"
+            for character in name
+        )
+
+    def skip_macro_block_invocation(self):
+        if self.is_bare_macro_before_block_invocation():
+            self.eat("IDENTIFIER")
+
+        self.eat("IDENTIFIER")
+        self.skip_balanced_parentheses()
+        if self.current_token[0] == "LBRACE":
+            self.skip_balanced_brace_block()
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
 
     def skip_return_pointer_suffix_at_index(self, index):
         while index < len(self.tokens) and self.tokens[index][0] in {
@@ -1721,6 +1805,8 @@ class CudaParser:
             self.eat("TEMPLATE")
             if self.current_token[0] == "LESS_THAN":
                 self.parse_template_suffix()
+        if self.is_cpp_attribute_specifier_start():
+            self.skip_cpp_attribute_specifiers()
 
         while self.current_token[0] not in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
             self.eat(self.current_token[0])
@@ -1891,6 +1977,9 @@ class CudaParser:
         return params
 
     def parse_parameter(self):
+        if self.is_cpp_attribute_specifier_start():
+            self.skip_cpp_attribute_specifiers()
+
         if self.is_ellipsis_at_current_index():
             self.consume_ellipsis()
             return VariableNode("...", "")
@@ -1908,7 +1997,12 @@ class CudaParser:
             self.skip_parameter_default()
             return VariableNode(param_type, "")
 
+        if self.is_cpp_attribute_specifier_start():
+            self.skip_cpp_attribute_specifiers()
+
         param_name = self.parse_name_component()
+        if self.is_cpp_attribute_specifier_start():
+            self.skip_cpp_attribute_specifiers()
         param_type += self.parse_array_suffix()
         self.skip_parameter_default()
         return VariableNode(param_type, param_name)
@@ -3086,6 +3180,11 @@ class CudaParser:
                 left = self.append_qualified_name(left, "::", member)
             elif self.current_token[0] == "LESS_THAN" and self.is_template_suffix():
                 left = self.append_template_suffix(left)
+            elif self.is_arrow_star_lambda_start():
+                self.eat("ARROW")
+                self.eat("MULTIPLY")
+                lambda_node = self.parse_lambda_expression()
+                left = FunctionCallNode("operator->*", [left, lambda_node])
             elif self.current_token[0] == "ARROW":
                 self.eat("ARROW")
                 member = self.parse_member_name()
@@ -3125,6 +3224,14 @@ class CudaParser:
                 break
 
         return left
+
+    def is_arrow_star_lambda_start(self):
+        return (
+            self.current_token[0] == "ARROW"
+            and self.current_index + 2 < len(self.tokens)
+            and self.tokens[self.current_index + 1][0] == "MULTIPLY"
+            and self.tokens[self.current_index + 2][0] == "LBRACKET"
+        )
 
     def parse_member_name(self):
         if self.current_token[0] in self.NAME_COMPONENT_TOKENS:

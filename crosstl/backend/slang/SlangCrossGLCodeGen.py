@@ -252,6 +252,7 @@ class SlangToCrossGLConverter:
             "rsqrt": "inversesqrt",
         }
         self.user_function_names = set()
+        self.function_name_map = {}
         self.sampleable_resource_scopes = [set()]
         self.sampleable_resource_type_scopes = [{}]
         self.storage_image_resource_scopes = [set()]
@@ -365,11 +366,10 @@ class SlangToCrossGLConverter:
             for exp in getattr(ast, "exports", [])
             if isinstance(getattr(exp, "item", None), FunctionNode)
         ]
-        self.user_function_names = {
-            getattr(func, "name", None)
-            for func in [*getattr(ast, "functions", []), *exported_functions]
-        }
+        functions = [*getattr(ast, "functions", []), *exported_functions]
+        self.user_function_names = {getattr(func, "name", None) for func in functions}
         self.user_function_names.discard(None)
+        self.function_name_map = self.collect_function_name_map(functions)
         resource_types = self.collect_sampleable_resource_types(ast)
         storage_image_types = self.collect_storage_image_resource_types(ast)
         self.struct_member_types = self.collect_struct_member_types(ast)
@@ -498,9 +498,10 @@ class SlangToCrossGLConverter:
     def format_function_generic_constraints(self, function):
         constraints = []
         for constraint in getattr(function, "generic_constraints", []) or []:
+            relation = getattr(constraint, "relation", ":")
             constraints.append(
                 f"function {function.name} where "
-                f"{constraint.parameter} : {constraint.constraint_type}"
+                f"{constraint.parameter} {relation} {constraint.constraint_type}"
             )
         return constraints
 
@@ -510,6 +511,21 @@ class SlangToCrossGLConverter:
             return path
         escaped = path.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
+
+    def collect_function_name_map(self, functions):
+        name_map = {}
+        used_names = set()
+        for function in functions:
+            name = getattr(function, "name", None)
+            if not name or name in name_map:
+                continue
+            safe_name = self.sanitize_crossgl_identifier(name, used_names)
+            name_map[name] = safe_name
+            used_names.add(safe_name)
+        return name_map
+
+    def format_function_name(self, name):
+        return self.function_name_map.get(name, name)
 
     def register_global_identifier_renames(self, ast):
         for node in getattr(ast, "global_vars", []) or []:
@@ -677,7 +693,7 @@ class SlangToCrossGLConverter:
         semantic_suffix = f" {semantic}" if semantic else ""
         code += (
             f"    {self.map_type(func.return_type)} "
-            f"{func.name}({params}){semantic_suffix} {{\n"
+            f"{self.format_function_name(func.name)}({params}){semantic_suffix} {{\n"
         )
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    }\n\n"
@@ -942,7 +958,7 @@ class SlangToCrossGLConverter:
         if not register_name:
             return False
         register_name = str(register_name).strip().lower()
-        return register_name.startswith(("t", "s"))
+        return re.match(r"^[tsu]\d", register_name) is not None
 
     def format_register_metadata_arguments(self, register_name):
         return ", ".join(self.split_top_level_commas(str(register_name)))
@@ -1020,7 +1036,7 @@ class SlangToCrossGLConverter:
             ):
                 return f"clamp({args}, 0.0, 1.0)"
             if expr.name in self.user_function_names:
-                name = expr.name
+                name = self.format_function_name(expr.name)
             elif expr.name in self.type_map and expr.name[:1].islower():
                 name = self.map_type(expr.name)
             else:
