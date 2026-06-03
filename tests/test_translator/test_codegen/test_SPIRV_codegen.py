@@ -23233,6 +23233,68 @@ class TestVulkanSPIRVCodeGen:
         ), "OpTypeArray with float element and size 4 not found"
         assert "WARNING" not in spv_code
 
+    def test_named_constant_expression_uses_registered_constant(self, tmp_path):
+        source_code = """
+        shader NamedConstExpression {
+            const float SCALE = 0.5;
+
+            fragment {
+                vec4 main() @gl_FragColor {
+                    return vec4(SCALE, 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        scale_id = spirv_named_id(spv_code, "SCALE")
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32\b", spv_code)
+        assert float_type is not None
+        assert re.search(
+            rf"{re.escape(scale_id)} = OpConstant "
+            rf"{re.escape(float_type.group(1))} 0.5\b",
+            spv_code,
+        )
+        assert "Unknown variable SCALE" not in spv_code
+        assert "OpCompositeConstruct" in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
+    def test_named_specialization_constant_emits_spec_id_and_resolves_reference(
+        self, tmp_path
+    ):
+        source_code = """
+        shader NamedSpecConstExpression {
+            const int SCALE @constant_id(7) = 2;
+
+            vertex {
+                void main() {
+                    int x = SCALE;
+                    gl_Position = vec4(float(x), 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        scale_id = spirv_named_id(spv_code, "SCALE")
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        assert int_type is not None
+        assert re.search(
+            rf"{re.escape(scale_id)} = OpSpecConstant "
+            rf"{re.escape(int_type.group(1))} 2\b",
+            spv_code,
+        )
+        assert f"OpDecorate {scale_id} SpecId 7" in spv_code
+        assert re.search(rf"OpStore %\d+ {re.escape(scale_id)}\b", spv_code)
+        assert "Unknown variable SCALE" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
     def test_named_constant_array_size_emits_fixed_struct_member_array(self, tmp_path):
         source_code = """
         shader NamedConstStructArray {

@@ -10,6 +10,7 @@ from ..ast import (
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
+    ConstantNode,
     ConstructorNode,
     ConstructorPatternNode,
     ContinueNode,
@@ -143,6 +144,8 @@ class VulkanSPIRVCodeGen:
         self.required_capabilities = set()
         self.global_variables = {}
         self.local_variables = {}
+        self.named_constants = {}
+        self.named_constant_debug_ids = set()
         self.resource_alias_variables = set()
         self.variable_value_types = {}
         self.value_types = {}
@@ -150,6 +153,7 @@ class VulkanSPIRVCodeGen:
         self.literal_int_constants = {}
         self.vector_constants = {}
         self.composite_constants = {}
+        self.specialization_constants = {}
         self.resource_type_metadata = {}
         self.structured_buffer_metadata = {}
         self.storage_buffer_access_metadata = {}
@@ -601,6 +605,28 @@ class VulkanSPIRVCodeGen:
         self.constants[key] = spirv_id
         return spirv_id
 
+    def register_specialization_constant(
+        self, value: Union[bool, int, float], type_id: SpirvId, spec_id: int
+    ) -> SpirvId:
+        """Create and register a scalar specialization constant."""
+        key = (value, type_id.id, spec_id)
+        if key in self.specialization_constants:
+            return self.specialization_constants[key]
+
+        id_value = self.get_id()
+        type_name = type_id.type.base_type
+        if type_name == "bool":
+            opcode = "OpSpecConstantTrue" if value else "OpSpecConstantFalse"
+            self.emit(f"%{id_value} = {opcode} %{type_id.id}")
+        else:
+            self.emit(f"%{id_value} = OpSpecConstant %{type_id.id} {value}")
+
+        self.decorations.append(f"OpDecorate %{id_value} SpecId {spec_id}")
+        spirv_id = SpirvId(id_value, type_id.type, f"{type_name}_{value}")
+        self.value_types[id_value] = type_id
+        self.specialization_constants[key] = spirv_id
+        return spirv_id
+
     def register_vector_constant(
         self, vector_type: SpirvId, components: List[SpirvId]
     ) -> SpirvId:
@@ -651,7 +677,130 @@ class VulkanSPIRVCodeGen:
                 constant.id == value_id.id
                 for constant in self.composite_constants.values()
             )
+            or any(
+                constant.id == value_id.id
+                for constant in self.specialization_constants.values()
+            )
         )
+
+    def emit_named_constant_debug_name(self, name: str, value_id: SpirvId):
+        """Attach a debug name to a named constant result id once."""
+        if value_id.id in self.named_constant_debug_ids:
+            return
+        self.emit(f'OpName %{value_id.id} "{name}"')
+        self.named_constant_debug_ids.add(value_id.id)
+
+    def spirv_specialization_constant_attributes(self, node):
+        """Return SPIR-V specialization-constant attributes on a declaration."""
+        attributes = []
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).lower().replace("-", "_")
+            for prefix in ("spirv_", "vulkan_", "vk_"):
+                if normalized.startswith(prefix):
+                    normalized = normalized[len(prefix) :]
+                    break
+            if normalized in {
+                "constant_id",
+                "spec_id",
+                "specialization_constant",
+                "function_constant",
+            }:
+                attributes.append(attr)
+        return attributes
+
+    def spirv_specialization_constant_id(self, node) -> Optional[int]:
+        """Return the SPIR-V SpecId for a specialization-constant declaration."""
+        attributes = self.spirv_specialization_constant_attributes(node)
+        if not attributes:
+            return None
+
+        name = getattr(node, "name", getattr(node, "variable_name", "<unnamed>"))
+        if len(attributes) > 1:
+            raise ValueError(
+                f"SPIR-V specialization constant '{name}' has multiple SpecId "
+                "attributes"
+            )
+
+        arguments = getattr(attributes[0], "arguments", []) or []
+        spec_id = (
+            self.literal_int_argument(arguments[0]) if len(arguments) == 1 else None
+        )
+        if spec_id is None:
+            raise ValueError(
+                f"SPIR-V specialization constant '{name}' requires an integer id"
+            )
+        if spec_id < 0:
+            raise ValueError(
+                f"SPIR-V specialization constant '{name}' requires a non-negative id"
+            )
+        return spec_id
+
+    def coerce_scalar_constant_value(
+        self, expr, target_type: SpirvId
+    ) -> Optional[Union[bool, int, float]]:
+        """Return a Python scalar value for a literal constant expression."""
+        type_name = self.normalize_primitive_name(target_type.type.base_type)
+        if type_name not in {"bool", "float", "double", "int", "uint"}:
+            return None
+
+        if isinstance(expr, LiteralNode):
+            value = expr.value
+        elif isinstance(expr, (bool, int, float)):
+            value = expr
+        elif expr is None:
+            if type_name == "bool":
+                return False
+            if type_name in {"float", "double"}:
+                return 0.0
+            return 0
+        else:
+            return None
+
+        if type_name == "bool":
+            if isinstance(value, str):
+                return value.lower() == "true"
+            return bool(value)
+        if type_name in {"float", "double"}:
+            return float(value)
+        return int(value)
+
+    def process_named_constant_declaration(self, node) -> Optional[SpirvId]:
+        """Register a CrossGL named constant for expression lookup."""
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        if not name:
+            return None
+
+        type_source = getattr(
+            node, "const_type", getattr(node, "var_type", getattr(node, "vtype", "int"))
+        )
+        type_id = self.map_crossgl_type(type_source)
+        value = getattr(node, "value", getattr(node, "initial_value", None))
+        spec_id = self.spirv_specialization_constant_id(node)
+
+        if spec_id is not None:
+            scalar_value = self.coerce_scalar_constant_value(value, type_id)
+            if scalar_value is None:
+                self.emit(
+                    f"; WARNING: SPIR-V specialization constant {name} requires "
+                    "a scalar literal default; emitting a plain constant fallback"
+                )
+            else:
+                constant_id = self.register_specialization_constant(
+                    scalar_value, type_id, spec_id
+                )
+                self.emit_named_constant_debug_name(name, constant_id)
+                self.named_constants[name] = constant_id
+                return constant_id
+
+        constant_id = self.process_constant_expression(value, type_id)
+        if constant_id is None:
+            constant_id = self.default_value_for_type(type_id)
+        self.emit_named_constant_debug_name(name, constant_id)
+        self.named_constants[name] = constant_id
+        return constant_id
 
     def image_offset_operand(self, offset_id: SpirvId) -> str:
         if self.is_constant_instruction(offset_id):
@@ -18066,6 +18215,8 @@ class VulkanSPIRVCodeGen:
             if expr in self.local_variables:
                 var_id = self.local_variables[expr]
                 return self.get_variable_value(var_id)
+            elif expr in self.named_constants:
+                return self.named_constants[expr]
             elif expr in self.global_variables:
                 var_id = self.global_variables[expr]
                 self.mark_builtin_interface_variable(var_id)
@@ -18126,6 +18277,8 @@ class VulkanSPIRVCodeGen:
             if expr.name in self.local_variables:
                 var_id = self.local_variables[expr.name]
                 return self.get_variable_value(var_id)
+            elif expr.name in self.named_constants:
+                return self.named_constants[expr.name]
             elif expr.name in self.global_variables:
                 var_id = self.global_variables[expr.name]
                 self.mark_builtin_interface_variable(var_id)
@@ -19804,6 +19957,10 @@ class VulkanSPIRVCodeGen:
                 if not isinstance(struct, StructNode):
                     continue
                 self.process_crossgl_struct(struct)
+
+        for constant in getattr(ast, "constants", []) or []:
+            if isinstance(constant, ConstantNode):
+                self.process_named_constant_declaration(constant)
 
         self.function_resource_array_type_hints = (
             self.collect_resource_array_parameter_type_hints(ast)
