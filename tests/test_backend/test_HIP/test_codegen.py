@@ -539,6 +539,41 @@ class TestHipCodeGen:
         assert "Warp sync not directly supported in CrossGL" not in result
         assert "None" not in result
 
+    def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_hip_calls(self):
+        code = """
+        __global__ void warp(unsigned long long mask, int pred, int value, int lane, unsigned int* out) {
+            unsigned long long active = __activemask();
+            unsigned long long bits = __ballot_sync(0xffffffffffffffff, pred);
+            int all_set = __all_sync(0xffffffffffffffff, pred);
+            int y = __shfl_sync(0xffffffffffffffff, value, lane);
+            int unsupported = __shfl_xor_sync(mask, value, lane);
+            out[lane] = y + unsupported + all_set + active + bits;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "(WaveActiveAllTrue((pred != 0)) ? 1 : 0)" in result
+        assert "WaveReadLaneAt(value, lane)" in result
+        assert (
+            "/* hip warp intrinsic __activemask() not directly supported in "
+            "CrossGL */ 0"
+        ) in result
+        assert (
+            "/* hip warp intrinsic __ballot_sync(0xffffffffffffffff, pred) "
+            "not directly supported in CrossGL */ 0"
+        ) in result
+        assert (
+            "/* hip warp intrinsic __shfl_xor_sync(mask, value, lane) not "
+            "directly supported in CrossGL */ 0"
+        ) in result
+        assert "__shfl_sync(0xffffffffffffffff, value, lane)" not in result
+        assert "__activemask();" not in result
+
     def test_atomic_builtins_parse_and_convert_to_crossgl(self):
         code = """
         __global__ void atomics(int* out, int* expected) {

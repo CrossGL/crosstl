@@ -732,6 +732,41 @@ class TestCudaCodeGen:
         assert "// __syncwarp() not directly supported in CrossGL" in result
         assert "None" not in result
 
+    def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_cuda_calls(self):
+        code = """
+        __global__ void warp(unsigned int mask, int pred, int value, int lane, unsigned int* out) {
+            unsigned int active = __activemask();
+            unsigned int bits = __ballot_sync(0xffffffff, pred);
+            int any_set = __any_sync(0xffffffff, pred);
+            int y = __shfl_sync(0xffffffff, value, lane);
+            unsigned int custom = __ballot_sync(mask, pred);
+            int unsupported = __shfl_down_sync(0xffffffff, value, 1);
+            out[lane] = active + bits + any_set + y + custom + unsupported;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "WaveActiveBallot(true).x" in result
+        assert "WaveActiveBallot((pred != 0)).x" in result
+        assert "(WaveActiveAnyTrue((pred != 0)) ? 1 : 0)" in result
+        assert "WaveReadLaneAt(value, lane)" in result
+        assert (
+            "/* cuda warp intrinsic __ballot_sync(mask, pred) not directly "
+            "supported in CrossGL */ 0"
+        ) in result
+        assert (
+            "/* cuda warp intrinsic __shfl_down_sync(0xffffffff, value, 1) "
+            "not directly supported in CrossGL */ 0"
+        ) in result
+        assert "__activemask()" not in result
+        assert "__ballot_sync(0xffffffff, pred)" not in result
+        assert "__shfl_sync(0xffffffff, value, lane)" not in result
+
     def test_cooperative_groups_thread_block_sync_converts(self):
         code = """
         #include <cooperative_groups.h>

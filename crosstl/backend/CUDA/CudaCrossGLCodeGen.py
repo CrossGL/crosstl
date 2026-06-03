@@ -4009,6 +4009,10 @@ class CudaToCrossGLConverter:
         if self.is_user_defined_function(raw_name):
             return f"{raw_name}({args_str})"
 
+        warp_intrinsic = self.format_cuda_warp_intrinsic_call(raw_name, args)
+        if warp_intrinsic is not None:
+            return warp_intrinsic
+
         fp16_intrinsic = self.format_cuda_fp16_intrinsic_call(raw_name, args)
         if fp16_intrinsic is not None:
             return fp16_intrinsic
@@ -4019,6 +4023,78 @@ class CudaToCrossGLConverter:
 
         func_name = self.convert_cuda_builtin_function(raw_name)
         return f"{func_name}({args_str})"
+
+    def format_cuda_warp_intrinsic_call(self, function_name, args):
+        if function_name == "__activemask":
+            if not args:
+                return "WaveActiveBallot(true).x"
+            return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
+
+        if function_name in {"__any_sync", "__all_sync", "__ballot_sync"}:
+            if len(args) != 2 or not self.is_full_or_active_warp_mask(args[0]):
+                return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
+            predicate = self.format_wave_predicate(args[1])
+            if function_name == "__any_sync":
+                return f"(WaveActiveAnyTrue({predicate}) ? 1 : 0)"
+            if function_name == "__all_sync":
+                return f"(WaveActiveAllTrue({predicate}) ? 1 : 0)"
+            return f"WaveActiveBallot({predicate}).x"
+
+        if function_name == "__shfl_sync":
+            if len(args) != 3 or not self.is_full_or_active_warp_mask(args[0]):
+                return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
+            return f"WaveReadLaneAt({args[1]}, {args[2]})"
+
+        if function_name in {
+            "__ballot",
+            "__any",
+            "__all",
+            "__shfl",
+            "__shfl_up",
+            "__shfl_down",
+            "__shfl_xor",
+            "__shfl_up_sync",
+            "__shfl_down_sync",
+            "__shfl_xor_sync",
+        }:
+            return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
+
+        return None
+
+    def is_full_or_active_warp_mask(self, mask):
+        normalized = self.normalize_warp_mask_expression(mask)
+        return normalized in {
+            "0xffffffff",
+            "0xffffffffu",
+            "0xfffffffful",
+            "0xffffffffffffffff",
+            "0xffffffffffffffffu",
+            "0xffffffffffffffffull",
+            "uint_max",
+            "ullong_max",
+            "warp_full_mask",
+            "full_mask",
+            "waveactiveballot(true).x",
+        }
+
+    def normalize_warp_mask_expression(self, mask):
+        text = str(mask).strip()
+        while text.startswith("(") and text.endswith(")"):
+            inner = text[1:-1].strip()
+            if not inner:
+                break
+            text = inner
+        return text.replace(" ", "").lower()
+
+    def format_wave_predicate(self, predicate):
+        return f"({predicate} != 0)"
+
+    def format_unsupported_cuda_warp_intrinsic(self, function_name, args):
+        args_text = ", ".join(args)
+        return (
+            f"(/* cuda warp intrinsic {function_name}({args_text}) "
+            "not directly supported in CrossGL */ 0)"
+        )
 
     def format_cuda_fp16_intrinsic_call(self, function_name, args):
         if function_name == "__float2half2_rn" and len(args) == 1:
