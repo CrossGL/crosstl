@@ -17,6 +17,7 @@ class MojoToCrossGLConverter:
         VERTEX_ATTRIBUTES | FRAGMENT_ATTRIBUTES | COMPUTE_ATTRIBUTES
     )
     MATRIX_TYPE_PATTERN = re.compile(r"^Matrix\[(DType\.\w+),\s*(\d+),\s*(\d+)\]$")
+    REFERENCE_TYPE_PATTERN = re.compile(r"^ref\[[^\]]*\]\s+(.+)$")
     MATRIX_DTYPE_PREFIXES = {
         "DType.float16": "half",
         "DType.float32": "mat",
@@ -746,7 +747,7 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_nested_expression(expr.left)
             right = self.generate_nested_expression(expr.right)
-            op = expr.op if hasattr(expr, "op") else "+"
+            op = self.map_operator(expr.op if hasattr(expr, "op") else "+")
             return f"({left} {op} {right})"
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_nested_expression(expr.operand)
@@ -817,12 +818,21 @@ class MojoToCrossGLConverter:
         """Map a Mojo type name to the closest CrossGL type name."""
         if mojo_type is None:
             return "void"
+        mojo_type = self.strip_reference_type(mojo_type)
         mapped_type = self.type_map.get(mojo_type)
         if mapped_type:
             return mapped_type
         matrix_type = self.map_matrix_type(mojo_type)
         if matrix_type:
             return matrix_type
+        return mojo_type
+
+    def strip_reference_type(self, mojo_type):
+        if not isinstance(mojo_type, str):
+            return mojo_type
+        match = self.REFERENCE_TYPE_PATTERN.match(mojo_type)
+        if match:
+            return match.group(1)
         return mojo_type
 
     def map_matrix_type(self, mojo_type):
@@ -887,3 +897,10 @@ class MojoToCrossGLConverter:
         if self.is_user_defined_function(func_name, arg_count):
             return func_name
         return self.function_map.get(func_name, func_name)
+
+    def map_operator(self, op):
+        if op == "is":
+            return "=="
+        if op == "is not":
+            return "!="
+        return op

@@ -5,6 +5,7 @@ import pytest
 from crosstl.backend.SPIRV import VulkanCrossGLCodeGen
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 from crosstl.backend.SPIRV.VulkanParser import VulkanParser
+from crosstl.translator import parse as parse_crossgl
 
 
 def generate_code(ast_node):
@@ -470,6 +471,85 @@ OpDecorate %output_value Location 0
 %loaded = OpLoad %float %input_value
 %root = OpExtInst %float %std450 Sqrt %loaded
 OpStore %output_value %root
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_TOOLS_DEBUG_FUNCTION_NAME_ASSEMBLY = """
+; Reduced from Khronos SPIRV-Tools test/diff/diff_files/extra_if_block_src.spvasm.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %color
+OpExecutionMode %main OriginUpperLeft
+OpName %helper "f1("
+OpName %color "color"
+OpDecorate %color Location 0
+%void = OpTypeVoid
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%fn_void = OpTypeFunction %void
+%fn_float = OpTypeFunction %float
+%zero = OpConstant %float 0
+%color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn_void
+%main_label = OpLabel
+%value = OpFunctionCall %float %helper
+%out = OpCompositeConstruct %v4float %value %value %zero %zero
+OpStore %color %out
+OpReturn
+OpFunctionEnd
+%helper = OpFunction %float None %fn_float
+%helper_label = OpLabel
+OpReturnValue %zero
+OpFunctionEnd
+"""
+
+SPIRV_TOOLS_POINTER_PARAMETER_BLOCK_ASSEMBLY = """
+; Reduced from Khronos SPIRV-Tools test/diff/diff_files/different_decorations_fragment_src.spvasm.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %color
+OpExecutionMode %main OriginUpperLeft
+OpName %helper "helper("
+OpName %param "param"
+OpName %Block "Block"
+OpMemberName %Block 0 "value"
+OpName %block "block"
+OpName %input_value "inputValue"
+OpName %color "color"
+OpDecorate %input_value Location 0
+OpDecorate %color Location 0
+OpDecorate %Block Block
+OpDecorate %block DescriptorSet 0
+OpDecorate %block Binding 0
+OpMemberDecorate %Block 0 Offset 0
+%void = OpTypeVoid
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%Block = OpTypeStruct %v4float
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%ptr_uniform_block = OpTypePointer Uniform %Block
+%ptr_function_v4float = OpTypePointer Function %v4float
+%fn_void = OpTypeFunction %void
+%fn_helper = OpTypeFunction %v4float %ptr_function_v4float
+%input_value = OpVariable %ptr_input_v4float Input
+%color = OpVariable %ptr_output_v4float Output
+%block = OpVariable %ptr_uniform_block Uniform
+%helper = OpFunction %v4float None %fn_helper
+%param = OpFunctionParameter %ptr_function_v4float
+%helper_label = OpLabel
+%loaded_param = OpLoad %v4float %param
+OpReturnValue %loaded_param
+OpFunctionEnd
+%main = OpFunction %void None %fn_void
+%main_label = OpLabel
+%local = OpVariable %ptr_function_v4float Function
+%loaded_input = OpLoad %v4float %input_value
+OpStore %local %loaded_input
+%result = OpFunctionCall %v4float %helper %local
+OpStore %color %result
 OpReturn
 OpFunctionEnd
 """
@@ -1084,6 +1164,31 @@ def test_spirv_tools_std450_sqrt_extinst_codegen():
     assert "float outputValue @output @location(0);" in generated_code
     assert "outputValue = sqrt(inputValue);" in generated_code
     assert "spirv_GLSL_std_450_Sqrt" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_debug_function_names_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_DEBUG_FUNCTION_NAME_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float f1()" in generated_code
+    assert "f1(()" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_pointer_parameter_block_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_POINTER_PARAMETER_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "cbuffer Block @set(0) @binding(0)" in generated_code
+    assert "struct Block" not in generated_code
+    assert "float4 helper(float4 param)" in generated_code
+    assert "%ptr_function_v4float" not in generated_code
+    assert "helper(()" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

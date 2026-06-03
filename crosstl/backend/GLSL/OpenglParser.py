@@ -640,6 +640,11 @@ class GLSLParser:
 
         while True:
             consumed = False
+            while self.is_macro_declaration_prefix():
+                self.skip_macro_declaration_prefix()
+                self.skip_newlines()
+                consumed = True
+
             while self.current_token[0] == "LAYOUT":
                 layout = self.merge_layout_qualifiers(
                     layout, self.parse_layout_qualifier()
@@ -658,6 +663,53 @@ class GLSLParser:
                 break
 
         return qualifiers, layout
+
+    def is_macro_declaration_prefix(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+        if not self.is_uppercase_macro_identifier(self.current_token[1]):
+            return False
+
+        if self.peek()[0] == "LPAREN":
+            end_index = self.skip_balanced_suffix(self.index + 1, "LPAREN", "RPAREN")
+            next_token = self.token_at(self.skip_newline_index(end_index))
+            return self.can_follow_macro_declaration_prefix(next_token)
+
+        return self.can_follow_macro_declaration_prefix(self.peek_non_newline())
+
+    def can_follow_macro_declaration_prefix(self, token):
+        token_type, token_value = token
+        if token_type in TYPE_TOKENS or token_type in QUALIFIER_TOKENS | {"LAYOUT"}:
+            return True
+        if token_type == "IDENTIFIER" and self.is_uppercase_macro_identifier(
+            token_value
+        ):
+            return True
+        return token_type == "IDENTIFIER" and token_value in (
+            IDENTIFIER_QUALIFIERS | CONTEXTUAL_QUALIFIERS
+        )
+
+    def is_uppercase_macro_identifier(self, value):
+        return any(char.isupper() for char in value) and all(
+            char.isupper() or char.isdigit() or char == "_" for char in value
+        )
+
+    def skip_macro_declaration_prefix(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_parentheses()
+
+    def skip_balanced_parentheses(self):
+        self.eat("LPAREN")
+        depth = 1
+        while depth:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated macro declaration prefix")
+            if self.current_token[0] == "LPAREN":
+                depth += 1
+            elif self.current_token[0] == "RPAREN":
+                depth -= 1
+            self.advance()
 
     def parse_layout_value(self):
         value = self.parse_layout_constant_expression()

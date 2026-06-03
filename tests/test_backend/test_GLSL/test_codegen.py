@@ -183,6 +183,32 @@ def test_codegen_default_function_argument_from_glslang_default_args():
     assert "int x = 2" in output
 
 
+def test_codegen_macro_declaration_prefixes_from_filament_sources():
+    code = textwrap.dedent("""
+        #version 450
+
+        LAYOUT_LOCATION(LOCATION_POSITION) ATTRIBUTE vec4 position;
+
+        struct PostProcessVertexInputs {
+            vec2 normalizedUV;
+            DECLARE_FIELD(MATERIAL_SLOT) highp vec4 material;
+        };
+
+        void initPostProcessMaterialVertex(out PostProcessVertexInputs inputs) {
+            inputs.normalizedUV = position.xy;
+        }
+
+        void main() {
+            gl_Position = position;
+        }
+    """).strip()
+
+    output = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "vec4 position" in output
+    assert "vec4 material" in output
+
+
 def test_codegen_resource_function_descriptors():
     converter = GLSLToCrossGLConverter(shader_type="fragment")
 

@@ -148,6 +148,59 @@ ASSIGNMENT_TOKENS = {
     "ASSIGN_SHIFT_RIGHT",
 }
 
+OPERATOR_OVERLOAD_TOKENS = {
+    "ASSIGN_SHIFT_LEFT",
+    "ASSIGN_SHIFT_RIGHT",
+    "PLUS_EQUALS",
+    "MINUS_EQUALS",
+    "MULTIPLY_EQUALS",
+    "DIVIDE_EQUALS",
+    "MOD_EQUALS",
+    "ASSIGN_AND",
+    "ASSIGN_OR",
+    "ASSIGN_XOR",
+    "SHIFT_LEFT",
+    "SHIFT_RIGHT",
+    "LESS_EQUAL",
+    "GREATER_EQUAL",
+    "EQUAL",
+    "NOT_EQUAL",
+    "LOGICAL_AND",
+    "LOGICAL_OR",
+    "LOGICAL_NOT",
+    "BITWISE_NOT",
+    "BITWISE_XOR",
+    "BITWISE_OR",
+    "BITWISE_AND",
+    "INCREMENT",
+    "DECREMENT",
+    "PLUS",
+    "MINUS",
+    "MULTIPLY",
+    "DIVIDE",
+    "MOD",
+    "EQUALS",
+    "LESS_THAN",
+    "GREATER_THAN",
+}
+
+SCALAR_CONSTRUCTOR_TOKENS = {
+    "FLOAT",
+    "HALF",
+    "DOUBLE",
+    "INT",
+    "UINT",
+    "BOOL",
+    "DWORD",
+    "MIN16FLOAT",
+    "MIN10FLOAT",
+    "MIN16INT",
+    "MIN12INT",
+    "MIN16UINT",
+    "INT64_T",
+    "UINT64_T",
+}
+
 
 class HLSLParser:
     """Parse HLSL tokens into the DirectX backend shader AST."""
@@ -634,7 +687,11 @@ class HLSLParser:
             self.current_token[0] != "GREATER_THAN" and self.current_token[0] != "EOF"
         ):
             if self.is_type_token(self.current_token[0]):
-                args.append(self.parse_type())
+                arg_type = self.parse_type()
+                arg_type += self.format_array_suffixes_for_type(
+                    self.parse_array_suffixes()
+                )
+                args.append(arg_type)
             else:
                 args.append(self.current_token[1])
                 self.eat(self.current_token[0])
@@ -779,7 +836,7 @@ class HLSLParser:
                 )
             return_type = self.parse_type()
             qualifiers.extend(self.parse_post_type_qualifiers())
-            member_name = self.parse_identifier()
+            member_name = self.parse_member_declarator_name()
             if self.current_token[0] == "LPAREN":
                 methods.append(
                     self.parse_function(
@@ -912,6 +969,31 @@ class HLSLParser:
     def synthetic_enum_name(self):
         self.synthetic_enum_count += 1
         return f"AnonymousEnum_{self.synthetic_enum_count}"
+
+    def parse_member_declarator_name(self):
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "operator"
+        ):
+            self.eat("IDENTIFIER")
+            if self.current_token[0] in OPERATOR_OVERLOAD_TOKENS:
+                op = self.current_token[1]
+                self.eat(self.current_token[0])
+                return f"operator{op}"
+            if self.current_token[0] == "LBRACKET" and self.peek()[0] == "RBRACKET":
+                self.eat("LBRACKET")
+                self.eat("RBRACKET")
+                return "operator[]"
+            if self.current_token[0] == "LPAREN" and self.peek()[0] == "RPAREN":
+                self.eat("LPAREN")
+                self.eat("RPAREN")
+                return "operator()"
+            if self.is_type_token(self.current_token[0]):
+                return f"operator {self.parse_type()}"
+            raise SyntaxError(
+                f"Expected overloaded operator name, got {self.current_token[0]}"
+            )
+        return self.parse_identifier()
 
     def parse_enum(self):
         self.eat("ENUM")
@@ -1114,6 +1196,13 @@ class HLSLParser:
             "numthreads" in attribute_names or has_mesh_output_parameter
         ):
             return "mesh"
+        if (
+            "outputcontrolpoints" in attribute_names
+            or "patchconstantfunc" in attribute_names
+        ):
+            return "tessellation_control"
+        if "domain" in attribute_names:
+            return "tessellation_evaluation"
         if "numthreads" in attribute_names:
             return "compute"
         if semantic:
@@ -2098,12 +2187,7 @@ class HLSLParser:
         if token_type == "LBRACE":
             return self.parse_initializer_list()
         if token_type in [
-            "FLOAT",
-            "HALF",
-            "DOUBLE",
-            "INT",
-            "UINT",
-            "BOOL",
+            *SCALAR_CONSTRUCTOR_TOKENS,
             "FVECTOR",
             "IVECTOR",
             "UVECTOR",

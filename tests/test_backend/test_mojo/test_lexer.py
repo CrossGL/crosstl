@@ -420,6 +420,31 @@ def test_string_literals_tokenization():
         pytest.fail("String literals tokenization not implemented.")
 
 
+def test_backtick_metadata_identifiers_tokenization_from_modular_kernels():
+    code = """
+    @__llvm_metadata(`nvvm.cluster_dim`=cluster_shape)
+    fn kernel():
+        pass
+    """
+
+    tokens = tokenize_code(code)
+
+    assert ("BACKTICK_IDENTIFIER", "`nvvm.cluster_dim`") in tokens
+
+
+def test_backslash_line_continuation_tokenization_from_modular_kernels():
+    code = """
+    fn main():
+        comptime has_static_NK = (b.static_shape[0] > -1 and b.static_shape[1] > -1) \\
+                      and a.static_shape[1] > -1
+    """
+
+    tokens = tokenize_code(code)
+
+    assert ("IDENTIFIER", "has_static_NK") in tokens
+    assert ("AND", "&&") in tokens
+
+
 def test_numeric_literals_tokenization():
     code = """
     fn main():

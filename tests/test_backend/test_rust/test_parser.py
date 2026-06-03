@@ -605,6 +605,48 @@ def test_impl_block_parsing():
         pytest.fail(f"Impl block parsing failed: {e}")
 
 
+def test_attributed_impl_block_parsing_from_spirv_std_image():
+    code = """
+    #[crate::macros::gen_sample_param_permutations]
+    impl<
+        SampledType: SampleType<FORMAT, COMPONENTS>,
+        const DIM: u32,
+        const DEPTH: u32,
+        const ARRAYED: u32,
+        const MULTISAMPLED: u32,
+        const SAMPLED: u32,
+        const FORMAT: u32,
+        const COMPONENTS: u32,
+    > Image<SampledType, DIM, DEPTH, ARRAYED, MULTISAMPLED, SAMPLED, FORMAT, COMPONENTS> {
+        pub fn sample<F>(&self, sampler: Sampler) -> SampledType::SampleResult
+        where
+            F: Float,
+        {
+            return self.fetch_with(sampler);
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    impl_block = ast.impl_blocks[0]
+
+    assert impl_block.struct_name == (
+        "Image<SampledType, DIM, DEPTH, ARRAYED, MULTISAMPLED, SAMPLED, FORMAT, "
+        "COMPONENTS>"
+    )
+    assert impl_block.generics == [
+        "SampledType: SampleType<FORMAT, COMPONENTS>",
+        "const DIM: u32",
+        "const DEPTH: u32",
+        "const ARRAYED: u32",
+        "const MULTISAMPLED: u32",
+        "const SAMPLED: u32",
+        "const FORMAT: u32",
+        "const COMPONENTS: u32",
+    ]
+    assert impl_block.functions[0].name == "sample"
+
+
 def test_generic_impl_where_clause_parsing():
     code = """
     impl<T> Drawable for Sprite<T>

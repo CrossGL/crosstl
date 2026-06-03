@@ -201,6 +201,85 @@ class VulkanParser:
         "Not": "~",
         "SNegate": "-",
     }
+    CROSSGL_RESERVED_IDENTIFIERS = {
+        "as",
+        "async",
+        "await",
+        "bool",
+        "box",
+        "break",
+        "buffer",
+        "case",
+        "cbuffer",
+        "char",
+        "class",
+        "compute",
+        "const",
+        "continue",
+        "default",
+        "do",
+        "double",
+        "else",
+        "enum",
+        "extern",
+        "float",
+        "fn",
+        "for",
+        "fragment",
+        "from",
+        "geometry",
+        "global",
+        "half",
+        "if",
+        "impl",
+        "import",
+        "in",
+        "int",
+        "interface",
+        "let",
+        "local",
+        "loop",
+        "match",
+        "mesh",
+        "module",
+        "move",
+        "mut",
+        "namespace",
+        "object",
+        "precision",
+        "priv",
+        "protected",
+        "pub",
+        "ref",
+        "return",
+        "safe",
+        "shader",
+        "shared",
+        "static",
+        "string",
+        "struct",
+        "switch",
+        "task",
+        "tessellation",
+        "tessellation_control",
+        "tessellation_evaluation",
+        "threadgroup",
+        "trait",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "uint",
+        "uniform",
+        "unsafe",
+        "use",
+        "var",
+        "vertex",
+        "void",
+        "while",
+        "workgroup",
+        "yield",
+    }
     SPIRV_GLSL_STD_450_EXT_INST_FUNCTIONS = {
         "Acos": "acos",
         "Acosh": "acosh",
@@ -509,9 +588,18 @@ class VulkanParser:
 
         for result_id, opcode, operands, _line_number in instructions:
             if opcode == "OpName" and len(operands) >= 2:
-                names[operands[0]] = operands[1]
+                names[operands[0]] = (
+                    self.spirv_identifier_name(operands[1], operands[0])
+                    if operands[1]
+                    else ""
+                )
             elif opcode == "OpMemberName" and len(operands) >= 3:
-                target, member, name = operands[0], operands[1], operands[2]
+                target, member = operands[0], operands[1]
+                name = self.spirv_identifier_name(
+                    operands[2],
+                    f"{target}_{member}",
+                    prefix="member",
+                )
                 member_names.setdefault(target, {})[member] = name
             elif opcode == "OpDecorate" and len(operands) >= 2:
                 target, decoration = operands[0], operands[1]
@@ -526,7 +614,9 @@ class VulkanParser:
                     {
                         "execution_model": operands[0],
                         "id": operands[1],
-                        "name": operands[2],
+                        "name": self.spirv_identifier_name(
+                            operands[2], operands[1], prefix="entry_point"
+                        ),
                         "interface_ids": operands[3:],
                     }
                 )
@@ -685,11 +775,15 @@ class VulkanParser:
                 )
 
         self.spirv_register_struct_type_names(types, names)
+        resource_block_type_ids = self.spirv_resource_block_struct_type_ids(
+            variables, types, decorations
+        )
         structs = self.spirv_assembly_structs(
             names,
             member_names,
             types,
             constants,
+            skip_type_ids=resource_block_type_ids,
         )
         entry_interface_ids = {
             interface_id
@@ -799,10 +893,18 @@ class VulkanParser:
                 parameter_records
             ):
                 param = VariableNode(
-                    self.spirv_type_name(parameter_type_id, types) or parameter_type_id,
+                    self.spirv_function_parameter_type_name(
+                        parameter_type_id, types, constants
+                    ),
                     names.get(
                         parameter_id,
-                        parameter_id.lstrip("%") if parameter_id else f"param{index}",
+                        (
+                            self.spirv_fallback_identifier(
+                                parameter_id, f"param{index}"
+                            )
+                            if parameter_id
+                            else f"param{index}"
+                        ),
                     ),
                     spirv_id=parameter_id,
                     spirv_type_id=parameter_type_id,
@@ -1288,8 +1390,21 @@ class VulkanParser:
         if function_id in entry_points_by_id:
             return entry_points_by_id[function_id][0].get("name")
         if function_id:
-            return function_id.lstrip("%")
+            return self.spirv_fallback_identifier(function_id, "function")
         return ""
+
+    def spirv_function_parameter_type_name(self, type_id, types, constants):
+        type_info = types.get(type_id, {})
+        if type_info.get("kind") == "pointer":
+            pointee_type, array_suffix = self.spirv_type_name_and_suffix(
+                type_info.get("type_id"), types, constants
+            )
+            if pointee_type is not None:
+                return f"{pointee_type}{array_suffix}"
+
+        return self.spirv_type_name(type_id, types) or self.spirv_fallback_identifier(
+            type_id, "param_type"
+        )
 
     def parse_spirv_assembly_instructions(self, code):
         instructions = []
@@ -1510,10 +1625,15 @@ class VulkanParser:
                     type_id
                 ) or self.spirv_fallback_identifier(type_id, "struct")
 
-    def spirv_assembly_structs(self, names, member_names, types, constants):
+    def spirv_assembly_structs(
+        self, names, member_names, types, constants, skip_type_ids=None
+    ):
+        skip_type_ids = set(skip_type_ids or [])
         structs = []
         for type_id, type_info in types.items():
             if type_info.get("kind") != "struct":
+                continue
+            if type_id in skip_type_ids:
                 continue
 
             members = []
@@ -1536,6 +1656,39 @@ class VulkanParser:
                 structs.append(StructNode(type_info["name"], members))
 
         return structs
+
+    def spirv_resource_block_struct_type_ids(self, variables, types, decorations):
+        resource_block_type_ids = set()
+        for variable in variables:
+            pointer_type = types.get(variable["pointer_type_id"], {})
+            if pointer_type.get("kind") != "pointer":
+                continue
+
+            storage_class = variable["storage_class"] or pointer_type.get(
+                "storage_class"
+            )
+            if storage_class not in {"PushConstant", "StorageBuffer", "Uniform"}:
+                continue
+
+            struct_type_id = pointer_type.get("type_id")
+            struct_type = types.get(struct_type_id, {})
+            if struct_type.get("kind") != "struct":
+                continue
+
+            struct_decorations = decorations.get(struct_type_id, [])
+            has_block = self.spirv_has_decoration(struct_decorations, "Block")
+            has_buffer_block = self.spirv_has_decoration(
+                struct_decorations, "BufferBlock"
+            )
+
+            if storage_class == "PushConstant" and has_block:
+                resource_block_type_ids.add(struct_type_id)
+            elif storage_class == "StorageBuffer" and has_block:
+                resource_block_type_ids.add(struct_type_id)
+            elif storage_class == "Uniform" and (has_block or has_buffer_block):
+                resource_block_type_ids.add(struct_type_id)
+
+        return resource_block_type_ids
 
     def spirv_spec_constant_id(self, decorations):
         for decoration, operands in decorations:
@@ -1619,6 +1772,21 @@ class VulkanParser:
             return prefix
         if identifier[0].isdigit():
             return f"{prefix}_{identifier}"
+        return identifier
+
+    def spirv_identifier_name(self, raw_name, fallback_value=None, prefix="value"):
+        name = str(raw_name or "")
+        signature_index = name.find("(")
+        if signature_index > 0:
+            name = name[:signature_index]
+
+        identifier = re.sub(r"[^0-9A-Za-z_]", "_", name)
+        if not identifier:
+            identifier = self.spirv_fallback_identifier(fallback_value, prefix)
+        if identifier and identifier[0].isdigit():
+            identifier = f"{prefix}_{identifier}"
+        if identifier in self.CROSSGL_RESERVED_IDENTIFIERS:
+            identifier = f"{identifier}_"
         return identifier
 
     def spirv_assembly_resource_block_layout(

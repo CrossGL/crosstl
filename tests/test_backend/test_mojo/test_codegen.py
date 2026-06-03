@@ -113,6 +113,31 @@ def test_function_parameter_convention_codegen_drops_mojo_conventions():
     assert "self" not in generated_code
 
 
+def test_variadic_and_reference_parameter_codegen_from_current_docs():
+    code = """
+    struct GenericArray[ElementType: Copyable & ImplicitlyDestructible]:
+        var size: Int
+
+        def __init__(out self, var *elements: Self.ElementType):
+            self.size = len(elements)
+
+        def __del__(deinit self):
+            pass
+
+        def __getitem__(self, i: Int) raises -> ref[self] Self.ElementType:
+            return self.data[i]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "void __init__(Self.ElementType elements)" in generated_code
+    assert "void __del__()" in generated_code
+    assert "Self.ElementType __getitem__(int i)" in generated_code
+    assert "var *elements" not in generated_code
+    assert "deinit self" not in generated_code
+    assert "ref[self]" not in generated_code
+
+
 def test_function_parameter_separator_markers_codegen_drops_markers():
     code = """
     def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:
@@ -426,6 +451,21 @@ def test_bare_identifier_block_condition_codegen():
     assert "switch (state)" in generated_code
     assert "case active:" in generated_code
     assert "(flag ? yes : no)" in generated_code
+
+
+def test_identity_expression_codegen_from_modular_kernels():
+    code = """
+    fn main():
+        if elementwise_lambda_fn is None or fallback is not None:
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "if (((elementwise_lambda_fn == None) || (fallback != None)))" in generated_code
+    )
+    assert " is " not in generated_code
 
 
 def test_for_codegen():

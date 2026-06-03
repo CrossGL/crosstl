@@ -1062,6 +1062,33 @@ def test_parse_constructor_call_split_across_newline_from_gltf_sample_renderer()
     assert ast.constant[0].name == "ACESInputMat"
 
 
+def test_parse_macro_declaration_prefixes_from_filament_sources():
+    code = textwrap.dedent("""
+        LAYOUT_LOCATION(LOCATION_POSITION) ATTRIBUTE vec4 position;
+        POST_PROCESS_INPUT vec2 normalizedUV;
+
+        struct MacroInput {
+            COLOR color;
+            DECLARE_FIELD(MATERIAL_SLOT) highp vec4 material;
+        };
+
+        void main() {
+            gl_Position = position;
+        }
+        """)
+
+    ast = parse_ok(code, "vertex")
+
+    assert [var.name for var in ast.global_variables[:2]] == [
+        "position",
+        "normalizedUV",
+    ]
+    assert ast.global_variables[0].vtype == "vec4"
+    assert ast.global_variables[1].vtype == "vec2"
+    assert ast.structs[0].members[0].vtype == "COLOR"
+    assert ast.structs[0].members[1].vtype == "vec4"
+
+
 @pytest.mark.parametrize(
     "code",
     [

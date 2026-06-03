@@ -672,6 +672,20 @@ def test_codegen_namespace_block_scoped_call_imports_to_parseable_crossgl():
     parse_crossgl(crossgl)
 
 
+def test_codegen_array_template_argument_from_dxc_buffer_tests():
+    crossgl = generate_crossgl("""
+        StructuredBuffer<float[2]> ArrBuf : register(t3);
+
+        float2 main(uint ix0 : IX0) : SV_Target {
+            return (float2)ArrBuf.Load(ix0 + 1);
+        }
+    """)
+
+    assert "StructuredBuffer<float[2]> ArrBuf;" in crossgl
+    assert "StructuredBuffer<float, [, 2, ]>" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_anonymous_nested_struct_member_roundtrip():
     hlsl = textwrap.dedent("""
         struct NRCPathState {
@@ -878,6 +892,54 @@ def test_codegen_tessellation_stages():
     lowered = output.lower()
     assert "tessellation_control" in lowered
     assert "tessellation_evaluation" in lowered
+    parse_crossgl(output)
+
+
+def test_codegen_tessellation_stage_inference_from_dxc_main_attributes():
+    hlsl = textwrap.dedent("""
+        struct DSFoo {
+            float Edges[4] : SV_TessFactor;
+            float Inside[2] : SV_InsideTessFactor;
+        };
+
+        struct HSFoo {
+            float3 pos : POSITION;
+        };
+
+        DSFoo PatchFoo(InputPatch<HSFoo, 16> ip, uint patchID : SV_PrimitiveID) {
+            DSFoo output;
+            output.Edges[0] = ip[patchID].pos.x;
+            output.Inside[0] = ip[patchID].pos.y;
+            return output;
+        }
+
+        [domain("quad")]
+        [partitioning("fractional_odd")]
+        [outputtopology("triangle_cw")]
+        [outputcontrolpoints(16)]
+        [patchconstantfunc("PatchFoo")]
+        HSFoo main(InputPatch<HSFoo, 16> patch, uint i : SV_OutputControlPointID) {
+            HSFoo output;
+            output.pos = patch[i].pos;
+            return output;
+        }
+
+        [domain("quad")]
+        float4 DomainMain(
+            OutputPatch<HSFoo, 16> patch,
+            DSFoo input,
+            float2 uv : SV_DomainLocation
+        ) : SV_Position {
+            return float4(patch[0].pos, 1.0);
+        }
+        """)
+
+    output = generate_crossgl(hlsl)
+
+    assert "tessellation_control {" in output
+    assert "tessellation_evaluation {" in output
+    assert '@domain("quad")' in output
+    parse_crossgl(output)
 
 
 def test_codegen_mesh_task_stages():
@@ -1147,7 +1209,7 @@ def test_codegen_directx_samples_alias_and_scoped_types_parse_crossgl():
 def test_codegen_attributes_emitted():
     output = generate_crossgl(ATTRIBUTE_HLSL)
     lowered = output.lower()
-    assert "@ domain" in lowered
+    assert "@domain" in lowered
     assert "@ partitioning" in lowered
     assert "@ outputtopology" in lowered
     assert "@ outputcontrolpoints" in lowered

@@ -2419,6 +2419,59 @@ def test_parse_struct_methods_from_dxc_rewriter_samples():
     assert isinstance(struct.methods[0].body[0].value, VectorConstructorNode)
 
 
+def test_parse_struct_operator_methods_from_dxc_intrinsics_tests():
+    code = textwrap.dedent("""
+        struct Vector {
+            float2 v;
+
+            Vector operator+(Vector vec) {
+                Vector ret;
+                ret.v = v + vec.v;
+                return ret;
+            }
+        };
+        """)
+
+    ast = parse_code(code)
+    struct = ast.structs[0]
+
+    assert [member.name for member in struct.members] == ["v"]
+    assert [method.name for method in struct.methods] == ["operator+"]
+    assert struct.methods[0].return_type == "Vector"
+
+
+def test_parse_min_precision_scalar_constructor_from_dxc_tests():
+    ast = parse_code("""
+        int main(min16int a : A) : SV_Target {
+            min16int q = a + 2;
+            if (q == min16int(7)) {
+                return q - 3;
+            }
+            return 1;
+        }
+    """)
+
+    main = ast.functions[0]
+    branch = next(stmt for stmt in main.body if isinstance(stmt, IfNode))
+
+    assert branch.condition.op == "=="
+    assert isinstance(branch.condition.right, VectorConstructorNode)
+    assert branch.condition.right.type_name == "min16int"
+
+
+def test_parse_array_template_argument_from_dxc_buffer_tests():
+    ast = parse_code("""
+        StructuredBuffer<float[2]> ArrBuf : register(t3);
+        float2 main(uint ix0 : IX0) : SV_Target {
+            return (float2)ArrBuf.Load(ix0 + 1);
+        }
+    """)
+
+    arr_buf = ast.global_variables[0]
+
+    assert arr_buf.vtype == "StructuredBuffer<float[2]>"
+
+
 def test_parse_top_level_anonymous_struct_variable_from_dxc_rewriter_samples():
     code = textwrap.dedent("""
         SamplerState ss;

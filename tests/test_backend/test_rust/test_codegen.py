@@ -4916,6 +4916,22 @@ def test_raw_string_literal_conversion():
         pytest.fail(f"Raw string literal conversion failed: {e}")
 
 
+def test_escaped_newline_string_literal_codegen_reparseable_from_asm_macro():
+    code = (
+        'fn trace(payload: &mut u32) { unsafe { asm! { "OpTraceRayKHR \\\n'
+        '                {payload}", payload = in(reg) payload, } } }'
+    )
+
+    try:
+        result = parse_and_generate(code)
+
+        asm_line = next(line for line in result.splitlines() if "asm!(" in line)
+        assert r"\n" in asm_line
+        crosstl.translator.parse(result)
+    except Exception as e:
+        pytest.fail(f"Escaped newline string literal conversion failed: {e}")
+
+
 def test_byte_literal_conversion():
     code = r"""
     fn test_byte_literals(c: u8) -> String {

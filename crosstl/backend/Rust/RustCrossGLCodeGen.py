@@ -17,6 +17,7 @@ RUST_NUMERIC_LITERAL_RE = re.compile(
 )
 RUST_RAW_STRING_RE = re.compile(r'^r(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
 RUST_BYTE_RAW_STRING_RE = re.compile(r'^br(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
+RUST_STRING_RE = re.compile(r'^"((?:[^"\\]|\\(.|\n))*)"$', re.DOTALL)
 RUST_BYTE_STRING_RE = re.compile(r'^b"((?:[^"\\]|\\.)*)"$', re.DOTALL)
 RUST_BYTE_CHAR_RE = re.compile(r"^b'((?:[^'\\]|\\.)*)'$", re.DOTALL)
 
@@ -7552,6 +7553,11 @@ class RustToCrossGLConverter:
             if method_call is not None:
                 return method_call
 
+            if isinstance(expr.name, str) and expr.name.endswith("!"):
+                func_name = self.map_function(expr.name)
+                args = ", ".join(self.generate_macro_argument(arg) for arg in expr.args)
+                return f"{func_name}({args})"
+
             if isinstance(expr.name, str):
                 constructor = self.format_path_constructor_call(expr.name, expr.args)
                 if constructor is not None:
@@ -7647,6 +7653,14 @@ class RustToCrossGLConverter:
             return str(expr).lower() if isinstance(expr, bool) else str(expr)
         else:
             return str(expr)
+
+    def generate_macro_argument(self, arg):
+        if isinstance(arg, str):
+            return self.normalize_macro_body(arg)
+        return self.generate_expression(arg)
+
+    def normalize_macro_body(self, body):
+        return body.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
 
     def generate_inline_result_expression(self, expression):
         value_name = self.next_inline_expression_value_name()
@@ -8391,6 +8405,10 @@ class RustToCrossGLConverter:
         if raw_string:
             return self.normalize_raw_string_literal(raw_string.group(2))
 
+        string = RUST_STRING_RE.match(value)
+        if string:
+            return self.normalize_string_literal(string.group(1))
+
         byte_string = RUST_BYTE_STRING_RE.match(value)
         if byte_string:
             return self.normalize_byte_string_literal(byte_string.group(1))
@@ -8425,8 +8443,12 @@ class RustToCrossGLConverter:
         )
         return f'"{escaped}"'
 
+    def normalize_string_literal(self, content):
+        escaped = content.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+        return f'"{escaped}"'
+
     def normalize_byte_string_literal(self, content):
-        return f'"{content}"'
+        return self.normalize_string_literal(content)
 
     def normalize_byte_char_literal(self, content):
         if len(content) == 1:

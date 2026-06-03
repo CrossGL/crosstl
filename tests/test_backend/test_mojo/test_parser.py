@@ -116,6 +116,72 @@ def test_method_self_parameter_convention_without_type_parses():
     ]
 
 
+def test_variadic_and_deinit_parameters_parse_from_current_docs():
+    code = """
+    struct GenericArray[ElementType: Copyable & ImplicitlyDestructible]:
+        var size: Int
+
+        def __init__(out self, var *elements: Self.ElementType):
+            self.size = len(elements)
+
+        def __del__(deinit self):
+            pass
+
+        def __getitem__(self, i: Int) raises -> ref[self] Self.ElementType:
+            return self.data[i]
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = find_struct(ast, "GenericArray")
+    init_method = struct_node.methods[0]
+    del_method = struct_node.methods[1]
+    getitem_method = struct_node.methods[2]
+
+    assert [
+        (
+            param.name,
+            param.vtype,
+            param.parameter_convention,
+            getattr(param, "is_variadic", False),
+        )
+        for param in init_method.params
+    ] == [
+        ("self", "", "out", False),
+        ("elements", "Self.ElementType", "var", True),
+    ]
+    assert [
+        (param.name, param.vtype, param.parameter_convention)
+        for param in del_method.params
+    ] == [("self", "", "deinit")]
+    assert [(param.name, param.vtype) for param in getitem_method.params] == [
+        ("self", ""),
+        ("i", "Int"),
+    ]
+    assert getitem_method.return_type == "ref[self] Self.ElementType"
+
+
+def test_variadic_parameter_without_convention_parse_from_real_world_mojo():
+    code = """
+    struct Matrix:
+        fn __init__(out self, *dims: Int):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    init_method = find_struct(ast, "Matrix").methods[0]
+
+    assert [
+        (
+            param.name,
+            param.vtype,
+            param.parameter_convention,
+            getattr(param, "is_variadic", False),
+        )
+        for param in init_method.params
+    ] == [
+        ("self", "", "out", False),
+        ("dims", "Int", None, True),
+    ]
+
+
 def test_function_parameter_separator_markers_parse_from_official_docs():
     code = """
     def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:
@@ -504,6 +570,20 @@ def test_comptime_for_parsing_preserves_loop_shape():
     assert isinstance(c_style_loop.update, AssignmentNode)
 
 
+def test_statement_attributes_parse_from_real_world_mojo():
+    code = """
+    fn main():
+        @parameter
+        for k in range(n):
+            sink(k)
+    """
+    ast = parse_code(tokenize_code(code))
+    loop = find_function(ast, "main").body[0]
+
+    assert isinstance(loop, RangeForNode)
+    assert [attr.name for attr in loop.attributes] == ["parameter"]
+
+
 def test_while_parsing():
     code = """
     fn main():
@@ -600,6 +680,38 @@ def test_multiline_postfix_chain_parsing_from_modular_custom_ops():
     assert isinstance(fill_call.object, MethodCallNode)
     assert fill_call.object.method == "stack_allocation"
     assert isinstance(fill_call.object.object, ArrayAccessNode)
+
+
+def test_multiline_index_expression_parsing_from_modular_pmpp_examples():
+    code = """
+    fn main():
+        A[
+            (
+                tile_size
+                - consumed
+            )
+            % tile_size
+        ] = value
+    """
+    ast = parse_code(tokenize_code(code))
+    store = find_function(ast, "main").body[0]
+
+    assert isinstance(store.left, ArrayAccessNode)
+    assert isinstance(store.left.index, BinaryOpNode)
+    assert store.left.index.op == "%"
+
+
+def test_prefixed_string_literal_attribute_parsing_from_modular_kernels():
+    code = """
+    @__name(t"gemv_kernel_{dtype}")
+    def gemv_kernel():
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "gemv_kernel")
+
+    assert function.attributes[0].name == "__name"
+    assert function.attributes[0].args == ['t"gemv_kernel_{dtype}"']
 
 
 def test_multiline_call_argument_expression_parsing_from_modular_pmpp_examples():
@@ -699,6 +811,20 @@ def test_parenthesized_where_clause_with_and_constraints_parsing():
     assert function.body
 
 
+def test_function_effects_parse_from_modular_and_real_world_mojo():
+    code = """
+    def exported[M: Int]() abi("C"):
+        pass
+
+    fn _sum2[_nelts: Int](j: Int) unified{mut}:
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+
+    assert find_function(ast, "exported").body
+    assert find_function(ast, "_sum2").body
+
+
 def test_else_if_parsing():
     code = """
     fn fragment_main(input: PSInput) -> PSOutput:
@@ -784,6 +910,21 @@ def test_logical_ops_parsing():
         assert not_expr.op == "!"
     except SyntaxError:
         pytest.fail("Logical operators parsing not implemented.")
+
+
+def test_identity_expression_parsing_from_modular_kernels():
+    code = """
+    fn main():
+        if elementwise_lambda_fn is None or fallback is not None:
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    condition = find_function(ast, "main").body[0].condition
+
+    assert isinstance(condition, BinaryOpNode)
+    assert condition.op == "||"
+    assert condition.left.op == "is"
+    assert condition.right.op == "is not"
 
 
 def test_switch_case_parsing():
@@ -880,6 +1021,24 @@ def test_relative_import_path_parsing_from_modular_corpus():
     assert ast.includes[1].items == ["PathLike"]
     assert ast.includes[2].items == ["_stat as _stat_linux_x86"]
     assert ast.includes[3].items == []
+
+
+def test_keyword_like_qualified_names_parse_from_modular_kernels():
+    code = """
+    from linalg.matmul.gpu.sm100_structured.default.matmul_kernels import Kernel
+
+    fn main():
+        let value = config.default
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    expression = function.body[0].initial_value
+
+    assert ast.includes[0].module_name == (
+        "linalg.matmul.gpu.sm100_structured.default.matmul_kernels"
+    )
+    assert isinstance(expression, MemberAccessNode)
+    assert expression.member == "default"
 
 
 def test_hash_prefixed_lines_do_not_affect_import_parsing():
@@ -1695,6 +1854,29 @@ def test_keyword_style_comptime_assert_statement_parse():
     assert isinstance(size_assert.args[0], BinaryOpNode)
     assert size_assert.args[0].op == ">"
     assert size_assert.args[1] == '"bad size"'
+
+
+def test_comptime_in_expression_and_parameterized_declaration_parse():
+    code = """
+    def main():
+        comptime UInt32Indices[rank: Int] = IndexList[rank, element_type=DType.uint32]
+        comptime assert Self.cta_group in (
+            1,
+            2,
+        ), "MmaOpSM100 only supports cta_group 1 or 2"
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+    assertion = function.body[1]
+
+    assert isinstance(declaration, VariableDeclarationNode)
+    assert declaration.name == "UInt32Indices[rank:Int]"
+    assert getattr(declaration, "is_comptime", False)
+    assert isinstance(assertion.args[0], BinaryOpNode)
+    assert assertion.args[0].op == "in"
+    assert assertion.args[1] == '"MmaOpSM100 only supports cta_group 1 or 2"'
 
 
 def test_nested_decorator_and_generic_function_signature_parse():

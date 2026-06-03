@@ -1,5 +1,7 @@
 """Parser for Mojo source AST construction."""
 
+import re
+
 from .MojoAst import *
 from .MojoLexer import *
 
@@ -20,7 +22,10 @@ class MojoParser:
         "out",
         "read",
         "ref",
+        "deinit",
     }
+    REFERENCE_TYPE_PREFIXES = {"ref"}
+    FUNCTION_EFFECT_IDENTIFIERS = {"abi", "capturing", "raises", "unified"}
 
     def __init__(self, tokens):
         self.tokens = tokens
@@ -179,21 +184,30 @@ class MojoParser:
             name += "."
             self.eat("DOT")
 
-        if self.current_token[0] == "IDENTIFIER":
+        if name and self.current_token[0] == "IMPORT":
+            return name
+
+        if self.is_identifier_like_token():
             name += self.current_token[1]
-            self.eat("IDENTIFIER")
+            self.eat(self.current_token[0])
         elif not name:
             raise SyntaxError(f"Expected import path, got {self.current_token[0]}")
 
         while self.current_token[0] == "DOT":
             self.eat("DOT")
-            if self.current_token[0] != "IDENTIFIER":
+            if not self.is_identifier_like_token():
                 raise SyntaxError(
                     f"Expected IDENTIFIER after dot, got {self.current_token[0]}"
                 )
             name += f".{self.current_token[1]}"
-            self.eat("IDENTIFIER")
+            self.eat(self.current_token[0])
         return name
+
+    def is_identifier_like_token(self):
+        token_value = self.current_token[1]
+        return isinstance(token_value, str) and re.match(
+            r"^[A-Za-z_][A-Za-z0-9_]*$", token_value
+        )
 
     def parse_import_items(self):
         items = []
@@ -558,11 +572,30 @@ class MojoParser:
         return func
 
     def parse_function_effects(self):
-        while self.current_token[0] == "IDENTIFIER" and self.current_token[1] in {
-            "capturing",
-            "raises",
-        }:
+        while (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in self.FUNCTION_EFFECT_IDENTIFIERS
+        ):
             self.eat("IDENTIFIER")
+            self.skip_layout_tokens()
+            if self.current_token[0] == "LPAREN":
+                self.skip_balanced_group("LPAREN", "RPAREN")
+            elif self.current_token[0] == "LBRACE":
+                self.skip_balanced_group("LBRACE", "RBRACE")
+            self.skip_layout_tokens()
+
+    def skip_balanced_group(self, open_token, close_token):
+        self.eat(open_token)
+        depth = 1
+        while depth > 0:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError(f"Unterminated Mojo {open_token} group")
+            token_type = self.current_token[0]
+            if token_type == open_token:
+                depth += 1
+            elif token_type == close_token:
+                depth -= 1
+            self.eat(token_type)
 
     def parse_where_clause(self):
         if not (
@@ -613,8 +646,13 @@ class MojoParser:
             attributes = self.parse_attributes()
             self.skip_layout_tokens()
             convention = self.parse_parameter_convention()
+            is_variadic = self.parse_variadic_parameter_marker()
 
             if self.is_untyped_self_parameter(convention):
+                name = self.current_token[1]
+                self.eat("IDENTIFIER")
+                vtype = ""
+            elif self.is_bare_self_parameter():
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
                 vtype = ""
@@ -650,6 +688,7 @@ class MojoParser:
                 parameter_convention=convention,
             )
             param.default_value = default_value
+            param.is_variadic = is_variadic
             params.append(param)
             self.skip_layout_tokens()
 
@@ -693,16 +732,38 @@ class MojoParser:
         else:
             return None
 
-        if self.peek_token()[0] not in self.TYPE_START_TOKENS:
+        if not self.is_parameter_convention_followed_by_parameter():
             return None
 
         self.eat(token_type)
         self.skip_layout_tokens()
         return convention
 
+    def is_parameter_convention_followed_by_parameter(self):
+        next_token = self.peek_token()
+        if next_token[0] in self.TYPE_START_TOKENS:
+            return True
+        if next_token[0] == "MULTIPLY":
+            return self.peek_token(2)[0] in self.TYPE_START_TOKENS
+        return False
+
+    def parse_variadic_parameter_marker(self):
+        if self.current_token[0] != "MULTIPLY":
+            return False
+        if self.peek_token()[0] not in self.TYPE_START_TOKENS:
+            return False
+        self.eat("MULTIPLY")
+        self.skip_layout_tokens()
+        return True
+
     def is_untyped_self_parameter(self, convention):
         if convention is None:
             return False
+        if self.current_token[0] != "IDENTIFIER" or self.current_token[1] != "self":
+            return False
+        return self.peek_token()[0] in {"COMMA", "RPAREN"}
+
+    def is_bare_self_parameter(self):
         if self.current_token[0] != "IDENTIFIER" or self.current_token[1] != "self":
             return False
         return self.peek_token()[0] in {"COMMA", "RPAREN"}
@@ -828,7 +889,11 @@ class MojoParser:
                 return self.parse_struct(attributes)
             if self.current_token[0] == "CLASS":
                 return self.parse_class(attributes)
-            raise SyntaxError("Expected declaration after attribute")
+            statement = self.parse_statement()
+            if attributes:
+                existing_attributes = getattr(statement, "attributes", [])
+                statement.attributes = attributes + existing_attributes
+            return statement
 
         elif self.current_token[0] in self.FUNCTION_TOKENS:
             return self.parse_function()
@@ -995,12 +1060,40 @@ class MojoParser:
             return node
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "assert":
             return self.parse_keyword_comptime_assert_statement()
+        if self.is_comptime_declaration_start():
+            return self.parse_comptime_declaration(after_keyword=True)
         if self.is_comptime_expression_statement():
             node = self.parse_expression()
             self.consume_statement_terminator()
             node.is_comptime = True
             return node
         return self.parse_comptime_declaration(after_keyword=True)
+
+    def is_comptime_declaration_start(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+        next_token = self.peek_token()[0]
+        if next_token in {"COLON", "EQUALS"}:
+            return True
+        if next_token != "LBRACKET":
+            return False
+        index = self.pos + 1
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LBRACKET":
+                depth += 1
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    next_after_suffix = (
+                        self.tokens[index + 1]
+                        if index + 1 < len(self.tokens)
+                        else ("EOF", None)
+                    )
+                    return next_after_suffix[0] in {"COLON", "EQUALS"}
+            index += 1
+        return False
 
     def parse_keyword_comptime_assert_statement(self):
         self.eat("IDENTIFIER")
@@ -1038,6 +1131,8 @@ class MojoParser:
 
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        if self.current_token[0] == "LBRACKET":
+            name += self.parse_generic_type_suffix()
 
         vtype = None
         if self.current_token[0] == "COLON":
@@ -1361,18 +1456,36 @@ class MojoParser:
     def parse_relational(self):
         left = self.parse_shift()
         self.skip_expression_layout()
-        while self.current_token[0] in [
-            "LESS_THAN",
-            "GREATER_THAN",
-            "LESS_EQUAL",
-            "GREATER_EQUAL",
-        ]:
-            op = self.current_token[1]
-            self.eat(self.current_token[0])
+        while (
+            self.current_token[0]
+            in [
+                "LESS_THAN",
+                "GREATER_THAN",
+                "LESS_EQUAL",
+                "GREATER_EQUAL",
+                "IN",
+            ]
+            or self.is_identity_operator()
+        ):
+            if self.is_identity_operator():
+                op = self.parse_identity_operator()
+            else:
+                op = self.current_token[1]
+                self.eat(self.current_token[0])
             right = self.parse_shift()
             left = BinaryOpNode(left, op, right)
             self.skip_expression_layout()
         return left
+
+    def is_identity_operator(self):
+        return self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "is"
+
+    def parse_identity_operator(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "NOT":
+            self.eat("NOT")
+            return "is not"
+        return "is"
 
     def parse_shift(self):
         left = self.parse_additive()
@@ -1432,6 +1545,10 @@ class MojoParser:
     def parse_primary(self):
         if self.current_token[0] == "IDENTIFIER":
             return self.parse_function_call_or_identifier()
+        elif self.current_token[0] == "BACKTICK_IDENTIFIER":
+            value = self.current_token[1]
+            self.eat("BACKTICK_IDENTIFIER")
+            return self.parse_postfix_suffixes(value)
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
@@ -1545,6 +1662,10 @@ class MojoParser:
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
+            if self.current_token[0] == "STRING_LITERAL":
+                value = f"{name}{self.current_token[1]}"
+                self.eat("STRING_LITERAL")
+                return self.parse_postfix_suffixes(value)
             return self.parse_postfix_suffixes(VariableNode("", name))
 
         elif self.current_token[0] == "NUMBER":
@@ -1567,12 +1688,12 @@ class MojoParser:
 
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
-                if self.current_token[0] != "IDENTIFIER":
+                if not self.is_identifier_like_token():
                     raise SyntaxError(
                         f"Expected IDENTIFIER after dot, got {self.current_token[0]}"
                     )
                 member = self.current_token[1]
-                self.eat("IDENTIFIER")
+                self.eat(self.current_token[0])
                 node = MemberAccessNode(node, member)
                 continue
 
@@ -1671,14 +1792,22 @@ class MojoParser:
         if self.current_token[0] == "RBRACKET":
             self.eat("RBRACKET")
             return ArrayAccessNode(array, TupleNode([]))
-        indices = [self.parse_expression()]
+        self.expression_layout_depth += 1
+        try:
+            indices = [self.parse_expression()]
+        finally:
+            self.expression_layout_depth -= 1
         self.skip_layout_tokens()
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
             self.skip_layout_tokens()
             if self.current_token[0] == "RBRACKET":
                 break
-            indices.append(self.parse_expression())
+            self.expression_layout_depth += 1
+            try:
+                indices.append(self.parse_expression())
+            finally:
+                self.expression_layout_depth -= 1
             self.skip_layout_tokens()
         self.eat("RBRACKET")
         index = indices[0] if len(indices) == 1 else TupleNode(indices)
@@ -1738,7 +1867,7 @@ class MojoParser:
         self.eat(self.current_token[0])
         while self.current_token[0] == "DOT":
             self.eat("DOT")
-            if self.current_token[0] not in self.TYPE_START_TOKENS:
+            if not self.is_identifier_like_token():
                 raise SyntaxError(
                     f"Expected type name after dot, got {self.current_token[0]}"
                 )
@@ -1746,6 +1875,10 @@ class MojoParser:
             self.eat(self.current_token[0])
         if self.current_token[0] == "LBRACKET":
             type_name += self.parse_generic_type_suffix()
+        if type_name.split("[", 1)[0] in self.REFERENCE_TYPE_PREFIXES:
+            self.skip_layout_tokens()
+            if self.current_token[0] in self.TYPE_START_TOKENS:
+                type_name += f" {self.parse_type()}"
         return type_name
 
     def skip_bracketed_suffix(self):

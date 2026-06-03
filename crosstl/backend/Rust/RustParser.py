@@ -265,6 +265,9 @@ class RustParser:
                     enums.append(e)
                 elif self.current_token[0] == "TYPE":
                     type_aliases.append(self.parse_type_alias(attributes=attrs))
+                elif self.current_token[0] == "IMPL":
+                    i = self.parse_impl_block()
+                    impl_blocks.append(i)
                 elif self.current_token[0] == "FN":
                     f = self.parse_function(attributes=attrs)
                     functions.append(f)

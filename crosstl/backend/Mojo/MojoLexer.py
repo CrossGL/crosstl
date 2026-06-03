@@ -43,6 +43,7 @@ TOKENS = tuple(
         ("BOOL", r"\bBool\b"),
         ("STRING", r"\bString\b"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
+        ("BACKTICK_IDENTIFIER", r"`(?:[^`\\]|\\.)*`"),
         (
             "NUMBER",
             r"0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|\d+(\.\d+)?([eE][+-]?\d+)?",
@@ -153,7 +154,9 @@ class MojoLexer:
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
         indent_stack = [0]
-        layout_code = self._remove_multiline_comments(self.code)
+        layout_code = self._remove_multiline_comments(
+            self._join_line_continuations(self.code)
+        )
 
         for line in layout_code.splitlines():
             stripped_line = line.strip()
@@ -217,6 +220,10 @@ class MojoLexer:
             return "".join("\n" if char == "\n" else " " for char in match.group(0))
 
         return re.sub(r'"""[\s\S]*?"""', preserve_layout, code)
+
+    def _join_line_continuations(self, code: str) -> str:
+        """Join explicit Mojo line continuations before indentation analysis."""
+        return re.sub(r"\\[ \t]*(?:\r?\n)[ \t]*", " ", code)
 
     def _next_token(self, source: str, pos: int) -> Tuple[int, str, str]:
         """Match the next token in ``source`` at ``pos`` and return its end offset."""

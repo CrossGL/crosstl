@@ -1052,12 +1052,13 @@ class HLSLToCrossGLConverter:
             attr_name = str(getattr(attr, "name", ""))
             if attr_name.lower() in skip_names:
                 continue
+            prefix = "@" if attr_name.lower() == "domain" else "@ "
             args = getattr(attr, "args", getattr(attr, "arguments", []))
             if args:
                 rendered_args = ", ".join(self.generate_expression(arg) for arg in args)
-                lines += "    " * indent + f"@ {attr_name}({rendered_args})\n"
+                lines += "    " * indent + f"{prefix}{attr_name}({rendered_args})\n"
             else:
-                lines += "    " * indent + f"@ {attr_name}\n"
+                lines += "    " * indent + f"{prefix}{attr_name}\n"
         return lines
 
     def format_binding_attributes(self, node, indent):
