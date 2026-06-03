@@ -75,6 +75,17 @@ class SlangToCrossGLConverter:
         "SamplerCubeShadow",
         "SamplerCubeArrayShadow",
     }
+    STORAGE_IMAGE_RESOURCE_TYPES = {
+        "RWTexture1D",
+        "RWTexture1DArray",
+        "RWTexture2D",
+        "RWTexture2DArray",
+        "RWTexture2DMS",
+        "RWTexture2DMSArray",
+        "RWTexture3D",
+        "RWTextureCube",
+        "RWTextureCubeArray",
+    }
 
     def __init__(self):
         self.vertex_inputs = []
@@ -128,6 +139,15 @@ class SlangToCrossGLConverter:
             "Sampler2DArrayShadow": "sampler2DArrayShadow",
             "SamplerCubeShadow": "samplerCubeShadow",
             "SamplerCubeArrayShadow": "samplerCubeArrayShadow",
+            "RWTexture1D": "image1D",
+            "RWTexture1DArray": "image1DArray",
+            "RWTexture2D": "image2D",
+            "RWTexture2DArray": "image2DArray",
+            "RWTexture2DMS": "image2DMS",
+            "RWTexture2DMSArray": "image2DMSArray",
+            "RWTexture3D": "image3D",
+            "RWTextureCube": "imageCube",
+            "RWTextureCubeArray": "imageCubeArray",
         }
         self.function_map = {
             "frac": "fract",
@@ -138,6 +158,8 @@ class SlangToCrossGLConverter:
         self.user_function_names = set()
         self.sampleable_resource_scopes = [set()]
         self.sampleable_resource_type_scopes = [{}]
+        self.storage_image_resource_scopes = [set()]
+        self.storage_image_resource_type_scopes = [{}]
 
         self.semantic_map = {
             # Vertex inputs position
@@ -248,8 +270,11 @@ class SlangToCrossGLConverter:
         }
         self.user_function_names.discard(None)
         resource_types = self.collect_sampleable_resource_types(ast)
+        storage_image_types = self.collect_storage_image_resource_types(ast)
         self.sampleable_resource_scopes = [set(resource_types)]
         self.sampleable_resource_type_scopes = [resource_types]
+        self.storage_image_resource_scopes = [set(storage_image_types)]
+        self.storage_image_resource_type_scopes = [storage_image_types]
         code = "shader main {\n"
         if ast.imports:
             for imp in ast.imports:
@@ -426,6 +451,7 @@ class SlangToCrossGLConverter:
         code = " "
         code += "  " * indent
         self.push_sampleable_resource_scope(func.params)
+        self.push_storage_image_resource_scope(func.params)
         params = ", ".join(self.generate_parameter(p) for p in func.params)
         semantic = self.map_semantic(func.semantic)
         semantic_suffix = f" {semantic}" if semantic else ""
@@ -435,6 +461,7 @@ class SlangToCrossGLConverter:
         )
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    }\n\n"
+        self.pop_storage_image_resource_scope()
         self.pop_sampleable_resource_scope()
         return code
 
@@ -466,6 +493,7 @@ class SlangToCrossGLConverter:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
                 self.register_sampleable_resource(stmt)
+                self.register_storage_image_resource(stmt)
                 code += (
                     f"{self.map_type(stmt.vtype)} {stmt.name}"
                     f"{self.format_array_suffixes(stmt, is_main)};\n"
@@ -761,11 +789,17 @@ class SlangToCrossGLConverter:
                 return f"clamp({args}, 0.0, 1.0)"
             if expr.name in self.user_function_names:
                 name = expr.name
+            elif expr.name in self.type_map and expr.name[:1].islower():
+                name = self.map_type(expr.name)
             else:
                 name = self.function_map.get(expr.name, expr.name)
             return f"{name}({args})"
         elif isinstance(expr, MethodCallNode):
             obj = self.generate_expression(expr.object, is_main)
+            image_call = self.generate_storage_image_method_call(expr, obj, is_main)
+            if image_call is not None:
+                return image_call
+
             texture_call = self.generate_texture_method_call(expr, obj, is_main)
             if texture_call is not None:
                 return texture_call
@@ -871,6 +905,16 @@ class SlangToCrossGLConverter:
                     resources[name] = getattr(declaration, "vtype", None)
         return resources
 
+    def collect_storage_image_resource_types(self, ast):
+        resources = {}
+        for node in getattr(ast, "global_vars", []) or []:
+            declaration = node.left if isinstance(node, AssignmentNode) else node
+            if self.is_storage_image_resource_type(getattr(declaration, "vtype", None)):
+                name = getattr(declaration, "name", None)
+                if name is not None:
+                    resources[name] = getattr(declaration, "vtype", None)
+        return resources
+
     def push_sampleable_resource_scope(self, params):
         scope = set()
         type_scope = {}
@@ -883,11 +927,29 @@ class SlangToCrossGLConverter:
         self.sampleable_resource_scopes.append(scope)
         self.sampleable_resource_type_scopes.append(type_scope)
 
+    def push_storage_image_resource_scope(self, params):
+        scope = set()
+        type_scope = {}
+        for param in params or []:
+            if self.is_storage_image_resource_type(getattr(param, "vtype", None)):
+                name = getattr(param, "name", None)
+                if name is not None:
+                    scope.add(name)
+                    type_scope[name] = getattr(param, "vtype", None)
+        self.storage_image_resource_scopes.append(scope)
+        self.storage_image_resource_type_scopes.append(type_scope)
+
     def pop_sampleable_resource_scope(self):
         if len(self.sampleable_resource_scopes) > 1:
             self.sampleable_resource_scopes.pop()
         if len(self.sampleable_resource_type_scopes) > 1:
             self.sampleable_resource_type_scopes.pop()
+
+    def pop_storage_image_resource_scope(self):
+        if len(self.storage_image_resource_scopes) > 1:
+            self.storage_image_resource_scopes.pop()
+        if len(self.storage_image_resource_type_scopes) > 1:
+            self.storage_image_resource_type_scopes.pop()
 
     def register_sampleable_resource(self, node):
         if self.is_sampleable_resource_type(getattr(node, "vtype", None)):
@@ -898,11 +960,34 @@ class SlangToCrossGLConverter:
                     node, "vtype", None
                 )
 
+    def register_storage_image_resource(self, node):
+        if self.is_storage_image_resource_type(getattr(node, "vtype", None)):
+            name = getattr(node, "name", None)
+            if name is not None:
+                self.storage_image_resource_scopes[-1].add(name)
+                self.storage_image_resource_type_scopes[-1][name] = getattr(
+                    node, "vtype", None
+                )
+
     def is_sampleable_resource_type(self, type_name):
         if not type_name:
             return False
         base_type = str(type_name).strip().split("<", 1)[0].strip()
         return base_type in self.SAMPLEABLE_RESOURCE_TYPES
+
+    def is_storage_image_resource_type(self, type_name):
+        if not type_name:
+            return False
+        base_type = str(type_name).strip().split("<", 1)[0].strip()
+        return base_type in self.STORAGE_IMAGE_RESOURCE_TYPES
+
+    def generate_storage_image_method_call(self, expr, obj, is_main=False):
+        if expr.method != "Load":
+            return None
+        if not self.is_storage_image_resource_expression(expr.object):
+            return None
+        args = [self.generate_expression(arg, is_main) for arg in expr.args or []]
+        return f"imageLoad({', '.join([obj] + args)})"
 
     def generate_texture_method_call(self, expr, obj, is_main=False):
         if expr.method not in self.SAMPLE_METHOD_MAP:
@@ -1047,6 +1132,14 @@ class SlangToCrossGLConverter:
         if name is None:
             return False
         return any(name in scope for scope in reversed(self.sampleable_resource_scopes))
+
+    def is_storage_image_resource_expression(self, expr):
+        name = self.expression_base_name(expr)
+        if name is None:
+            return False
+        return any(
+            name in scope for scope in reversed(self.storage_image_resource_scopes)
+        )
 
     def sampleable_resource_expression_type(self, expr):
         name = self.expression_base_name(expr)

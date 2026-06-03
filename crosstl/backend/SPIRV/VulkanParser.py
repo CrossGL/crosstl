@@ -764,6 +764,7 @@ class VulkanParser:
     ):
         statements = []
         expressions = {}
+        expression_type_ids = {}
 
         for result_id, opcode, operands, _line_number in raw_instructions:
             if result_id and opcode == "OpFunctionParameter":
@@ -771,6 +772,8 @@ class VulkanParser:
                     "",
                     self.spirv_assembly_value_name(result_id, names, decorations),
                 )
+                if operands:
+                    expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpVariable" and len(operands) >= 2:
@@ -780,6 +783,7 @@ class VulkanParser:
                     result_id, names, decorations
                 )
                 expressions[result_id] = VariableNode("", variable_name)
+                expression_type_ids[result_id] = operands[0]
                 if storage_class == "Function":
                     variable_type = (
                         self.spirv_type_name(pointer_type.get("type_id"), types)
@@ -817,6 +821,7 @@ class VulkanParser:
                     decorations,
                     constants,
                 )
+                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode in {"OpAccessChain", "OpInBoundsAccessChain"}:
@@ -840,6 +845,7 @@ class VulkanParser:
                             ),
                         )
                     expressions[result_id] = access
+                    expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpCompositeConstruct" and operands:
@@ -856,6 +862,7 @@ class VulkanParser:
                         for operand in operands[1:]
                     ],
                 )
+                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpCompositeExtract" and len(operands) >= 2:
@@ -869,6 +876,23 @@ class VulkanParser:
                 for index_operand in operands[2:]:
                     expression = ArrayAccessNode(expression, index_operand)
                 expressions[result_id] = expression
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode == "OpVectorShuffle" and len(operands) >= 4:
+                expressions[result_id] = self.spirv_assembly_vector_shuffle_expression(
+                    operands[0],
+                    operands[1],
+                    operands[2],
+                    operands[3:],
+                    expressions,
+                    expression_type_ids,
+                    names,
+                    decorations,
+                    constants,
+                    types,
+                )
+                expression_type_ids[result_id] = operands[0]
                 continue
 
             operation = opcode[2:] if opcode.startswith("Op") else opcode
@@ -894,6 +918,7 @@ class VulkanParser:
                         constants,
                     ),
                 )
+                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -911,6 +936,7 @@ class VulkanParser:
                         constants,
                     ),
                 )
+                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpFunctionCall" and len(operands) >= 2:
@@ -929,6 +955,7 @@ class VulkanParser:
                         for operand in operands[2:]
                     ],
                 )
+                expression_type_ids[result_id] = operands[0]
                 continue
 
             if opcode == "OpStore" and len(operands) >= 2:
@@ -970,6 +997,115 @@ class VulkanParser:
                 statements.append(ReturnNode())
 
         return statements
+
+    def spirv_assembly_vector_shuffle_expression(
+        self,
+        result_type_id,
+        vector1_id,
+        vector2_id,
+        component_operands,
+        expressions,
+        expression_type_ids,
+        names,
+        decorations,
+        constants,
+        types,
+    ):
+        source1_count = self.spirv_vector_component_count(
+            expression_type_ids.get(vector1_id), types
+        )
+        components = [
+            self.spirv_vector_shuffle_component_index(component)
+            for component in component_operands
+        ]
+
+        if (
+            vector1_id == vector2_id
+            and source1_count is not None
+            and all(
+                component is not None and 0 <= component < source1_count
+                for component in components
+            )
+        ):
+            swizzle = "".join(
+                self.spirv_vector_component_name(component) for component in components
+            )
+            source = self.spirv_assembly_operand_expression(
+                vector1_id, expressions, names, decorations, constants
+            )
+            return MemberAccessNode(source, swizzle)
+
+        result_type = self.spirv_type_name(result_type_id, types) or result_type_id
+        args = [
+            self.spirv_vector_shuffle_component_expression(
+                vector1_id,
+                vector2_id,
+                component,
+                source1_count,
+                expressions,
+                expression_type_ids,
+                names,
+                decorations,
+                constants,
+                types,
+            )
+            for component in components
+        ]
+        return FunctionCallNode(result_type, args)
+
+    def spirv_vector_shuffle_component_expression(
+        self,
+        vector1_id,
+        vector2_id,
+        component,
+        source1_count,
+        expressions,
+        expression_type_ids,
+        names,
+        decorations,
+        constants,
+        types,
+    ):
+        if component is None:
+            return "0"
+
+        if source1_count is not None and component >= source1_count:
+            source_id = vector2_id
+            component -= source1_count
+        else:
+            source_id = vector1_id
+
+        source = self.spirv_assembly_operand_expression(
+            source_id, expressions, names, decorations, constants
+        )
+        source_count = self.spirv_vector_component_count(
+            expression_type_ids.get(source_id), types
+        )
+        if source_count is not None and 0 <= component < min(source_count, 4):
+            return MemberAccessNode(source, self.spirv_vector_component_name(component))
+        return ArrayAccessNode(source, str(component))
+
+    def spirv_vector_component_count(self, type_id, types):
+        type_info = types.get(type_id, {})
+        component_count = type_info.get("component_count")
+        if component_count is None:
+            return None
+        try:
+            return int(component_count, 0)
+        except ValueError:
+            return None
+
+    def spirv_vector_shuffle_component_index(self, component):
+        try:
+            index = int(component, 0)
+        except (TypeError, ValueError):
+            return None
+        if index in {-1, 0xFFFFFFFF}:
+            return None
+        return index
+
+    def spirv_vector_component_name(self, component):
+        return "xyzw"[component]
 
     def spirv_assembly_operand_expression(
         self,

@@ -142,6 +142,19 @@ def test_function_optional_argument_default_codegen_preserves_default():
     assert "return (base ** exp);" in generated_code
 
 
+def test_single_quoted_string_literal_codegen():
+    code = """
+    fn message() -> String:
+        let status: String = 'done'
+        return status
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "String status = 'done';" in generated_code
+    assert "return status;" in generated_code
+
+
 def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     code = """
     struct Resources {

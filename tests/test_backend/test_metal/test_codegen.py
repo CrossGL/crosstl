@@ -1592,6 +1592,31 @@ def test_roundtrip_local_constexpr_sampler_options_from_apple_texture_sample():
     assert "fragment void fragment_main()" not in metal
 
 
+def test_codegen_keyword_named_sampler_from_apple_filter_sample():
+    code = """
+    struct RasterizerData {
+        float4 position [[position]];
+        float2 texCoord;
+    };
+
+    fragment half4 texturedQuadFragment(RasterizerData in [[stage_in]],
+                                        texture2d<half> texture [[texture(0)]],
+                                        constant float& mipmapBias [[buffer(0)]]) {
+        constexpr sampler sampler(min_filter::linear,
+                                  mag_filter::linear,
+                                  mip_filter::linear);
+        half4 color = texture.sample(sampler, in.texCoord, level(mipmapBias));
+        return color;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "const sampler sampler_ = sampler(" in crossgl
+    assert "textureLod(texture_, sampler_, in_.texCoord, mipmapBias)" in crossgl
+    assert " texture.sample(sampler" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_sanitizes_unicode_identifiers_for_crossgl_parse():
     code = """
     void main() {

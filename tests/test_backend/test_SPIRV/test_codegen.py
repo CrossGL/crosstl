@@ -392,6 +392,34 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_VECTOR_SHUFFLE_BODY_ASSEMBLY = """
+; Reduced from Khronos Vulkan-Samples timeline_semaphore/glsl/render.frag swizzles.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %value %color
+OpExecutionMode %main OriginUpperLeft
+OpName %value "value"
+OpName %color "color"
+OpDecorate %value Location 0
+OpDecorate %color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v3float = OpTypeVector %float 3
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v3float = OpTypePointer Output %v3float
+%value = OpVariable %ptr_input_v4float Input
+%color = OpVariable %ptr_output_v3float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %value
+%rgb = OpVectorShuffle %v3float %loaded %loaded 0 1 2
+OpStore %color %rgb
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_LOCAL_SIZE_ID_ASSEMBLY = """
 ; Reduced from specialization-driven compute local sizes.
 OpCapability Shader
@@ -821,6 +849,18 @@ def test_spirv_assembly_opstore_body_codegen():
     assert ast.functions[0].body
     assert "fragColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
     assert "fragment {" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_vector_shuffle_swizzle_body_codegen():
+    tokens = tokenize_code(SPIRV_VECTOR_SHUFFLE_BODY_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 value @input @location(0);" in generated_code
+    assert "float3 color @output @location(0);" in generated_code
+    assert "color = value.xyz;" in generated_code
+    assert "color = rgb;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

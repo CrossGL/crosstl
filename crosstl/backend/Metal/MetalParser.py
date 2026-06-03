@@ -99,6 +99,7 @@ MACRO_QUALIFIERS = {"METAL_FUNC"}
 IDENTIFIER_TYPE_QUALIFIERS = MACRO_QUALIFIERS | {"object_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
+KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER"}
 CONSTRUCTOR_TYPE_TOKENS = TYPE_TOKENS - {
     "VOID",
     "IDENTIFIER",
@@ -1159,6 +1160,7 @@ class MetalParser:
         return (
             self.tokens[idx][0] == "IDENTIFIER"
             or self.tokens[idx][0] in STAGE_TOKENS
+            or self.tokens[idx][0] in KEYWORD_IDENTIFIER_TOKENS
             or self.tokens[idx][0] == "COMPUTE"
         )
 
@@ -1166,6 +1168,7 @@ class MetalParser:
         return (
             self.current_token[0] == "IDENTIFIER"
             or self.current_token[0] in STAGE_TOKENS
+            or self.current_token[0] in KEYWORD_IDENTIFIER_TOKENS
             or self.current_token[0] == "COMPUTE"
         )
 
@@ -2296,6 +2299,12 @@ class MetalParser:
         if self.current_token[0] == "LBRACE":
             return self.parse_initializer_list()
         if self.current_token[0] in CONSTRUCTOR_TYPE_TOKENS:
+            if self.is_current_name_token() and self.peek(1)[0] not in {
+                "LPAREN",
+                "LBRACE",
+            }:
+                name = self.parse_scoped_identifier()
+                return VariableNode("", name)
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
             if self.current_token[0] == "LPAREN":

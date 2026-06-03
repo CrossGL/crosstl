@@ -55,7 +55,7 @@ TOKENS = tuple(
         ("LBRACKET", r"\["),
         ("RBRACKET", r"\]"),
         ("SEMICOLON", r";"),
-        ("STRING_LITERAL", r'"[^"]*"'),
+        ("STRING_LITERAL", r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\''),
         ("COMMA", r","),
         ("COLON", r":"),
         ("QUESTION", r"\?"),

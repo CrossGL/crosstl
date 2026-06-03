@@ -1771,7 +1771,7 @@ def test_generic_struct_member_and_uniform_parameter_codegen_from_official_sampl
     assert "StructuredBuffer<float4> lookupTable;" in generated_code
     assert "uvec3 threadID @ SV_DispatchThreadID" in generated_code
     assert "sampler2D inputImage" in generated_code
-    assert "RWTexture2D outputImage" in generated_code
+    assert "image2D outputImage" in generated_code
     assert "ImageProcessingOptions options" in generated_code
 
 
@@ -1817,6 +1817,30 @@ def test_c_style_scalar_cast_codegen_from_official_select_expr_sample():
         "outputBuffer[dispatchThreadID.x] = test(int(dispatchThreadID.x));"
         in generated_code
     )
+
+
+def test_rwtexture_load_codegen_from_official_texture_capability_sample():
+    code = """
+    RWStructuredBuffer<int> outputBuffer;
+    RWTexture2D<float4> texHandle;
+
+    [shader("fragment")]
+    void fragMain()
+    {
+        int ret = 0;
+        ret = int((texHandle.Load(int2(0, 0))).x);
+        outputBuffer[0] = 0x12345 + ret;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "image2D texHandle;" in generated_code
+    assert "ret = int(imageLoad(texHandle, ivec2(0, 0)).x);" in generated_code
+    assert "RWTexture2D<float4> texHandle;" not in generated_code
+    assert ".Load(" not in generated_code
 
 
 def test_parenthesized_expression_swizzle_codegen_from_autodiff_texture_learnmip_sample():

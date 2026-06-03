@@ -398,6 +398,8 @@ def test_string_literals_tokenization():
     fn main():
         let message: String = "Hello, Mojo!"
         let path: String = "path/to/file.txt"
+        let status: String = 'done'
+        let escaped: String = 'it\\'s ready'
     """
     try:
         tokens = tokenize_code(code)
@@ -408,6 +410,12 @@ def test_string_literals_tokenization():
         assert (
             '"path/to/file.txt"' in string_literals
         ), "String literal not tokenized correctly"
+        assert (
+            "'done'" in string_literals
+        ), "Single-quoted string not tokenized correctly"
+        assert (
+            "'it\\'s ready'" in string_literals
+        ), "Escaped single quote not tokenized correctly"
     except SyntaxError:
         pytest.fail("String literals tokenization not implemented.")
 

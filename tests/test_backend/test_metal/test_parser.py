@@ -951,6 +951,28 @@ def test_parse_stage_attributes_and_trailing_const_pointer_qualifiers():
     assert ast.functions[0].qualifier == "vertex"
 
 
+def test_parse_keyword_named_sampler_and_buffer_from_apple_samples():
+    code = """
+    fragment half4 texturedQuadFragment(texture2d<half> texture [[texture(0)]],
+                                        device float* values [[buffer(0)]],
+                                        uint index) {
+        constexpr sampler sampler(min_filter::linear, mag_filter::linear);
+        device float* buffer = values;
+        half4 color = texture.sample(sampler, float2(buffer[index]));
+        return color;
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    sampler_decl = body[0]
+    buffer_decl = body[1]
+    assert sampler_decl.left.name == "sampler"
+    assert sampler_decl.left.vtype == "sampler"
+    assert buffer_decl.left.name == "buffer"
+    assert buffer_decl.left.vtype == "float*"
+
+
 def test_parse_function_prototypes_macro_expanded_empty_statements_and_comma_update():
     code = """
     #include <metal_stdlib>
