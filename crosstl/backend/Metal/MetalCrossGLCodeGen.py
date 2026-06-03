@@ -1484,7 +1484,11 @@ class MetalToCrossGLConverter:
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
         elif isinstance(expr, CastNode):
-            return f"({self.map_type(expr.target_type)}){self.generate_expression(expr.expression, is_main)}"
+            mapped_type = self.map_type(expr.target_type)
+            value = self.generate_expression(expr.expression, is_main)
+            if mapped_type == expr.target_type and "::" not in str(mapped_type):
+                return f"{self.sanitize_identifier(mapped_type)}({value})"
+            return f"({mapped_type}){value}"
         elif isinstance(expr, VectorConstructorNode):
             size_query = self.texture_size_constructor_expression(expr, is_main)
             if size_query is not None:
@@ -1544,7 +1548,7 @@ class MetalToCrossGLConverter:
     def map_function_call_name(self, name):
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
         if not match:
-            return name
+            return self.sanitize_identifier(name)
 
         target_type = self.normalized_metal_type(match.group(1))
         mapped_type = self.map_type(target_type)

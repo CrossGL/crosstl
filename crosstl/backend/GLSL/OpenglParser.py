@@ -1098,6 +1098,90 @@ class GLSLParser:
             return stmt
         return [stmt]
 
+    def token_at(self, index):
+        if index < len(self.tokens):
+            return self.tokens[index]
+        return ("EOF", "")
+
+    def skip_newline_index(self, index):
+        while self.token_at(index)[0] == "NEWLINE":
+            index += 1
+        return index
+
+    def skip_balanced_suffix(self, index, open_token, close_token):
+        if self.token_at(index)[0] != open_token:
+            return index
+
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.token_at(index)[0]
+            if token_type == open_token:
+                depth += 1
+            elif token_type == close_token:
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            index += 1
+        return index
+
+    def skip_type_template_suffix_index(self, index):
+        index = self.skip_newline_index(index)
+        if self.token_at(index)[0] != "LESS_THAN":
+            return index
+        return self.skip_balanced_suffix(index, "LESS_THAN", "GREATER_THAN")
+
+    def skip_array_suffixes_index(self, index):
+        while True:
+            index = self.skip_newline_index(index)
+            if self.token_at(index)[0] != "LBRACKET":
+                return index
+            index = self.skip_balanced_suffix(index, "LBRACKET", "RBRACKET")
+
+    def is_condition_declaration_start(self):
+        index = self.skip_newline_index(self.index)
+
+        while True:
+            token_type, token_value = self.token_at(index)
+            if token_type in QUALIFIER_TOKENS or (
+                token_type == "IDENTIFIER"
+                and token_value in IDENTIFIER_QUALIFIERS | CONTEXTUAL_QUALIFIERS
+            ):
+                index = self.skip_newline_index(index + 1)
+                continue
+            break
+
+        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
+            return False
+        index = self.skip_type_template_suffix_index(index + 1)
+        index = self.skip_array_suffixes_index(index)
+
+        if self.token_at(index)[0] not in NAME_TOKENS:
+            return False
+        index = self.skip_array_suffixes_index(index + 1)
+
+        return self.token_at(index)[0] == "EQUALS"
+
+    def parse_condition(self):
+        self.skip_newlines()
+        if self.is_condition_declaration_start():
+            qualifiers = self.parse_qualifiers()
+            type_name = self.parse_type()
+            self.skip_newlines()
+            type_array_sizes = []
+            if self.current_token[0] == "LBRACKET":
+                type_array_sizes = self.parse_array_suffixes()
+                self.skip_newlines()
+            declarations = self.parse_variable_declarations(
+                type_name,
+                qualifiers=qualifiers,
+                consume_semicolon=False,
+                type_array_sizes=type_array_sizes,
+            )
+            if len(declarations) != 1:
+                raise SyntaxError("GLSL condition declarations must declare one name")
+            return declarations[0]
+        return self.parse_expression()
+
     def parse_statement(self):
         self.skip_newlines()
         if self.current_token[0] in ("RBRACE", "EOF"):
@@ -1161,7 +1245,7 @@ class GLSLParser:
     def parse_if_statement(self):
         self.eat("IF")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        condition = self.parse_condition()
         self.eat("RPAREN")
         if_body = self.parse_statement_or_block()
         self.skip_newlines()
@@ -1173,7 +1257,7 @@ class GLSLParser:
             self.skip_newlines()
             self.eat("IF")
             self.eat("LPAREN")
-            else_if_condition = self.parse_expression()
+            else_if_condition = self.parse_condition()
             self.eat("RPAREN")
             else_if_body = self.parse_statement_or_block()
             else_if_chain.append((else_if_condition, else_if_body))
@@ -1211,7 +1295,7 @@ class GLSLParser:
 
         condition = None
         if self.current_token[0] != "SEMICOLON":
-            condition = self.parse_expression()
+            condition = self.parse_condition()
         self.eat("SEMICOLON")
 
         update = None
@@ -1234,7 +1318,7 @@ class GLSLParser:
     def parse_while_loop(self):
         self.eat("WHILE")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        condition = self.parse_condition()
         self.eat("RPAREN")
         body = self.parse_statement_or_block()
         return WhileNode(condition, body)
@@ -1248,7 +1332,7 @@ class GLSLParser:
         self.skip_newlines()
         self.eat("WHILE")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        condition = self.parse_condition()
         self.eat("RPAREN")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")

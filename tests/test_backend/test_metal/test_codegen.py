@@ -909,6 +909,40 @@ def test_codegen_lowers_static_cast_from_apple_compute_sample():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void fence() {
+        metal::atomic_thread_fence(metal::mem_flags::mem_device);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "metal_u3a_u3aatomic_thread_fence" in crossgl
+    assert "metal_u3a_u3amem_flags_u3a_u3amem_device" in crossgl
+    assert "metal::atomic_thread_fence" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_unknown_struct_cast_uses_parseable_constructor_call():
+    code = """
+    struct Token {
+        float value;
+    };
+
+    void f(float x) {
+        Token t = (Token)x;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "Token t = Token(x);" in crossgl
+    assert "Token t = (Token)x;" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_ignores_function_body_pragma_from_llama_cpp():
     code = """
     void quantize_q4_0(device const float* src, device block_q4_0& dst) {

@@ -565,6 +565,55 @@ def test_codegen_control_flow_roundtrip():
     assert "switch" in lowered
 
 
+def test_codegen_glslang_while_condition_declaration_roundtrip():
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) in vec4 color;
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            float d = 0.5;
+            while (bool test = color.y < d) {
+                fragColor = color;
+                d -= 0.25;
+            }
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "while (true)" in crossgl
+    assert "bool test = (input.color.y < d);" in crossgl
+    assert "if (!test)" in crossgl
+
+
+def test_codegen_reserved_helper_name_from_glslang_struct_sample_roundtrip():
+    code = textwrap.dedent("""
+        #version 450 core
+        struct S {
+            vec4 a;
+        };
+        layout(location = 0) out vec4 fragColor;
+
+        S compute(vec4 value) {
+            return S(value);
+        }
+
+        void main() {
+            S result = compute(vec4(1.0));
+            fragColor = result.a;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "S compute_(vec4 value)" in crossgl
+    assert "compute_(vec4(1.0))" in crossgl
+    assert "S compute(" not in crossgl
+    assert " compute(vec4" not in crossgl
+    assert "S{value}" in crossgl
+
+
 def test_codegen_do_while_continue_roundtrip_preserves_condition_check():
     code = textwrap.dedent("""
         #version 450 core

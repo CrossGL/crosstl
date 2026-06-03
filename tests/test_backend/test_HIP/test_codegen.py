@@ -199,6 +199,27 @@ class TestHipCodeGen:
         assert "var<workgroup> shared: array<f32>;" in result
         assert "workgroupBarrier();" in result
 
+    def test_rocm_dynamic_shared_macro_codegen_marks_launch_sized_storage(self):
+        code = """
+        __global__ void kernel(float* out) {
+            HIP_DYNAMIC_SHARED(float, shared);
+            shared[threadIdx.x] = out[threadIdx.x];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// HIP dynamic shared memory: shared uses launch-time shared memory size"
+            in result
+        )
+        assert "var<workgroup> shared: array<f32>;" in result
+
     def test_cpp17_if_initializer_conversion(self):
         code = """
         int main() {

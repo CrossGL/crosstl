@@ -316,6 +316,23 @@ class TestHipParser:
         assert sdata.is_extern_shared_memory is True
         assert sdata.is_dynamic_shared_memory is True
 
+    def test_rocm_dynamic_shared_macro_parses_as_extern_shared_array(self):
+        code = """
+        __global__ void dynamic_shared_macro() {
+            HIP_DYNAMIC_SHARED(float, tile);
+            tile[threadIdx.x] = 1.0f;
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0].body[0]
+        assert isinstance(declaration, VariableNode)
+        assert declaration.name == "tile"
+        assert declaration.vtype == "float[]"
+        assert declaration.qualifiers == ["extern", "__shared__"]
+        assert declaration.is_extern_shared_memory is True
+        assert declaration.is_dynamic_shared_memory is True
+
     def test_public_rocm_bit_extract_fixed_width_pointer_declarations_parse(self):
         code = """
         __global__ void bit_extract_kernel(
@@ -2386,6 +2403,7 @@ class TestHipParser:
         float* get_data(float* data) { return data; }
         const float* get_const_data(const float* data) { return data; }
         static inline unsigned int helper(unsigned int x) { return x; }
+        inline __device__ float scale(float value) { return value * 2.0f; }
         __forceinline__ __device__ float fast_add(float a, float b) { return a + b; }
         __noinline__ __device__ float slow_sub(float a, float b) { return a - b; }
         __launch_bounds__(256, 2) __global__ void bounded(float* data) {
@@ -2405,14 +2423,31 @@ class TestHipParser:
         assert ast.statements[3].return_type == "unsigned int"
         assert "static" in ast.statements[3].qualifiers
         assert "inline" in ast.statements[3].qualifiers
-        assert ast.statements[4].name == "fast_add"
-        assert "__forceinline__" in ast.statements[4].qualifiers
-        assert "__device__" in ast.statements[4].qualifiers
-        assert ast.statements[5].name == "slow_sub"
-        assert "__noinline__" in ast.statements[5].qualifiers
+        assert ast.statements[4].name == "scale"
+        assert ast.statements[4].qualifiers == ["inline", "__device__"]
+        assert ast.statements[5].name == "fast_add"
+        assert "__forceinline__" in ast.statements[5].qualifiers
         assert "__device__" in ast.statements[5].qualifiers
-        assert ast.statements[6].name == "bounded"
-        assert ast.statements[6].attributes == ["__launch_bounds__(256, 2)"]
+        assert ast.statements[6].name == "slow_sub"
+        assert "__noinline__" in ast.statements[6].qualifiers
+        assert "__device__" in ast.statements[6].qualifiers
+        assert ast.statements[7].name == "bounded"
+        assert ast.statements[7].attributes == ["__launch_bounds__(256, 2)"]
+
+    def test_builtin_token_names_can_be_regular_parameters(self):
+        code = """
+        __device__ int block_lookup(int blockIdx, int threadIdx) {
+            return blockIdx + threadIdx;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        assert function.params == [
+            {"type": "int", "name": "blockIdx"},
+            {"type": "int", "name": "threadIdx"},
+        ]
+        assert isinstance(function.body[0], ReturnNode)
 
     def test_launch_bounds_after_return_type_kernel_parsing(self):
         code = """

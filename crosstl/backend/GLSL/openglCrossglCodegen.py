@@ -28,6 +28,13 @@ from .OpenglAst import (
     WhileNode,
 )
 
+try:
+    from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
+except ImportError:
+    CROSSGL_KEYWORDS = {}
+
+CROSSGL_RESERVED_IDENTIFIERS = set(CROSSGL_KEYWORDS) | {"true", "false"}
+
 
 class GLSLToCrossGLConverter:
     """Serialize OpenGL backend AST nodes back into CrossGL source."""
@@ -456,6 +463,7 @@ class GLSLToCrossGLConverter:
         self.flattened_uniform_block_instances = {}
         self.task_payload_shared_names = set()
         self.variable_type_scopes = []
+        self.function_name_renames = {}
 
     def indent(self):
         return self.indent_str * self.indent_level
@@ -569,6 +577,29 @@ class GLSLToCrossGLConverter:
         if name == "textureGatherOffsets" and len(args) >= 4:
             return "textureGatherCompareOffsets"
         return name
+
+    def sanitize_crossgl_identifier(self, name):
+        if name in CROSSGL_RESERVED_IDENTIFIERS:
+            return f"{name}_"
+        return name
+
+    def collect_function_name_renames(self, functions):
+        renames = {}
+        used_names = {getattr(function, "name", "") for function in functions}
+        for function in functions:
+            name = getattr(function, "name", None)
+            if not name or name == "main":
+                continue
+            safe_name = self.sanitize_crossgl_identifier(name)
+            while safe_name in used_names and safe_name != name:
+                safe_name += "_"
+            if safe_name != name:
+                renames[name] = safe_name
+                used_names.add(safe_name)
+        return renames
+
+    def format_function_name(self, name):
+        return self.function_name_renames.get(name, name)
 
     def _is_image_resource_type(self, type_name):
         if not type_name:
@@ -1112,6 +1143,9 @@ class GLSLToCrossGLConverter:
             for var in getattr(node, "global_variables", []) or []
             if self.is_task_payload_shared_variable(var)
         }
+        self.function_name_renames = self.collect_function_name_renames(
+            getattr(node, "functions", []) or []
+        )
         self.prepare_structured_buffers(node)
 
         for var in node.io_variables:
@@ -1462,7 +1496,7 @@ class GLSLToCrossGLConverter:
 
         try:
             return_type = self.convert_type(node.return_type)
-            name = node.name
+            name = self.format_function_name(node.name)
 
             params = []
             for param in node.params:
@@ -1631,6 +1665,18 @@ class GLSLToCrossGLConverter:
 
         return self.generate_expression(node)
 
+    def is_condition_declaration(self, node):
+        return (
+            isinstance(node, VariableNode)
+            and bool(getattr(node, "vtype", None))
+            and getattr(node, "value", None) is not None
+        )
+
+    def generate_condition_expression(self, node):
+        if self.is_condition_declaration(node):
+            return node.name
+        return self.generate_expression(node)
+
     def ray_control_statement(self, node):
         if getattr(node, "vtype", None):
             return None
@@ -1646,8 +1692,21 @@ class GLSLToCrossGLConverter:
         condition_node = getattr(node, "condition", None)
         if condition_node is None:
             condition_node = getattr(node, "if_condition", None)
-        condition = self.generate_expression(condition_node)
-        result = f"if ({condition}) {{\n"
+        wraps_condition_declaration = self.is_condition_declaration(condition_node)
+        result = ""
+        if wraps_condition_declaration:
+            self.register_variable_type(condition_node)
+            result += "{\n"
+            self.increase_indent()
+            result += (
+                self.indent()
+                + self.generate_variable_declaration(condition_node)
+                + ";\n"
+            )
+
+        condition = self.generate_condition_expression(condition_node)
+        if_prefix = self.indent() if wraps_condition_declaration else ""
+        result += if_prefix + f"if ({condition}) {{\n"
 
         # Generate if body
         self.increase_indent()
@@ -1684,6 +1743,11 @@ class GLSLToCrossGLConverter:
 
             result += self.indent() + "}"
 
+        if wraps_condition_declaration:
+            result += "\n"
+            self.decrease_indent()
+            result += self.indent() + "}"
+
         return result
 
     def generate_for(self, node):
@@ -1709,6 +1773,27 @@ class GLSLToCrossGLConverter:
         return result
 
     def generate_while(self, node):
+        if self.is_condition_declaration(node.condition):
+            self.register_variable_type(node.condition)
+            condition_name = node.condition.name
+            result = "while (true) {\n"
+            self.increase_indent()
+            result += (
+                self.indent()
+                + self.generate_variable_declaration(node.condition)
+                + ";\n"
+            )
+            result += self.indent() + f"if (!{condition_name}) {{\n"
+            self.increase_indent()
+            result += self.indent() + "break;\n"
+            self.decrease_indent()
+            result += self.indent() + "}\n"
+            for statement in node.body:
+                result += self.indent() + self.generate_statement(statement) + "\n"
+            self.decrease_indent()
+            result += self.indent() + "}"
+            return result
+
         condition = self.generate_expression(node.condition)
         result = f"while ({condition}) {{\n"
         self.increase_indent()
@@ -1851,11 +1936,15 @@ class GLSLToCrossGLConverter:
             args = ", ".join(self.generate_expression(arg) for arg in node.args)
             return f"{self.convert_type(name)}({args})"
 
+        if name in self.structs_by_name:
+            args = ", ".join(self.generate_expression(arg) for arg in node.args)
+            return f"{name}{{{args}}}"
+
         descriptor = self.resource_function_descriptor(name)
         mapped_name = (
             descriptor["function"]
             if descriptor is not None
-            else self.function_map.get(name, name)
+            else self.function_map.get(name, self.format_function_name(name))
         )
 
         args = ", ".join(self.generate_expression(arg) for arg in node.args)

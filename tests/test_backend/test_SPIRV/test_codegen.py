@@ -629,6 +629,38 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_FRAGMENT_SAMPLE_AND_VIEW_BUILTINS_ASSEMBLY = """
+; Reduced from Vulkan fragment interface built-ins found in SwiftShader/glslang output.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %sample_id %sample_position %sample_mask_in %layer %viewport
+OpExecutionMode %main OriginUpperLeft
+OpDecorate %sample_id BuiltIn SampleId
+OpDecorate %sample_position BuiltIn SamplePosition
+OpDecorate %sample_mask_in BuiltIn SampleMask
+OpDecorate %layer BuiltIn Layer
+OpDecorate %viewport BuiltIn ViewportIndex
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%float = OpTypeFloat 32
+%v2float = OpTypeVector %float 2
+%one = OpConstant %int 1
+%sample_mask_array = OpTypeArray %int %one
+%ptr_input_int = OpTypePointer Input %int
+%ptr_input_vec2 = OpTypePointer Input %v2float
+%ptr_input_mask = OpTypePointer Input %sample_mask_array
+%sample_id = OpVariable %ptr_input_int Input
+%sample_position = OpVariable %ptr_input_vec2 Input
+%sample_mask_in = OpVariable %ptr_input_mask Input
+%layer = OpVariable %ptr_input_int Input
+%viewport = OpVariable %ptr_input_int Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -1125,6 +1157,21 @@ def test_spirv_assembly_flat_location_interface_codegen():
     assert "uint input_flat_u32 @input @location(0) @flat;" in generated_code
     assert "%input_flat_u32" not in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_fragment_sample_and_view_builtins_codegen():
+    tokens = tokenize_code(SPIRV_FRAGMENT_SAMPLE_AND_VIEW_BUILTINS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int gl_SampleID @input @gl_SampleID;" in generated_code
+    assert "float2 gl_SamplePosition @input @gl_SamplePosition;" in generated_code
+    assert "int gl_SampleMaskIn[1] @input @gl_SampleMaskIn;" in generated_code
+    assert "int gl_Layer @input @gl_Layer;" in generated_code
+    assert "int gl_ViewportIndex @input @gl_ViewportIndex;" in generated_code
+    assert "@builtin(sampleid)" not in generated_code
+    assert "@builtin(samplemask)" not in generated_code
+    assert "@builtin(layer)" not in generated_code
 
 
 def test_translate_api_accepts_spirv_assembly_uniform_constant_resources(tmp_path):

@@ -115,7 +115,10 @@ def test_slang_import_parameter_block_member_texture_sample_from_upstream_exampl
     generated_code = generate_crossgl_from_slang(code)
 
     assert "ParameterBlock<Material> material;" in generated_code
-    assert "return texture(material.albedoMap, material.sampler, uv);" in generated_code
+    assert (
+        "return texture(material.albedoMap, material.sampler_, uv);" in generated_code
+    )
+    assert "sampler sampler_;" in generated_code
     assert "material.albedoMap.Sample" not in generated_code
 
 

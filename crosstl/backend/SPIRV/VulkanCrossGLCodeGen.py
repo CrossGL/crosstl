@@ -586,7 +586,11 @@ class VulkanToCrossGLConverter:
             ):
                 attributes.append(f"@{qualifier_name}({value})")
             elif qualifier_name == "builtin" and value is not None:
-                attributes.append(self.crossgl_builtin_attribute(value))
+                attributes.append(
+                    self.crossgl_builtin_attribute(
+                        value, getattr(node, "spirv_storage_class", None)
+                    )
+                )
 
         supported_qualifiers = {
             "centroid",
@@ -609,7 +613,11 @@ class VulkanToCrossGLConverter:
 
         return f" {' '.join(attributes)}"
 
-    def crossgl_builtin_attribute(self, builtin_name):
+    def crossgl_builtin_attribute(self, builtin_name, storage_class=None):
+        storage_mapped_builtins = {
+            ("SampleMask", "Input"): "gl_SampleMaskIn",
+            ("SampleMask", "Output"): "gl_SampleMask",
+        }
         mapped_builtins = {
             "BaseInstance": "gl_BaseInstance",
             "BaseVertex": "gl_BaseVertex",
@@ -617,22 +625,41 @@ class VulkanToCrossGLConverter:
             "CullDistance": "gl_CullDistance",
             "FragCoord": "gl_FragCoord",
             "FragDepth": "gl_FragDepth",
+            "FragStencilRefEXT": "gl_FragStencilRefEXT",
             "FrontFacing": "gl_FrontFacing",
             "GlobalInvocationId": "gl_GlobalInvocationID",
             "InstanceIndex": "gl_InstanceID",
+            "InvocationId": "gl_InvocationID",
+            "Layer": "gl_Layer",
             "LocalInvocationId": "gl_LocalInvocationID",
             "LocalInvocationIndex": "gl_LocalInvocationIndex",
+            "NumSubgroups": "gl_NumSubgroups",
             "NumWorkgroups": "gl_NumWorkGroups",
+            "PatchVertices": "gl_PatchVerticesIn",
             "PointCoord": "gl_PointCoord",
             "PointSize": "gl_PointSize",
             "Position": "gl_Position",
             "PrimitiveId": "gl_PrimitiveID",
+            "SampleId": "gl_SampleID",
+            "SampleMask": "gl_SampleMask",
+            "SamplePosition": "gl_SamplePosition",
+            "SubgroupId": "gl_SubgroupID",
             "SubgroupLocalInvocationId": "gl_SubgroupInvocationID",
             "SubgroupSize": "gl_SubgroupSize",
+            "TessCoord": "gl_TessCoord",
+            "TessLevelInner": "gl_TessLevelInner",
+            "TessLevelOuter": "gl_TessLevelOuter",
             "VertexIndex": "gl_VertexID",
+            "ViewportIndex": "gl_ViewportIndex",
+            "ViewIndex": "gl_ViewIndex",
             "WorkgroupId": "gl_WorkGroupID",
             "WorkgroupSize": "gl_WorkGroupSize",
         }
+        storage_mapped_name = storage_mapped_builtins.get(
+            (str(builtin_name), storage_class)
+        )
+        if storage_mapped_name:
+            return f"@{storage_mapped_name}"
         mapped_name = mapped_builtins.get(str(builtin_name))
         if mapped_name:
             return f"@{mapped_name}"

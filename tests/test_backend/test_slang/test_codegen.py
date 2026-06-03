@@ -2,6 +2,7 @@ from typing import List
 
 import pytest
 
+import crosstl.translator as cgl_translator
 from crosstl import translate
 from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 
@@ -60,6 +61,24 @@ def test_import_and_include_paths_codegen():
     assert "dir/file-name.slang;" not in generated_code.replace(
         '"dir/file-name.slang"', ""
     )
+    cgl_translator.parse(generated_code)
+
+
+def test_imports_emit_as_parseable_crossgl_unit_preamble():
+    code = """
+    import common;
+
+    [shader("compute")]
+    void main() {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert generated_code.startswith("import common;\n\nshader main {")
+    cgl_translator.parse(generated_code)
 
 
 def test_struct_array_member_codegen():
@@ -126,6 +145,45 @@ def test_visibility_qualified_struct_codegen_from_mlp_training_adam_sample():
     assert "int iteration;" in generated_code
     assert "public" not in generated_code
     assert "internal" not in generated_code
+
+
+def test_reserved_crossgl_names_are_sanitized_from_reflection_api_sample():
+    code = """
+    struct RasterVertex
+    {
+        float2 uv;
+    }
+
+    struct Material
+    {
+        Texture2D<float3> albedoMap;
+        SamplerState sampler;
+    }
+
+    uniform ParameterBlock<Material> material;
+
+    [shader("fragment")]
+    float4 fragmentMain(
+        in RasterVertex vertex : R)
+        : SV_Target0
+    {
+        float3 albedo = material.albedoMap.Sample(material.sampler, vertex.uv);
+        return float4(albedo, 1);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler sampler_;" in generated_code
+    assert "RasterVertex vertex_ @ R" in generated_code
+    assert (
+        "texture(material.albedoMap, material.sampler_, vertex_.uv)" in generated_code
+    )
+    assert " material.sampler," not in generated_code
+    assert " vertex.uv" not in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_struct_methods_do_not_break_field_codegen():
@@ -1080,7 +1138,7 @@ def test_local_and_parameter_array_declarator_codegen():
     generated_code = generate_code(ast)
 
     assert "float bump(float values[2], int idx)" in generated_code
-    assert "float local[2];" in generated_code
+    assert "float local_[2];" in generated_code
     assert "float grid[2][3];" in generated_code
     assert "return values[idx];" in generated_code
 
@@ -1478,7 +1536,7 @@ def test_initializer_list_declaration_codegen():
     generated_code = generate_code(ast)
 
     assert "float weights[2] = {1.0, 2.0};" in generated_code
-    assert "float local[2] = {0.5, 1.0};" in generated_code
+    assert "float local_[2] = {0.5, 1.0};" in generated_code
     assert "vec4 colors[1] = {vec4(1.0, 0.5, 0.0, 1.0)};" in generated_code
     assert "{.5f, 1f" not in generated_code
 
@@ -1497,7 +1555,7 @@ def test_typed_brace_constructor_codegen():
     generated_code = generate_code(ast)
 
     assert "vec4 tint = vec4(1.0, 0.5, 0.0, 1.0);" in generated_code
-    assert "vec4 local = vec4(0.0, 1.0, 0.0, 1.0);" in generated_code
+    assert "vec4 local_ = vec4(0.0, 1.0, 0.0, 1.0);" in generated_code
     assert "vec4 colors[1] = {vec4(1.0, 0.0, 0.0, 1.0)};" in generated_code
     assert "float4{" not in generated_code
 

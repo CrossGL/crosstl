@@ -1234,6 +1234,9 @@ class MetalParser:
     def parse_struct_members(self):
         members = []
         while self.current_token[0] != "RBRACE":
+            if self.is_template_declaration_start():
+                self.skip_template_declaration()
+                continue
             member_alignas = self.parse_alignas_specifiers()
             vtype, qualifiers = self.parse_type_specifier()
             if self.current_token[0] == "OPERATOR":
@@ -1515,6 +1518,8 @@ class MetalParser:
         if idx >= len(self.tokens):
             return False
         token_type, token_value = self.tokens[idx]
+        if self.is_scoped_call_expression_start_at(idx):
+            return False
         if token_type == "ALIGNAS":
             return True
         if self.is_qualifier_token_at(idx):
@@ -1543,6 +1548,31 @@ class MetalParser:
                 return token_value in self.known_types
             return True
         return False
+
+    def is_scoped_call_expression_start_at(self, idx):
+        if idx + 2 >= len(self.tokens):
+            return False
+        if self.tokens[idx][0] not in {"IDENTIFIER", "METAL"}:
+            return False
+        if self.tokens[idx + 1][0] != "SCOPE":
+            return False
+
+        idx += 2
+        while idx < len(self.tokens):
+            if (
+                self.tokens[idx][0] not in TYPE_TOKENS
+                and self.tokens[idx][0] not in STAGE_TOKENS
+                and self.tokens[idx][0] != "METAL"
+            ):
+                return False
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+                idx = self.skip_balanced_tokens_at(idx, "LESS_THAN", "GREATER_THAN")
+            if idx >= len(self.tokens) or self.tokens[idx][0] != "SCOPE":
+                break
+            idx += 1
+
+        return idx < len(self.tokens) and self.tokens[idx][0] == "LPAREN"
 
     def parse_statement(self):
         if self.current_token[0] == "SEMICOLON":

@@ -106,6 +106,10 @@ class HipParser:
         "HIPARRAY",
         "HIPARRAYT",
     }
+    DECLARATOR_NAME_TOKENS = {
+        "IDENTIFIER",
+        *MEMBER_NAME_TOKENS,
+    }
     FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
     OVERLOADABLE_OPERATOR_TOKENS = {
         "PLUS",
@@ -434,13 +438,13 @@ class HipParser:
         return ""
 
     def is_declarator_name_token(self):
-        return self.match("IDENTIFIER", *self.CONTEXTUAL_IDENTIFIER_TOKENS)
+        return self.match(*self.DECLARATOR_NAME_TOKENS)
 
     def is_declarator_name_token_at(self, index):
-        return index < len(self.tokens) and self.tokens[index].type in {
-            "IDENTIFIER",
-            *self.CONTEXTUAL_IDENTIFIER_TOKENS,
-        }
+        return (
+            index < len(self.tokens)
+            and self.tokens[index].type in self.DECLARATOR_NAME_TOKENS
+        )
 
     def consume_declarator_name(self):
         if not self.is_declarator_name_token():
@@ -450,6 +454,37 @@ class HipParser:
         name = self.current_token.value
         self.advance()
         return name
+
+    def is_hip_dynamic_shared_macro(self):
+        return (
+            self.match("IDENTIFIER")
+            and self.current_token.value == "HIP_DYNAMIC_SHARED"
+            and self.peek_non_newline()
+            and self.peek_non_newline().type == "LPAREN"
+        )
+
+    def parse_hip_dynamic_shared_macro(self):
+        self.advance()
+        self.consume("LPAREN")
+        self.skip_newlines()
+        var_type = self.parse_type()
+        self.skip_newlines()
+        self.consume("COMMA")
+        self.skip_newlines()
+        name = self.consume_declarator_name()
+        self.skip_newlines()
+        self.consume("RPAREN")
+        if self.match("SEMICOLON"):
+            self.advance()
+
+        qualifiers = ["extern", "__shared__"]
+        return VariableNode(
+            f"{var_type}[]",
+            name,
+            qualifiers=qualifiers,
+            is_extern_shared_memory=True,
+            is_dynamic_shared_memory=True,
+        )
 
     def parse_flat_builtin_node(self):
         token = self.current_token
@@ -562,6 +597,7 @@ class HipParser:
 
         if (
             self.match(
+                *self.FUNCTION_SPECIFIER_TOKENS,
                 "__DEVICE__",
                 "__HOST__",
                 "__GLOBAL__",
@@ -619,6 +655,8 @@ class HipParser:
             return self.parse_sync_statement()
         if self.match("ASM"):
             return self.parse_asm_statement()
+        if self.is_hip_dynamic_shared_macro():
+            return self.parse_hip_dynamic_shared_macro()
         if self.match("LBRACE"):
             return self.parse_block()
         if self.is_identifier_value("throw"):
@@ -651,7 +689,15 @@ class HipParser:
         self.skip_newlines()
 
         if (
-            self.match("__DEVICE__", "__HOST__", "__GLOBAL__", "__LAUNCH_BOUNDS__")
+            self.match(
+                *self.FUNCTION_SPECIFIER_TOKENS,
+                "__DEVICE__",
+                "__HOST__",
+                "__GLOBAL__",
+                "__FORCEINLINE__",
+                "__NOINLINE__",
+                "__LAUNCH_BOUNDS__",
+            )
             or self.is_identifier_function_specifier_token()
         ):
             if self.function_name_index_at(self.pos) is None:
@@ -762,6 +808,7 @@ class HipParser:
             tag_name = self.current_token.value
             self.advance()
 
+        self.skip_newlines()
         if not self.match("LBRACE"):
             alias = self.parse_type_alias_declarator(
                 f"struct {tag_name}", allow_prefix=True
@@ -775,6 +822,7 @@ class HipParser:
         self.consume("RBRACE")
 
         alias_name = tag_name
+        self.skip_newlines()
         if self.match("IDENTIFIER"):
             alias_name = self.current_token.value
             self.advance()

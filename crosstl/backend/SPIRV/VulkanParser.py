@@ -115,20 +115,37 @@ class VulkanParser:
         "FragCoord": "gl_FragCoord",
         "FragDepth": "gl_FragDepth",
         "FrontFacing": "gl_FrontFacing",
+        "FragStencilRefEXT": "gl_FragStencilRefEXT",
         "GlobalInvocationId": "gl_GlobalInvocationID",
         "InstanceIndex": "gl_InstanceID",
+        "InvocationId": "gl_InvocationID",
+        "Layer": "gl_Layer",
         "LocalInvocationId": "gl_LocalInvocationID",
         "LocalInvocationIndex": "gl_LocalInvocationIndex",
+        "NumSubgroups": "gl_NumSubgroups",
         "NumWorkgroups": "gl_NumWorkGroups",
+        "PatchVertices": "gl_PatchVerticesIn",
         "PointCoord": "gl_PointCoord",
         "PointSize": "gl_PointSize",
         "Position": "gl_Position",
         "PrimitiveId": "gl_PrimitiveID",
+        "SampleId": "gl_SampleID",
+        "SamplePosition": "gl_SamplePosition",
+        "SubgroupId": "gl_SubgroupID",
         "SubgroupLocalInvocationId": "gl_SubgroupInvocationID",
         "SubgroupSize": "gl_SubgroupSize",
+        "TessCoord": "gl_TessCoord",
+        "TessLevelInner": "gl_TessLevelInner",
+        "TessLevelOuter": "gl_TessLevelOuter",
         "VertexIndex": "gl_VertexID",
+        "ViewportIndex": "gl_ViewportIndex",
+        "ViewIndex": "gl_ViewIndex",
         "WorkgroupId": "gl_WorkGroupID",
         "WorkgroupSize": "gl_WorkGroupSize",
+    }
+    SPIRV_STORAGE_BUILTIN_VARIABLE_NAMES = {
+        ("SampleMask", "Input"): "gl_SampleMaskIn",
+        ("SampleMask", "Output"): "gl_SampleMask",
     }
     SPIRV_SPEC_CONSTANT_BINARY_OPS = {
         "BitwiseAnd": "&",
@@ -1387,7 +1404,7 @@ class VulkanParser:
 
             variable_name = names.get(variable["id"]) or variable["id"].lstrip("%")
             variable_name = self.spirv_builtin_variable_name_from_qualifiers(
-                qualifiers, variable_name
+                qualifiers, variable_name, storage_class=storage_class
             )
             variable_name += array_suffix
             layouts.append(
@@ -1752,6 +1769,7 @@ class VulkanParser:
                 block_name,
                 qualifiers,
                 member_names,
+                storage_class=storage_class,
             )
             variable_name += array_suffix
             layouts.append(
@@ -1803,12 +1821,15 @@ class VulkanParser:
         block_name,
         qualifiers,
         member_names,
+        storage_class=None,
     ):
         member_name = member_names.get(struct_type_id, {}).get(member_key)
         if member_name:
             return member_name
 
-        builtin_name = self.spirv_builtin_variable_name_from_qualifiers(qualifiers)
+        builtin_name = self.spirv_builtin_variable_name_from_qualifiers(
+            qualifiers, storage_class=storage_class
+        )
         if builtin_name:
             return builtin_name
 
@@ -1817,10 +1838,15 @@ class VulkanParser:
         return f"member{member_key}"
 
     def spirv_builtin_variable_name_from_qualifiers(
-        self, qualifiers, fallback_name=None
+        self, qualifiers, fallback_name=None, storage_class=None
     ):
         for name, value in qualifiers:
             if name == "builtin":
+                storage_builtin_name = self.SPIRV_STORAGE_BUILTIN_VARIABLE_NAMES.get(
+                    (value, storage_class)
+                )
+                if storage_builtin_name:
+                    return storage_builtin_name
                 return self.SPIRV_BUILTIN_VARIABLE_NAMES.get(value, value)
         return fallback_name
 

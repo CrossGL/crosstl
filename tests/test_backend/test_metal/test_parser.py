@@ -278,6 +278,23 @@ def test_parse_coherent_memory_qualifier_from_mlx_fence_kernel():
     assert param.attributes[0].args == ["0"]
 
 
+def test_parse_scoped_atomic_thread_fence_call_from_mlx_kernel():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void fence() {
+        metal::atomic_thread_fence(metal::mem_flags::mem_device);
+    }
+    """
+    ast = parse_ok(code)
+
+    call = ast.functions[0].body[0]
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "metal::atomic_thread_fence"
+    assert call.args[0].name == "metal::mem_flags::mem_device"
+
+
 def test_parse_arrays_and_indexing():
     code = """
     struct Data {
