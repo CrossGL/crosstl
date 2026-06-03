@@ -2882,10 +2882,10 @@ class HLSLToCrossGLConverter:
                     ("SV_CLIPDISTANCE", "gl_ClipDistance"),
                     ("SV_CULLDISTANCE", "gl_CullDistance"),
                 ):
-                    suffix = semantic_upper.removeprefix(hlsl_prefix)
-                    if semantic_upper.startswith(hlsl_prefix) and (
-                        not suffix or suffix.isdigit()
-                    ):
+                    if not semantic_upper.startswith(hlsl_prefix):
+                        continue
+                    suffix = semantic_upper[len(hlsl_prefix) :]
+                    if not suffix or suffix.isdigit():
                         mapped = crossgl_semantic
                         break
         mapped = mapped or semantic
