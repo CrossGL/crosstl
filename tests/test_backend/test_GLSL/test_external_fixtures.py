@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from crosstl.backend.GLSL.OpenglAst import ForNode
+from crosstl.backend.GLSL.OpenglAst import ForNode, InitializerListNode
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
@@ -83,6 +83,27 @@ EXTERNAL_FIXTURES = [
                 case 2:  color = vec4(0.5); break;
                 default: color = vec4(0.0); break;
                 }
+            }
+        """).strip(),
+    ),
+    ExternalFixture(
+        name="glslang-420-tese-anonymous-struct-initializer",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/420.tese",
+        shader_type="tessellation_evaluation",
+        code=textwrap.dedent("""
+            #version 420 core
+
+            struct {
+                float a;
+                int b;
+            } e = { 1.2, 2, };
+
+            void main()
+            {
+                if (e.b > 0)
+                    ;
             }
         """).strip(),
     ),
@@ -566,6 +587,24 @@ def test_parse_glslang_perprimitive_nv_interface_block_fixture():
     assert output.layout == {"location": "8"}
 
 
+def test_parse_glslang_anonymous_struct_declarator_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-420-tese-anonymous-struct-initializer"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    anon_struct = next(
+        struct for struct in ast.structs if struct.name == "AnonymousStruct0"
+    )
+    value = next(var for var in ast.global_variables if var.name == "e")
+
+    assert [member.name for member in anon_struct.members] == ["a", "b"]
+    assert value.vtype == "AnonymousStruct0"
+    assert isinstance(value.value, InitializerListNode)
+
+
 def test_parse_godot_particles_precision_ubo_hash_fixture():
     fixture = next(
         item
@@ -760,6 +799,19 @@ def test_codegen_glslang_legacy_projected_texture_fixture_snippet():
     assert "textureProj(texSampler3D, coords4D, bias)" in crossgl
     assert "texture2DProj(" not in crossgl
     assert "texture3DProj(" not in crossgl
+
+
+def test_codegen_glslang_anonymous_struct_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-420-tese-anonymous-struct-initializer"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "struct AnonymousStruct0 {" in crossgl
+    assert "AnonymousStruct0 e = { 1.2, 2 };" in crossgl
 
 
 def test_codegen_glslang_legacy_varying_fragment_input_fixture():

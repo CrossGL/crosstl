@@ -248,6 +248,34 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["tex.Load"],
     },
     {
+        "id": "slang_texture3d_load_int4",
+        "repo": "shader-slang/slang-generated-2026",
+        "path": "docs/generated/tests/cross-cutting/core-module/texture3d-load.slang",
+        "source": (
+            """
+            Texture3D<float4> tex;
+            RWStructuredBuffer<float4> outBuf;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void main(uint3 tid : SV_DispatchThreadID)
+            {
+                outBuf[tid.x] =
+                    tex.Load(int4(int(tid.x), int(tid.y), int(tid.z), 0));
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "sampler3D tex;",
+            "texelFetch(tex, ivec3(int(tid.x), int(tid.y), int(tid.z)), 0)",
+        ],
+        "not_contains": [
+            "tex.Load",
+            "ivec4(int(tid.x), int(tid.y), int(tid.z), 0)",
+        ],
+    },
+    {
         "id": "slang_texturecubearray_samplelevel",
         "repo": "shader-slang/slang-generated",
         "path": (

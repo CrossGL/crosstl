@@ -19,11 +19,13 @@ from crosstl.backend.Mojo.MojoAst import (
     ListLiteralNode,
     MemberAccessNode,
     MethodCallNode,
+    PassNode,
     RangeForNode,
     ReturnNode,
     StructNode,
     SwitchNode,
     TernaryOpNode,
+    TraitNode,
     TryExceptNode,
     TupleNode,
     UnaryOpNode,
@@ -1778,6 +1780,45 @@ def test_try_except_parse_from_layout_tensor_gpu_docs():
     assert statement.exception_name == "error"
     assert isinstance(statement.try_body[0], FunctionCallNode)
     assert isinstance(statement.except_body[0], FunctionCallNode)
+
+
+def test_modular_pipeline_schedule_trait_parse():
+    # Reduced from modular/modular commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/kernels/src/pipeline/compiler.mojo PipelineSchedule trait.
+    code = """
+    trait PipelineSchedule:
+        def config(self) -> PipelineConfig:
+            ...
+
+        def build_body(self) -> List[OpDesc]:
+            ...
+    """
+    ast = parse_code(tokenize_code(code))
+    trait = ast.traits[0]
+
+    assert isinstance(trait, TraitNode)
+    assert trait.name == "PipelineSchedule"
+    assert [method.name for method in trait.methods] == ["config", "build_body"]
+    assert trait.methods[0].return_type == "PipelineConfig"
+    assert trait.methods[1].return_type == "List[OpDesc]"
+    assert all(isinstance(method.body[0], PassNode) for method in trait.methods)
+
+
+def test_modular_tuning_config_trait_base_list_parse():
+    # Reduced from modular/modular commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/kernels/src/internal_utils/dispatch_utils.mojo TuningConfig trait.
+    code = """
+    trait TuningConfig(TrivialRegisterPassable, Writable):
+        ...
+    """
+    ast = parse_code(tokenize_code(code))
+    trait = ast.traits[0]
+
+    assert trait.name == "TuningConfig"
+    assert trait.base_classes == ["TrivialRegisterPassable", "Writable"]
+    assert isinstance(trait.members[0], PassNode)
 
 
 def test_function_local_imports_parse_from_layout_tensor_gpu_docs():

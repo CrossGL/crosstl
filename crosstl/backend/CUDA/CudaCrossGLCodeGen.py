@@ -5416,6 +5416,8 @@ class CudaToCrossGLConverter:
             "__threadfence": "memoryBarrier",
             "__threadfence_block": "memoryBarrier",
             "__threadfence_system": "memoryBarrier",
+            "__popc": "bitCount",
+            "__popcll": "bitCount",
             "floor": "floor",
             "ceil": "ceil",
             "bool": "bool",

@@ -150,6 +150,22 @@ class ClassNode(ASTNode):
         return f"ClassNode(name={self.name}, members={len(self.members)}, methods={len(self.methods)})"
 
 
+class TraitNode(ASTNode):
+    """Node representing a Mojo trait definition."""
+
+    def __init__(
+        self, name, members=None, methods=None, base_classes=None, attributes=None
+    ):
+        self.name = name
+        self.members = members or []
+        self.methods = methods or []
+        self.base_classes = base_classes or []
+        self.attributes = attributes or []
+
+    def __repr__(self):
+        return f"TraitNode(name={self.name}, members={len(self.members)}, methods={len(self.methods)})"
+
+
 class DecoratorNode(ASTNode):
     """Node representing a decorator"""
 

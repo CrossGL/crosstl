@@ -790,6 +790,45 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_IMAGE_READ_SAMPLE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
+; Source path: test/val/val_image_test.cpp
+; Reduced from ValidateImage::ImageMSArray_SampledTypeDoesNotRequireCapability
+; OpImageRead %v4float %18 %10 Sample %uint_2.
+OpCapability Shader
+OpCapability StorageImageMultisample
+OpCapability StorageImageReadWithoutFormat
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %color %var_image
+OpExecutionMode %main OriginUpperLeft
+OpName %color "color"
+OpDecorate %color Location 0
+OpDecorate %var_image DescriptorSet 0
+OpDecorate %var_image Binding 1
+%void = OpTypeVoid
+%func = OpTypeFunction %void
+%f32 = OpTypeFloat 32
+%u32 = OpTypeInt 32 0
+%uint_2 = OpConstant %u32 2
+%uint_1 = OpConstant %u32 1
+%v2uint = OpTypeVector %u32 2
+%v4float = OpTypeVector %f32 4
+%image = OpTypeImage %f32 2D 2 0 1 2 Unknown
+%ptr_image = OpTypePointer UniformConstant %image
+%ptr_output_v4float = OpTypePointer Output %v4float
+%10 = OpConstantComposite %v2uint %uint_1 %uint_2
+%var_image = OpVariable %ptr_image UniformConstant
+%color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %func
+%main_lab = OpLabel
+%18 = OpLoad %image %var_image
+%19 = OpImageRead %v4float %18 %10 Sample %uint_2
+OpStore %color %19
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_BITCAST_SUCCESS_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
@@ -1717,6 +1756,19 @@ def test_spirv_tools_image_query_size_codegen():
     assert "Texture2DMS uImage @set(0) @binding(0);" in generated_code
     assert "Size = textureSize(uImage);" in generated_code
     assert "Size = size;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_image_read_sample_operand_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_IMAGE_READ_SAMPLE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "RWTexture2DMS var_image @set(0) @binding(1);" in generated_code
+    assert "float4 color @output @location(0);" in generated_code
+    assert "color = imageLoad(var_image, uint2(1, 2), 2);" in generated_code
+    assert "imageLoad(var_image, uint2(1, 2));" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

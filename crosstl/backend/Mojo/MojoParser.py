@@ -94,6 +94,7 @@ class MojoParser:
         global_variables = []
         constants = []
         classes = []
+        traits = []
         all_items = []
 
         while self.current_token[0] != "EOF":
@@ -116,6 +117,10 @@ class MojoParser:
             elif self.current_token[0] == "CLASS":
                 node = self.parse_class(attributes)
                 classes.append(node)
+                all_items.append(node)
+            elif self.current_token[0] == "TRAIT":
+                node = self.parse_trait(attributes)
+                traits.append(node)
                 all_items.append(node)
             elif self.current_token[0] == "CONSTANT":
                 node = self.parse_constant_buffer()
@@ -155,6 +160,7 @@ class MojoParser:
             global_variables=global_variables,
             constants=constants,
             classes=classes,
+            traits=traits,
         )
 
     def parse_import_statement(self):
@@ -433,10 +439,56 @@ class MojoParser:
             attributes=initial_attributes,
         )
 
+    def parse_trait(self, initial_attributes=None):
+        self.eat("TRAIT")
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        base_classes = []
+        generic_parameters = None
+
+        if self.current_token[0] == "LBRACKET":
+            generic_parameters = self.parse_generic_type_suffix()
+
+        if self.current_token[0] == "LPAREN":
+            base_classes = self.parse_base_class_list()
+
+        members = []
+        methods = []
+
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            self.skip_newlines()
+            if self.current_token[0] == "INDENT":
+                self.eat("INDENT")
+                while self.current_token[0] not in ["DEDENT", "EOF"]:
+                    self.skip_newlines()
+                    if self.current_token[0] in ["DEDENT", "EOF"]:
+                        break
+                    self.add_class_member(members, methods, self.parse_class_member())
+                    self.skip_newlines()
+                if self.current_token[0] == "DEDENT":
+                    self.eat("DEDENT")
+            else:
+                self.add_class_member(members, methods, self.parse_class_member())
+        else:
+            raise SyntaxError(f"Expected trait body, got {self.current_token[0]}")
+
+        node = TraitNode(
+            name,
+            members=members,
+            methods=methods,
+            base_classes=base_classes,
+            attributes=initial_attributes,
+        )
+        node.generic_parameters = generic_parameters
+        return node
+
     def parse_class_member(self):
         self.skip_newlines()
         attributes = self.parse_attributes()
 
+        if self.is_ellipsis_statement():
+            return self.parse_ellipsis_statement()
         if self.current_token[0] in self.FUNCTION_TOKENS:
             return self.parse_function(attributes)
         if self.current_token[0] == "CLASS":
@@ -953,8 +1005,26 @@ class MojoParser:
             return self.parse_switch_statement()
         elif self.current_token[0] == "STRUCT":
             return self.parse_struct()
+        elif self.current_token[0] == "TRAIT":
+            return self.parse_trait()
+        elif self.is_ellipsis_statement():
+            return self.parse_ellipsis_statement()
         else:
             return self.parse_expression_statement()
+
+    def is_ellipsis_statement(self):
+        return (
+            self.current_token[0] == "DOT"
+            and self.peek_token()[0] == "DOT"
+            and self.peek_token(2)[0] == "DOT"
+        )
+
+    def parse_ellipsis_statement(self):
+        self.eat("DOT")
+        self.eat("DOT")
+        self.eat("DOT")
+        self.consume_statement_terminator()
+        return PassNode()
 
     def parse_variable_declaration_or_assignment(self):
         if self.current_token[0] in ["COMPTIME", "ALIAS"]:

@@ -1377,7 +1377,11 @@ class SlangToCrossGLConverter:
 
     def crossgl_texture_call_parts(self, expr, is_main=False):
         if expr.method == "Load":
-            args = self.format_texture_load_args(expr.args, is_main)
+            args = self.format_texture_load_args(
+                expr.args,
+                is_main,
+                self.sampleable_resource_expression_type(expr.object),
+            )
             texture_func = (
                 "texelFetchOffset" if len(expr.args or []) > 1 else "texelFetch"
             )
@@ -1447,7 +1451,11 @@ class SlangToCrossGLConverter:
 
     def format_texture_method_args(self, expr, is_main=False):
         if expr.method == "Load":
-            return self.format_texture_load_args(expr.args, is_main)
+            return self.format_texture_load_args(
+                expr.args,
+                is_main,
+                self.sampleable_resource_expression_type(expr.object),
+            )
         return [self.generate_expression(arg, is_main) for arg in expr.args]
 
     def split_texture_sample_args(self, expr, is_main=False):
@@ -1469,9 +1477,11 @@ class SlangToCrossGLConverter:
         base_type = str(type_name).strip().split("<", 1)[0].strip()
         return base_type.startswith("Texture")
 
-    def format_texture_load_args(self, args, is_main=False):
+    def format_texture_load_args(self, args, is_main=False, resource_type=None):
         if args:
-            load_args = self.split_texture_load_vector_argument(args[0], is_main)
+            load_args = self.split_texture_load_vector_argument(
+                args[0], is_main, resource_type
+            )
             if load_args is not None:
                 trailing_args = [
                     self.generate_expression(arg, is_main) for arg in args[1:]
@@ -1479,7 +1489,9 @@ class SlangToCrossGLConverter:
                 return load_args + trailing_args
         return [self.generate_expression(arg, is_main) for arg in args]
 
-    def split_texture_load_vector_argument(self, arg, is_main=False):
+    def split_texture_load_vector_argument(
+        self, arg, is_main=False, resource_type=None
+    ):
         vector_type = None
         vector_args = None
 
@@ -1489,6 +1501,17 @@ class SlangToCrossGLConverter:
         elif isinstance(arg, FunctionCallNode):
             vector_type = arg.name
             vector_args = arg.args
+
+        if vector_type in {"int4", "uint4"}:
+            base_type = str(resource_type or "").strip().split("<", 1)[0].strip()
+            if base_type != "Texture3D" or len(vector_args) != 4:
+                return None
+            coord_type = "ivec3" if vector_type == "int4" else "uvec3"
+            x = self.generate_expression(vector_args[0], is_main)
+            y = self.generate_expression(vector_args[1], is_main)
+            z = self.generate_expression(vector_args[2], is_main)
+            mip = self.generate_expression(vector_args[3], is_main)
+            return [f"{coord_type}({x}, {y}, {z})", mip]
 
         if vector_type not in {"int3", "uint3"}:
             return None

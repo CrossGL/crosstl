@@ -41,6 +41,7 @@ class HLSLToCrossGLConverter:
             "uint": "uint",
             "dword": "uint",
             "float": "float",
+            "float32_t": "float",
             "half": "float16",
             "float16_t": "float16",
             "double": "double",
@@ -48,8 +49,10 @@ class HLSLToCrossGLConverter:
             "min10float": "float16",
             "min16int": "int16",
             "min12int": "int16",
+            "int32_t": "int",
             "int16_t": "int16",
             "min16uint": "uint16",
+            "uint32_t": "uint",
             "uint16_t": "uint16",
             "int64_t": "int64",
             "uint64_t": "uint64",
@@ -2864,6 +2867,24 @@ class HLSLToCrossGLConverter:
     def canonical_composite_type(self, type_name):
         """Normalize HLSL C-style signedness spellings before CrossGL mapping."""
         text = str(type_name).strip()
+        fixed_width_aliases = {
+            "float32_t": "float",
+            "int32_t": "int",
+            "uint32_t": "uint",
+        }
+        if text in fixed_width_aliases:
+            return fixed_width_aliases[text]
+
+        vector_alias_match = re.fullmatch(r"(float32_t|int32_t|uint32_t)([2-4])", text)
+        if vector_alias_match:
+            scalar, width = vector_alias_match.groups()
+            scalar_prefix = {
+                "float32_t": "float",
+                "int32_t": "int",
+                "uint32_t": "uint",
+            }[scalar]
+            return f"{scalar_prefix}{width}"
+
         match = re.fullmatch(r"(signed|unsigned)\s+(.+)", text)
         if not match:
             return text
@@ -2955,6 +2976,7 @@ class HLSLToCrossGLConverter:
     def map_template_matrix_type(self, scalar_type, rows, cols):
         if rows is None or cols is None or rows < 2 or rows > 4 or cols < 2 or cols > 4:
             return None
+        scalar_type = self.canonical_composite_type(scalar_type)
         prefixes = {
             "float": "mat",
             "half": "f16mat",

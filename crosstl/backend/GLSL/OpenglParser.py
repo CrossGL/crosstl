@@ -287,6 +287,7 @@ class GLSLParser:
         self.should_infer_shader_type = self.is_auto_shader_type(shader_type)
         self.index = 0
         self.current_token = self.tokens[self.index]
+        self.anonymous_struct_count = 0
 
     def is_auto_shader_type(self, shader_type):
         return shader_type in AUTO_SHADER_TYPES
@@ -1003,8 +1004,11 @@ class GLSLParser:
     def parse_struct(self, qualifiers=None, layout=None):
         declaration_qualifiers = qualifiers or []
         self.eat("STRUCT")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        if self.current_token[0] == "IDENTIFIER":
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+        else:
+            name = self.next_anonymous_struct_name()
         self.skip_newlines()
         self.eat("LBRACE")
 
@@ -1035,6 +1039,11 @@ class GLSLParser:
             self.eat("SEMICOLON")
 
         return StructNode(name, members), variables
+
+    def next_anonymous_struct_name(self):
+        name = f"AnonymousStruct{self.anonymous_struct_count}"
+        self.anonymous_struct_count += 1
+        return name
 
     def parse_interface_block(self, qualifiers, layout):
         block_name = self.current_token[1]

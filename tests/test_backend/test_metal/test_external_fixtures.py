@@ -546,6 +546,36 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "mlx_rope_metal_fast_math_namespace_intrinsics",
+        "repo_url": MLX_REPO,
+        "commit": MLX_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/rope.metal",
+        "roundtrip": True,
+        "contains": [
+            "float costheta = cos(theta);",
+            "float sintheta = sin(theta);",
+            "float inv_freq = exp2((-d) * base);",
+        ],
+        "not_contains": [
+            "metal_u3a_u3afast_u3a_u3acos",
+            "metal_u3a_u3afast_u3a_u3asin",
+            "metal_u3a_u3aexp2",
+        ],
+        "source": (
+            """
+            #include <metal_math>
+            using namespace metal;
+
+            float2 rope_angles(float theta, float d, float base) {
+                float costheta = metal::fast::cos(theta);
+                float sintheta = metal::fast::sin(theta);
+                float inv_freq = metal::exp2(-d * base);
+                return float2(costheta, sintheta + inv_freq);
+            }
+        """
+        ),
+    },
+    {
         "name": "mlx_gemv_template_struct_alias_specialization",
         "repo_url": MLX_REPO,
         "commit": MLX_COMMIT,
