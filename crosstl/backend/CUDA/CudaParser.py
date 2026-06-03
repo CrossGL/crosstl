@@ -1685,15 +1685,16 @@ class CudaParser:
         return index
 
     def is_anonymous_aggregate_member_start(self):
-        return (
-            self.current_token[0] in {"STRUCT", "UNION"}
-            and self.current_index + 1 < len(self.tokens)
-            and self.tokens[self.current_index + 1][0] == "LBRACE"
-        )
+        if self.current_token[0] not in {"STRUCT", "UNION"}:
+            return False
+
+        index = self.skip_alignment_attributes_at_index(self.current_index + 1)
+        return index < len(self.tokens) and self.tokens[index][0] == "LBRACE"
 
     def parse_anonymous_aggregate_member(self):
         aggregate_type = self.current_token[1]
         self.eat(self.current_token[0])
+        attributes = self.parse_alignment_attributes()
         self.eat("LBRACE")
         members = self.parse_struct_members()
         self.eat("RBRACE")
@@ -1702,7 +1703,7 @@ class CudaParser:
             name = self.parse_name_component()
             vtype = aggregate_type + self.parse_array_suffix()
             self.eat("SEMICOLON")
-            return [VariableNode(vtype, name)]
+            return [VariableNode(vtype, name, attributes=attributes)]
 
         self.eat("SEMICOLON")
         return members

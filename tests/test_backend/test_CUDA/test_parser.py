@@ -2536,6 +2536,34 @@ class TestCudaParser:
         assert ast.kernels[0].params[0].vtype == "Pair *"
         assert ast.kernels[0].params[0].name == "pairs"
 
+    def test_aligned_anonymous_aggregate_members_parse(self):
+        code = """
+        struct Packet {
+            int header;
+            struct __align__(16) {
+                float4 value;
+            } payload;
+            union alignas(8) {
+                int i;
+                float f;
+            };
+        };
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        packet = ast.structs[0]
+        assert packet.name == "Packet"
+        assert [(member.vtype, member.name) for member in packet.members] == [
+            ("int", "header"),
+            ("struct", "payload"),
+            ("int", "i"),
+            ("float", "f"),
+        ]
+        assert packet.members[1].attributes == ["__align__(16)"]
+
     def test_cuda_struct_conversion_operator_methods_are_skipped(self):
         code = """
         template <class T> struct SharedMemory {
