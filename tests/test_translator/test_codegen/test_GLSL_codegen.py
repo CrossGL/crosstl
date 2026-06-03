@@ -11305,6 +11305,35 @@ def test_opengl_array_parameters_use_glsl_order():
     assert "vec3[2] colors" not in generated_code
 
 
+def test_opengl_helper_parameters_preserve_out_and_inout_qualifiers():
+    shader = """
+    shader OutParamGLSL {
+        void fill(out float value) {
+            value = 1.0;
+        }
+
+        void accumulate(inout float value) {
+            value += 1.0;
+        }
+
+        compute {
+            void main() {
+                float x = 0.0;
+                fill(x);
+                accumulate(x);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void fill(out float value)" in generated_code
+    assert "void accumulate(inout float value)" in generated_code
+    assert "void fill(float value)" not in generated_code
+    assert "void accumulate(float value)" not in generated_code
+
+
 def test_opengl_non_resource_arrays_preserve_expression_sizes():
     shader = """
     shader ArrayExpressionSizes {

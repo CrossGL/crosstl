@@ -758,7 +758,7 @@ def test_codegen_multidimensional_interface_and_parameter_arrays_roundtrip():
     assert "vec3 positions[2][3];" in glsl
     assert "ivec2 ids[2][2];" in glsl
     assert "vec4 colors[2][3];" in glsl
-    assert "vec4 pickColor(vec4 table[2][3], PatchData patches[2][2]" in glsl
+    assert "vec4 pickColor(vec4 table[2][3], inout PatchData patches[2][2]" in glsl
     assert "vec4[2][3] table" not in glsl
     assert "PatchData[2][2] patches" not in glsl
 

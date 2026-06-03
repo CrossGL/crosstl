@@ -579,6 +579,7 @@ class GLSLCodeGen:
         "callabledatainext",
     }
     GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
+    GLSL_PARAMETER_QUALIFIERS = {"out", "inout"}
     GLSL_RESERVED_IDENTIFIERS = {"active", "input", "output"}
     GLSL_INTERPOLATION_FUNCTIONS = {
         "interpolateAtCentroid": 1,
@@ -5177,6 +5178,16 @@ class GLSLCodeGen:
             return None
         return func_name
 
+    def glsl_parameter_qualifiers(self, parameter):
+        qualifiers = []
+        seen = set()
+        for qualifier in getattr(parameter, "qualifiers", []) or []:
+            normalized = str(qualifier).lower()
+            if normalized in self.GLSL_PARAMETER_QUALIFIERS and normalized not in seen:
+                qualifiers.append(normalized)
+                seen.add(normalized)
+        return qualifiers
+
     def generate_function(
         self,
         func,
@@ -5312,6 +5323,9 @@ class GLSLCodeGen:
                 memory_qualifiers = self.resource_memory_qualifiers(p)
                 if memory_qualifiers:
                     declaration = f"{memory_qualifiers} {declaration}"
+            parameter_qualifiers = self.glsl_parameter_qualifiers(p)
+            if parameter_qualifiers:
+                declaration = f"{' '.join(parameter_qualifiers)} {declaration}"
             semantic_attr = self.map_semantic(semantic)
             params.append(
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
