@@ -59,6 +59,11 @@ EXTERNAL_SAMPLES = [
         "commit": "ae6ee21b92bc3e0fb4e6a5ab7383497861e644cc",
         "paths": ["ggml/src/ggml-cuda/fattn-vec.cuh"],
     },
+    {
+        "repo": "https://github.com/LLNL/RAJA",
+        "commit": "2b575f125fd37fdbd6dafdd84cd6c97a025321a1",
+        "paths": ["include/RAJA/policy/cuda/intrinsics.hpp"],
+    },
 ]
 
 
@@ -563,3 +568,18 @@ def test_external_turbo3_fast_exp_softmax_codegen_reparse():
     assert "var kq_max_scale: f32 = exp((kq_max[j] - kq[tid]));" in crossgl
     assert "var reg: f32 = exp((kq[((j * nthreads) + tid)] - kq_max[j]));" in crossgl
     assert "__expf" not in crossgl
+
+
+def test_external_raja_global_qualified_cuda_shuffle_codegen_reparse():
+    source = """
+    __device__ int shfl_sync(int var, int srcLane) {
+        return ::__shfl_sync(0xffffffffu, var, srcLane);
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "i32 shfl_sync(i32 var_, i32 srcLane)" in crossgl
+    assert "return WaveReadLaneAt(var_, srcLane);" in crossgl
+    assert "::__shfl_sync" not in crossgl

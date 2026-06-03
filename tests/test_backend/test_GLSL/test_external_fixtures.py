@@ -171,6 +171,34 @@ EXTERNAL_FIXTURES = [
         """).strip(),
     ),
     ExternalFixture(
+        name="glslang-texture-frag-legacy-projected-samplers",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/texture.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 130
+
+            uniform sampler2D texSampler2D;
+            uniform sampler3D texSampler3D;
+
+            varying vec2 coords2D;
+
+            void main()
+            {
+                float bias = 2.0;
+                vec3 coords3D = vec3(coords2D, 1.0);
+                vec4 coords4D = vec4(coords2D, 1.0, 2.0);
+                vec4 color = vec4(0.0);
+
+                color += texture2DProj(texSampler2D, coords3D);
+                color += texture3DProj(texSampler3D, coords4D, bias);
+
+                gl_FragColor = color;
+            }
+        """).strip(),
+    ),
+    ExternalFixture(
         name="saschawillems-compute-particles-ssbo",
         repo="https://github.com/SaschaWillems/Vulkan",
         commit="180be3f9f9a0e86fff2a7de283a54063999f2b69",
@@ -698,6 +726,21 @@ def test_codegen_ekmett_vr_scan_multi_declarator_for_fixture_snippet():
         "for (uint i = 1, i_max = min((N >> 1), 5u); (i < i_max); i <<= 1)" in crossgl
     )
     assert "for (uint i = 1; (i < i_max);" not in crossgl
+
+
+def test_codegen_glslang_legacy_projected_texture_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-texture-frag-legacy-projected-samplers"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "textureProj(texSampler2D, coords3D)" in crossgl
+    assert "textureProj(texSampler3D, coords4D, bias)" in crossgl
+    assert "texture2DProj(" not in crossgl
+    assert "texture3DProj(" not in crossgl
 
 
 def test_codegen_glslang_perprimitive_nv_fixture_canonical_qualifier():

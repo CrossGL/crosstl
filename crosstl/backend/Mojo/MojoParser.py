@@ -1906,16 +1906,19 @@ class MojoParser:
 
         type_name = self.current_token[1]
         self.eat(self.current_token[0])
-        while self.current_token[0] == "DOT":
-            self.eat("DOT")
-            if not self.is_identifier_like_token():
-                raise SyntaxError(
-                    f"Expected type name after dot, got {self.current_token[0]}"
-                )
-            type_name += f".{self.current_token[1]}"
-            self.eat(self.current_token[0])
-        if self.current_token[0] == "LBRACKET":
-            type_name += self.parse_generic_type_suffix()
+        while self.current_token[0] in {"DOT", "LBRACKET", "LPAREN"}:
+            if self.current_token[0] == "DOT":
+                self.eat("DOT")
+                if not self.is_identifier_like_token():
+                    raise SyntaxError(
+                        f"Expected type name after dot, got {self.current_token[0]}"
+                    )
+                type_name += f".{self.current_token[1]}"
+                self.eat(self.current_token[0])
+            elif self.current_token[0] == "LBRACKET":
+                type_name += self.parse_generic_type_suffix()
+            else:
+                type_name += self.parse_parenthesized_type_suffix()
         if type_name.split("[", 1)[0] in self.REFERENCE_TYPE_PREFIXES:
             self.skip_layout_tokens()
             if self.current_token[0] in self.TYPE_START_TOKENS:
@@ -1956,6 +1959,37 @@ class MojoParser:
                 self.eat("COMMA")
                 self.skip_layout_tokens()
                 if self.current_token[0] != "RBRACKET":
+                    suffix += ", "
+            elif token_type in {"NEWLINE", "INDENT", "DEDENT"}:
+                self.eat(token_type)
+            else:
+                suffix += token_value
+                self.eat(token_type)
+
+        return suffix
+
+    def parse_parenthesized_type_suffix(self):
+        suffix = "("
+        depth = 1
+        self.eat("LPAREN")
+
+        while depth > 0:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated parenthesized type suffix")
+
+            token_type, token_value = self.current_token
+            if token_type == "LPAREN":
+                suffix += "("
+                depth += 1
+                self.eat("LPAREN")
+            elif token_type == "RPAREN":
+                suffix += ")"
+                depth -= 1
+                self.eat("RPAREN")
+            elif token_type == "COMMA":
+                self.eat("COMMA")
+                self.skip_layout_tokens()
+                if self.current_token[0] != "RPAREN":
                     suffix += ", "
             elif token_type in {"NEWLINE", "INDENT", "DEDENT"}:
                 self.eat(token_type)

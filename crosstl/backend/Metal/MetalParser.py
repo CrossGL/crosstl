@@ -1319,6 +1319,9 @@ class MetalParser:
     def parse_struct_members(self):
         members = []
         while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "STATIC_ASSERT":
+                members.append(self.parse_static_assert())
+                continue
             if self.current_token[0] == "USING":
                 self.parse_using_statement()
                 continue

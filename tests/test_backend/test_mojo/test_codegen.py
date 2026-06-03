@@ -714,6 +714,30 @@ def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
     assert "Unhandled statement type: VectorConstructorNode" not in generated_code
 
 
+def test_modular_top_k_type_of_parameter_type_codegen():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/top_k.mojo top_k_gpu nested kernel.
+    code = """
+    def execute():
+        @parameter
+        def top_k_gpu(
+            out_vals: type_of(out_vals_tensor),
+            out_idxs: type_of(out_idxs_tensor),
+            in_vals: type_of(in_vals_tensor),
+        ):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "void top_k_gpu(type_of(out_vals_tensor) out_vals, "
+        "type_of(out_idxs_tensor) out_idxs, type_of(in_vals_tensor) in_vals) "
+        "@ parameter"
+    ) in generated_code
+
+
 def test_type_member_expression_codegen_from_modular_testing_examples():
     code = """
     def inc(n: Int) raises -> Int:

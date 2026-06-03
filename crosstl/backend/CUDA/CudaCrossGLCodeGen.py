@@ -139,10 +139,12 @@ class CudaToCrossGLConverter:
         "cudaStreamGraphTailLaunch": "tail",
         "cudaStreamGraphFireAndForgetAsSibling": "fire-and-forget sibling",
     }
+    CROSSGL_RESERVED_IDENTIFIERS = {"var"}
 
     def __init__(self):
         self.indent_level = 0
         self.output = []
+        self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
@@ -156,6 +158,7 @@ class CudaToCrossGLConverter:
     def generate(self, ast_node):
         self.output = []
         self.indent_level = 0
+        self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
@@ -179,7 +182,7 @@ class CudaToCrossGLConverter:
 
     def generic_visit(self, node):
         if isinstance(node, str):
-            return node
+            return self.output_identifier_name(node)
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
         else:
@@ -190,6 +193,38 @@ class CudaToCrossGLConverter:
             self.output.append("    " * self.indent_level + code)
         else:
             self.output.append("")
+
+    def push_identifier_name_scope(self):
+        self.identifier_name_scopes.append({})
+
+    def pop_identifier_name_scope(self):
+        if len(self.identifier_name_scopes) > 1:
+            self.identifier_name_scopes.pop()
+
+    def register_identifier_name(self, name):
+        if not self.is_simple_identifier(name):
+            return name
+        output_name = self.sanitize_identifier_name(name)
+        if not self.identifier_name_scopes:
+            self.identifier_name_scopes.append({})
+        self.identifier_name_scopes[-1][name] = output_name
+        return output_name
+
+    def output_identifier_name(self, name):
+        if not self.is_simple_identifier(name):
+            return name
+        for scope in reversed(self.identifier_name_scopes):
+            if name in scope:
+                return scope[name]
+        return name
+
+    def sanitize_identifier_name(self, name):
+        if name in self.CROSSGL_RESERVED_IDENTIFIERS:
+            return f"{name}_"
+        return name
+
+    def is_simple_identifier(self, name):
+        return isinstance(name, str) and name.isidentifier()
 
     def collect_user_function_names(self, node):
         names = set()
@@ -3483,10 +3518,11 @@ class CudaToCrossGLConverter:
             return ", ".join(self.format_statement_fragment(item) for item in stmt)
         if isinstance(stmt, VariableNode):
             var_type = self.convert_cuda_variable_type_to_crossgl(stmt.vtype, stmt.name)
+            name = self.register_identifier_name(stmt.name)
             if stmt.value:
                 value = self.visit(stmt.value)
-                return f"var {stmt.name}: {var_type} = {value}"
-            return f"var {stmt.name}: {var_type}"
+                return f"var {name}: {var_type} = {value}"
+            return f"var {name}: {var_type}"
         if isinstance(stmt, AssignmentNode):
             left = self.visit(stmt.left)
             right = self.visit(stmt.right)
@@ -3595,12 +3631,14 @@ class CudaToCrossGLConverter:
                 node, self.collect_declared_variable_names(node)
             )
         )
+        self.push_identifier_name_scope()
         try:
             for param in node.params:
                 param_type = self.convert_cuda_variable_type_to_crossgl(
                     param.vtype, param.name
                 )
-                params.append(f"{param_type} {param.name}")
+                param_name = self.register_identifier_name(param.name)
+                params.append(f"{param_type} {param_name}")
 
             param_str = ", ".join(params)
             self.emit(f"{return_type} {node.name}({param_str}) {{")
@@ -3626,6 +3664,7 @@ class CudaToCrossGLConverter:
                 self.pop_packed_argument_scope()
                 self.indent_level -= 1
         finally:
+            self.pop_identifier_name_scope()
             self.pop_resource_object_hint_scope()
 
         self.emit("}")
@@ -3655,22 +3694,24 @@ class CudaToCrossGLConverter:
                 kernel, self.collect_declared_variable_names(kernel)
             )
         )
+        self.push_identifier_name_scope()
         try:
             for param in kernel.params:
+                param_name = self.register_identifier_name(param.name)
                 if "*" in param.vtype:
                     element_type = self.convert_cuda_pointer_element_type(param.vtype)
                     storage_type = self.format_crossgl_type_syntax(
                         f"array<{element_type}>"
                     )
                     params.append(
-                        f"@group(0) @binding({len(params)}) var<storage, read_write> {param.name}: {storage_type}"
+                        f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: {storage_type}"
                     )
                 else:
                     param_type = self.convert_cuda_variable_type_to_crossgl(
                         param.vtype, param.name
                     )
                     param_type = self.format_crossgl_type_syntax(param_type)
-                    params.append(f"{param_type} {param.name}")
+                    params.append(f"{param_type} {param_name}")
 
             self.emit(f"fn {kernel.name}(")
             self.indent_level += 1
@@ -3709,6 +3750,7 @@ class CudaToCrossGLConverter:
                 self.pop_packed_argument_scope()
                 self.indent_level -= 1
         finally:
+            self.pop_identifier_name_scope()
             self.pop_resource_object_hint_scope()
 
         self.emit("}")
@@ -3765,6 +3807,7 @@ class CudaToCrossGLConverter:
             return
 
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
+        output_name = self.register_identifier_name(node.name)
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
@@ -3774,13 +3817,13 @@ class CudaToCrossGLConverter:
                 comments, value = runtime_expression
                 for comment in comments:
                     self.emit(comment)
-                self.emit(f"var {node.name}: {var_type} = {value};")
+                self.emit(f"var {output_name}: {var_type} = {value};")
                 return
 
             value = self.visit(node.value)
-            self.emit(f"var {node.name}: {var_type} = {value};")
+            self.emit(f"var {output_name}: {var_type} = {value};")
         else:
-            self.emit(f"var {node.name}: {var_type};")
+            self.emit(f"var {output_name}: {var_type};")
 
     def push_packed_argument_scope(self):
         self.packed_argument_scopes.append({})
@@ -4051,6 +4094,9 @@ class CudaToCrossGLConverter:
         return f"{func_name}({args_str})"
 
     def format_cuda_warp_intrinsic_call(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
         if function_name == "__activemask":
             if not args:
                 return "WaveActiveBallot(true).x"

@@ -1460,6 +1460,17 @@ class HLSLToCrossGLConverter:
             rendered_value = f"{current_value} {binary_op} {rendered_value}"
         return f"imageStore({image}, {coord}, {rendered_value})"
 
+    def storage_image_component_assignment_access(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return None
+        if not isinstance(expr.member, str):
+            return None
+        if not re.fullmatch(r"[xyzwrgba]{1,4}", expr.member):
+            return None
+        if not self.is_storage_image_texel_access(expr.object):
+            return None
+        return expr.object, expr.member
+
     def storage_image_component_type(self, access):
         raw_type = self.expression_raw_type(access)
         if raw_type is None:
@@ -1468,6 +1479,51 @@ class HLSLToCrossGLConverter:
         if "<" not in type_name or ">" not in type_name:
             return None
         return type_name.split("<", 1)[1].rsplit(">", 1)[0].strip()
+
+    def normalize_resource_component_type(self, component_type):
+        if component_type is None:
+            return None
+        component_type = str(component_type).strip()
+        component_type = re.sub(r"^(snorm|unorm)\s*,?\s+", "", component_type)
+        return self.canonical_composite_type(component_type)
+
+    def storage_image_component_count(self, component_type):
+        component_type = self.normalize_resource_component_type(component_type)
+        if not component_type:
+            return None
+        if re.fullmatch(
+            r"(?:min16float|min10float|min16uint|min16int|min12int|float16_t|"
+            r"uint16_t|int16_t|float|half|double|uint|int|bool)[2-4]",
+            component_type,
+        ):
+            return int(component_type[-1])
+        if component_type in {
+            "min16float",
+            "min10float",
+            "min16uint",
+            "min16int",
+            "min12int",
+            "float16_t",
+            "uint16_t",
+            "int16_t",
+            "float",
+            "half",
+            "double",
+            "uint",
+            "int",
+            "bool",
+        }:
+            return 1
+        return None
+
+    def generate_storage_image_component_store(
+        self, access, component, value, operator, is_main=False
+    ):
+        component_type = self.storage_image_component_type(access)
+        component_count = self.storage_image_component_count(component_type)
+        if component_count == 1 and len(component) == 1 and component in {"x", "r"}:
+            return self.generate_storage_image_store(access, value, operator, is_main)
+        return None
 
     def generate_storage_image_atomic_value(self, arg, component_type, is_main):
         if (
@@ -2569,6 +2625,14 @@ class HLSLToCrossGLConverter:
         if self.is_storage_image_texel_access(node.left):
             storage_store = self.generate_storage_image_store(
                 node.left, node.right, node.operator, is_main
+            )
+            if storage_store is not None:
+                return storage_store
+        component_access = self.storage_image_component_assignment_access(node.left)
+        if component_access is not None:
+            access, component = component_access
+            storage_store = self.generate_storage_image_component_store(
+                access, component, node.right, node.operator, is_main
             )
             if storage_store is not None:
                 return storage_store

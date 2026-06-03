@@ -18,6 +18,8 @@ BOOK_OF_SHADERS_METAL_REPO = "https://github.com/metal-by-example/book-of-shader
 BOOK_OF_SHADERS_METAL_COMMIT = "12bb2366697cba9c5f660d54fead7bdcd73b6b8a"
 MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
+CANDLE_REPO = "https://github.com/huggingface/candle"
+CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
 PMETAL_REPO = "https://github.com/Epistates/pmetal"
 PMETAL_COMMIT = "089171635d1b9c9b7a58b575cf7d522834022cd3"
 IMGUI_REPO = "https://github.com/ocornut/imgui"
@@ -521,6 +523,45 @@ EXTERNAL_FIXTURES = [
             template <>
             struct DefaultAccT<complex64_t> {
                 using type = complex64_t;
+            };
+        """
+        ),
+    },
+    {
+        "name": "candle_gemv_struct_static_assert",
+        "repo_url": CANDLE_REPO,
+        "commit": CANDLE_COMMIT,
+        "source_path": "candle-metal-kernels/src/metal_src/gemv.metal",
+        "roundtrip": True,
+        "struct_names": ["GemvDefaultAccT", "GEMVKernel"],
+        "contains": [
+            "struct GEMVKernel",
+            "constant int threadsM;",
+            'static_assert(SM * SN == 32, "simdgroup must have 32 threads");',
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define MLX_MTL_CONST static constant constexpr const
+
+            template <typename U>
+            struct GemvDefaultAccT {
+                using type = float;
+            };
+
+            template <
+                typename T,
+                const int BM,
+                const int SM,
+                const int SN,
+                typename AccT = typename GemvDefaultAccT<T>::type>
+            struct GEMVKernel {
+                using acc_type = AccT;
+                MLX_MTL_CONST int threadsM = BM * SM;
+                static_assert(SM * SN == 32,
+                              "simdgroup must have 32 threads");
             };
         """
         ),

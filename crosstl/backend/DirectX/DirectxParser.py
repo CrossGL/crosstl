@@ -686,7 +686,19 @@ class HLSLParser:
         while (
             self.current_token[0] != "GREATER_THAN" and self.current_token[0] != "EOF"
         ):
-            if self.is_type_token(self.current_token[0]):
+            if (
+                self.current_token[0] == "IDENTIFIER"
+                and str(self.current_token[1]).lower() in {"snorm", "unorm"}
+                and self.is_type_token(self.peek()[0])
+            ):
+                qualifier = self.current_token[1]
+                self.eat("IDENTIFIER")
+                arg_type = f"{qualifier} {self.parse_type()}"
+                arg_type += self.format_array_suffixes_for_type(
+                    self.parse_array_suffixes()
+                )
+                args.append(arg_type)
+            elif self.is_type_token(self.current_token[0]):
                 arg_type = self.parse_type()
                 arg_type += self.format_array_suffixes_for_type(
                     self.parse_array_suffixes()

@@ -34,6 +34,8 @@ FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
 FIDELITYFX_SDK_COMMIT = "e236f2304dcda35f282fdddd085f41e2ff48c86a"
+WICKED_ENGINE_REPO = "https://github.com/turanszkij/WickedEngine"
+WICKED_ENGINE_COMMIT = "9df7a530aed53cc59b345f751939e513170ddf3c"
 
 
 EXTERNAL_FIXTURES = [
@@ -656,6 +658,33 @@ EXTERNAL_FIXTURES = [
             "vec3 color0 = ColorBuffer[coord1].xyz;",
             "workgroupBarrier();",
             "imageStore(OutputBuffer, globalID.xy, vec4(center, 1.0));",
+        ),
+    ),
+    ExternalFixture(
+        name="wickedengine_rtao_unorm_uav_component_write",
+        repo=WICKED_ENGINE_REPO,
+        commit=WICKED_ENGINE_COMMIT,
+        path="WickedEngine/shaders/rtao_denoise_filterCS.hlsl",
+        code=textwrap.dedent("""
+            RWTexture2D<unorm float> output : register(u1);
+            float rtao_power;
+
+            bool FFX_DNSR_Shadows_IsShadowReciever(uint2 did)
+            {
+                return did.x > 0;
+            }
+
+            [numthreads(8, 8, 1)]
+            void main(uint2 did : SV_DispatchThreadID)
+            {
+                const float mean = 0.5f;
+                output[did].x = FFX_DNSR_Shadows_IsShadowReciever(did) ? pow(mean, rtao_power) : 1;
+            }
+        """).strip(),
+        contains=(
+            "@ register(u1)",
+            "image2D output;",
+            "imageStore(output, did, FFX_DNSR_Shadows_IsShadowReciever(did) ? pow(mean, rtao_power) : 1);",
         ),
     ),
 ]

@@ -808,6 +808,18 @@ class MetalToCrossGLConverter:
                         struct_alignas = " ".join(parts) + " "
                     code += f"    {struct_alignas}struct {struct_node.name} {{\n"
                 for member in struct_node.members:
+                    if isinstance(member, StaticAssertNode):
+                        cond = self.generate_expression(member.condition, False)
+                        if member.message is not None:
+                            msg = (
+                                member.message
+                                if isinstance(member.message, str)
+                                else self.generate_expression(member.message, False)
+                            )
+                            code += f"        static_assert({cond}, {msg});\n"
+                        else:
+                            code += f"        static_assert({cond});\n"
+                        continue
                     decl = self.format_decl(member, include_semantic=True)
                     code += f"        {decl};\n"
                 code += "    }\n\n"

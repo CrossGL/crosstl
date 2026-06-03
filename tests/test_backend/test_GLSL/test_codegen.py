@@ -226,6 +226,12 @@ def test_codegen_resource_function_descriptors():
         "resource": "texture",
         "operation": "sample_lod",
     }
+    assert converter.resource_function_descriptor("texture2DProj") == {
+        "name": "texture2DProj",
+        "function": "textureProj",
+        "resource": "texture",
+        "operation": "sample_projected",
+    }
     assert converter.resource_function_descriptor("texelFetch") == {
         "name": "texelFetch",
         "function": "texelFetch",

@@ -255,13 +255,18 @@ class GLSLToCrossGLConverter:
         }
         self.texture_function_operations = {
             "texture": "sample",
+            "texture1D": "sample",
             "texture2D": "sample",
+            "texture3D": "sample",
             "textureCube": "sample",
             "textureLod": "sample_lod",
             "textureLodOffset": "sample_lod",
             "textureGrad": "sample_grad",
             "textureGradOffset": "sample_grad",
             "textureProj": "sample_projected",
+            "texture1DProj": "sample_projected",
+            "texture2DProj": "sample_projected",
+            "texture3DProj": "sample_projected",
             "textureProjLod": "sample_projected",
             "textureProjLodOffset": "sample_projected",
             "textureProjGrad": "sample_projected",
@@ -293,8 +298,13 @@ class GLSLToCrossGLConverter:
             "textureSamples": "query_samples",
         }
         self.legacy_texture_function_names = {
+            "texture1D": "texture",
             "texture2D": "texture",
+            "texture3D": "texture",
             "textureCube": "texture",
+            "texture1DProj": "textureProj",
+            "texture2DProj": "textureProj",
+            "texture3DProj": "textureProj",
         }
         self.image_function_operations = {
             "imageLoad": "load",

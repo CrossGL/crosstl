@@ -2453,6 +2453,15 @@ def test_parse_nested_struct_method_prototype_from_wickedengine_sh_lite():
     assert [function.name for function in ast.functions] == ["L1::Packed::Unpack"]
 
 
+def test_parse_normalized_rwtexture_element_type_from_wickedengine_rtao():
+    # Source: https://github.com/turanszkij/WickedEngine/blob/9df7a530aed53cc59b345f751939e513170ddf3c/WickedEngine/shaders/rtao_denoise_filterCS.hlsl
+    ast = parse_code("""
+        RWTexture2D<unorm float> output : register(u1);
+    """)
+
+    assert ast.global_variables[0].vtype == "RWTexture2D<unorm float>"
+
+
 def test_parse_struct_operator_methods_from_dxc_intrinsics_tests():
     code = textwrap.dedent("""
         struct Vector {

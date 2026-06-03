@@ -639,6 +639,32 @@ def test_mojo_gpu_puzzles_async_shared_memory_copy_call_parsing():
     assert [arg.name for arg in copy_call.args] == ["a_shared", "a_tile"]
 
 
+def test_modular_top_k_type_of_parameter_type_parsing():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/top_k.mojo top_k_gpu nested kernel.
+    code = """
+    def execute():
+        @parameter
+        def top_k_gpu(
+            out_vals: type_of(out_vals_tensor),
+            out_idxs: type_of(out_idxs_tensor),
+            in_vals: type_of(in_vals_tensor),
+        ):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    kernel = find_function(ast, "execute").body[0]
+
+    assert isinstance(kernel, FunctionNode)
+    assert [attr.name for attr in kernel.attributes] == ["parameter"]
+    assert [(param.name, param.vtype) for param in kernel.params] == [
+        ("out_vals", "type_of(out_vals_tensor)"),
+        ("out_idxs", "type_of(out_idxs_tensor)"),
+        ("in_vals", "type_of(in_vals_tensor)"),
+    ]
+
+
 def test_statement_attributes_parse_from_real_world_mojo():
     code = """
     fn main():
