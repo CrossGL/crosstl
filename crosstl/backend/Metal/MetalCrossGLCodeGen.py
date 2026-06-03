@@ -299,6 +299,9 @@ class MetalToCrossGLConverter:
             "depth2d_ms<float>": "sampler2DMS",
             "depth2d_ms_array": "sampler2DMSArray",
             "depth2d_ms_array<float>": "sampler2DMSArray",
+            # SwiftUI layer-effect shaders expose the rendered layer as a
+            # sampler-like object with sample(coord) syntax.
+            "SwiftUI::Layer": "sampler2D",
             "acceleration_structure": "acceleration_structure",
             "intersection_function_table": "intersection_function_table",
             "visible_function_table": "visible_function_table",
@@ -1561,13 +1564,20 @@ class MetalToCrossGLConverter:
             if diagnostic is not None:
                 return diagnostic
             texture = self.generate_expression(expr.texture, is_main)
-            sampler_name = self.expression_base_name(expr.sampler)
+            sampler_expr = expr.sampler
+            coords_expr = expr.coordinates
+            if coords_expr is None and self.is_samplerless_sample_expression(
+                expr.texture
+            ):
+                coords_expr = sampler_expr
+                sampler_expr = None
+            sampler_name = self.expression_base_name(sampler_expr)
             sampler = (
                 ""
                 if sampler_name in self.global_sampler_names
-                else self.generate_expression(expr.sampler, is_main)
+                else self.generate_expression(sampler_expr, is_main)
             )
-            coords = self.generate_expression(expr.coordinates, is_main)
+            coords = self.generate_expression(coords_expr, is_main)
             sample_args = [texture]
             if sampler:
                 sample_args.append(sampler)
@@ -1905,6 +1915,11 @@ class MetalToCrossGLConverter:
         if storage_type:
             return storage_type
         return self.map_type(metal_type) if metal_type else None
+
+    def is_samplerless_sample_expression(self, expr):
+        return self.normalized_metal_type(self.expression_metal_type(expr)) in {
+            "SwiftUI::Layer",
+        }
 
     def has_attribute(self, node, name):
         return any(

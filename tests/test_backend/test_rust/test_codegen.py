@@ -571,6 +571,75 @@ def test_rust_gpu_builtin_spirv_aliases_drive_parameter_semantics():
     assert "uint local_index @ gl_LocalInvocationIndex" in result
 
 
+def test_rust_gpu_all_builtins_compiletest_semantic_aliases_codegen():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/spirv-attr/all-builtins.rs.
+    code = """
+    use spirv_std::glam::*;
+    use spirv_std::spirv;
+
+    #[spirv(vertex)]
+    pub fn vertex(
+        #[spirv(base_instance)] base_instance: u32,
+        #[spirv(base_vertex)] base_vertex: u32,
+        #[spirv(device_index)] device_index: u32,
+        #[spirv(draw_index)] draw_index: u32,
+        #[spirv(point_size)] point_size: &mut u32,
+        #[spirv(subgroup_eq_mask)] subgroup_eq_mask: UVec4,
+        #[spirv(subgroup_ge_mask)] subgroup_ge_mask: UVec4,
+        #[spirv(subgroup_gt_mask)] subgroup_gt_mask: UVec4,
+        #[spirv(subgroup_le_mask)] subgroup_le_mask: UVec4,
+        #[spirv(subgroup_lt_mask)] subgroup_lt_mask: UVec4,
+        #[spirv(viewport_index)] viewport_index: u32,
+    ) {}
+
+    #[spirv(fragment)]
+    pub fn fragment(
+        #[spirv(bary_coord)] bary_coord: Vec3,
+        #[spirv(bary_coord_no_persp)] bary_coord_no_persp: Vec3,
+        #[spirv(clip_distance)] clip_distance: [f32; 1],
+        #[spirv(cull_distance)] cull_distance: [f32; 1],
+        #[spirv(frag_depth)] frag_depth: &mut f32,
+        #[spirv(frag_invocation_count_ext, flat)] frag_invocation_count_ext: u32,
+        #[spirv(frag_size_ext, flat)] frag_size_ext: UVec2,
+        #[spirv(fully_covered_ext)] fully_covered_ext: bool,
+        #[spirv(helper_invocation)] helper_invocation: bool,
+        #[spirv(layer, flat)] layer: u32,
+        #[spirv(sample_id, flat)] sample_id: u32,
+        #[spirv(sample_mask, flat)] sample_mask: [u32; 1],
+        #[spirv(sample_position)] sample_position: Vec2,
+        #[spirv(viewport_index, flat)] viewport_index: u32,
+    ) {}
+    """
+    result = parse_and_generate(code)
+
+    assert "uint base_instance @ gl_BaseInstance" in result
+    assert "uint base_vertex @ gl_BaseVertex" in result
+    assert "uint device_index @ gl_DeviceIndex" in result
+    assert "uint draw_index @ gl_DrawID" in result
+    assert "uint point_size @ gl_PointSize" in result
+    assert "uvec4 subgroup_eq_mask @ gl_SubgroupEqMask" in result
+    assert "uvec4 subgroup_ge_mask @ gl_SubgroupGeMask" in result
+    assert "uvec4 subgroup_gt_mask @ gl_SubgroupGtMask" in result
+    assert "uvec4 subgroup_le_mask @ gl_SubgroupLeMask" in result
+    assert "uvec4 subgroup_lt_mask @ gl_SubgroupLtMask" in result
+    assert "vec3 bary_coord @ gl_BaryCoordEXT" in result
+    assert "vec3 bary_coord_no_persp @ gl_BaryCoordNoPerspEXT" in result
+    assert "float clip_distance[1] @ gl_ClipDistance" in result
+    assert "float cull_distance[1] @ gl_CullDistance" in result
+    assert "float frag_depth @ gl_FragDepth" in result
+    assert "uint frag_invocation_count_ext @ gl_FragInvocationCountEXT" in result
+    assert "uvec2 frag_size_ext @ gl_FragSizeEXT" in result
+    assert "bool fully_covered_ext @ gl_FullyCoveredEXT" in result
+    assert "bool helper_invocation @ gl_HelperInvocation" in result
+    assert "uint layer @ gl_Layer" in result
+    assert "uint sample_id @ gl_SampleID" in result
+    assert "uint sample_mask[1] @ gl_SampleMask" in result
+    assert "vec2 sample_position @ gl_SamplePosition" in result
+    assert result.count("uint viewport_index @ gl_ViewportIndex") == 2
+
+
 def test_vulkan_shader_examples_multiview_view_index_semantic_codegen():
     # Reduced from Rust-GPU/VulkanShaderExamples commit
     # b29a37eb46802b5ea6882af4808d6887fc184581,

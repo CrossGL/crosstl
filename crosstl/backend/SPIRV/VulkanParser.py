@@ -1209,6 +1209,22 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode == "OpTranspose" and len(operands) >= 2:
+                expressions[result_id] = FunctionCallNode(
+                    "transpose",
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             if result_id and opcode in {"OpAccessChain", "OpInBoundsAccessChain"}:
                 if len(operands) >= 2:
                     access = self.spirv_assembly_access_chain_expression(

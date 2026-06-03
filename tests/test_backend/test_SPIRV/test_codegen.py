@@ -157,6 +157,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_MATRIX_TRANSPOSE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/spv.matrix.frag.out
+; Reduced from Test/spv.matrix.frag transpose(sum34).
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %sum34 %m43
+OpExecutionMode %main OriginUpperLeft
+OpName %sum34 "sum34"
+OpName %m43 "m43"
+OpDecorate %sum34 Location 0
+OpDecorate %m43 Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%v3float = OpTypeVector %float 3
+%mat3x4 = OpTypeMatrix %v4float 3
+%mat4x3 = OpTypeMatrix %v3float 4
+%ptr_input_mat3x4 = OpTypePointer Input %mat3x4
+%ptr_output_mat4x3 = OpTypePointer Output %mat4x3
+%sum34 = OpVariable %ptr_input_mat3x4 Input
+%m43 = OpVariable %ptr_output_mat4x3 Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %mat3x4 %sum34
+%transposed = OpTranspose %mat4x3 %loaded
+OpStore %m43 %transposed
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_PRECISE_DOT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -1464,6 +1497,19 @@ def test_glslang_simple_mat_matrix_times_vector_codegen_reparse():
     assert "float4 v @input @location(0);" in generated_code
     assert "glPos = (mvp * v);" in generated_code
     assert "glPos = transformed;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_matrix_transpose_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_MATRIX_TRANSPOSE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float3x4 sum34 @input @location(0);" in generated_code
+    assert "float4x3 m43 @output @location(0);" in generated_code
+    assert "m43 = transpose(sum34);" in generated_code
+    assert "m43 = transposed;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

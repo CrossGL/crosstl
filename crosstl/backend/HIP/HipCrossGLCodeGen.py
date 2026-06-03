@@ -5860,6 +5860,9 @@ class HipToCrossGLConverter:
             "long long": "i64",
             "signed long long": "i64",
             "unsigned long long": "u64",
+            "__int64": "i64",
+            "signed __int64": "i64",
+            "unsigned __int64": "u64",
             "int8_t": "i8",
             "uint8_t": "u8",
             "int16_t": "i16",
@@ -6095,6 +6098,13 @@ class HipToCrossGLConverter:
             "__threadfence": "memoryBarrier",
             "__threadfence_block": "memoryBarrier",
             "__threadfence_system": "memoryBarrier",
+            # Population count intrinsics
+            "__builtin_popcount": "bitCount",
+            "__builtin_popcountl": "bitCount",
+            "__builtin_popcountll": "bitCount",
+            "__popcnt16": "bitCount",
+            "__popcnt": "bitCount",
+            "__popcnt64": "bitCount",
             # Atomic functions
             "atomicAdd": "atomicAdd",
             "hipAtomicAdd": "atomicAdd",

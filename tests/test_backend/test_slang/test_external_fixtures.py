@@ -16,6 +16,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "3dacd6028f380f3f2ff735516d39a1bdc05aeed2",
     },
+    "shader-slang/slang-generated-2026": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "a49a125809f7b491bfd54a3014021fa7d716bbdc",
+    },
     "shader-slang/optix-examples": {
         "url": "https://github.com/shader-slang/optix-examples",
         "commit": "02fa85ae2f39400ced9a602531aa096589055076",
@@ -272,6 +276,35 @@ EXTERNAL_FIXTURES = [
             "textureLod(tex, samp, vec4(1.0, 0.0, 0.0, 0.0), 0.0)",
         ],
         "not_contains": ["tex.SampleLevel"],
+    },
+    {
+        "id": "slang_hlsl_intrinsic_mul_matrix_vector",
+        "repo": "shader-slang/slang-generated-2026",
+        "path": (
+            "docs/generated/tests/cross-cutting/core-module/"
+            "hlsl-intrinsic-mul-matrix-lowers-per-target.slang"
+        ),
+        "source": (
+            """
+            RWStructuredBuffer<float3> outBuf;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void main(uint3 tid : SV_DispatchThreadID)
+            {
+                float3x3 m = float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
+                float3 v = float3(float(tid.x), float(tid.y), float(tid.z));
+                outBuf[tid.x] = mul(m, v);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "mat3 m = mat3(1, 0, 0, 0, 1, 0, 0, 0, 1);",
+            "vec3 v = vec3(float(tid.x), float(tid.y), float(tid.z));",
+            "outBuf[tid.x] = (m * v);",
+        ],
+        "not_contains": ["mul("],
     },
     {
         "id": "slang_groupshared_atomic_add",

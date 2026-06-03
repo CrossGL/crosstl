@@ -23,6 +23,7 @@ EXTERNAL_FIXTURE_SOURCES = {
             "HIP-Basic/texture_management/main.hip",
             "HIP-Basic/warp_shuffle/main.hip",
             "HIP-Doc/Tutorials/Programming-Patterns/image_convolution/main.hip",
+            "HIP-Doc/Programming-Guide/HIP-C++-Language-Extensions/warp_size_reduction/popcount.hpp",
         ],
     },
     "rocm_examples_inline_assembly": {
@@ -579,3 +580,48 @@ def test_external_hip_kittens_fast_exp_vector_codegen_reparse():
     assert "return exp(x);" in crossgl
     assert "return vec2<f32>(exp(x.x), exp(x.y));" in crossgl
     assert "__expf" not in crossgl
+
+
+def test_external_rocm_warp_size_reduction_popcount_codegen_reparse():
+    source = """
+    inline auto popcount(unsigned int x) -> int {
+        return __builtin_popcount(x);
+    }
+
+    inline auto popcount(unsigned long x) -> int {
+        return __builtin_popcountl(x);
+    }
+
+    inline auto popcount(unsigned long long x) -> int {
+        return __builtin_popcountll(x);
+    }
+
+    inline auto msvc_popcount16(unsigned short x) -> unsigned short {
+        return __popcnt16(x);
+    }
+
+    inline auto msvc_popcount32(unsigned int x) -> unsigned int {
+        return __popcnt(x);
+    }
+
+    inline auto msvc_popcount64(unsigned __int64 x) -> unsigned __int64 {
+        return __popcnt64(x);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    msvc_popcount64 = ast.statements[-1]
+
+    assert msvc_popcount64.return_type == "unsigned __int64"
+    assert msvc_popcount64.params[0]["type"] == "unsigned __int64"
+    assert crossgl.count("return bitCount(x);") == 6
+    assert "u64 msvc_popcount64(u64 x)" in crossgl
+    for raw_name in (
+        "__builtin_popcount",
+        "__builtin_popcountl",
+        "__builtin_popcountll",
+        "__popcnt16",
+        "__popcnt(",
+        "__popcnt64",
+    ):
+        assert raw_name not in crossgl

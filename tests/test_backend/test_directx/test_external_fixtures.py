@@ -141,6 +141,44 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_precise_struct_member",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenHLSL/precise/precise_gvn.hlsl",
+        code=textwrap.dedent("""
+            struct VSIn
+            {
+                float4 Pos : P;
+                float4 A   : A;
+            };
+
+            struct VSOut
+            {
+                precise float4 Pos : SV_Position;
+                float4 N : A;
+            };
+
+            [RootSignature("")]
+            VSOut main(VSIn input)
+            {
+                float4 X  = input.A * input.A;
+                float4 Y  = input.A + input.A;
+                float4 R1 = mul(X, Y);
+                float4 R2 = mul(X, Y);
+
+                VSOut O;
+                O.Pos = R1 * R1;
+                O.N   = R2;
+                return O;
+            }
+        """).strip(),
+        contains=(
+            "precise vec4 Pos @ gl_Position;",
+            '@ RootSignature("")',
+            "return O;",
+        ),
+    ),
+    ExternalFixture(
         name="directx_graphics_samples_emulated_pointer_reserved_buffer_identifier",
         repo=DIRECTX_GRAPHICS_SAMPLES_REPO,
         commit=DIRECTX_GRAPHICS_SAMPLES_COMMIT,

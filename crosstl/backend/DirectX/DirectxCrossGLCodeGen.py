@@ -1153,6 +1153,10 @@ class HLSLToCrossGLConverter:
                 ordered.append("const")
         return f"{' '.join(ordered)} " if ordered else ""
 
+    def format_precise_qualifier_prefix(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        return "precise " if "precise" in qualifiers else ""
+
     def format_interpolation_attributes(self, node):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         attributes = []
@@ -1225,7 +1229,7 @@ class HLSLToCrossGLConverter:
         if attributes:
             prefixes.append(attributes)
         qualifier_prefix = self.format_storage_qualifier_prefix(
-            parameter, {"in", "out", "inout", "const"}
+            parameter, {"in", "out", "inout", "const", "precise"}
         ).strip()
         if qualifier_prefix:
             prefixes.append(qualifier_prefix)
@@ -2090,8 +2094,9 @@ class HLSLToCrossGLConverter:
                     attributes = self.format_semantic_and_interpolation_attributes(
                         member, member.semantic
                     )
+                    qualifier_prefix = self.format_precise_qualifier_prefix(member)
                     code += (
-                        f"        {self.map_variable_type(member)} "
+                        f"        {qualifier_prefix}{self.map_variable_type(member)} "
                         f"{self.render_identifier(member.name)}"
                         f"{array_suffix}{attributes};\n"
                     )
@@ -2109,12 +2114,13 @@ class HLSLToCrossGLConverter:
             code += self.format_resource_qualifier_attributes(node, 1)
             code += self.format_binding_attributes(node, 1)
             storage_prefix = self.format_global_storage_qualifier_prefix(node)
+            precise_prefix = self.format_precise_qualifier_prefix(node)
             array_suffix = self.format_array_suffixes(node)
             initializer = ""
             if getattr(node, "value", None) is not None:
                 initializer = f" = {self.generate_expression(node.value)}"
             code += (
-                f"    {storage_prefix}{self.map_variable_type(node)} "
+                f"    {storage_prefix}{precise_prefix}{self.map_variable_type(node)} "
                 f"{self.render_identifier(node.name)}"
                 f"{array_suffix}{initializer};\n"
             )
@@ -2173,8 +2179,9 @@ class HLSLToCrossGLConverter:
                     code += self.format_attributes(getattr(member, "attributes", []), 2)
                     code += self.format_binding_attributes(member, 2)
                     array_suffix = self.format_array_suffixes(member)
+                    qualifier_prefix = self.format_precise_qualifier_prefix(member)
                     code += (
-                        f"        {self.map_variable_type(member)} "
+                        f"        {qualifier_prefix}{self.map_variable_type(member)} "
                         f"{self.render_identifier(member.name)}{array_suffix};\n"
                     )
                 code += "    }\n"
@@ -2224,18 +2231,19 @@ class HLSLToCrossGLConverter:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
                 array_suffix = self.format_array_suffixes(stmt, is_main)
+                qualifier_prefix = self.format_precise_qualifier_prefix(stmt)
                 if stmt.value is not None:
                     value = self.generate_expression(stmt.value, is_main)
                     self.record_variable_type(stmt)
                     code += (
-                        f"{self.map_variable_type(stmt)} "
+                        f"{qualifier_prefix}{self.map_variable_type(stmt)} "
                         f"{self.render_identifier(stmt.name)}{array_suffix} = "
                         f"{value};\n"
                     )
                 else:
                     self.record_variable_type(stmt)
                     code += (
-                        f"{self.map_variable_type(stmt)} "
+                        f"{qualifier_prefix}{self.map_variable_type(stmt)} "
                         f"{self.render_identifier(stmt.name)}{array_suffix};\n"
                     )
             elif isinstance(stmt, AssignmentNode):
