@@ -75,6 +75,38 @@ class MetalToCrossGLConverter:
         "while",
     }
     storage_texture_accesses = {"access::read", "access::write", "access::read_write"}
+    pixel_data_type_wrappers = {
+        "r8unorm",
+        "r8snorm",
+        "r8uint",
+        "r8sint",
+        "r16unorm",
+        "r16snorm",
+        "r16uint",
+        "r16sint",
+        "r16float",
+        "rg8unorm",
+        "rg8snorm",
+        "rg8uint",
+        "rg8sint",
+        "rg16unorm",
+        "rg16snorm",
+        "rg16uint",
+        "rg16sint",
+        "rg16float",
+        "rgba8unorm",
+        "rgba8snorm",
+        "rgba8uint",
+        "rgba8sint",
+        "rgba16unorm",
+        "rgba16snorm",
+        "rgba16uint",
+        "rgba16sint",
+        "rgba16float",
+        "rgba32uint",
+        "rgba32sint",
+        "rgba32float",
+    }
 
     def __init__(self):
         self.rt_qualifiers = {
@@ -267,6 +299,9 @@ class MetalToCrossGLConverter:
             "depth2d_ms<float>": "sampler2DMS",
             "depth2d_ms_array": "sampler2DMSArray",
             "depth2d_ms_array<float>": "sampler2DMSArray",
+            # SwiftUI layer-effect shaders expose the rendered layer as a
+            # sampler-like object with sample(coord) syntax.
+            "SwiftUI::Layer": "sampler2D",
             "acceleration_structure": "acceleration_structure",
             "intersection_function_table": "intersection_function_table",
             "visible_function_table": "visible_function_table",
@@ -1529,13 +1564,20 @@ class MetalToCrossGLConverter:
             if diagnostic is not None:
                 return diagnostic
             texture = self.generate_expression(expr.texture, is_main)
-            sampler_name = self.expression_base_name(expr.sampler)
+            sampler_expr = expr.sampler
+            coords_expr = expr.coordinates
+            if coords_expr is None and self.is_samplerless_sample_expression(
+                expr.texture
+            ):
+                coords_expr = sampler_expr
+                sampler_expr = None
+            sampler_name = self.expression_base_name(sampler_expr)
             sampler = (
                 ""
                 if sampler_name in self.global_sampler_names
-                else self.generate_expression(expr.sampler, is_main)
+                else self.generate_expression(sampler_expr, is_main)
             )
-            coords = self.generate_expression(expr.coordinates, is_main)
+            coords = self.generate_expression(coords_expr, is_main)
             sample_args = [texture]
             if sampler:
                 sample_args.append(sampler)
@@ -1617,6 +1659,10 @@ class MetalToCrossGLConverter:
             suffix = base[-1] + suffix
             base = base[:-1].strip()
 
+        pixel_payload_type = self.pixel_data_payload_type(base)
+        if pixel_payload_type:
+            return f"{self.map_type(pixel_payload_type)}{suffix}"
+
         vector_type = self.metal_vector_type_parts(base)
         if vector_type:
             element_type, size = vector_type
@@ -1633,6 +1679,12 @@ class MetalToCrossGLConverter:
 
         mapped = self.type_map.get(base, base)
         return f"{mapped}{suffix}"
+
+    def pixel_data_payload_type(self, metal_type):
+        base_name, generic_args = self.generic_type_parts(metal_type)
+        if base_name in self.pixel_data_type_wrappers and len(generic_args) == 1:
+            return generic_args[0].strip()
+        return None
 
     def should_elide_resource_access_qualifier(self, base_name, generic_args):
         if len(generic_args) < 2 or not self.is_metal_resource_type_name(base_name):
@@ -1863,6 +1915,11 @@ class MetalToCrossGLConverter:
         if storage_type:
             return storage_type
         return self.map_type(metal_type) if metal_type else None
+
+    def is_samplerless_sample_expression(self, expr):
+        return self.normalized_metal_type(self.expression_metal_type(expr)) in {
+            "SwiftUI::Layer",
+        }
 
     def has_attribute(self, node, name):
         return any(

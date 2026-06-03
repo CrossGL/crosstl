@@ -141,6 +141,44 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_precise_struct_member",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenHLSL/precise/precise_gvn.hlsl",
+        code=textwrap.dedent("""
+            struct VSIn
+            {
+                float4 Pos : P;
+                float4 A   : A;
+            };
+
+            struct VSOut
+            {
+                precise float4 Pos : SV_Position;
+                float4 N : A;
+            };
+
+            [RootSignature("")]
+            VSOut main(VSIn input)
+            {
+                float4 X  = input.A * input.A;
+                float4 Y  = input.A + input.A;
+                float4 R1 = mul(X, Y);
+                float4 R2 = mul(X, Y);
+
+                VSOut O;
+                O.Pos = R1 * R1;
+                O.N   = R2;
+                return O;
+            }
+        """).strip(),
+        contains=(
+            "precise vec4 Pos @ gl_Position;",
+            '@ RootSignature("")',
+            "return O;",
+        ),
+    ),
+    ExternalFixture(
         name="directx_graphics_samples_emulated_pointer_reserved_buffer_identifier",
         repo=DIRECTX_GRAPHICS_SAMPLES_REPO,
         commit=DIRECTX_GRAPHICS_SAMPLES_COMMIT,
@@ -352,6 +390,45 @@ EXTERNAL_FIXTURES = [
             "buf[0] = f;",
             "@ numthreads(8, 8, 1)",
             "void main(uvec2 ID @ gl_GlobalInvocationID)",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_contextual_keyword_identifiers",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/objects/Texture/sample_kwd.hlsl",
+        code=textwrap.dedent("""
+            float3 foo(float3 sample) {
+                return sample;
+            }
+
+            struct S {
+              float4 center;
+              float4 precise;
+              float4 sample;
+              float4 globallycoherent;
+            };
+
+            float4 main(float4 input : SV_POSITION) : SV_TARGET
+            {
+                float precise = 1.0f;
+                int globallycoherent = 1;
+                float sample;
+
+                sample = 1.0f;
+                globallycoherent += 10;
+
+                return float4(foo(float3(precise, globallycoherent, sample)), input.x);
+            }
+        """).strip(),
+        contains=(
+            "vec4 precise;",
+            "vec4 globallycoherent;",
+            "vec3 foo(vec3 sample)",
+            "float precise = 1.0;",
+            "int globallycoherent = 1;",
+            "sample = 1.0;",
+            "globallycoherent += 10;",
         ),
     ),
     ExternalFixture(

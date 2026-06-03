@@ -431,7 +431,7 @@ class GLSLParser:
                         uniforms.append(var)
                     elif "const" in lowered:
                         constants.append(var)
-                    elif "in" in lowered or "out" in lowered or "inout" in lowered:
+                    elif self.is_io_qualifier_set(lowered):
                         io_variables.append(var)
                     else:
                         global_variables.append(var)
@@ -471,7 +471,7 @@ class GLSLParser:
                         uniforms.append(var)
                     elif "const" in lowered:
                         constants.append(var)
-                    elif "in" in lowered or "out" in lowered or "inout" in lowered:
+                    elif self.is_io_qualifier_set(lowered):
                         io_variables.append(var)
                     else:
                         global_variables.append(var)
@@ -598,10 +598,23 @@ class GLSLParser:
             lowered = {q.lower() for q in var.qualifiers or []}
             if "uniform" in lowered:
                 uniforms.append(var)
-            elif "in" in lowered or "out" in lowered or "inout" in lowered:
+            elif self.is_io_qualifier_set(lowered):
                 io_variables.append(var)
             else:
                 global_variables.append(var)
+
+    def is_io_qualifier_set(self, qualifiers):
+        return bool({"in", "out", "inout", "varying"} & set(qualifiers))
+
+    def apply_variable_io_type(self, var, qualifiers):
+        if "inout" in qualifiers:
+            var.io_type = "INOUT"
+        elif "in" in qualifiers:
+            var.io_type = "IN"
+        elif "out" in qualifiers:
+            var.io_type = "OUT"
+        elif "varying" in qualifiers:
+            var.io_type = "IN" if self.shader_type == "fragment" else "OUT"
 
     def is_extension_interface_block_start(self):
         return (
@@ -955,12 +968,7 @@ class GLSLParser:
             )
 
             lowered = {q.lower() for q in qualifiers or []}
-            if "in" in lowered:
-                var.io_type = "IN"
-            if "out" in lowered:
-                var.io_type = "OUT"
-            if "inout" in lowered:
-                var.io_type = "INOUT"
+            self.apply_variable_io_type(var, lowered)
             if "const" in lowered:
                 var.is_const = True
 
@@ -1270,6 +1278,47 @@ class GLSLParser:
 
         return self.token_at(index)[0] == "EQUALS"
 
+    def is_local_function_prototype_start(self):
+        index = self.skip_newline_index(self.index)
+
+        while True:
+            token_type, token_value = self.token_at(index)
+            if token_type in QUALIFIER_TOKENS or (
+                token_type == "IDENTIFIER"
+                and token_value in IDENTIFIER_QUALIFIERS | CONTEXTUAL_QUALIFIERS
+            ):
+                index = self.skip_newline_index(index + 1)
+                continue
+            break
+
+        if self.token_at(index)[0] not in TYPE_TOKENS:
+            return False
+        index = self.skip_type_template_suffix_index(index + 1)
+        index = self.skip_array_suffixes_index(index)
+
+        if self.token_at(index)[0] not in NAME_TOKENS:
+            return False
+        index = self.skip_newline_index(index + 1)
+
+        if self.token_at(index)[0] != "LPAREN":
+            return False
+        index = self.skip_balanced_suffix(index, "LPAREN", "RPAREN")
+        index = self.skip_newline_index(index)
+        return self.token_at(index)[0] == "SEMICOLON"
+
+    def skip_local_function_prototype(self):
+        self.parse_qualifiers()
+        self.parse_type()
+        self.skip_newlines()
+        if self.current_token[0] == "LBRACKET":
+            self.parse_array_suffixes()
+            self.skip_newlines()
+        self.parse_identifier_name("function prototype name")
+        self.skip_newlines()
+        self.skip_balanced_parentheses()
+        self.skip_newlines()
+        self.eat("SEMICOLON")
+
     def parse_condition(self):
         self.skip_newlines()
         if self.is_condition_declaration_start():
@@ -1333,6 +1382,10 @@ class GLSLParser:
         if self.current_token[0] == "STRUCT":
             struct_node, extra_vars = self.parse_struct()
             return [struct_node, *extra_vars]
+
+        if self.is_local_function_prototype_start():
+            self.skip_local_function_prototype()
+            return None
 
         if self.is_declaration_start() and not self.is_constructor_expression_start():
             qualifiers = self.parse_qualifiers()

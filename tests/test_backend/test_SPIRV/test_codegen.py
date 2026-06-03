@@ -157,6 +157,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_MATRIX_TRANSPOSE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/spv.matrix.frag.out
+; Reduced from Test/spv.matrix.frag transpose(sum34).
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %sum34 %m43
+OpExecutionMode %main OriginUpperLeft
+OpName %sum34 "sum34"
+OpName %m43 "m43"
+OpDecorate %sum34 Location 0
+OpDecorate %m43 Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%v3float = OpTypeVector %float 3
+%mat3x4 = OpTypeMatrix %v4float 3
+%mat4x3 = OpTypeMatrix %v3float 4
+%ptr_input_mat3x4 = OpTypePointer Input %mat3x4
+%ptr_output_mat4x3 = OpTypePointer Output %mat4x3
+%sum34 = OpVariable %ptr_input_mat3x4 Input
+%m43 = OpVariable %ptr_output_mat4x3 Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %mat3x4 %sum34
+%transposed = OpTranspose %mat4x3 %loaded
+OpStore %m43 %transposed
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_PRECISE_DOT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -753,6 +786,43 @@ OpDecorate %uImage Binding 0
 %loaded = OpLoad %image_type %uImage
 %size = OpImageQuerySize %v2int %loaded
 OpStore %Size %size
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_TOOLS_BITCAST_SUCCESS_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
+; Source path: test/val/val_conversion_test.cpp
+; Reduced from ValidateConversion::BitcastSuccess OpBitcast %f32 %u32_1
+; and OpBitcast %f32vec2 %u32vec2_12.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %float_out %vec_out
+OpExecutionMode %main OriginUpperLeft
+OpName %float_out "floatOut"
+OpName %vec_out "vecOut"
+OpDecorate %float_out Location 0
+OpDecorate %vec_out Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%v2uint = OpTypeVector %uint 2
+%v2float = OpTypeVector %float 2
+%ptr_output_float = OpTypePointer Output %float
+%ptr_output_v2float = OpTypePointer Output %v2float
+%u32_1 = OpConstant %uint 1
+%u32_2 = OpConstant %uint 2
+%u32vec2_12 = OpConstantComposite %v2uint %u32_1 %u32_2
+%float_out = OpVariable %ptr_output_float Output
+%vec_out = OpVariable %ptr_output_v2float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%float_value = OpBitcast %float %u32_1
+OpStore %float_out %float_value
+%vec_value = OpBitcast %v2float %u32vec2_12
+OpStore %vec_out %vec_value
 OpReturn
 OpFunctionEnd
 """
@@ -1430,6 +1500,19 @@ def test_glslang_simple_mat_matrix_times_vector_codegen_reparse():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_glslang_matrix_transpose_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_MATRIX_TRANSPOSE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float3x4 sum34 @input @location(0);" in generated_code
+    assert "float4x3 m43 @output @location(0);" in generated_code
+    assert "m43 = transpose(sum34);" in generated_code
+    assert "m43 = transposed;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
 def test_glslang_precise_dot_codegen_reparse():
     tokens = tokenize_code(SPIRV_GLSLANG_PRECISE_DOT_ASSEMBLY)
     ast = parse_code(tokens)
@@ -1634,6 +1717,21 @@ def test_spirv_tools_image_query_size_codegen():
     assert "Texture2DMS uImage @set(0) @binding(0);" in generated_code
     assert "Size = textureSize(uImage);" in generated_code
     assert "Size = size;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_bitcast_success_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_BITCAST_SUCCESS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float floatOut @output @location(0);" in generated_code
+    assert "float2 vecOut @output @location(1);" in generated_code
+    assert "floatOut = uintBitsToFloat(1);" in generated_code
+    assert "vecOut = uintBitsToFloat(uint2(1, 2));" in generated_code
+    assert "float_value" not in generated_code
+    assert "vec_value" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

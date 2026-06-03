@@ -4237,6 +4237,12 @@ class CudaToCrossGLConverter:
 
         if group_kind == "thread_block_tile" and not args:
             tile_size = group_metadata.get("tile_size")
+            if (
+                member_name == "sync"
+                and tile_size
+                and group_metadata.get("parent_kind") == "thread_block"
+            ):
+                return "workgroupBarrier()"
             if member_name in {"size", "num_threads"} and tile_size:
                 return tile_size
             if (

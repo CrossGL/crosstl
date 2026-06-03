@@ -24,6 +24,7 @@ EXTERNAL_SAMPLES = [
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
             "cpp/3_CUDA_Features/cudaCompressibleMemory/saxpy.cu",
+            "cpp/3_CUDA_Features/simpleCudaGraphs/simpleCudaGraphs.cu",
             "cpp/3_CUDA_Features/cudaTensorCoreGemm/cudaTensorCoreGemm.cu",
             "cpp/6_Performance/transpose/transpose.cu",
         ],
@@ -619,3 +620,70 @@ def test_external_raja_global_qualified_cuda_shuffle_codegen_reparse():
     assert "i32 shfl_sync(i32 var_, i32 srcLane)" in crossgl
     assert "return WaveReadLaneAt(var_, srcLane);" in crossgl
     assert "::__shfl_sync" not in crossgl
+
+
+def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():
+    source = """
+    namespace cg = cooperative_groups;
+    #define THREADS_PER_BLOCK 256
+
+    __global__ void reduce(float *inputVec,
+                           double *outputVec,
+                           size_t inputSize,
+                           size_t outputSize) {
+        __shared__ double tmp[THREADS_PER_BLOCK];
+
+        cg::thread_block cta = cg::this_thread_block();
+        size_t globaltid = blockIdx.x * blockDim.x + threadIdx.x;
+
+        double temp_sum = 0.0;
+        for (int i = globaltid; i < inputSize; i += gridDim.x * blockDim.x) {
+            temp_sum += (double)inputVec[i];
+        }
+        tmp[cta.thread_rank()] = temp_sum;
+
+        cg::sync(cta);
+
+        cg::thread_block_tile<32> tile32 = cg::tiled_partition<32>(cta);
+
+        double beta = temp_sum;
+        double temp;
+
+        for (int i = tile32.size() / 2; i > 0; i >>= 1) {
+            if (tile32.thread_rank() < i) {
+                temp = tmp[cta.thread_rank() + i];
+                beta += temp;
+                tmp[cta.thread_rank()] = beta;
+            }
+            cg::sync(tile32);
+        }
+        cg::sync(cta);
+
+        if (cta.thread_rank() == 0 && blockIdx.x < outputSize) {
+            beta = 0.0;
+            for (int i = 0; i < cta.size(); i += tile32.size()) {
+                beta += tmp[i];
+            }
+            outputVec[blockIdx.x] = beta;
+        }
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert (
+        "// cooperative_groups thread_block_tile<32> tile32 maps to a tiled "
+        "partition of the current workgroup"
+    ) in crossgl
+    assert crossgl.count("workgroupBarrier();") == 3
+    assert (
+        "var globaltid: u32 = ((gl_WorkGroupID.x * gl_WorkGroupSize.x) + "
+        "gl_LocalInvocationID.x);"
+    ) in crossgl
+    assert "for (var i: i32 = (32 / 2); (i > 0); i >>= 1)" in crossgl
+    assert "tmp[gl_LocalInvocationIndex] = beta;" in crossgl
+    assert (
+        "cooperative_groups thread_block_tile.sync not directly supported"
+        not in crossgl
+    )

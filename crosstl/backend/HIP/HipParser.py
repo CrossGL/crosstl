@@ -257,6 +257,7 @@ class HipParser:
         "hipFloatComplex",
         "hipfftComplex",
         "hipfftDoubleComplex",
+        "__int64",
         "int8_t",
         "uint8_t",
         "int16_t",
@@ -4142,6 +4143,9 @@ class HipParser:
             return True
 
         if token_type != "IDENTIFIER":
+            return False
+
+        if self.is_identifier_type_name(self.tokens[index].value):
             return False
 
         next_type = (

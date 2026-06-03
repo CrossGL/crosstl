@@ -1752,6 +1752,26 @@ def test_user_defined_lerp_function_is_not_lowered_to_mix():
     assert "return mix(0.0, 1.0, 0.25);" not in generated_code
 
 
+def test_user_defined_mul_function_is_not_lowered_to_binary_operator():
+    code = """
+    float mul(float a, float b) {
+        return a + b;
+    }
+
+    float main() {
+        return mul(1.0, 2.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float mul(float a, float b)" in generated_code
+    assert "return mul(1.0, 2.0);" in generated_code
+    assert "return (1.0 * 2.0);" not in generated_code
+
+
 def test_slang_rsqrt_builtin_lowers_to_crossgl_inversesqrt():
     code = """
     void main() {

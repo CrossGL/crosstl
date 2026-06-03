@@ -183,6 +183,28 @@ def test_codegen_default_function_argument_from_glslang_default_args():
     assert "int x = 2" in output
 
 
+def test_codegen_local_function_prototype_from_glslang_scope_vert():
+    code = textwrap.dedent("""
+        #version 110
+
+        void helper() {
+        }
+
+        void main() {
+            void helper();
+            helper();
+            gl_Position = vec4(1.0);
+        }
+    """).strip()
+
+    output = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert output.count("void helper()") == 1
+    assert "void helper();" not in output
+    assert "helper();" in output
+    assert "gl_Position = vec4(1.0);" in output
+
+
 def test_codegen_macro_declaration_prefixes_from_filament_sources():
     code = textwrap.dedent("""
         #version 450

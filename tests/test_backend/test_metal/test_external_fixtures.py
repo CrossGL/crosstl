@@ -31,6 +31,8 @@ METALPETAL_COMMIT = "f9b78897bd4214bb097f352a1bde0a4f4a1e2ddb"
 BLENDER_REPO = "https://github.com/blender/blender"
 BLENDER_COMMIT = "2d196d20b93a9f6e596e6d451c5e845d84f21c89"
 BLENDER_TEXTURE_READ_COMMIT = "38657e6c5ccb9968bfcc55b4fd384ca528c71d10"
+METAL_RIPPLE_REPO = "https://github.com/swiftandcurious/MetalRipple"
+METAL_RIPPLE_COMMIT = "125274960b1bf0184b6570afa97f097ee3d2c6b1"
 
 
 EXTERNAL_FIXTURES = [
@@ -158,6 +160,41 @@ EXTERNAL_FIXTURES = [
 
             float4 AAPLUserDylib::getFullScreenColor(float4 inColor) {
                 return float4(inColor.r, inColor.g, inColor.b, 0);
+            }
+        """
+        ),
+    },
+    {
+        "name": "apple_imageblock_pixel_format_member_payload_type",
+        "repo_url": APPLE_SAMPLE_REPO,
+        "commit": APPLE_SAMPLE_COMMIT,
+        "source_path": (
+            "MetalSampleCodeLibrary/RenderWorkflows/"
+            "ImplementingOrderIndependentTransparencyWithImageBlocks/"
+            "Renderer/Shaders/AAPLShaders.metal"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "f16vec4[kNumLayers] colors @raster_order_group(0);",
+            "f16vec4 layerColor = fragmentValues.colors[0];",
+        ],
+        "not_contains": ["rgba8unorm<half4>"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            static constexpr constant short kNumLayers = 4;
+
+            struct TransparentFragmentValues {
+                rgba8unorm<half4> colors [[raster_order_group(0)]] [kNumLayers];
+                half depths [[raster_order_group(0)]] [kNumLayers];
+            };
+
+            fragment half4 blendFragments(
+                TransparentFragmentValues fragmentValues [[imageblock_data]]) {
+                half4 layerColor = fragmentValues.colors[0];
+                return layerColor;
             }
         """
         ),
@@ -873,6 +910,51 @@ EXTERNAL_FIXTURES = [
                     * float4(*(device const half4*)(A + simd_lane_id));
                 xA_tile[tid.x] = acc_a4.x;
                 xA[tid.x] = half(params.rank);
+            }
+        """
+        ),
+    },
+    {
+        "name": "metal_ripple_swiftui_layer_samplerless_sample",
+        "repo_url": METAL_RIPPLE_REPO,
+        "commit": METAL_RIPPLE_COMMIT,
+        "source_path": "MetalRipple/RippleEffect/Ripple.metal",
+        "roundtrip": True,
+        "contains": [
+            "sampler2D layer",
+            "f16vec4 color = texture(layer, newPosition);",
+        ],
+        "not_contains": [
+            "SwiftUI::Layer",
+            "texture(layer, newPosition, )",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            #include <SwiftUI/SwiftUI.h>
+            using namespace metal;
+
+            [[ stitchable ]]
+            half4 Ripple(
+                float2 position,
+                SwiftUI::Layer layer,
+                float2 origin,
+                float time,
+                float amplitude,
+                float frequency,
+                float decay,
+                float speed) {
+                float distance = length(position - origin);
+                float delay = distance / speed;
+                time -= delay;
+                time = max(0.0, time);
+                float rippleAmount =
+                    amplitude * sin(frequency * time) * exp(-decay * time);
+                float2 n = normalize(position - origin);
+                float2 newPosition = position + rippleAmount * n;
+                half4 color = layer.sample(newPosition);
+                color.rgb += 0.3 * (rippleAmount / amplitude) * color.a;
+                return color;
             }
         """
         ),
