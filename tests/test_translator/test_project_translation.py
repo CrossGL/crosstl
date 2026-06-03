@@ -116,18 +116,12 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
         ("gpu/kernel.shader", "cgl")
     ]
     diagnostics = {diagnostic.code: diagnostic for diagnostic in scan.diagnostics}
-    assert set(diagnostics) == {
-        "project.config.include-dirs-not-applied",
-        "project.config.variants-not-applied",
-    }
-    assert diagnostics[
-        "project.config.include-dirs-not-applied"
-    ].missing_capabilities == ["include.resolution"]
+    assert set(diagnostics) == {"project.config.variants-not-applied"}
     assert diagnostics["project.config.variants-not-applied"].missing_capabilities == [
         "macro.variants"
     ]
     payload = scan.to_report(targets=config.targets).to_json()
-    assert payload["diagnosticCounts"]["warning"] == 2
+    assert payload["diagnosticCounts"]["warning"] == 1
     assert {
         diagnostic["location"]["file"] for diagnostic in payload["diagnostics"]
     } == {"crosstl.toml"}
@@ -201,6 +195,59 @@ def test_scan_project_reports_unsupported_source_overrides(tmp_path):
     assert payload["diagnostics"][0]["location"]["file"] == "crosstl.toml"
     assert payload["diagnostics"][0]["missingCapabilities"] == ["source.override"]
     assert "unknown-backend" in payload["diagnostics"][0]["message"]
+
+
+def test_translate_project_applies_include_dirs_and_defines(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir(parents=True)
+    (include_dir / "shared.glsl").write_text(
+        "vec4 project_color() { return vec4(1.0); }\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #ifdef USE_PROJECT_SHARED
+            #include <shared.glsl>
+            #else
+            #error "missing project define"
+            #endif
+
+            layout(location = 0) out vec4 outColor;
+
+            void main()
+            {
+                outColor = project_color();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl"]
+            output_dir = "translated"
+            include_dirs = ["includes"]
+
+            [project.defines]
+            USE_PROJECT_SHARED = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    output = repo / "translated" / "cgl" / "shaders" / "main.cgl"
+
+    assert output.exists()
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnosticCounts"]["error"] == 0
+    assert payload["diagnosticCounts"]["warning"] == 0
+    assert "project_color" in output.read_text(encoding="utf-8")
 
 
 def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_path):

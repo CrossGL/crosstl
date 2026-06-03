@@ -139,6 +139,16 @@ def _artifact_counts_by_target(
     return {target: counts[target] for target in sorted(counts)}
 
 
+def _resolved_include_dirs(config: ProjectConfig) -> list[str]:
+    include_dirs = []
+    for include_dir in config.include_dirs:
+        path = Path(include_dir)
+        if not path.is_absolute():
+            path = config.root / path
+        include_dirs.append(str(path.resolve()))
+    return include_dirs
+
+
 def _config_location(config: ProjectConfig) -> SourceLocation:
     if config.config_path:
         file = (
@@ -237,28 +247,14 @@ class ProjectDiagnostic:
 def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     diagnostics: list[ProjectDiagnostic] = []
     location = _config_location(config)
-    if config.include_dirs:
-        diagnostics.append(
-            ProjectDiagnostic(
-                severity="warning",
-                code="project.config.include-dirs-not-applied",
-                message=(
-                    "Project include directories are recorded in the report but "
-                    "are not applied to backend parser invocations yet."
-                ),
-                location=location,
-                missing_capabilities=["include.resolution"],
-            )
-        )
-    if config.defines or config.variants:
+    if config.variants:
         diagnostics.append(
             ProjectDiagnostic(
                 severity="warning",
                 code="project.config.variants-not-applied",
                 message=(
-                    "Project defines and variants are recorded in the report but "
-                    "variant expansion through backend preprocessors is not "
-                    "implemented yet."
+                    "Project named variants are recorded in the report but variant "
+                    "expansion through backend preprocessors is not implemented yet."
                 ),
                 location=location,
                 missing_capabilities=["macro.variants"],
@@ -631,6 +627,7 @@ def translate_project(
     scan = scan_project(config)
     diagnostics: list[ProjectDiagnostic] = list(scan.diagnostics)
     artifacts: list[dict[str, Any]] = []
+    include_paths = _resolved_include_dirs(config)
 
     for unit in scan.units:
         for target in selected_targets:
@@ -664,6 +661,8 @@ def translate_project(
                     save_shader=str(output_path),
                     format_output=format_output,
                     source_backend=unit.source_backend,
+                    include_paths=include_paths,
+                    defines=config.defines,
                 )
             except Exception as exc:  # noqa: BLE001
                 # Project translation reports per-artifact failures so one bad

@@ -5,7 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional, Sequence
 
 from .translator.codegen import (
     backend_names,
@@ -30,6 +30,9 @@ def translate(
     save_shader: Optional[str] = None,
     format_output: bool = True,
     source_backend: Optional[str] = None,
+    *,
+    include_paths: Optional[Sequence[str]] = None,
+    defines: Optional[Mapping[str, str]] = None,
 ) -> str:
     """Translate a shader file to another language.
 
@@ -40,6 +43,10 @@ def translate(
         format_output (bool, optional): Whether to format the generated code. Defaults to True.
         source_backend (str, optional): Override the source parser instead of inferring it
             from the file extension. Defaults to None.
+        include_paths (Sequence[str], optional): Source parser include search paths.
+            Defaults to None.
+        defines (Mapping[str, str], optional): Source parser preprocessor defines.
+            Defaults to None.
 
     Returns:
         str: The translated shader code
@@ -67,7 +74,12 @@ def translate(
     with open(file_path, encoding="utf-8", errors="replace") as file:
         shader_code = file.read()
 
-    ast = source_spec.parse(shader_code, file_path=file_path)
+    ast = source_spec.parse(
+        shader_code,
+        file_path=file_path,
+        include_paths=include_paths,
+        defines=defines,
+    )
 
     requested_backend = backend
     normalized_backend = normalize_backend_name(requested_backend) or requested_backend

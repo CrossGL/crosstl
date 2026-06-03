@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .lexer import Lexer as CglLexer
 from .parser import Parser as CglParser
@@ -69,12 +69,23 @@ class SourceSpec:
     aliases: Sequence[str] = ()
     shader_type_from_path: Callable[[str], str | None] | None = None
 
-    def parse(self, code: str, file_path: str | None = None):
+    def parse(
+        self,
+        code: str,
+        file_path: str | None = None,
+        *,
+        include_paths: Sequence[str] | None = None,
+        defines: Mapping[str, str] | None = None,
+    ):
         """Parse source code into that source backend's AST."""
         lexer_cls, parser_cls = self.load_lexer_parser()
         lexer_kwargs = {}
         if file_path is not None and _accepts_keyword(lexer_cls, "file_path"):
             lexer_kwargs["file_path"] = file_path
+        if include_paths and _accepts_keyword(lexer_cls, "include_paths"):
+            lexer_kwargs["include_paths"] = list(include_paths)
+        if defines and _accepts_keyword(lexer_cls, "defines"):
+            lexer_kwargs["defines"] = dict(defines)
         lexer = lexer_cls(code, **lexer_kwargs)
         tokens = _extract_tokens(lexer)
         parser_kwargs = {}

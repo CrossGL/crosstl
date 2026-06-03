@@ -82,10 +82,11 @@ configuration contract is intentionally small:
 overrides allow extensionless or non-standard files to be assigned to a
 registered source backend; invalid override backend names are reported as
 configuration diagnostics. Include directories, defines, and variants are
-recorded in project reports; full variant expansion through every native
-preprocessor remains a tracked project-porting capability. Reports emit
-structured warnings when these fields are present but not yet applied during
-backend parser invocation.
+recorded in project reports. Include directories and defines are passed to
+source frontends that expose preprocessor options. Named variant expansion
+through every native preprocessor remains a tracked project-porting capability,
+and reports emit structured warnings when variants are present but not yet
+expanded.
 
 Report Shape
 ------------
