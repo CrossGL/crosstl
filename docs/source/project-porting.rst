@@ -46,6 +46,9 @@ Translate every discovered unit to one or more targets:
      --output-dir crosstl-out \
      --report crosstl-out/portability-report.json
 
+Project translation exits nonzero when the report contains failed artifacts or
+error diagnostics.
+
 Validate artifacts referenced by a report:
 
 .. code-block:: bash
@@ -81,15 +84,16 @@ configuration contract is intentionally small:
    USE_FAST_PATH = "0"
 
 ``source_roots`` limits discovery to selected directories. ``include`` and
-``exclude`` use shell-style patterns against repository-relative paths. Source
-overrides allow extensionless or non-standard files to be assigned to a
-registered source backend; invalid override backend names are reported as
-configuration diagnostics. Include directories, defines, and variants are
-recorded in project reports. Include directories and defines are passed to
-source frontends that expose preprocessor options. Named variant expansion
-through every native preprocessor remains a tracked project-porting capability,
-and reports emit structured warnings when variants are present but not yet
-expanded.
+``exclude`` use shell-style patterns against repository-relative paths. Missing
+source roots and roots that resolve outside the repository are reported as scan
+diagnostics. Source overrides allow extensionless or non-standard files to be
+assigned to a registered source backend; invalid override backend names are
+reported as configuration diagnostics. Include directories, defines, and
+variants are recorded in project reports. Include directories and defines are
+passed to source frontends that expose preprocessor options. Named variant
+expansion through every native preprocessor remains a tracked project-porting
+capability, and reports emit structured warnings when variants are present but
+not yet expanded.
 
 Report Shape
 ------------

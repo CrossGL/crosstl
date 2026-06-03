@@ -84,6 +84,46 @@ def test_scan_project_reports_explicitly_included_unsupported_sources(tmp_path):
     }
 
 
+def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    outside_dir = tmp_path / "outside"
+    shader_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    (shader_dir / "main.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (outside_dir / "external.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders", "missing", "../outside"]
+            include = ["**/*"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report().to_json()
+
+    assert [unit.relative_path for unit in scan.units] == ["shaders/main.cgl"]
+    assert [
+        unit.relative_path for unit in scan.units if "external" in unit.path.name
+    ] == []
+    diagnostics = {
+        diagnostic["code"]: diagnostic for diagnostic in payload["diagnostics"]
+    }
+    assert set(diagnostics) == {
+        "project.config.source-root-outside-project",
+        "project.scan.missing-source-root",
+    }
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 1}
+    assert diagnostics["project.scan.missing-source-root"]["location"]["file"] == (
+        "crosstl.toml"
+    )
+    assert diagnostics["project.config.source-root-outside-project"][
+        "missingCapabilities"
+    ] == ["repo.scan"]
+
+
 def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
@@ -507,6 +547,46 @@ def test_project_cli_translate_project_writes_report(tmp_path):
     assert "Wrote" in result.stdout
     assert payload["summary"]["translatedCount"] == 1
     assert (repo / "out" / "opengl" / "simple.glsl").exists()
+
+
+def test_project_cli_translate_project_fails_on_error_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    outside_dir = tmp_path / "outside"
+    repo.mkdir()
+    outside_dir.mkdir()
+    (outside_dir / "external.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["../outside"]
+            include = ["**/*"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--target",
+            "opengl",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.config.source-root-outside-project"
+    )
 
 
 def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):

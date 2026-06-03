@@ -149,6 +149,13 @@ def _resolved_include_dirs(config: ProjectConfig) -> list[str]:
     return include_dirs
 
 
+def _resolved_source_root(config: ProjectConfig, source_root: str) -> Path:
+    path = Path(source_root)
+    if not path.is_absolute():
+        path = config.root / path
+    return path.resolve()
+
+
 def _config_location(config: ProjectConfig) -> SourceLocation:
     if config.config_path:
         file = (
@@ -260,6 +267,38 @@ def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]
                 missing_capabilities=["macro.variants"],
             )
         )
+    return diagnostics
+
+
+def _source_root_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    location = _config_location(config)
+    for source_root in config.source_roots:
+        absolute_root = _resolved_source_root(config, source_root)
+        if not _is_relative_to(absolute_root, config.root):
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.config.source-root-outside-project",
+                    message=(
+                        f"Configured source root '{source_root}' resolves outside "
+                        f"the repository: {absolute_root}"
+                    ),
+                    location=location,
+                    missing_capabilities=["repo.scan"],
+                )
+            )
+            continue
+        if not absolute_root.exists():
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="warning",
+                    code="project.scan.missing-source-root",
+                    message=f"Configured source root does not exist: {source_root}",
+                    location=location,
+                    missing_capabilities=["repo.scan"],
+                )
+            )
     return diagnostics
 
 
@@ -458,7 +497,9 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
 
     candidates: set[Path] = set()
     for source_root in config.source_roots:
-        absolute_root = (config.root / source_root).resolve()
+        absolute_root = _resolved_source_root(config, source_root)
+        if not _is_relative_to(absolute_root, config.root):
+            continue
         if not absolute_root.exists():
             continue
         for pattern in include_patterns:
@@ -478,6 +519,7 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
     units: list[ProjectTranslationUnit] = []
     skipped: list[dict[str, Any]] = []
     diagnostics: list[ProjectDiagnostic] = _configuration_diagnostics(config)
+    diagnostics.extend(_source_root_diagnostics(config))
 
     for path in _iter_scan_candidates(config):
         try:

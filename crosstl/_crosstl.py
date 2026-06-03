@@ -209,12 +209,14 @@ def _run_translate_project(args):
         format_output=not args.no_format,
         validate=args.validate,
     )
+    payload = report.to_json()
     if args.report:
         report.write_json(Path(args.report))
         print(f"Wrote {args.report}")
     else:
-        _write_json_payload(report.to_json())
-    return 1 if report.to_json()["summary"]["failedCount"] else 0
+        _write_json_payload(payload)
+    summary = payload["summary"]
+    return 1 if summary["failedCount"] or summary["diagnosticCounts"]["error"] else 0
 
 
 def _run_validate_project(args):
