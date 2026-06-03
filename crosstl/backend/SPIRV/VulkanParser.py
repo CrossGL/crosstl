@@ -1259,6 +1259,33 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode == "OpSelect" and len(operands) >= 4:
+                expressions[result_id] = TernaryOpNode(
+                    self.spirv_assembly_operand_expression(
+                        operands[1],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                    self.spirv_assembly_operand_expression(
+                        operands[2],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                    self.spirv_assembly_operand_expression(
+                        operands[3],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             operation = opcode[2:] if opcode.startswith("Op") else opcode
             if (
                 result_id
@@ -1466,9 +1493,6 @@ class VulkanParser:
             return None
 
         storage_class = variable["storage_class"] or pointer_type.get("storage_class")
-        if storage_class not in self.SPIRV_INTERFACE_STORAGE_CLASSES:
-            return None
-
         struct_type_id = pointer_type.get("type_id")
         struct_type = types.get(struct_type_id, {})
         if struct_type.get("kind") != "struct":
@@ -1483,6 +1507,36 @@ class VulkanParser:
             return None
 
         member_key = str(member_index)
+        if storage_class == "Function":
+            member_name = member_names.get(struct_type_id, {}).get(
+                member_key, f"member_{member_key}"
+            )
+            access = MemberAccessNode(
+                self.spirv_assembly_operand_expression(
+                    base_operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                ),
+                member_name,
+            )
+            for index_operand in index_operands[1:]:
+                access = ArrayAccessNode(
+                    access,
+                    self.spirv_assembly_operand_expression(
+                        index_operand,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                )
+            return access
+
+        if storage_class not in self.SPIRV_INTERFACE_STORAGE_CLASSES:
+            return None
+
         member_layout_decorations = [
             (decoration, operands)
             for member, decoration, operands in member_decorations.get(

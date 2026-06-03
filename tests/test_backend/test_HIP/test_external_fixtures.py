@@ -22,6 +22,7 @@ EXTERNAL_FIXTURE_SOURCES = {
             "HIP-Basic/dynamic_shared/main.hip",
             "HIP-Basic/texture_management/main.hip",
             "HIP-Basic/warp_shuffle/main.hip",
+            "HIP-Doc/Tutorials/Programming-Patterns/image_convolution/main.hip",
         ],
     },
     "rocm_examples_inline_assembly": {
@@ -503,3 +504,55 @@ def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
         "// Kernel launch: matrix_transpose_kernel<<<grid_dim, block_dim, "
         "0, hipStreamDefault>>>()"
     ) in crossgl
+
+
+def test_external_rocm_image_convolution_continue_codegen_reparse():
+    source = """
+    __global__ void conv2d(uint8_t *image,
+                           uint8_t *output,
+                           float *mask,
+                           int image_width,
+                           int image_height,
+                           int channels,
+                           int mask_width,
+                           int mask_height) {
+      int x = blockIdx.x * blockDim.x + threadIdx.x;
+      int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+      if (x >= image_width || y >= image_height) {
+        return;
+      }
+
+      for (int c = 0; c < channels; ++c) {
+        float sum = 0.0f;
+
+        for (int i = 0; i < mask_height; i++) {
+          for (int j = 0; j < mask_width; j++) {
+            int image_x = x + j - mask_width / 2;
+            int image_y = y + i - mask_height / 2;
+
+            if (image_x < 0 || image_x >= image_width || image_y < 0 ||
+                image_y >= image_height) {
+              continue;
+            }
+
+            int image_index = (image_y * image_width + image_x) * channels + c;
+            int mask_index = i * mask_width + j;
+            sum += image[image_index] / 255.0f * mask[mask_index];
+          }
+        }
+
+        int output_index = (y * image_width + x) * channels + c;
+        output[output_index] = static_cast<uint8_t>(sum * 255.0f);
+      }
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "@group(0) @binding(0) var<storage, read_write> image: array<u8>" in crossgl
+    assert "for (var c: i32 = 0; (c < channels); (++c))" in crossgl
+    assert "continue;" in crossgl
+    assert "sum += ((image[image_index] / 255.0f) * mask[mask_index]);" in crossgl
+    assert "output[output_index] = u8((sum * 255.0f));" in crossgl
+    assert "static_cast" not in crossgl

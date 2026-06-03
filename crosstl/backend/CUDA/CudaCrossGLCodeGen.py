@@ -4039,6 +4039,10 @@ class CudaToCrossGLConverter:
         if fp16_intrinsic is not None:
             return fp16_intrinsic
 
+        integer_intrinsic = self.format_cuda_integer_intrinsic_call(raw_name, args)
+        if integer_intrinsic is not None:
+            return integer_intrinsic
+
         resource_call = self.format_cuda_resource_call(raw_name, args)
         if resource_call is not None:
             return resource_call
@@ -4129,6 +4133,11 @@ class CudaToCrossGLConverter:
             return f"({args[0]} * {args[1]})"
         if function_name == "__hfma2" and len(args) == 3:
             return f"fma({args[0]}, {args[1]}, {args[2]})"
+        return None
+
+    def format_cuda_integer_intrinsic_call(self, function_name, args):
+        if function_name == "__umul24" and len(args) == 2:
+            return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
         return None
 
     def format_vector_component_access(self, expression, component):

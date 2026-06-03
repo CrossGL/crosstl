@@ -8,6 +8,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "adc996670ec281aa8a4ee131f30b324648cbbe60",
     },
+    "shader-slang/slang-generated": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "3dacd6028f380f3f2ff735516d39a1bdc05aeed2",
+    },
     "shader-slang/optix-examples": {
         "url": "https://github.com/shader-slang/optix-examples",
         "commit": "02fa85ae2f39400ced9a602531aa096589055076",
@@ -205,6 +209,65 @@ EXTERNAL_FIXTURES = [
             "texelFetch(tex, ivec4(int(tid.x), int(tid.y), 0, 0))",
         ],
         "not_contains": ["tex.Load"],
+    },
+    {
+        "id": "slang_texturecubearray_samplelevel",
+        "repo": "shader-slang/slang-generated",
+        "path": (
+            "docs/generated/tests/cross-cutting/core-module/"
+            "texturecubearray-samplelevel.slang"
+        ),
+        "source": (
+            """
+            TextureCubeArray<float4> tex;
+            SamplerState samp;
+            RWStructuredBuffer<float4> outBuf;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void main(uint3 tid : SV_DispatchThreadID)
+            {
+                outBuf[tid.x] =
+                    tex.SampleLevel(samp, float4(1.0, 0.0, 0.0, 0.0), 0.0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "samplerCubeArray tex;",
+            "sampler samp;",
+            "textureLod(tex, samp, vec4(1.0, 0.0, 0.0, 0.0), 0.0)",
+        ],
+        "not_contains": ["tex.SampleLevel"],
+    },
+    {
+        "id": "slang_groupshared_atomic_add",
+        "repo": "shader-slang/slang-generated",
+        "path": (
+            "docs/generated/tests/ir-reference/resources-and-atomics/"
+            "atomic-groupshared-add.slang"
+        ),
+        "source": (
+            """
+            groupshared Atomic<int> gsa;
+            uniform RWStructuredBuffer<int> rwbuf;
+
+            [numthreads(8, 1, 1)]
+            void main(uint3 tid : SV_DispatchThreadID,
+                      uint3 gid : SV_GroupThreadID)
+            {
+                int prev = gsa.add((int)gid.x + 1);
+                rwbuf[tid.x] = prev;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "Atomic<int> gsa;",
+            "RWStructuredBuffer<int> rwbuf;",
+            "int prev = gsa.add(int(gid.x) + 1);",
+            "rwbuf[tid.x] = prev;",
+        ],
     },
     {
         "id": "optix_examples_raygeneration_stages",

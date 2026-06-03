@@ -17,6 +17,7 @@ EXTERNAL_SAMPLES = [
         "paths": [
             "cpp/0_Introduction/simpleAtomicIntrinsics/simpleAtomicIntrinsics_kernel.cuh",
             "cpp/0_Introduction/simpleSurfaceWrite/simpleSurfaceWrite.cu",
+            "cpp/0_Introduction/simpleTexture3D/simpleTexture3D_kernel.cu",
             "cpp/0_Introduction/simpleVoteIntrinsics/simpleVote_kernel.cuh",
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
@@ -415,3 +416,36 @@ def test_cuda_samples_simple_surface_write_texture_object_codegen_reparse():
     assert "gOData[((y * width) + x)] = texture(tex, vec2<f32>(tu, tv));" in crossgl
     assert "surf2Dwrite" not in crossgl
     assert "tex2D<float>" not in crossgl
+
+
+def test_cuda_samples_simple_texture3d_umul24_codegen_reparse():
+    source = """
+    typedef unsigned int uint;
+
+    __global__ void d_render(uint *d_output,
+                             uint imageW,
+                             uint imageH,
+                             float w,
+                             cudaTextureObject_t texObj) {
+        uint x = __umul24(blockIdx.x, blockDim.x) + threadIdx.x;
+        uint y = __umul24(blockIdx.y, blockDim.y) + threadIdx.y;
+
+        float u = x / (float)imageW;
+        float v = y / (float)imageH;
+        float voxel = tex3D<float>(texObj, u, v, w);
+
+        if ((x < imageW) && (y < imageH)) {
+            uint i = __umul24(y, imageW) + x;
+            d_output[i] = voxel * 255;
+        }
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "sampler3D texObj" in crossgl
+    assert "texture(texObj, vec3<f32>(u, v, w))" in crossgl
+    assert "(gl_WorkGroupID.x & 0x00ffffffu)" in crossgl
+    assert "(gl_WorkGroupSize.x & 0x00ffffffu)" in crossgl
+    assert "__umul24" not in crossgl

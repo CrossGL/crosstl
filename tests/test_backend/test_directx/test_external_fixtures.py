@@ -32,6 +32,8 @@ DIRECTX_SHADER_COMPILER_REPO = "https://github.com/microsoft/DirectXShaderCompil
 DIRECTX_SHADER_COMPILER_COMMIT = "517dd5eb5d8cbb46c15fc1230acac1d2f4779092"
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
+FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
+FIDELITYFX_SDK_COMMIT = "e236f2304dcda35f282fdddd085f41e2ff48c86a"
 
 
 EXTERNAL_FIXTURES = [
@@ -442,6 +444,96 @@ EXTERNAL_FIXTURES = [
             "@ register(u0)",
             "imageStore(OutputTexture, pos, textureLod(InputTexture, samLinearClamp, pp, 0.0));",
             "uvec2 gxy = LocalThreadId.xy + uvec2(WorkGroupId.x << 4, WorkGroupId.y << 4);",
+        ),
+    ),
+    ExternalFixture(
+        name="fidelityfx_sdk_autoexposure_atomic_counter",
+        repo=FIDELITYFX_SDK_REPO,
+        commit=FIDELITYFX_SDK_COMMIT,
+        path="Kits/Cauldron2/dx12/framework/shaders/autoexposure.hlsl",
+        code=textwrap.dedent("""
+            RWTexture2D<uint> AutomaticExposureSpdAtomicCounter : register(u0);
+
+            groupshared uint spdCounter;
+
+            void SpdIncreaseAtomicCounter(uint slice)
+            {
+                InterlockedAdd(AutomaticExposureSpdAtomicCounter[int2(0, 0)], 1, spdCounter);
+            }
+
+            uint SpdGetAtomicCounter()
+            {
+                return spdCounter;
+            }
+
+            void SpdResetAtomicCounter(uint slice)
+            {
+                AutomaticExposureSpdAtomicCounter[int2(0, 0)] = 0;
+            }
+
+            [numthreads(64, 1, 1)]
+            void MainCS(uint3 WorkGroupId : SV_GroupID, uint LocalThreadIndex : SV_GroupIndex)
+            {
+                SpdIncreaseAtomicCounter(WorkGroupId.z);
+            }
+        """).strip(),
+        contains=(
+            "uimage2D AutomaticExposureSpdAtomicCounter;",
+            "groupshared uint spdCounter;",
+            "spdCounter = imageAtomicAdd(AutomaticExposureSpdAtomicCounter, ivec2(0, 0), 1u);",
+            "imageStore(AutomaticExposureSpdAtomicCounter, ivec2(0, 0), 0);",
+            "@ numthreads(64, 1, 1)",
+        ),
+    ),
+    ExternalFixture(
+        name="fidelityfx_sdk_taa_tile_cache",
+        repo=FIDELITYFX_SDK_REPO,
+        commit=FIDELITYFX_SDK_COMMIT,
+        path="Kits/Cauldron2/dx12/rendermodules/taa/shaders/taa.hlsl",
+        code=textwrap.dedent("""
+            #define RADIUS 1
+            #define GROUP_SIZE 16
+            #define TILE_DIM (2 * RADIUS + GROUP_SIZE)
+
+            Texture2D ColorBuffer : register(t0);
+            RWTexture2D<float4> OutputBuffer : register(u0);
+
+            groupshared float3 Tile[TILE_DIM * TILE_DIM];
+
+            float3 Reinhard(in float3 hdr)
+            {
+                return hdr / (hdr + 1.0f);
+            }
+
+            float3 Tap(in float2 pos)
+            {
+                return Tile[int(pos.x) + TILE_DIM * int(pos.y)];
+            }
+
+            [numthreads(GROUP_SIZE, GROUP_SIZE, 1)]
+            void FirstCS(uint3 globalID : SV_DispatchThreadID, uint3 localID : SV_GroupThreadID, uint localIndex : SV_GroupIndex, uint3 groupID : SV_GroupID)
+            {
+                const float2 tilePos = localID.xy + RADIUS + 0.5f;
+
+                if (localIndex < TILE_DIM * TILE_DIM / 4)
+                {
+                    const int2 anchor = groupID.xy * GROUP_SIZE - RADIUS;
+                    const int2 coord1 = anchor + int2(localIndex % TILE_DIM, localIndex / TILE_DIM);
+                    const float3 color0 = ColorBuffer[coord1].xyz;
+                    Tile[localIndex] = Reinhard(color0);
+                }
+
+                GroupMemoryBarrierWithGroupSync();
+                const float3 center = Tap(tilePos);
+                OutputBuffer[globalID.xy] = float4(center, 1.0);
+            }
+        """).strip(),
+        contains=(
+            "groupshared vec3 Tile[((2 * 1) + 16) * ((2 * 1) + 16)];",
+            "@ numthreads(16, 16, 1)",
+            "vec3 color0 = ColorBuffer[coord1].xyz;",
+            "workgroupBarrier();",
+            "imageStore(OutputBuffer, globalID.xy, vec4(center, 1.0));",
         ),
     ),
 ]

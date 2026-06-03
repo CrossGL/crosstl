@@ -2528,6 +2528,39 @@ def test_block_expression_statements_are_preserved_in_let_conversion():
         pytest.fail(f"Block expression let conversion failed: {e}")
 
 
+def test_rust_gpu_mouse_shader_untyped_block_expression_let_codegen():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/mouse-shader/src/lib.rs fragment background block.
+    code = """
+    use glam::{Vec3, Vec4, vec2, vec3};
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(frag_coord)] in_frag_coord: Vec4,
+        output: &mut Vec4,
+    ) {
+        let frag_coord = vec2(in_frag_coord.x, in_frag_coord.y);
+        let background = {
+            let v = frag_coord - vec2(400.0, 300.0);
+            let color = vec3(v.x.abs(), v.y.abs(), 1.0);
+            let vignette = smoothstep(1.0, 0.0, (v.x * v.y).abs());
+            color * vignette
+        };
+
+        *output = background.extend(1.0);
+    }
+    """
+    result = parse_and_generate(code)
+
+    assert "auto background;" in result
+    assert "let v = (frag_coord - vec2(400.0, 300.0));" in result
+    assert "background = (color * vignette);" in result
+    assert "\n        background;\n" not in result
+    assert "output = background.extend(1.0);" in result
+
+
 def test_if_expression_result_conversion():
     code = """
     fn test_if_expression() -> i32 {

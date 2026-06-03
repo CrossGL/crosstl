@@ -2609,21 +2609,28 @@ class RustToCrossGLConverter:
     def generate_block_expression_let(self, stmt, indent, loop_contexts=None):
         indent_str = "    " * indent
         code = ""
+        target_name = self.declare_local_alias(stmt.name)
         inferred_type = stmt.vtype or self.infer_value_type(stmt.value)
         if inferred_type:
-            self.add_value_type(stmt.name, inferred_type)
+            self.add_value_type(target_name, inferred_type)
 
         if stmt.vtype:
             code += (
-                f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
+                f"{indent_str}"
+                f"{self.format_typed_declarator(stmt.vtype, target_name)};\n"
+            )
+        elif inferred_type:
+            code += (
+                f"{indent_str}"
+                f"{self.format_typed_declarator(inferred_type, target_name)};\n"
             )
         else:
-            code += f"{indent_str}{stmt.name};\n"
+            code += f"{indent_str}auto {target_name};\n"
 
         code += self.generate_block_expression_result(
             stmt.value,
             indent,
-            stmt.name,
+            target_name,
             loop_contexts,
         )
         return code

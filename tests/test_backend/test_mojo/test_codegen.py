@@ -428,6 +428,50 @@ def test_gpu_fundamentals_launch_keyword_tuple_args_codegen():
     assert "comptime" not in generated_code
 
 
+def test_mojo_gpu_intro_vector_addition_host_buffer_codegen():
+    # Reduced from modular/modular commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # mojo/examples/gpu-intro/vector_addition.mojo host setup and kernel launch.
+    code = """
+    from std.math import ceildiv
+    from std.gpu.host import DeviceContext
+
+    comptime float_dtype = DType.float32
+    comptime vector_size = 1000
+    comptime block_size = 256
+    comptime num_blocks = ceildiv(vector_size, block_size)
+
+    def main() raises:
+        ctx = DeviceContext()
+        lhs_host_buffer = ctx.enqueue_create_host_buffer[float_dtype](vector_size)
+        lhs_device_buffer = ctx.enqueue_create_buffer[float_dtype](vector_size)
+        ctx.enqueue_copy(dst_buf=lhs_device_buffer, src_buf=lhs_host_buffer)
+        ctx.enqueue_function[vector_addition](
+            lhs_tensor,
+            rhs_tensor,
+            result_tensor,
+            grid_dim=num_blocks,
+            block_dim=block_size,
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "// from std.math import ceildiv" in generated_code
+    assert "let float_dtype = DType.float32;" in generated_code
+    assert (
+        "lhs_host_buffer = " "ctx.enqueue_create_host_buffer[float_dtype](vector_size);"
+    ) in generated_code
+    assert (
+        "ctx.enqueue_copy(dst_buf = lhs_device_buffer, " "src_buf = lhs_host_buffer);"
+    ) in generated_code
+    assert (
+        "ctx.enqueue_function[vector_addition]"
+        "(lhs_tensor, rhs_tensor, result_tensor, grid_dim = num_blocks, "
+        "block_dim = block_size);"
+    ) in generated_code
+
+
 def test_modular_histogram_nested_gpu_kernel_metadata_codegen():
     # Reduced from modularml/mojo commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,

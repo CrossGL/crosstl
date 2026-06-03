@@ -187,6 +187,110 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_OPSELECT_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/spv.1.4.OpSelect.frag.out
+; Reduced from Test/spv.1.4.OpSelect.frag OpSelect scalar/vector/matrix/struct cases.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %outv %cond %in1 %in2
+OpExecutionMode %main OriginUpperLeft
+OpName %outv "outv"
+OpName %cond "cond"
+OpName %in1 "in1"
+OpName %in2 "in2"
+OpName %S1 "S1"
+OpMemberName %S1 0 "a"
+OpMemberName %S1 1 "b"
+OpName %fv "fv"
+OpDecorate %outv Location 0
+OpDecorate %cond Flat
+OpDecorate %cond Location 4
+OpDecorate %in1 Flat
+OpDecorate %in1 Location 0
+OpDecorate %in2 Flat
+OpDecorate %in2 Location 2
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%bool = OpTypeBool
+%ptr_output_float = OpTypePointer Output %float
+%ptr_input_int = OpTypePointer Input %int
+%ptr_function_float = OpTypePointer Function %float
+%v4int = OpTypeVector %int 4
+%ptr_function_v4int = OpTypePointer Function %v4int
+%v3float = OpTypeVector %float 3
+%mat3 = OpTypeMatrix %v3float 3
+%ptr_function_mat3 = OpTypePointer Function %mat3
+%S1 = OpTypeStruct %float %int
+%ptr_function_S1 = OpTypePointer Function %S1
+%ptr_input_S1 = OpTypePointer Input %S1
+%one_f = OpConstant %float 1.0
+%two_f = OpConstant %float 2.0
+%zero_i = OpConstant %int 0
+%one_i = OpConstant %int 1
+%two_i = OpConstant %int 2
+%eight_i = OpConstant %int 8
+%twenty_i = OpConstant %int 20
+%five_i = OpConstant %int 5
+%outv = OpVariable %ptr_output_float Output
+%cond = OpVariable %ptr_input_int Input
+%in1 = OpVariable %ptr_input_S1 Input
+%in2 = OpVariable %ptr_input_S1 Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+%iv1 = OpVariable %ptr_function_v4int Function
+%iv2 = OpVariable %ptr_function_v4int Function
+%m1 = OpVariable %ptr_function_mat3 Function
+%m2 = OpVariable %ptr_function_mat3 Function
+%fv = OpVariable %ptr_function_S1 Function
+%loaded_cond = OpLoad %int %cond
+%lt = OpSLessThan %bool %loaded_cond %eight_i
+%selected_float = OpSelect %float %lt %one_f %two_f
+OpStore %outv %selected_float
+%iv1_value = OpCompositeConstruct %v4int %one_i %one_i %one_i %one_i
+OpStore %iv1 %iv1_value
+%iv2_value = OpCompositeConstruct %v4int %two_i %two_i %two_i %two_i
+OpStore %iv2 %iv2_value
+%gt_zero = OpSGreaterThan %bool %loaded_cond %zero_i
+%iv1_loaded = OpLoad %v4int %iv1
+%iv2_loaded = OpLoad %v4int %iv2
+%selected_vec = OpSelect %v4int %gt_zero %iv1_loaded %iv2_loaded
+%selected_component = OpCompositeExtract %int %selected_vec 2
+%component_f = OpConvertSToF %float %selected_component
+%current_outv = OpLoad %float %outv
+%vec_product = OpFMul %float %current_outv %component_f
+OpStore %outv %vec_product
+%col0 = OpConstantComposite %v3float %one_f %one_f %one_f
+%col1 = OpConstantComposite %v3float %two_f %two_f %two_f
+%m1_value = OpConstantComposite %mat3 %col0 %col0 %col0
+%m2_value = OpConstantComposite %mat3 %col1 %col1 %col1
+OpStore %m1 %m1_value
+OpStore %m2 %m2_value
+%lt_twenty = OpSLessThan %bool %loaded_cond %twenty_i
+%m1_loaded = OpLoad %mat3 %m1
+%m2_loaded = OpLoad %mat3 %m2
+%selected_mat = OpSelect %mat3 %lt_twenty %m1_loaded %m2_loaded
+%matrix_component = OpCompositeExtract %float %selected_mat 2 1
+%after_vec = OpLoad %float %outv
+%matrix_product = OpFMul %float %after_vec %matrix_component
+OpStore %outv %matrix_product
+%gt_five = OpSGreaterThan %bool %loaded_cond %five_i
+%in1_loaded = OpLoad %S1 %in1
+%in2_loaded = OpLoad %S1 %in2
+%selected_struct = OpSelect %S1 %gt_five %in1_loaded %in2_loaded
+OpStore %fv %selected_struct
+%field_a = OpAccessChain %ptr_function_float %fv %zero_i
+%a_value = OpLoad %float %field_a
+%after_mat = OpLoad %float %outv
+%struct_product = OpFMul %float %after_mat %a_value
+OpStore %outv %struct_product
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_PUSH_CONSTANT_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -1226,6 +1330,25 @@ def test_glslang_precise_dot_codegen_reparse():
     assert "float4 inputVec @input @location(0);" in generated_code
     assert "outValue = dot(inputVec, inputVec);" in generated_code
     assert "outValue = dot;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_opselect_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_OPSELECT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "outv = ((cond < 8) ? 1.0 : 2.0);" in generated_code
+    assert "outv = (outv * float(((cond > 0) ? iv1 : iv2)[2]));" in generated_code
+    assert "outv = (outv * ((cond < 20) ? m1 : m2)[2][1]);" in generated_code
+    assert "fv = ((cond > 5) ? in1 : in2);" in generated_code
+    assert "outv = (outv * fv.a);" in generated_code
+    assert "selected_float" not in generated_code
+    assert "selected_vec" not in generated_code
+    assert "selected_mat" not in generated_code
+    assert "selected_struct" not in generated_code
+    assert "fv[0]" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
