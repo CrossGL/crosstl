@@ -11,9 +11,11 @@ EXTERNAL_SAMPLES = [
         "commit": "b7c5481c556c3fe98db060207ecaa41a4b9a9abc",
         "paths": [
             "cpp/0_Introduction/simpleSurfaceWrite/simpleSurfaceWrite.cu",
+            "cpp/0_Introduction/simpleVoteIntrinsics/simpleVote_kernel.cuh",
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
             "cpp/3_CUDA_Features/cudaCompressibleMemory/saxpy.cu",
+            "cpp/6_Performance/transpose/transpose.cu",
         ],
     },
     {
@@ -62,6 +64,37 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     )
     assert all(len(sample["commit"]) == 40 for sample in EXTERNAL_SAMPLES)
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
+
+
+def test_cuda_samples_simple_vote_intrinsics_warp_vote_codegen_reparse():
+    source = """
+    __global__ void VoteAnyKernel1(unsigned int *input,
+                                   unsigned int *result,
+                                   int size) {
+        int tx = threadIdx.x;
+
+        int mask = 0xffffffff;
+        result[tx] = __any_sync(mask, input[tx]);
+    }
+
+    __global__ void VoteAllKernel2(unsigned int *input,
+                                   unsigned int *result,
+                                   int size) {
+        int tx = threadIdx.x;
+
+        int mask = 0xffffffff;
+        result[tx] = __all_sync(mask, input[tx]);
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "var tx: i32 = gl_LocalInvocationID.x;" in crossgl
+    assert "cuda warp intrinsic __any_sync(mask, input[tx])" in crossgl
+    assert "cuda warp intrinsic __all_sync(mask, input[tx])" in crossgl
+    assert "__any_sync(mask, input[tx]);" not in crossgl
+    assert "__all_sync(mask, input[tx]);" not in crossgl
 
 
 def test_cuda_samples_scan_cooperative_group_parameter_codegen_reparse():
@@ -114,6 +147,55 @@ def test_cutlass_cute_template_array_bound_in_shared_memory_codegen_reparse():
     assert isinstance(shared, SharedMemoryNode)
     assert shared.vtype == "TA[cosize_v<ASmemLayout>]"
     assert "array<TA, cosize_v<ASmemLayout>>" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_transpose_parenthesized_index_and_shared_tile_codegen_reparse():
+    source = """
+    namespace cg = cooperative_groups;
+    #define TILE_DIM 32
+    #define BLOCK_ROWS 16
+
+    __global__ void transposeNoBankConflicts(float *odata,
+                                             float *idata,
+                                             int width,
+                                             int height) {
+        cg::thread_block cta = cg::this_thread_block();
+        __shared__ float tile[TILE_DIM][TILE_DIM + 1];
+
+        int xIndex = blockIdx.x * TILE_DIM + threadIdx.x;
+        int yIndex = blockIdx.y * TILE_DIM + threadIdx.y;
+        int index_in = xIndex + (yIndex) * width;
+
+        xIndex = blockIdx.y * TILE_DIM + threadIdx.x;
+        yIndex = blockIdx.x * TILE_DIM + threadIdx.y;
+        int index_out = xIndex + (yIndex) * height;
+
+        for (int i = 0; i < TILE_DIM; i += BLOCK_ROWS) {
+            tile[threadIdx.y + i][threadIdx.x] = idata[index_in + i * width];
+        }
+
+        cg::sync(cta);
+
+        for (int i = 0; i < TILE_DIM; i += BLOCK_ROWS) {
+            odata[index_out + i * height] = tile[threadIdx.x][threadIdx.y + i];
+        }
+    }
+    """
+
+    ast = parse_cuda(source)
+    shared = next(
+        stmt for stmt in ast.kernels[0].body if isinstance(stmt, SharedMemoryNode)
+    )
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert shared.vtype == "float[32][(32 + 1)]"
+    assert "var<workgroup> tile: array<array<f32, (32 + 1)>, 32>;" in crossgl
+    assert "var index_in: i32 = (xIndex + (yIndex * width));" in crossgl
+    assert "var index_out: i32 = (xIndex + (yIndex * height));" in crossgl
+    assert "yIndex((*width))" not in crossgl
+    assert "yIndex((*height))" not in crossgl
+    assert "workgroupBarrier();" in crossgl
     assert_crossgl_reparse(crossgl)
 
 

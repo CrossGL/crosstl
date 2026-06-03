@@ -1193,11 +1193,11 @@ class HLSLToCrossGLConverter:
         attributes = self.format_inline_parameter_attributes(parameter)
         if attributes:
             prefixes.append(attributes)
-            qualifier_prefix = self.format_storage_qualifier_prefix(
-                parameter, {"in", "out", "inout", "const"}
-            ).strip()
-            if qualifier_prefix:
-                prefixes.append(qualifier_prefix)
+        qualifier_prefix = self.format_storage_qualifier_prefix(
+            parameter, {"in", "out", "inout", "const"}
+        ).strip()
+        if qualifier_prefix:
+            prefixes.append(qualifier_prefix)
         parameter_name = parameter.name or f"_param{parameter_index}"
         parameter_text = (
             f"{self.map_variable_type(parameter)} {parameter_name}"

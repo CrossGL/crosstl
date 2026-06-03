@@ -848,6 +848,14 @@ class GLSLToCrossGLConverter:
         qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
         return "taskpayloadsharedext" in qualifiers
 
+    def is_buffer_reference_forward_declaration(self, var):
+        if not isinstance(var, VariableNode):
+            return False
+        if getattr(var, "vtype", ""):
+            return False
+        layout = {str(key).lower() for key in getattr(var, "layout", None) or {}}
+        return "buffer" in self._qualifier_set(var) and "buffer_reference" in layout
+
     def variable_qualifier_attribute_suffix(self, var):
         qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
         attributes = [
@@ -1284,6 +1292,8 @@ class GLSLToCrossGLConverter:
 
         # Generate global variables
         for global_var in getattr(node, "global_variables", []) or []:
+            if self.is_buffer_reference_forward_declaration(global_var):
+                continue
             structured_buffer_decl = self.structured_buffer_declaration(global_var)
             if structured_buffer_decl is not None:
                 result += self.indent_str + structured_buffer_decl + ";\n"
@@ -1484,7 +1494,9 @@ class GLSLToCrossGLConverter:
             return f"{self.convert_type(param_type)} {param_name}"
         if isinstance(param, VariableNode):
             declaration = self.generate_variable_declaration(
-                param, array_before_attributes=True
+                param,
+                array_before_attributes=True,
+                memory_qualifier_prefix=False,
             )
             default_value = getattr(param, "default_value", None)
             if default_value is not None:
@@ -2123,7 +2135,11 @@ class GLSLToCrossGLConverter:
         return name in self.RAY_QUERY_TRANSFORM_FUNCTIONS
 
     def generate_variable_declaration(
-        self, node, array_before_attributes=False, array_on_type=False
+        self,
+        node,
+        array_before_attributes=False,
+        array_on_type=False,
+        memory_qualifier_prefix=True,
     ):
         var_type = self.variable_declaration_type(node)
         var_name = node.name
@@ -2133,6 +2149,20 @@ class GLSLToCrossGLConverter:
             prefix_parts.append("shared")
         if getattr(node, "is_const", False) or "const" in qualifiers:
             prefix_parts.append("const")
+        if (
+            memory_qualifier_prefix
+            and not self._is_resource_type(var_type)
+            and "buffer" not in qualifiers
+        ):
+            for qualifier in (
+                "coherent",
+                "volatile",
+                "restrict",
+                "readonly",
+                "writeonly",
+            ):
+                if qualifier in qualifiers:
+                    prefix_parts.append(qualifier)
         interface_prefix = self.interface_qualifier_prefix(node)
         if interface_prefix:
             prefix_parts.append(interface_prefix)

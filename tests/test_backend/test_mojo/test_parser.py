@@ -2075,6 +2075,75 @@ def test_modular_histogram_nested_gpu_kernel_metadata_parse():
     assert [arg.left.name for arg in launch.args[3:]] == ["block_dim", "grid_dim"]
 
 
+def test_modular_vector_addition_nested_gpu_launch_parse():
+    # Reduced from modularml/mojo commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/vector_addition.mojo GPU launch helper.
+    code = """
+    from std.gpu.host import DeviceContext
+    from std.math import ceildiv
+    from std.gpu import block_dim, block_idx, thread_idx
+    from extensibility import InputTensor, ManagedTensorSlice, OutputTensor
+    from std.utils.index import IndexList
+
+    def _vector_addition_gpu(
+        output: ManagedTensorSlice[mut=True, ...],
+        lhs: ManagedTensorSlice[dtype=output.dtype, rank=output.rank, ...],
+        rhs: ManagedTensorSlice[dtype=output.dtype, rank=output.rank, ...],
+        ctx: DeviceContext,
+    ) raises:
+        comptime BLOCK_SIZE = 16
+        var gpu_ctx = ctx
+        var vector_length = output.dim_size(0)
+
+        @parameter
+        def vector_addition_gpu_kernel(length: Int):
+            var tid = block_dim.x * block_idx.x + thread_idx.x
+            if tid < length:
+                var idx = IndexList[output.rank](tid)
+                var result = lhs.load[1](idx) + rhs.load[1](idx)
+                output.store[1](idx, result)
+
+        var num_blocks = ceildiv(vector_length, BLOCK_SIZE)
+        gpu_ctx.enqueue_function[vector_addition_gpu_kernel](
+            vector_length, grid_dim=num_blocks, block_dim=BLOCK_SIZE
+        )
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "_vector_addition_gpu")
+    block_size, gpu_ctx, vector_length, kernel, num_blocks, launch = function.body
+
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("output", "ManagedTensorSlice[mut=true, ...]"),
+        ("lhs", "ManagedTensorSlice[dtype=output.dtype, rank=output.rank, ...]"),
+        ("rhs", "ManagedTensorSlice[dtype=output.dtype, rank=output.rank, ...]"),
+        ("ctx", "DeviceContext"),
+    ]
+    assert block_size.name == "BLOCK_SIZE"
+    assert getattr(block_size, "is_comptime", False)
+    assert gpu_ctx.name == "gpu_ctx"
+    assert vector_length.name == "vector_length"
+
+    assert isinstance(kernel, FunctionNode)
+    assert kernel.name == "vector_addition_gpu_kernel"
+    assert [attr.name for attr in kernel.attributes] == ["parameter"]
+    assert kernel.params[0].name == "length"
+    assert kernel.body[0].name == "tid"
+    assert isinstance(kernel.body[0].initial_value, BinaryOpNode)
+    assert isinstance(kernel.body[1], IfNode)
+    assert kernel.body[1].condition.op == "<"
+    store_call = kernel.body[1].if_body[2]
+    assert isinstance(store_call.callee, ArrayAccessNode)
+    assert store_call.callee.array.member == "store"
+    assert store_call.callee.index == "1"
+
+    assert num_blocks.name == "num_blocks"
+    assert launch.callee.array.member == "enqueue_function"
+    assert launch.callee.index.name == "vector_addition_gpu_kernel"
+    assert [arg.left.name for arg in launch.args[1:]] == ["grid_dim", "block_dim"]
+
+
 def test_variable_declarations_parsing():
     code = """
     fn main():

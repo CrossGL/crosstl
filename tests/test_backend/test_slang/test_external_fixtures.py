@@ -8,9 +8,17 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "adc996670ec281aa8a4ee131f30b324648cbbe60",
     },
+    "shader-slang/optix-examples": {
+        "url": "https://github.com/shader-slang/optix-examples",
+        "commit": "02fa85ae2f39400ced9a602531aa096589055076",
+    },
     "NVIDIAGameWorks/Falcor": {
         "url": "https://github.com/NVIDIAGameWorks/Falcor",
         "commit": "eb540f6748774680ce0039aaf3ac9279266ec521",
+    },
+    "HenriMichelon/vireo_samples": {
+        "url": "https://github.com/HenriMichelon/vireo_samples",
+        "commit": "e2d788909cc73a7f515380792796cebaaed53a7e",
     },
     "NVIDIAGameWorks/RTXGI": {
         "url": "https://github.com/NVIDIAGameWorks/RTXGI",
@@ -199,6 +207,57 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["tex.Load"],
     },
     {
+        "id": "optix_examples_raygeneration_stages",
+        "repo": "shader-slang/optix-examples",
+        "path": "example02_pipelineAndRayGen/devicePrograms.slang",
+        "source": (
+            """
+            int frameID;
+            RWStructuredBuffer<uint> colorBuffer;
+            int2 fbSize;
+
+            [shader("closesthit")]
+            void closesthit_radiance()
+            {
+            }
+
+            [shader("anyhit")]
+            void anyhit_radiance()
+            {
+            }
+
+            [shader("miss")]
+            void miss_radiance()
+            {
+            }
+
+            [shader("raygeneration")]
+            void renderFrame()
+            {
+                const int ix = DispatchRaysIndex().x;
+                const int iy = DispatchRaysIndex().y;
+                const int r = (ix % 256);
+                const int g = (iy % 256);
+                const int b = ((ix + iy) % 256);
+                const uint rgba = 0xff000000
+                    | (r << 0) | (g << 8) | (b << 16);
+                const uint fbIndex = ix + iy * fbSize.x;
+                colorBuffer[fbIndex] = rgba;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "ray_closest_hit {",
+            "ray_any_hit {",
+            "ray_miss {",
+            "ray_generation {",
+            "int b = (ix + iy) % 256;",
+            "uint rgba = 0xff000000 | r << 0 | g << 8 | b << 16;",
+            "colorBuffer[fbIndex] = rgba;",
+        ],
+    },
+    {
         "id": "falcor_pixel_stats_resource_array",
         "repo": "NVIDIAGameWorks/Falcor",
         "path": "Source/Falcor/Rendering/Utils/PixelStats.cs.slang",
@@ -235,6 +294,60 @@ EXTERNAL_FIXTURES = [
             "sampler2D gStatsRayCount[uint(PixelStatsRayType::Count)];",
             "image2D gStatsRayCountTotal;",
             "totalRays += gStatsRayCount[i][pixel];",
+        ],
+    },
+    {
+        "id": "vireo_samples_constantbuffer_gbuffer_sampling",
+        "repo": "HenriMichelon/vireo_samples",
+        "path": "src/shaders/deferred_lighting.frag.slang",
+        "source": (
+            """
+            struct VertexOutput {
+                float4 position : SV_POSITION;
+                float2 uv : TEXCOORD;
+            };
+
+            struct Global {
+                float exposure;
+            };
+
+            struct Light {
+                float3 color;
+            };
+
+            ConstantBuffer<Global> global : register(b0);
+            ConstantBuffer<Light> light : register(b1);
+            Texture2D positionBuffer : register(t2);
+            SamplerState sampler : register(SAMPLER_NEAREST_BORDER, space1);
+
+            float3 calcLighting(Global global, Light light, float3 worldPos)
+            {
+                return light.color * global.exposure;
+            }
+
+            float4 fragmentMain(VertexOutput input) : SV_TARGET
+            {
+                float3 worldPos =
+                    positionBuffer.Sample(sampler, input.uv).rgb;
+                float3 lit = calcLighting(global, light, worldPos);
+                return float4(lit, 1.0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "ConstantBuffer<Global> global_ @register(b0);",
+            "ConstantBuffer<Light> light @register(b1);",
+            "sampler2D positionBuffer @register(t2);",
+            "sampler sampler_;",
+            "vec3 worldPos = texture(positionBuffer, sampler_, input.uv).rgb;",
+            "vec3 lit = calcLighting(global_, light, worldPos);",
+            "return vec4(lit, 1.0);",
+        ],
+        "not_contains": [
+            "@register(SAMPLER_NEAREST_BORDER, space1)",
+            "positionBuffer.Sample",
+            "global.exposure",
         ],
     },
     {

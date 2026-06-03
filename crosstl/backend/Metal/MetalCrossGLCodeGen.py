@@ -1598,6 +1598,11 @@ class MetalToCrossGLConverter:
             suffix = base[-1] + suffix
             base = base[:-1].strip()
 
+        vector_type = self.metal_vector_type_parts(base)
+        if vector_type:
+            element_type, size = vector_type
+            return f"{self.map_generic_vector_type(element_type, size)}{suffix}"
+
         # Normalize generic access qualifiers: texture2d<float, access::read_write>
         if "<" in base and ">" in base:
             base_name, inner = base.split("<", 1)
@@ -1621,6 +1626,32 @@ class MetalToCrossGLConverter:
         if base_name != "array" or len(generic_args) < 2:
             return None
         return generic_args[0].strip(), generic_args[1].strip()
+
+    def metal_vector_type_parts(self, metal_type):
+        base_name, generic_args = self.generic_type_parts(metal_type)
+        if base_name not in {"vec", "vector"} or len(generic_args) < 2:
+            return None
+        return generic_args[0].strip(), generic_args[1].strip()
+
+    def map_generic_vector_type(self, element_type, size):
+        size = str(size).strip()
+        mapped_element = self.map_type(element_type)
+        prefixes = {
+            "float": "vec",
+            "float16": "f16vec",
+            "double": "dvec",
+            "int": "ivec",
+            "uint": "uvec",
+            "int16": "i16vec",
+            "uint16": "u16vec",
+            "int8": "i8vec",
+            "uint8": "u8vec",
+            "bool": "bvec",
+        }
+        prefix = prefixes.get(mapped_element)
+        if prefix and size in {"2", "3", "4"}:
+            return f"{prefix}{size}"
+        return f"vec<{mapped_element}, {size}>"
 
     def normalized_metal_type(self, metal_type):
         if not metal_type:

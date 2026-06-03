@@ -909,7 +909,7 @@ class SlangToCrossGLConverter:
                 append_metadata("push_constant", "@push_constant")
 
         register_name = getattr(node, "register", None)
-        if self.should_emit_register_metadata(register_name):
+        if self.should_emit_register_metadata(register_name, node):
             register_arguments = self.format_register_metadata_arguments(register_name)
             append_metadata("register", f"@register({register_arguments})")
 
@@ -954,11 +954,19 @@ class SlangToCrossGLConverter:
             parts.append("".join(current).strip())
         return parts
 
-    def should_emit_register_metadata(self, register_name):
+    def should_emit_register_metadata(self, register_name, node=None):
         if not register_name:
             return False
         register_name = str(register_name).strip().lower()
-        return re.match(r"^[tsu]\d", register_name) is not None
+        if re.match(r"^[tsu]\d", register_name):
+            return True
+        if not re.match(r"^b\d", register_name):
+            return False
+        node_type = getattr(node, "vtype", None)
+        if not node_type:
+            return False
+        base_type = str(node_type).strip().split("<", 1)[0].strip()
+        return base_type in {"ConstantBuffer", "ParameterBlock"}
 
     def format_register_metadata_arguments(self, register_name):
         return ", ".join(self.split_top_level_commas(str(register_name)))

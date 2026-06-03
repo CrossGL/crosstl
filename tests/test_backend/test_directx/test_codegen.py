@@ -742,8 +742,8 @@ def test_brace_initializer_declarations_generate_crossgl():
 
     assert "RayDesc myRay = {origin, 0.0, rayDir, 10000.0};" in output
     assert "MyPayload payload = {0};" in output
-    assert "void main(MyPayload payload @ payload)" in output
-    assert "BuiltInTriangleIntersectionAttributes attr @ hit_attribute" in output
+    assert "void main(inout MyPayload payload @ payload)" in output
+    assert "in BuiltInTriangleIntersectionAttributes attr @ hit_attribute" in output
     parse_crossgl(output)
 
 

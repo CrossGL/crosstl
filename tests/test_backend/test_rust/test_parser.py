@@ -1143,6 +1143,85 @@ def test_rust_gpu_reduce_subgroup_builtins_parse_from_upstream_example():
     ]
 
 
+def test_rust_gpu_compute_collatz_option_chain_parse_from_upstream_example():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/compute-shader/src/lib.rs Collatz compute entry point.
+    code = """
+    use glam::UVec3;
+    use spirv_std::{glam, spirv};
+
+    pub fn collatz(mut n: u32) -> Option<u32> {
+        let mut i = 0;
+        if n == 0 {
+            return None;
+        }
+        while n != 1 {
+            n = if n.is_multiple_of(2) {
+                n / 2
+            } else {
+                if n >= 0x5555_5555 {
+                    return None;
+                }
+                3 * n + 1
+            };
+            i += 1;
+        }
+        Some(i)
+    }
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(global_invocation_id)] id: UVec3,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 0)]
+        prime_indices: &mut [u32],
+    ) {
+        let index = id.x as usize;
+        prime_indices[index] = collatz(prime_indices[index]).unwrap_or(u32::MAX);
+    }
+    """
+
+    ast = parse_code(code)
+    collatz, main_cs = ast.functions
+
+    assert collatz.name == "collatz"
+    assert collatz.return_type == "Option<u32>"
+    assert [(param.name, param.vtype) for param in collatz.params] == [("n", "u32")]
+    assert isinstance(collatz.body[2], WhileNode)
+    loop_assign = collatz.body[2].body[0]
+    assert isinstance(loop_assign, AssignmentNode)
+    assert isinstance(loop_assign.right, IfNode)
+    assert isinstance(loop_assign.right.condition, FunctionCallNode)
+    assert loop_assign.right.condition.name.member == "is_multiple_of"
+
+    assert main_cs.attributes[0].args == [
+        "compute",
+        "(",
+        "threads",
+        "(",
+        "64",
+        ")",
+        ")",
+    ]
+    assert [(param.name, param.vtype) for param in main_cs.params] == [
+        ("id", "UVec3"),
+        ("prime_indices", "&mut u32[]"),
+    ]
+    assert [param.attributes[0].args[0] for param in main_cs.params] == [
+        "global_invocation_id",
+        "storage_buffer",
+    ]
+    output_assignment = main_cs.body[1]
+    assert isinstance(output_assignment.left, ArrayAccessNode)
+    assert output_assignment.left.array == "prime_indices"
+    unwrap_call = output_assignment.right
+    assert isinstance(unwrap_call.name, MemberAccessNode)
+    assert unwrap_call.name.member == "unwrap_or"
+    assert isinstance(unwrap_call.name.object, FunctionCallNode)
+    assert unwrap_call.name.object.name == "collatz"
+    assert unwrap_call.args == ["u32::MAX"]
+
+
 def test_restricted_visibility_parsing():
     code = """
     #[inline]

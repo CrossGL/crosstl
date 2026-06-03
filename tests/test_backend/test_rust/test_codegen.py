@@ -590,6 +590,61 @@ def test_rust_gpu_reduce_subgroup_builtins_codegen_from_upstream_example():
     assert "output[workgroup_id_x] = sum_;" in result
 
 
+def test_rust_gpu_compute_collatz_option_chain_codegen_from_upstream_example():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/compute-shader/src/lib.rs Collatz compute entry point.
+    code = """
+    use glam::UVec3;
+    use spirv_std::{glam, spirv};
+
+    pub fn collatz(mut n: u32) -> Option<u32> {
+        let mut i = 0;
+        if n == 0 {
+            return None;
+        }
+        while n != 1 {
+            n = if n.is_multiple_of(2) {
+                n / 2
+            } else {
+                if n >= 0x5555_5555 {
+                    return None;
+                }
+                3 * n + 1
+            };
+            i += 1;
+        }
+        Some(i)
+    }
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(global_invocation_id)] id: UVec3,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 0)]
+        prime_indices: &mut [u32],
+    ) {
+        let index = id.x as usize;
+        prime_indices[index] = collatz(prime_indices[index]).unwrap_or(u32::MAX);
+    }
+    """
+    result = parse_and_generate(code)
+
+    assert "// use spirv_std::{glam, spirv}" in result
+    assert "Option<u32> collatz(uint n)" in result
+    assert "if (((n % 2) == 0))" in result
+    assert "return Some(i);" in result
+    assert "compute main_cs {" in result
+    assert "void main(uvec3 id @ gl_GlobalInvocationID" in result
+    assert "uint prime_indices[] @ set(0) @ binding(0)" in result
+    assert "@numthreads(64, 1, 1)" in result
+    assert "let index = (uint)id.x;" in result
+    assert (
+        "prime_indices[index] = collatz(prime_indices[index]).unwrap_or(u32::MAX);"
+        in result
+    )
+    assert "Unhandled statement type" not in result
+
+
 def test_rust_shader_stage_local_aliases_shadow_parameter_after_initializer(tmp_path):
     code = """
     #[vertex_shader]

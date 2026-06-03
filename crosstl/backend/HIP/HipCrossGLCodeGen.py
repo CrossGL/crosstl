@@ -4105,6 +4105,7 @@ class HipToCrossGLConverter:
             if hasattr(node, "params") and node.params:
                 for param in node.params:
                     self.register_unique_ptr_parameter(param)
+                    self.register_cooperative_group_parameter(param)
             if hasattr(node, "body") and node.body:
                 try:
                     if isinstance(node.body, list):
@@ -4202,6 +4203,7 @@ class HipToCrossGLConverter:
                 if hasattr(kernel, "params") and kernel.params:
                     for param in kernel.params:
                         self.register_unique_ptr_parameter(param)
+                        self.register_cooperative_group_parameter(param)
                 try:
                     if isinstance(kernel.body, list):
                         for stmt in kernel.body:
@@ -4410,6 +4412,18 @@ class HipToCrossGLConverter:
     def register_cooperative_group_name(self, name, group_metadata):
         if name:
             self.cooperative_group_scopes[-1][name] = group_metadata
+
+    def register_cooperative_group_parameter(self, param):
+        if isinstance(param, dict):
+            name = param.get("name", "")
+            type_name = param.get("type", "")
+        else:
+            name = getattr(param, "name", "")
+            type_name = getattr(param, "vtype", "")
+
+        metadata = self.cooperative_group_metadata_from_type(type_name)
+        if metadata is not None:
+            self.register_cooperative_group_name(name, metadata)
 
     def lookup_cooperative_group_metadata(self, name):
         for scope in reversed(self.cooperative_group_scopes):
@@ -4768,6 +4782,7 @@ class HipToCrossGLConverter:
         base_type, template_args = self.parse_cpp_template(type_name)
         base_name = self.cooperative_group_base_name(type_name)
         if base_name in {
+            "thread_group",
             "thread_block",
             "grid_group",
             "multi_grid_group",
@@ -4808,6 +4823,15 @@ class HipToCrossGLConverter:
                 if parent is not None:
                     metadata["parent_kind"] = parent["kind"]
         return metadata
+
+    def convert_cooperative_group_type(self, hip_type):
+        metadata = self.cooperative_group_metadata_from_type(hip_type)
+        if metadata is None:
+            return None
+        group_kind = metadata["kind"]
+        if group_kind == "thread_block_tile" and metadata.get("tile_size"):
+            return f"cooperative_groups_thread_block_tile_{metadata['tile_size']}"
+        return f"cooperative_groups_{group_kind}"
 
     def resolve_cooperative_group_metadata(self, expression):
         name = self.simple_identifier(expression)
@@ -5814,6 +5838,9 @@ class HipToCrossGLConverter:
             hip_type = str(hip_type)
 
         hip_type = self.strip_type_qualifiers(hip_type)
+        cooperative_group_type = self.convert_cooperative_group_type(hip_type)
+        if cooperative_group_type is not None:
+            return cooperative_group_type
 
         type_mapping = {
             # Basic types

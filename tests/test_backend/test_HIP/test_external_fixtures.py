@@ -16,6 +16,8 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
         "paths": [
             "HIP-Basic/bit_extract/main.hip",
+            "HIP-Basic/cooperative_groups/main.hip",
+            "HIP-Basic/device_globals/main.hip",
             "HIP-Basic/dynamic_shared/main.hip",
             "HIP-Basic/texture_management/main.hip",
             "HIP-Basic/warp_shuffle/main.hip",
@@ -51,6 +53,147 @@ def assert_crossgl_reparses(source):
     ast, crossgl = generate_crossgl_from_hip(source)
     CrossGLParser(CrossGLLexer(crossgl).tokens).parse()
     return ast, crossgl
+
+
+def test_external_rocm_device_globals_symbol_api_codegen_reparse():
+    source = """
+    constexpr unsigned int device_array_size = 16;
+    __device__ float global;
+    __device__ float global_array[device_array_size];
+
+    __global__ void test_globals_kernel(float* out,
+                                        const float* in,
+                                        const size_t size) {
+        const unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+        if(tid < size) {
+            out[tid] = in[tid] + global + global_array[tid % device_array_size];
+        }
+    }
+
+    void host(float* d_out, float* d_in, size_t size, size_t size_bytes) {
+        void* d_global{};
+        size_t global_size_bytes{};
+        HIP_CHECK(hipGetSymbolAddress(&d_global, HIP_SYMBOL(global)));
+        HIP_CHECK(hipGetSymbolSize(&global_size_bytes, HIP_SYMBOL(global)));
+        HIP_CHECK(hipMemcpyToSymbol(HIP_SYMBOL(global_array), d_in, size_bytes));
+        test_globals_kernel<<<dim3(64), dim3(1), 0, hipStreamDefault>>>(
+            d_out,
+            d_in,
+            size);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    global_var = ast.statements[1]
+    global_array = ast.statements[2]
+    assert isinstance(global_var, VariableNode)
+    assert set(global_var.qualifiers) == {"__device__"}
+    assert global_array.vtype == "float[device_array_size]"
+    assert "var global_array: array<f32, device_array_size>;" in crossgl
+    assert (
+        "var tid: u32 = ((gl_WorkGroupSize.x * gl_WorkGroupID.x) + "
+        "gl_LocalInvocationID.x);"
+    ) in crossgl
+    assert "in_[tid] + global" in crossgl
+    assert (
+        "// HIP get symbol address: output: d_global, symbol: HIP_SYMBOL(global)"
+        in crossgl
+    )
+    assert (
+        "// HIP get symbol size: output: global_size_bytes, symbol: HIP_SYMBOL(global)"
+        in crossgl
+    )
+    assert (
+        "// HIP symbol copy to: HIP_SYMBOL(global_array), source: d_in, "
+        "bytes: size_bytes"
+    ) in crossgl
+    assert (
+        "// Kernel launch: test_globals_kernel<<<vec3<u32>(64), vec3<u32>(1), "
+        "0, hipStreamDefault>>>()"
+    ) in crossgl
+
+
+def test_external_rocm_cooperative_groups_thread_group_parameter_codegen_reparse():
+    source = """
+    using namespace cooperative_groups;
+
+    __device__ unsigned int reduce_sum(thread_group g,
+                                       unsigned int* x,
+                                       unsigned int val) {
+        const unsigned int group_thread_id = g.thread_rank();
+
+        for(unsigned int i = g.size() / 2; i > 0; i /= 2) {
+            x[group_thread_id] = val;
+            g.sync();
+
+            if(group_thread_id < i) {
+                val += x[group_thread_id + i];
+            }
+
+            g.sync();
+        }
+
+        if(g.thread_rank() == 0)
+            return val;
+        else
+            return 0;
+    }
+
+    template<unsigned int PartitionSize>
+    __global__ void vector_reduce_kernel(const unsigned int* d_vector,
+                                         unsigned int* d_block_reduced_vector,
+                                         unsigned int* d_partition_reduced_vector) {
+        thread_block thread_block_group = this_thread_block();
+        __shared__ unsigned int workspace[2048];
+        unsigned int output;
+
+        const unsigned int input = d_vector[thread_block_group.thread_rank()];
+        output = reduce_sum(thread_block_group, workspace, input);
+
+        if(thread_block_group.thread_rank() == 0) {
+            d_block_reduced_vector[0] = output;
+        }
+
+        thread_block_tile<PartitionSize> custom_partition
+            = tiled_partition<PartitionSize>(thread_block_group);
+        const unsigned int group_offset
+            = thread_block_group.thread_rank() - custom_partition.thread_rank();
+        output = reduce_sum(custom_partition, &workspace[group_offset], input);
+
+        if(custom_partition.thread_rank() == 0) {
+            const unsigned int partition_id
+                = thread_block_group.thread_rank() / PartitionSize;
+            d_partition_reduced_vector[partition_id] = output;
+        }
+        return;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    reduce_sum = ast.statements[0]
+
+    assert reduce_sum.params[0]["type"] == "thread_group"
+    assert (
+        "u32 reduce_sum(cooperative_groups_thread_group g, ptr<u32> x, u32 val)"
+        in crossgl
+    )
+    assert (
+        "cooperative_groups thread_group.thread_rank not directly supported" in crossgl
+    )
+    assert "cooperative_groups thread_group.size not directly supported" in crossgl
+    assert "cooperative_groups thread_group.sync not directly supported" in crossgl
+    assert (
+        "cooperative_groups thread_block thread_block_group maps to the current "
+        "workgroup"
+    ) in crossgl
+    assert (
+        "cooperative_groups thread_block_tile<PartitionSize> custom_partition"
+        in crossgl
+    )
+    assert "var<workgroup> workspace: array<u32, 2048>;" in crossgl
+    assert "g.sync()" not in crossgl
+    assert "g.thread_rank()" not in crossgl
 
 
 def test_external_rocm_saxpy_kernel_launch_crossgl_reparse():

@@ -481,6 +481,63 @@ def test_modular_histogram_nested_gpu_kernel_metadata_codegen():
     assert "Unhandled statement type: FunctionNode" not in generated_code
 
 
+def test_modular_vector_addition_nested_gpu_launch_codegen():
+    # Reduced from modularml/mojo commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/examples/custom_ops/kernels/vector_addition.mojo GPU launch helper.
+    code = """
+    from std.gpu.host import DeviceContext
+    from std.math import ceildiv
+    from std.gpu import block_dim, block_idx, thread_idx
+    from extensibility import InputTensor, ManagedTensorSlice, OutputTensor
+    from std.utils.index import IndexList
+
+    def _vector_addition_gpu(
+        output: ManagedTensorSlice[mut=True, ...],
+        lhs: ManagedTensorSlice[dtype=output.dtype, rank=output.rank, ...],
+        rhs: ManagedTensorSlice[dtype=output.dtype, rank=output.rank, ...],
+        ctx: DeviceContext,
+    ) raises:
+        comptime BLOCK_SIZE = 16
+        var gpu_ctx = ctx
+        var vector_length = output.dim_size(0)
+
+        @parameter
+        def vector_addition_gpu_kernel(length: Int):
+            var tid = block_dim.x * block_idx.x + thread_idx.x
+            if tid < length:
+                var idx = IndexList[output.rank](tid)
+                var result = lhs.load[1](idx) + rhs.load[1](idx)
+                output.store[1](idx, result)
+
+        var num_blocks = ceildiv(vector_length, BLOCK_SIZE)
+        gpu_ctx.enqueue_function[vector_addition_gpu_kernel](
+            vector_length, grid_dim=num_blocks, block_dim=BLOCK_SIZE
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "// from std.gpu import block_dim, block_idx, thread_idx" in generated_code
+    assert (
+        "void _vector_addition_gpu(ManagedTensorSlice[mut=true, ...] output, "
+        "ManagedTensorSlice[dtype=output.dtype, rank=output.rank, ...] lhs, "
+        "ManagedTensorSlice[dtype=output.dtype, rank=output.rank, ...] rhs, "
+        "DeviceContext ctx)"
+    ) in generated_code
+    assert "let BLOCK_SIZE = 16;" in generated_code
+    assert "var vector_length = output.dim_size(0);" in generated_code
+    assert "void vector_addition_gpu_kernel(int length) @ parameter" in generated_code
+    assert "var tid = ((block_dim.x * block_idx.x) + thread_idx.x);" in generated_code
+    assert "var idx = IndexList[output.rank](tid);" in generated_code
+    assert "output.store[1](idx, result);" in generated_code
+    assert (
+        "gpu_ctx.enqueue_function[vector_addition_gpu_kernel]"
+        "(vector_length, grid_dim = num_blocks, block_dim = BLOCK_SIZE);"
+    ) in generated_code
+    assert "Unhandled statement type: FunctionNode" not in generated_code
+
+
 def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
     code = """
     def matmul_idiomatic_tiled[

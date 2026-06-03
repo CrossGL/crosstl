@@ -3714,12 +3714,34 @@ class HipParser:
             and self.tokens[type_end + 1].type in {"COMMA", "RPAREN", "SEMICOLON"}
         ):
             return False
+        if self.is_unknown_identifier_cast_followed_by_ambiguous_unary(
+            type_start, type_end
+        ):
+            return False
         return (
             type_end is not None
             and type_end < len(self.tokens)
             and self.tokens[type_end].type == "RPAREN"
             and self.is_cast_type_sequence(type_start, type_end)
         )
+
+    def is_unknown_identifier_cast_followed_by_ambiguous_unary(self, start, end):
+        if end is None or end >= len(self.tokens):
+            return False
+
+        type_tokens = [
+            token for token in self.tokens[start:end] if token.type != "NEWLINE"
+        ]
+        if len(type_tokens) != 1 or type_tokens[0].type != "IDENTIFIER":
+            return False
+        if self.is_identifier_type_name(type_tokens[0].value):
+            return False
+
+        operand_index = self.skip_newlines_at_pos(end + 1)
+        return operand_index < len(self.tokens) and self.tokens[operand_index].type in {
+            "STAR",
+            "AMPERSAND",
+        }
 
     def is_cast_type_sequence(self, start, end):
         index = start

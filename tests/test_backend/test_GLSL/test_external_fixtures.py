@@ -342,6 +342,45 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    ExternalFixture(
+        name="vulkan-samples-buffer-device-address-reference-compute",
+        repo=VULKAN_SAMPLES_REPO,
+        commit=VULKAN_SAMPLES_COMMIT,
+        path="shaders/buffer_device_address/glsl/update_vbo.comp",
+        shader_type="compute",
+        code=textwrap.dedent("""
+            #version 450
+            #extension GL_EXT_buffer_reference : require
+
+            layout(local_size_x = 8, local_size_y = 8) in;
+
+            layout(buffer_reference) buffer Position;
+
+            layout(std430, buffer_reference, buffer_reference_align = 8) writeonly buffer Position
+            {
+                vec2 positions[];
+            };
+
+            layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer PositionReferences
+            {
+                Position buffers[];
+            };
+
+            layout(push_constant) uniform Registers
+            {
+                PositionReferences references;
+                float fract_time;
+            } registers;
+
+            void main()
+            {
+                uint local_index = gl_GlobalInvocationID.x;
+                uint slice = gl_WorkGroupID.z;
+                restrict Position positions = registers.references.buffers[slice];
+                positions.positions[local_index] = vec2(fract(registers.fract_time));
+            }
+        """).strip(),
+    ),
 ]
 
 
@@ -447,6 +486,45 @@ def test_parse_vulkan_samples_base_frag_push_constants_fixture():
     assert spot_count.value.value == "0U"
 
 
+def test_parse_vulkan_samples_buffer_device_address_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "vulkan-samples-buffer-device-address-reference-compute"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    forward_decl = next(var for var in ast.global_variables if var.name == "Position")
+    position = next(struct for struct in ast.structs if struct.name == "Position")
+    references = next(
+        struct for struct in ast.structs if struct.name == "PositionReferences"
+    )
+    registers = next(var for var in ast.uniforms if var.name == "registers")
+    local_alias = next(
+        statement
+        for statement in ast.functions[0].body
+        if getattr(statement, "name", None) == "positions"
+    )
+
+    assert forward_decl.vtype == ""
+    assert forward_decl.qualifiers == ["buffer"]
+    assert forward_decl.layout == {"buffer_reference": None}
+    assert position.interface_layout == {
+        "std430": None,
+        "buffer_reference": None,
+        "buffer_reference_align": "8",
+    }
+    assert position.interface_qualifiers == ["writeonly", "buffer"]
+    assert position.members[0].name == "positions"
+    assert position.members[0].is_array is True
+    assert references.interface_qualifiers == ["readonly", "buffer"]
+    assert references.members[0].vtype == "Position"
+    assert registers.vtype == "Registers"
+    assert registers.layout == {"push_constant": None}
+    assert local_alias.vtype == "Position"
+    assert local_alias.qualifiers == ["restrict"]
+
+
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda fixture: fixture.name)
 def test_codegen_external_glsl_fixture_to_parseable_crossgl(fixture):
     crossgl = generate_crossgl(fixture.code, fixture.shader_type)
@@ -454,3 +532,22 @@ def test_codegen_external_glsl_fixture_to_parseable_crossgl(fixture):
     assert "#version" in crossgl
     assert fixture.shader_type in crossgl
     assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_vulkan_samples_buffer_device_address_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "vulkan-samples-buffer-device-address-reference-compute"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "struct Position {" in crossgl
+    assert "vec2 positions[];" in crossgl
+    assert "struct PositionReferences {" in crossgl
+    assert "Position buffers[];" in crossgl
+    assert "cbuffer Registers @push_constant {" in crossgl
+    assert "PositionReferences references;" in crossgl
+    assert "restrict Position positions = references.buffers[slice];" in crossgl
+    assert "\n     Position;\n" not in crossgl

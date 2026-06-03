@@ -4090,6 +4090,7 @@ class CudaParser:
         if self.current_token[0] != "IDENTIFIER":
             return False
 
+        identifier_name = self.current_token[1]
         close_index = self.current_index + 1
         while close_index < len(self.tokens) and self.tokens[close_index][0] in {
             "MULTIPLY",
@@ -4101,7 +4102,15 @@ class CudaParser:
         if close_index >= len(self.tokens) or self.tokens[close_index][0] != "RPAREN":
             return False
 
-        return self.is_cast_operand_start_at_index(close_index + 1)
+        operand_index = close_index + 1
+        if (
+            not self.is_identifier_type_name(identifier_name)
+            and operand_index < len(self.tokens)
+            and self.tokens[operand_index][0] in {"MULTIPLY", "BITWISE_AND"}
+        ):
+            return False
+
+        return self.is_cast_operand_start_at_index(operand_index)
 
     def is_qualified_identifier_cast_target_at_current_index(self):
         if self.current_token[0] != "IDENTIFIER":

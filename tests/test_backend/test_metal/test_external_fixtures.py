@@ -18,6 +18,12 @@ BOOK_OF_SHADERS_METAL_REPO = "https://github.com/metal-by-example/book-of-shader
 BOOK_OF_SHADERS_METAL_COMMIT = "12bb2366697cba9c5f660d54fead7bdcd73b6b8a"
 MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
+IMGUI_REPO = "https://github.com/ocornut/imgui"
+IMGUI_COMMIT = "7950c96f0e86b761607a34601f19e90afa825bd6"
+METALPETAL_REPO = "https://github.com/MetalPetal/MetalPetal"
+METALPETAL_COMMIT = "f9b78897bd4214bb097f352a1bde0a4f4a1e2ddb"
+BLENDER_REPO = "https://github.com/blender/blender"
+BLENDER_COMMIT = "2d196d20b93a9f6e596e6d451c5e845d84f21c89"
 
 
 EXTERNAL_FIXTURES = [
@@ -491,6 +497,187 @@ EXTERNAL_FIXTURES = [
                 uint index [[thread_position_in_grid]]) {
                 out[index] = static_cast<T>(alpha) * x[index]
                     + static_cast<T>(beta) * y[index];
+            }
+        """
+        ),
+    },
+    {
+        "name": "imgui_backend_uchar_color_half_sample",
+        "repo_url": IMGUI_REPO,
+        "commit": IMGUI_COMMIT,
+        "source_path": "backends/imgui_impl_metal.mm",
+        "roundtrip": True,
+        "contains": [
+            "u8vec4 color @TANGENT;",
+            "out_.color = vec4(in_.color) / vec4(255.0);",
+            "f16vec4 texColor = texture(texture_, textureSampler, in_.texCoords);",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct Uniforms { float4x4 projectionMatrix; };
+            struct VertexIn {
+                float2 position [[attribute(0)]];
+                float2 texCoords [[attribute(1)]];
+                uchar4 color [[attribute(2)]];
+            };
+            struct VertexOut {
+                float4 position [[position]];
+                float2 texCoords;
+                float4 color;
+            };
+
+            vertex VertexOut vertex_main(
+                VertexIn in [[stage_in]],
+                constant Uniforms &uniforms [[buffer(1)]]) {
+                VertexOut out;
+                out.position =
+                    uniforms.projectionMatrix * float4(in.position, 0, 1);
+                out.texCoords = in.texCoords;
+                out.color = float4(in.color) / float4(255.0);
+                return out;
+            }
+
+            fragment half4 fragment_main(
+                VertexOut in [[stage_in]],
+                texture2d<half, access::sample> texture [[texture(0)]],
+                sampler textureSampler [[sampler(0)]]) {
+                half4 texColor = texture.sample(textureSampler, in.texCoords);
+                return half4(in.color) * texColor;
+            }
+        """
+        ),
+    },
+    {
+        "name": "metalpetal_yuv_conversion_namespace_sampler_textures",
+        "repo_url": METALPETAL_REPO,
+        "commit": METALPETAL_COMMIT,
+        "source_path": "Frameworks/MetalPetal/Shaders/ColorConversionShaders.metal",
+        "roundtrip": True,
+        "contains": [
+            "StructuredBuffer<Vertex> verticies @buffer(0)",
+            "const sampler s = sampler(address::clamp_to_edge, filter::linear);",
+            "image2D outTexture @texture(2) @writeonly",
+            "imageStore(outTexture, gid, vec4(vec3(rgb), 1.0));",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            #include <simd/simd.h>
+            #include "MTIShaderLib.h"
+
+            using namespace metal;
+
+            namespace metalpetal {
+                namespace yuv2rgbconvert {
+                    typedef struct {
+                        packed_float2 position;
+                        packed_float2 texcoord;
+                    } Vertex;
+
+                    typedef struct {
+                        float3x3 matrix;
+                        float3 offset;
+                    } ColorConversion;
+
+                    typedef struct {
+                        float4 position [[ position ]];
+                        float2 texcoord;
+                    } Varyings;
+
+                    vertex Varyings colorConversionVertex(
+                        const device Vertex * verticies [[ buffer(0) ]],
+                        unsigned int vid [[ vertex_id ]]) {
+                        Varyings out;
+                        Vertex v = verticies[vid];
+                        out.position = float4(float2(v.position), 0.0, 1.0);
+                        out.texcoord = v.texcoord;
+                        return out;
+                    }
+
+                    fragment float4 colorConversionFragment(
+                        Varyings in [[ stage_in ]],
+                        texture2d<float, access::sample> yTexture [[ texture(0) ]],
+                        texture2d<float, access::sample> cbcrTexture [[ texture(1) ]],
+                        constant ColorConversion &colorConversion [[ buffer(0) ]],
+                        constant bool &convertToLinearRGB [[ buffer(1) ]]) {
+                        constexpr sampler s(
+                            address::clamp_to_edge, filter::linear);
+                        float3 ycbcr = float3(
+                            yTexture.sample(s, in.texcoord).r,
+                            cbcrTexture.sample(s, in.texcoord).rg);
+                        float3 rgb =
+                            colorConversion.matrix *
+                            (ycbcr + colorConversion.offset);
+                        return float4(
+                            float3(
+                                convertToLinearRGB ? sRGBToLinear(rgb) : rgb),
+                            1.0);
+                    }
+
+                    kernel void colorConversion(
+                        uint2 gid [[ thread_position_in_grid ]],
+                        texture2d<float, access::read> yTexture [[ texture(0) ]],
+                        texture2d<float, access::read> cbcrTexture [[ texture(1) ]],
+                        texture2d<float, access::write> outTexture [[ texture(2) ]],
+                        constant ColorConversion &colorConversion [[ buffer(0) ]]) {
+                        uint2 cbcrCoordinates = uint2(gid.x / 2, gid.y / 2);
+                        float y = yTexture.read(gid).r;
+                        float2 cbcr = cbcrTexture.read(cbcrCoordinates).rg;
+                        float3 ycbcr = float3(y, cbcr);
+                        float3 rgb =
+                            colorConversion.matrix *
+                            (ycbcr + colorConversion.offset);
+                        outTexture.write(float4(float3(rgb), 1.0), gid);
+                    }
+                }
+            }
+        """
+        ),
+    },
+    {
+        "name": "blender_texture_update_generic_vec_write",
+        "repo_url": BLENDER_REPO,
+        "commit": BLENDER_COMMIT,
+        "source_path": "source/blender/gpu/metal/kernels/compute_texture_update.msl",
+        "roundtrip": True,
+        "contains": [
+            "int[3] extent;",
+            "StructuredBuffer<float> input_data @buffer(1)",
+            "vec4 output;",
+            "output[i] = float(buffer_load(input_data, index + i));",
+            "imageStore(update_tex, uvec2(params.offset[0], params.offset[1]) + uvec2(xx, yy), output);",
+        ],
+        "not_contains": ["vec<float> output"],
+        "source": (
+            """
+            using namespace metal;
+
+            struct TextureUpdateParams {
+                int mip_index;
+                int extent[3];
+                int offset[3];
+                uint unpack_row_length;
+            };
+
+            kernel void compute_texture_update(
+                constant TextureUpdateParams &params [[buffer(0)]],
+                constant float *input_data [[buffer(1)]],
+                texture2d<float, access::write> update_tex [[texture(0)]],
+                uint2 position [[thread_position_in_grid]]) {
+                uint xx = position[0];
+                uint yy = position[1];
+                int index = (yy * params.unpack_row_length + xx) * 4;
+
+                vec<float, 4> output;
+                for (int i = 0; i < 4; i++) {
+                    output[i] = float(input_data[index + i]);
+                }
+                update_tex.write(
+                    output,
+                    uint2(params.offset[0], params.offset[1]) + uint2(xx, yy));
             }
         """
         ),
