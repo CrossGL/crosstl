@@ -4,6 +4,9 @@ from typing import List
 
 import pytest
 
+from crosstl.backend.slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
+from crosstl.backend.slang.SlangLexer import SlangLexer as BackendSlangLexer
+from crosstl.backend.slang.SlangParser import SlangParser as BackendSlangParser
 from crosstl.translator.ast import (
     ArrayAccessNode,
     AtomicOpNode,
@@ -47,6 +50,12 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def generate_crossgl_from_slang(code: str) -> str:
+    lexer = BackendSlangLexer(code, preprocess=False)
+    parser = BackendSlangParser(lexer.tokenize())
+    return SlangToCrossGLConverter().generate(parser.parse())
+
+
 def compile_generated_slang(
     generated_code,
     tmp_path,
@@ -85,6 +94,29 @@ def compile_generated_slang(
     assert result.returncode == 0, result.stderr or result.stdout
     assert output_path.exists()
     return result
+
+
+def test_slang_import_parameter_block_member_texture_sample_from_upstream_example():
+    code = """
+    struct Material
+    {
+        Texture2D<float3> albedoMap;
+        SamplerState sampler;
+    }
+
+    uniform ParameterBlock<Material> material;
+
+    float3 sampleMaterial(float2 uv)
+    {
+        return material.albedoMap.Sample(material.sampler, uv);
+    }
+    """
+
+    generated_code = generate_crossgl_from_slang(code)
+
+    assert "ParameterBlock<Material> material;" in generated_code
+    assert "return texture(material.albedoMap, material.sampler, uv);" in generated_code
+    assert "material.albedoMap.Sample" not in generated_code
 
 
 def test_struct():

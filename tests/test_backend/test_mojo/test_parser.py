@@ -16,6 +16,7 @@ from crosstl.backend.Mojo.MojoAst import (
     FunctionNode,
     IfNode,
     ImportNode,
+    ListLiteralNode,
     MemberAccessNode,
     MethodCallNode,
     RangeForNode,
@@ -1271,6 +1272,23 @@ def test_comptime_declarations_and_raises_function_parse():
     assert function.body[3].else_body[0].name == "raise"
 
 
+def test_comptime_expression_prefix_parse_from_modular_gpu_examples():
+    code = """
+    def main():
+        var dev_buf = ctx.enqueue_create_buffer[int_dtype](
+            comptime (layout.size())
+        )
+        for i in range(comptime (tile_layout.size())):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+
+    buffer_call = function.body[0].initial_value
+    assert getattr(buffer_call.args[0], "is_comptime", False)
+    assert getattr(function.body[1].iterable.args[0], "is_comptime", False)
+
+
 def test_function_raises_effect_before_return_type_parse():
     code = """
     fn parse_value(text: String) raises -> Int:
@@ -1282,6 +1300,71 @@ def test_function_raises_effect_before_return_type_parse():
     assert function.return_type == "Int"
     assert [param.name for param in function.params] == ["text"]
     assert function.params[0].vtype == "String"
+
+
+def test_function_capturing_raises_effects_parse_from_modular_reduction_example():
+    code = """
+    def sum_kernel_benchmark(
+        mut b: Bencher, input_data: SumKernelBenchmarkParams
+    ) capturing raises:
+        def kernel_launch_sum(ctx: DeviceContext) raises:
+            pass
+        b.iter_custom[kernel_launch_sum](ctx)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "sum_kernel_benchmark")
+
+    assert [param.name for param in function.params] == ["b", "input_data"]
+    assert function.params[0].parameter_convention == "mut"
+    assert isinstance(function.body[0], FunctionNode)
+    assert function.body[0].name == "kernel_launch_sum"
+
+
+def test_list_literal_argument_parse_from_modular_reduction_example():
+    code = """
+    def main():
+        bench.bench_with_input[Params, kernel](
+            BenchId("sum_kernel_benchmark", "gpu"),
+            Params(out_ptr, a_ptr),
+            [ThroughputMeasure(BenchMetric.bytes, SIZE * size_of[dtype]())],
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    call = function.body[0]
+
+    assert isinstance(call.args[2], ListLiteralNode)
+    assert call.args[2].elements
+    assert isinstance(call.args[2].elements[0], FunctionCallNode)
+
+
+def test_dotted_type_annotation_parse_from_modular_tiled_matmul_example():
+    code = """
+    def tiled_matmul_kernel(matrix_c: TileTensor):
+        var accumulator: matrix_c.ElementType = 0.0
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "tiled_matmul_kernel")
+    accumulator = function.body[0]
+
+    assert accumulator.name == "accumulator"
+    assert accumulator.vtype == "matrix_c.ElementType"
+    assert accumulator.initial_value == "0.0"
+
+
+def test_adjacent_string_literals_in_call_parse_from_modular_tiled_matmul_example():
+    code = """
+    def main():
+        print(
+            "Note: Expected formula is C[i,j] ="
+            " (i+1) * 64 * (j+1)"
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    call = function.body[0]
+
+    assert call.args == ['"Note: Expected formula is C[i,j] = (i+1) * 64 * (j+1)"']
 
 
 def test_alias_declarations_parse_as_comptime_aliases():

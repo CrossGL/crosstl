@@ -25675,6 +25675,64 @@ def test_rust_wave_intrinsic_helper_contract_compiles(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_backend_import_preserves_spirv_std_parameter_metadata():
+    from crosstl.backend.Rust import (
+        RustLexer,
+        RustParser,
+        RustToCrossGLConverter,
+    )
+
+    rust_source = """
+    use spirv_std::glam::{UVec3, Vec2, Vec4};
+    use spirv_std::spirv;
+
+    pub struct ShaderConstants {
+        pub exposure: f32,
+    }
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(frag_coord)] frag_coord: Vec4,
+        #[spirv(location = 0)] uv: Vec2,
+        #[spirv(push_constant)] constants: &ShaderConstants,
+        #[spirv(spec_constant(id = 0x5007, default = 100))] mode: u32,
+        #[spirv(location = 0)] output: &mut Vec4,
+    ) {
+        *output = Vec4::new(uv.x, uv.y, constants.exposure, mode as f32);
+    }
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(global_invocation_id)] id: UVec3,
+        #[spirv(subgroup_local_invocation_id)] lane: u32,
+        #[spirv(subgroup_id)] subgroup: u32,
+        #[spirv(num_subgroups)] subgroup_count: u32,
+        #[spirv(workgroup)] scratch: &mut [u32; 64],
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] data: &mut [u32],
+    ) {
+        data[id.x as usize] = scratch[0] + lane + subgroup + subgroup_count;
+    }
+    """
+
+    tokens = RustLexer(rust_source).tokenize()
+    ast = RustParser(tokens).parse()
+    crossgl = RustToCrossGLConverter().generate(ast)
+
+    assert "vec4 frag_coord @ gl_FragCoord" in crossgl
+    assert "vec2 uv @ location(0)" in crossgl
+    assert "ShaderConstants constants @ push_constant" in crossgl
+    assert "uint mode @ constant_id(0x5007)" in crossgl
+    assert "vec4 output @ location(0)" in crossgl
+    assert "uvec3 id @ gl_GlobalInvocationID" in crossgl
+    assert "uint lane @ gl_SubgroupInvocationID" in crossgl
+    assert "uint subgroup @ gl_SubgroupID" in crossgl
+    assert "uint subgroup_count @ gl_NumSubgroups" in crossgl
+    assert "uint scratch[64] @ workgroup" in crossgl
+    assert "uint data[] @ set(0) @ binding(1)" in crossgl
+    assert "void main(" in crossgl
+    assert ") @numthreads(64, 1, 1) {" in crossgl
+
+
 def test_barrier_emits_rust_workgroup_barrier():
     code = """
     shader ComputeSync {

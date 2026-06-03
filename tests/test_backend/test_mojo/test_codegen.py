@@ -142,6 +142,23 @@ def test_function_optional_argument_default_codegen_preserves_default():
     assert "return (base ** exp);" in generated_code
 
 
+def test_comptime_expression_prefix_codegen_drops_mojo_marker():
+    code = """
+    def main():
+        var dev_buf = ctx.enqueue_create_buffer[int_dtype](
+            comptime (layout.size())
+        )
+        for i in range(comptime (tile_layout.size())):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "comptime" not in generated_code
+    assert "layout.size()" in generated_code
+    assert "tile_layout.size()" in generated_code
+
+
 def test_single_quoted_string_literal_codegen():
     code = """
     fn message() -> String:
@@ -153,6 +170,70 @@ def test_single_quoted_string_literal_codegen():
 
     assert "String status = 'done';" in generated_code
     assert "return status;" in generated_code
+
+
+def test_function_capturing_raises_effects_codegen_are_dropped():
+    code = """
+    def sum_kernel_benchmark(
+        mut b: Bencher, input_data: SumKernelBenchmarkParams
+    ) capturing raises:
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "void sum_kernel_benchmark(Bencher b, SumKernelBenchmarkParams input_data)"
+        in generated_code
+    )
+    assert "capturing" not in generated_code
+    assert "raises" not in generated_code
+
+
+def test_list_literal_argument_codegen_from_modular_reduction_example():
+    code = """
+    def main():
+        bench.bench_with_input[Params, kernel](
+            BenchId("sum_kernel_benchmark", "gpu"),
+            Params(out_ptr, a_ptr),
+            [ThroughputMeasure(BenchMetric.bytes, SIZE * size_of[dtype]())],
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "[ThroughputMeasure(BenchMetric.bytes, (SIZE * size_of[dtype]()))]"
+        in generated_code
+    )
+
+
+def test_dotted_type_annotation_codegen_from_modular_tiled_matmul_example():
+    code = """
+    def tiled_matmul_kernel(matrix_c: TileTensor):
+        var accumulator: matrix_c.ElementType = 0.0
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "matrix_c.ElementType accumulator = 0.0;" in generated_code
+
+
+def test_adjacent_string_literals_in_call_codegen_from_modular_tiled_matmul_example():
+    code = """
+    def main():
+        print(
+            "Note: Expected formula is C[i,j] ="
+            " (i+1) * 64 * (j+1)"
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        'print("Note: Expected formula is C[i,j] = (i+1) * 64 * (j+1)");'
+        in generated_code
+    )
 
 
 def test_brace_struct_codegen_preserves_generic_members_and_attributes():

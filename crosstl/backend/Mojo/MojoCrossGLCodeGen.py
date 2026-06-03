@@ -702,6 +702,9 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, TupleNode):
             elements = ", ".join(self.generate_expression(e) for e in expr.elements)
             return f"({elements})"
+        elif isinstance(expr, ListLiteralNode):
+            elements = ", ".join(self.generate_expression(e) for e in expr.elements)
+            return f"[{elements}]"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, BinaryOpNode):

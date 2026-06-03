@@ -239,7 +239,13 @@ class RustToCrossGLConverter:
             "local_invocation_index": "gl_LocalInvocationIndex",
             "global_invocation_id": "gl_GlobalInvocationID",
             "workgroup_id": "gl_WorkGroupID",
+            "workgroup_size": "gl_WorkGroupSize",
             "num_workgroups": "gl_NumWorkGroups",
+            "subgroup_local_invocation_id": "gl_SubgroupInvocationID",
+            "subgroup_invocation_id": "gl_SubgroupInvocationID",
+            "subgroup_size": "gl_SubgroupSize",
+            "subgroup_id": "gl_SubgroupID",
+            "num_subgroups": "gl_NumSubgroups",
         }
         self.spirv_stage_map = {
             "vertex": "vertex",
@@ -1860,6 +1866,10 @@ class RustToCrossGLConverter:
         return_type = self.map_type(func.return_type)
         entry_point_name = self.get_entry_point_name_from_attributes(func.attributes)
         stage_name = self.crossgl_identifier(entry_point_name or func.name)
+        numthreads = self.get_numthreads_from_attributes(func.attributes)
+        numthreads_suffix = (
+            f" @numthreads({', '.join(numthreads)})" if numthreads else ""
+        )
         stage_header = (
             shader_type if stage_name == "main" else f"{shader_type} {stage_name}"
         )
@@ -1889,7 +1899,7 @@ class RustToCrossGLConverter:
 
         code = helper_code
         code += f"    {stage_header} {{\n"
-        code += f"        {return_type} main({params_str}) {{\n"
+        code += f"        {return_type} main({params_str}){numthreads_suffix} {{\n"
         code += body_code
         code += "        }\n"
         code += "    }\n\n"
@@ -9080,6 +9090,41 @@ class RustToCrossGLConverter:
 
         return None
 
+    def get_numthreads_from_attributes(self, attributes):
+        if not attributes:
+            return None
+
+        for attr in attributes:
+            if not isinstance(attr, AttributeNode) or attr.name != "spirv":
+                continue
+            args = list(attr.args or [])
+            if "threads" not in args:
+                continue
+            threads_index = args.index("threads")
+            if threads_index + 1 >= len(args) or args[threads_index + 1] != "(":
+                continue
+
+            values = []
+            depth = 0
+            for token in args[threads_index + 2 :]:
+                if token == "(":
+                    depth += 1
+                    continue
+                if token == ")":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                    continue
+                if depth == 0:
+                    values.append(str(token))
+
+            if values:
+                while len(values) < 3:
+                    values.append("1")
+                return values[:3]
+
+        return None
+
     def unquote_attribute_string(self, value):
         if not isinstance(value, str):
             return value
@@ -9106,15 +9151,28 @@ class RustToCrossGLConverter:
                         if arg in self.semantic_map:
                             return f" @ {self.semantic_map[arg]}"
 
+                    location = self.attribute_arg_value(attr.args, "location")
                     binding_index = self.attribute_arg_value(attr.args, "binding")
                     descriptor_set = self.attribute_arg_value(
                         attr.args, "descriptor_set"
                     )
+                    spec_constant_id = None
+                    if "spec_constant" in attr.args:
+                        spec_constant_id = self.attribute_arg_value(attr.args, "id")
+
                     semantics = []
+                    if location is not None:
+                        semantics.append(f"location({location})")
                     if descriptor_set is not None:
                         semantics.append(f"set({descriptor_set})")
                     if binding_index is not None:
                         semantics.append(f"binding({binding_index})")
+                    if "push_constant" in attr.args:
+                        semantics.append("push_constant")
+                    if spec_constant_id is not None:
+                        semantics.append(f"constant_id({spec_constant_id})")
+                    if "workgroup" in attr.args:
+                        semantics.append("workgroup")
                     if semantics:
                         return "".join(f" @ {semantic}" for semantic in semantics)
                 elif attr.name == "location" and attr.args:

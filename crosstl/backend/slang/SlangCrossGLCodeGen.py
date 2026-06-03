@@ -160,6 +160,8 @@ class SlangToCrossGLConverter:
         self.sampleable_resource_type_scopes = [{}]
         self.storage_image_resource_scopes = [set()]
         self.storage_image_resource_type_scopes = [{}]
+        self.variable_type_scopes = [{}]
+        self.struct_member_types = {}
 
         self.semantic_map = {
             # Vertex inputs position
@@ -271,6 +273,8 @@ class SlangToCrossGLConverter:
         self.user_function_names.discard(None)
         resource_types = self.collect_sampleable_resource_types(ast)
         storage_image_types = self.collect_storage_image_resource_types(ast)
+        self.struct_member_types = self.collect_struct_member_types(ast)
+        self.variable_type_scopes = [self.collect_global_variable_types(ast)]
         self.sampleable_resource_scopes = [set(resource_types)]
         self.sampleable_resource_type_scopes = [resource_types]
         self.storage_image_resource_scopes = [set(storage_image_types)]
@@ -450,6 +454,7 @@ class SlangToCrossGLConverter:
         """Render one Slang function node as a CrossGL function."""
         code = " "
         code += "  " * indent
+        self.push_variable_type_scope(func.params)
         self.push_sampleable_resource_scope(func.params)
         self.push_storage_image_resource_scope(func.params)
         params = ", ".join(self.generate_parameter(p) for p in func.params)
@@ -463,6 +468,7 @@ class SlangToCrossGLConverter:
         code += "    }\n\n"
         self.pop_storage_image_resource_scope()
         self.pop_sampleable_resource_scope()
+        self.pop_variable_type_scope()
         return code
 
     def generate_parameter(self, param):
@@ -492,6 +498,7 @@ class SlangToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
+                self.register_variable_type(stmt)
                 self.register_sampleable_resource(stmt)
                 self.register_storage_image_resource(stmt)
                 code += (
@@ -499,6 +506,10 @@ class SlangToCrossGLConverter:
                     f"{self.format_array_suffixes(stmt, is_main)};\n"
                 )
             elif isinstance(stmt, AssignmentNode):
+                if isinstance(stmt.left, VariableNode) and stmt.left.vtype:
+                    self.register_variable_type(stmt.left)
+                    self.register_sampleable_resource(stmt.left)
+                    self.register_storage_image_resource(stmt.left)
                 code += self.generate_assignment(stmt, is_main) + ";\n"
             elif isinstance(stmt, (FunctionCallNode, MethodCallNode, CallNode)):
                 code += f"{self.generate_expression(stmt, is_main)};\n"
@@ -915,6 +926,58 @@ class SlangToCrossGLConverter:
                     resources[name] = getattr(declaration, "vtype", None)
         return resources
 
+    def collect_global_variable_types(self, ast):
+        variables = {}
+        for node in getattr(ast, "global_vars", []) or []:
+            declaration = node.left if isinstance(node, AssignmentNode) else node
+            name = getattr(declaration, "name", None)
+            vtype = getattr(declaration, "vtype", None)
+            if name is not None and vtype:
+                variables[name] = vtype
+        return variables
+
+    def collect_struct_member_types(self, ast):
+        structs = {}
+        for struct in getattr(ast, "structs", []) or []:
+            self.collect_struct_member_types_from_node(struct, structs)
+        for export in getattr(ast, "exports", []) or []:
+            item = getattr(export, "item", None)
+            if isinstance(item, StructNode):
+                self.collect_struct_member_types_from_node(item, structs)
+        return structs
+
+    def collect_struct_member_types_from_node(self, struct, structs):
+        members = {}
+        for member in getattr(struct, "members", []) or []:
+            name = getattr(member, "name", None)
+            vtype = getattr(member, "vtype", None)
+            if name is not None and vtype:
+                members[name] = vtype
+        if members:
+            structs[struct.name] = members
+
+        for nested in getattr(struct, "structs", []) or []:
+            self.collect_struct_member_types_from_node(nested, structs)
+
+    def push_variable_type_scope(self, params):
+        scope = {}
+        for param in params or []:
+            name = getattr(param, "name", None)
+            vtype = getattr(param, "vtype", None)
+            if name is not None and vtype:
+                scope[name] = vtype
+        self.variable_type_scopes.append(scope)
+
+    def pop_variable_type_scope(self):
+        if len(self.variable_type_scopes) > 1:
+            self.variable_type_scopes.pop()
+
+    def register_variable_type(self, node):
+        name = getattr(node, "name", None)
+        vtype = getattr(node, "vtype", None)
+        if name is not None and vtype:
+            self.variable_type_scopes[-1][name] = vtype
+
     def push_sampleable_resource_scope(self, params):
         scope = set()
         type_scope = {}
@@ -980,6 +1043,53 @@ class SlangToCrossGLConverter:
             return False
         base_type = str(type_name).strip().split("<", 1)[0].strip()
         return base_type in self.STORAGE_IMAGE_RESOURCE_TYPES
+
+    def expression_type(self, expr):
+        if isinstance(expr, VariableNode):
+            if expr.vtype:
+                return expr.vtype
+            return self.lookup_variable_type(expr.name)
+        if isinstance(expr, ArrayAccessNode):
+            return self.expression_type(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            object_type = self.expression_type(expr.object)
+            struct_type = self.unwrap_resource_container_type(object_type)
+            if not struct_type:
+                return None
+            members = self.struct_member_types.get(struct_type)
+            if members is None:
+                return None
+            return members.get(expr.member)
+        return None
+
+    def lookup_variable_type(self, name):
+        if not name:
+            return None
+        base_name = str(name).split("[", 1)[0]
+        for scope in reversed(self.variable_type_scopes):
+            if base_name in scope:
+                return scope[base_name]
+        return None
+
+    def unwrap_resource_container_type(self, type_name):
+        if not type_name:
+            return None
+        type_name = str(type_name).strip()
+        while True:
+            base_type = type_name.split("<", 1)[0].strip()
+            if base_type not in {"ParameterBlock", "ConstantBuffer"}:
+                return type_name
+            inner_types = self.generic_type_arguments(type_name)
+            if not inner_types:
+                return type_name
+            type_name = inner_types[0]
+
+    def generic_type_arguments(self, type_name):
+        text = str(type_name).strip()
+        start = text.find("<")
+        if start < 0 or not text.endswith(">"):
+            return []
+        return self.split_top_level_commas(text[start + 1 : -1])
 
     def generate_storage_image_method_call(self, expr, obj, is_main=False):
         if expr.method != "Load":
@@ -1128,26 +1238,25 @@ class SlangToCrossGLConverter:
         return None
 
     def is_sampleable_resource_expression(self, expr):
-        name = self.expression_base_name(expr)
-        if name is None:
-            return False
-        return any(name in scope for scope in reversed(self.sampleable_resource_scopes))
+        return self.sampleable_resource_expression_type(expr) is not None
 
     def is_storage_image_resource_expression(self, expr):
         name = self.expression_base_name(expr)
-        if name is None:
-            return False
-        return any(
+        if name is not None and any(
             name in scope for scope in reversed(self.storage_image_resource_scopes)
-        )
+        ):
+            return True
+        return self.is_storage_image_resource_type(self.expression_type(expr))
 
     def sampleable_resource_expression_type(self, expr):
         name = self.expression_base_name(expr)
-        if name is None:
-            return None
-        for scope in reversed(self.sampleable_resource_type_scopes):
-            if name in scope:
-                return scope[name]
+        if name is not None:
+            for scope in reversed(self.sampleable_resource_type_scopes):
+                if name in scope:
+                    return scope[name]
+        type_name = self.expression_type(expr)
+        if self.is_sampleable_resource_type(type_name):
+            return type_name
         return None
 
     def expression_base_name(self, expr):

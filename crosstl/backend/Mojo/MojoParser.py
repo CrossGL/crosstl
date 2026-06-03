@@ -553,7 +553,10 @@ class MojoParser:
         return func
 
     def parse_function_effects(self):
-        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "raises":
+        while self.current_token[0] == "IDENTIFIER" and self.current_token[1] in {
+            "capturing",
+            "raises",
+        }:
             self.eat("IDENTIFIER")
 
     def parse_where_clause(self):
@@ -1299,6 +1302,11 @@ class MojoParser:
         return left
 
     def parse_unary(self):
+        if self.current_token[0] == "COMPTIME":
+            self.eat("COMPTIME")
+            operand = self.parse_unary()
+            operand.is_comptime = True
+            return operand
         if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT", "NOT"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -1365,6 +1373,8 @@ class MojoParser:
                 return self.parse_postfix_suffixes(TupleNode(elements))
             self.eat("RPAREN")
             return self.parse_postfix_suffixes(expr)
+        elif self.current_token[0] == "LBRACKET":
+            return self.parse_list_literal()
         elif self.current_token[0] in ["FN", "DEF", "STRUCT", "CLASS", "LET", "VAR"]:
             raise SyntaxError(f"Unexpected top-level keyword: {self.current_token[0]}")
         else:
@@ -1372,12 +1382,36 @@ class MojoParser:
                 f"Unexpected token in expression: {self.current_token[0]}"
             )
 
+    def parse_list_literal(self):
+        self.eat("LBRACKET")
+        elements = []
+        self.skip_layout_tokens()
+
+        while self.current_token[0] != "RBRACKET":
+            elements.append(self.parse_expression())
+            self.skip_layout_tokens()
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                self.skip_layout_tokens()
+                if self.current_token[0] == "RBRACKET":
+                    break
+            elif self.current_token[0] != "RBRACKET":
+                raise SyntaxError(
+                    f"Expected COMMA or RBRACKET, got {self.current_token[0]}"
+                )
+
+        self.eat("RBRACKET")
+        return self.parse_postfix_suffixes(ListLiteralNode(elements))
+
     def parse_vector_constructor(self, type_name):
         self.eat("LPAREN")
         args = []
         self.skip_layout_tokens()
         while self.current_token[0] != "RPAREN":
-            args.append(self.parse_expression())
+            arg = self.parse_expression()
+            self.skip_layout_tokens()
+            arg = self.parse_adjacent_string_literals(arg)
+            args.append(arg)
             self.skip_layout_tokens()
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
@@ -1442,7 +1476,10 @@ class MojoParser:
         args = []
         self.skip_layout_tokens()
         while self.current_token[0] != "RPAREN":
-            args.append(self.parse_expression())
+            arg = self.parse_expression()
+            self.skip_layout_tokens()
+            arg = self.parse_adjacent_string_literals(arg)
+            args.append(arg)
             self.skip_layout_tokens()
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
@@ -1457,6 +1494,24 @@ class MojoParser:
         if isinstance(callee, MemberAccessNode):
             return MethodCallNode(callee.object, callee.member, args)
         return CallNode(callee, args)
+
+    def parse_adjacent_string_literals(self, arg):
+        if not self.is_string_literal_value(arg):
+            return arg
+
+        while self.current_token[0] == "STRING_LITERAL":
+            next_literal = self.current_token[1]
+            self.eat("STRING_LITERAL")
+            arg = self.concat_string_literals(arg, next_literal)
+            self.skip_layout_tokens()
+        return arg
+
+    def is_string_literal_value(self, value):
+        return isinstance(value, str) and len(value) >= 2 and value[0] in {"'", '"'}
+
+    def concat_string_literals(self, left, right):
+        quote = left[0]
+        return f"{quote}{left[1:-1]}{right[1:-1]}{quote}"
 
     def parse_decorator(self):
         self.eat("DECORATOR")
@@ -1539,6 +1594,14 @@ class MojoParser:
 
         type_name = self.current_token[1]
         self.eat(self.current_token[0])
+        while self.current_token[0] == "DOT":
+            self.eat("DOT")
+            if self.current_token[0] not in self.TYPE_START_TOKENS:
+                raise SyntaxError(
+                    f"Expected type name after dot, got {self.current_token[0]}"
+                )
+            type_name += f".{self.current_token[1]}"
+            self.eat(self.current_token[0])
         if self.current_token[0] == "LBRACKET":
             type_name += self.parse_generic_type_suffix()
         return type_name

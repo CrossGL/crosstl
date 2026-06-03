@@ -85,6 +85,16 @@ class TupleNode(ASTNode):
         return f"TupleNode(elements={self.elements})"
 
 
+class ListLiteralNode(ASTNode):
+    """Node representing a Mojo list literal expression."""
+
+    def __init__(self, elements):
+        self.elements = elements
+
+    def __repr__(self):
+        return f"ListLiteralNode(elements={self.elements})"
+
+
 class WithNode(ASTNode):
     """Node representing a Mojo with/as block."""
 
