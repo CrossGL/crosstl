@@ -5,6 +5,8 @@ import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import crosstl.project.pipeline as project_pipeline
 from crosstl.project import (
     load_project_config,
@@ -172,6 +174,24 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     assert {
         diagnostic["location"]["file"] for diagnostic in payload["diagnostics"]
     } == {"crosstl.toml"}
+
+
+def test_project_config_rejects_malformed_variant_entries(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project.variants]
+            debug = "USE_FAST_PATH=0"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"crosstl\.toml \[project\.variants\.debug\] must be a table",
+    ):
+        load_project_config(repo)
 
 
 def test_translate_project_honors_source_backend_overrides(tmp_path):

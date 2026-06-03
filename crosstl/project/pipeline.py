@@ -80,6 +80,15 @@ def _as_str_list(value: Any, *, field_name: str) -> list[str]:
     raise ValueError(f"{field_name} must be a string or list of strings")
 
 
+def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
+    for name, value in variants.items():
+        if not isinstance(value, Mapping):
+            raise ValueError(f"crosstl.toml [project.variants.{name}] must be a table")
+        result[str(name)] = {str(key): str(value) for key, value in value.items()}
+    return result
+
+
 def _relpath(path: Path, root: Path) -> str:
     return path.resolve().relative_to(root.resolve()).as_posix()
 
@@ -472,11 +481,7 @@ def load_project_config(
             project.get("include_dirs"), field_name="project.include_dirs"
         ),
         defines={str(key): str(value) for key, value in defines.items()},
-        variants={
-            str(name): {str(key): str(value) for key, value in value.items()}
-            for name, value in variants.items()
-            if isinstance(value, Mapping)
-        },
+        variants=_variant_defines(variants),
     )
 
 
