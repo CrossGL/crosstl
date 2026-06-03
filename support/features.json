@@ -4196,6 +4196,744 @@
           ]
         }
       }
+    },
+    {
+      "id": "project.repo_scan",
+      "category": "project",
+      "name": "Repository source discovery",
+      "description": "Discover registered shader and GPU source files across a repository without assuming a single source backend.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.include_resolution",
+      "category": "project",
+      "name": "Project include resolution",
+      "description": "Carry project include-directory intent into repo-scale translation planning.",
+      "support": {
+        "directx": {
+          "status": "partial",
+          "notes": "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "opengl": {
+          "status": "partial",
+          "notes": "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "metal": {
+          "status": "partial",
+          "notes": "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "cuda": {
+          "status": "partial",
+          "notes": "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "hip": {
+          "status": "partial",
+          "notes": "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "mojo": {
+          "status": "partial",
+          "notes": "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "rust": {
+          "status": "partial",
+          "notes": "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "slang": {
+          "status": "partial",
+          "notes": "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.macro_variants",
+      "category": "project",
+      "name": "Macro and define variants",
+      "description": "Represent define sets and named variants for project translation units.",
+      "support": {
+        "directx": {
+          "status": "partial",
+          "notes": "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "opengl": {
+          "status": "partial",
+          "notes": "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "metal": {
+          "status": "partial",
+          "notes": "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "cuda": {
+          "status": "partial",
+          "notes": "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "hip": {
+          "status": "partial",
+          "notes": "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "mojo": {
+          "status": "partial",
+          "notes": "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "rust": {
+          "status": "partial",
+          "notes": "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        },
+        "slang": {
+          "status": "partial",
+          "notes": "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.batch_translation",
+      "category": "project",
+      "name": "Batch project translation",
+      "description": "Translate discovered project units to one or more target backends while preserving repository-relative output paths.",
+      "support": {
+        "directx": {
+          "status": "partial",
+          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+          ]
+        },
+        "opengl": {
+          "status": "partial",
+          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+          ]
+        },
+        "metal": {
+          "status": "partial",
+          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+          ]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+          ]
+        },
+        "cuda": {
+          "status": "partial",
+          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+          ]
+        },
+        "hip": {
+          "status": "partial",
+          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+          ]
+        },
+        "mojo": {
+          "status": "partial",
+          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+          ]
+        },
+        "rust": {
+          "status": "partial",
+          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+          ]
+        },
+        "slang": {
+          "status": "partial",
+          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.validation_hooks",
+      "category": "project",
+      "name": "Optional validation hooks",
+      "description": "Record artifact existence and optional external toolchain availability for translated project outputs.",
+      "support": {
+        "directx": {
+          "status": "diagnostic",
+          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+          ]
+        },
+        "opengl": {
+          "status": "diagnostic",
+          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+          ]
+        },
+        "metal": {
+          "status": "diagnostic",
+          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+          ]
+        },
+        "vulkan": {
+          "status": "diagnostic",
+          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+          ]
+        },
+        "cuda": {
+          "status": "diagnostic",
+          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+          ]
+        },
+        "hip": {
+          "status": "diagnostic",
+          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+          ]
+        },
+        "mojo": {
+          "status": "diagnostic",
+          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+          ]
+        },
+        "rust": {
+          "status": "diagnostic",
+          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+          ]
+        },
+        "slang": {
+          "status": "diagnostic",
+          "notes": "Project validation records artifact existence and reports unavailable optional tools deterministically. Full target compiler invocation is intentionally opt-in and not required for basic translation.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.artifact_manifest",
+      "category": "project",
+      "name": "Artifact manifest",
+      "description": "Emit machine-readable translated artifact records with source, target, path, status, and source hash metadata.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.source_provenance",
+      "category": "project",
+      "name": "Source provenance and source-map bridge",
+      "description": "Record provenance metadata that can bridge toward compiler source-map and debug metadata contracts.",
+      "support": {
+        "directx": {
+          "status": "partial",
+          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "opengl": {
+          "status": "partial",
+          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "metal": {
+          "status": "partial",
+          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "cuda": {
+          "status": "partial",
+          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "hip": {
+          "status": "partial",
+          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "mojo": {
+          "status": "partial",
+          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "rust": {
+          "status": "partial",
+          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        },
+        "slang": {
+          "status": "partial",
+          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.diagnostics",
+      "category": "project",
+      "name": "Project diagnostics",
+      "description": "Emit structured project diagnostics for scan, translation, and validation failures.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.external_corpus_coverage",
+      "category": "project",
+      "name": "External corpus coverage",
+      "description": "Track repository-scale coverage against external shader and GPU source corpora.",
+      "support": {
+        "directx": {
+          "status": "partial",
+          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+          ]
+        },
+        "opengl": {
+          "status": "partial",
+          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+          ]
+        },
+        "metal": {
+          "status": "partial",
+          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+          ]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+          ]
+        },
+        "cuda": {
+          "status": "partial",
+          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+          ]
+        },
+        "hip": {
+          "status": "partial",
+          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+          ]
+        },
+        "mojo": {
+          "status": "partial",
+          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+          ]
+        },
+        "rust": {
+          "status": "partial",
+          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+          ]
+        },
+        "slang": {
+          "status": "partial",
+          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+          ]
+        }
+      }
     }
   ]
 }

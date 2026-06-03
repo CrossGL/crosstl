@@ -1,4 +1,4 @@
-"""Project-scale shader porting pipeline for CrossTL V3."""
+"""Project-scale shader and GPU source porting pipeline for CrossTL."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ REPORT_KIND = "crosstl-project-portability-report"
 REPORT_SCHEMA_VERSION = 1
 DEFAULT_CONFIG_NAME = "crosstl.toml"
 DEFAULT_OUTPUT_DIR = "crosstl-out"
+INTERNAL_EXCLUDE_PATTERNS = (DEFAULT_CONFIG_NAME,)
 DEFAULT_EXCLUDE_PATTERNS = (
     ".git/**",
     ".hg/**",
@@ -242,7 +243,7 @@ class ProjectScan:
 
 @dataclass(frozen=True)
 class ProjectPortabilityReport:
-    """Machine-readable repo porting report emitted by the V3 project pipeline."""
+    """Machine-readable report emitted by the project porting pipeline."""
 
     config: ProjectConfig
     targets: Sequence[str]
@@ -267,7 +268,6 @@ class ProjectPortabilityReport:
             "kind": REPORT_KIND,
             "generator": {
                 "name": "CrossTL",
-                "version": "3.0.0-dev",
                 "pipeline": "project-porting",
             },
             "project": {
@@ -412,6 +412,8 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
         except ValueError:
             continue
         if _path_matches(relative_path, config.exclude_patterns):
+            continue
+        if _path_matches(relative_path, INTERNAL_EXCLUDE_PATTERNS):
             continue
 
         override = _override_for_path(relative_path, config)
@@ -564,9 +566,9 @@ def translate_project(
                     save_shader=str(output_path),
                     format_output=format_output,
                 )
-            except (
-                Exception
-            ) as exc:  # noqa: BLE001 - report instead of hiding failures.
+            except Exception as exc:  # noqa: BLE001
+                # Project translation reports per-artifact failures so one bad
+                # unit does not hide the rest of the repository's migration state.
                 artifact["status"] = "failed"
                 artifact["error"] = str(exc)
                 diagnostics.append(

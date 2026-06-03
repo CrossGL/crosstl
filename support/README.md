@@ -19,6 +19,11 @@ The matrix is intentionally data-driven:
   hand-written per-backend evidence files.
 - The generated JSON also records test counts and stable sampled unsupported
   markers from implementation paths for each backend.
+- Project-porting support rows track repository scan, batch translation,
+  project configuration, artifact reports, provenance, validation hooks, and
+  structured diagnostics. The implementation emits JSON portability reports
+  through `python -m crosstl._crosstl scan`, `translate-project`, and
+  `validate-project`.
 
 Status values are conservative. Do not mark a feature `supported` unless there is
 implementation and test evidence. Use `partial`, `diagnostic`, `unsupported`,
@@ -41,6 +46,7 @@ python tools/support_matrix.py audit --backend directx --backend opengl --backen
 python tools/support_matrix.py audit --backend directx --status partial --output /tmp/directx-partial.json
 python tools/support_signals.py docs --output support/generated/backend-docs-report.json
 python tools/support_signals.py extract --docs-report support/generated/backend-docs-report.json --output support/generated/support-signals.json
+python -m crosstl._crosstl scan /path/to/repo --target metal --output /tmp/crosstl-project-scan.json
 ```
 
 The hourly issue-sync CI fetches official backend documentation URLs, crawls a

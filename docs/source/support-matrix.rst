@@ -35,15 +35,15 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "42", "0", "1", "0", "0", "0"
-   "OpenGL / GLSL", "42", "0", "1", "0", "0", "0"
-   "Metal", "41", "0", "2", "0", "0", "0"
-   "Vulkan SPIR-V", "42", "0", "1", "0", "0", "0"
-   "CUDA", "37", "0", "6", "0", "0", "0"
-   "HIP", "37", "0", "6", "0", "0", "0"
-   "Mojo", "39", "0", "4", "0", "0", "0"
-   "Rust", "40", "0", "3", "0", "0", "0"
-   "Slang", "41", "0", "2", "0", "0", "0"
+   "DirectX / HLSL", "45", "5", "2", "0", "0", "0"
+   "OpenGL / GLSL", "45", "5", "2", "0", "0", "0"
+   "Metal", "44", "5", "3", "0", "0", "0"
+   "Vulkan SPIR-V", "45", "5", "2", "0", "0", "0"
+   "CUDA", "40", "5", "7", "0", "0", "0"
+   "HIP", "40", "5", "7", "0", "0", "0"
+   "Mojo", "42", "5", "5", "0", "0", "0"
+   "Rust", "43", "5", "4", "0", "0", "0"
+   "Slang", "44", "5", "3", "0", "0", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -54,13 +54,28 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "42", "0", "1", "0", "0", "0"
-   "OpenGL / GLSL", "42", "0", "1", "0", "0", "0"
-   "Metal", "41", "0", "2", "0", "0", "0"
+   "DirectX / HLSL", "45", "5", "2", "0", "0", "0"
+   "OpenGL / GLSL", "45", "5", "2", "0", "0", "0"
+   "Metal", "44", "5", "3", "0", "0", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
+   "DirectX / HLSL", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "OpenGL / GLSL", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "Metal", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "DirectX / HLSL", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "OpenGL / GLSL", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "Metal", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "DirectX / HLSL", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "OpenGL / GLSL", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "Metal", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "DirectX / HLSL", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "OpenGL / GLSL", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "Metal", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "DirectX / HLSL", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
+   "OpenGL / GLSL", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
+   "Metal", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
 
 Feature Matrix
 --------------
@@ -146,6 +161,19 @@ Each category below uses the status codes from the legend.
 
    "Invalid shader shape validation", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
+.. csv-table:: project
+   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
+
+   "Repository source discovery", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Project include resolution", "P", "P", "P", "P", "P", "P", "P", "P", "P"
+   "Macro and define variants", "P", "P", "P", "P", "P", "P", "P", "P", "P"
+   "Batch project translation", "P", "P", "P", "P", "P", "P", "P", "P", "P"
+   "Optional validation hooks", "D", "D", "D", "D", "D", "D", "D", "D", "D"
+   "Artifact manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Source provenance and source-map bridge", "P", "P", "P", "P", "P", "P", "P", "P", "P"
+   "Project diagnostics", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "External corpus coverage", "P", "P", "P", "P", "P", "P", "P", "P", "P"
+
 Backlog
 -------
 
@@ -155,6 +183,51 @@ need an audit before implementation work can be scoped accurately.
 .. csv-table:: Non-supported or unaudited feature rows
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
+   "DirectX / HLSL", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "OpenGL / GLSL", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "Metal", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "Vulkan SPIR-V", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "CUDA", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "HIP", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "Mojo", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "Rust", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "Slang", "project", "Project include resolution", "partial", "Project configuration records include directories, but include search paths are not yet plumbed into every native frontend invocation from the project pipeline."
+   "DirectX / HLSL", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "OpenGL / GLSL", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "Metal", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "Vulkan SPIR-V", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "CUDA", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "HIP", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "Mojo", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "Rust", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "Slang", "project", "Macro and define variants", "partial", "Project configuration records define sets and named variant metadata. Variant expansion through backend preprocessors is not implemented in the current project pipeline."
+   "DirectX / HLSL", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "OpenGL / GLSL", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "Metal", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "Vulkan SPIR-V", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "CUDA", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "HIP", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "Mojo", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "Rust", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "Slang", "project", "Batch project translation", "partial", "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing."
+   "DirectX / HLSL", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "OpenGL / GLSL", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "Metal", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "Vulkan SPIR-V", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "CUDA", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "HIP", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "Mojo", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "Rust", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "Slang", "project", "Source provenance and source-map bridge", "partial", "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet."
+   "DirectX / HLSL", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
+   "OpenGL / GLSL", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
+   "Metal", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
+   "Vulkan SPIR-V", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
+   "CUDA", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
+   "HIP", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
+   "Mojo", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
+   "Rust", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
+   "Slang", "project", "External corpus coverage", "partial", "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet."
 
 Documentation Sources
 ---------------------

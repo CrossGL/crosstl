@@ -77,6 +77,46 @@ def test_scan_project_reports_explicitly_included_unsupported_sources(tmp_path):
     }
 
 
+def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            include = ["**/*"]
+            exclude = []
+            targets = ["metal"]
+            output_dir = "generated"
+            include_dirs = ["gpu/include"]
+
+            [project.sources]
+            "gpu/*.shader" = "cgl"
+
+            [project.defines]
+            USE_FAST_PATH = "1"
+
+            [project.variants.debug]
+            USE_FAST_PATH = "0"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    config = load_project_config(repo)
+    scan = scan_project(config)
+
+    assert config.targets == ["metal"]
+    assert config.output_dir == "generated"
+    assert config.include_dirs == ["gpu/include"]
+    assert config.defines == {"USE_FAST_PATH": "1"}
+    assert config.variants == {"debug": {"USE_FAST_PATH": "0"}}
+    assert [(unit.relative_path, unit.source_backend) for unit in scan.units] == [
+        ("gpu/kernel.shader", "cgl")
+    ]
+
+
 def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders" / "graphics"
@@ -106,12 +146,42 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     ]
 
 
+def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        validate=True,
+    )
+    payload = report.to_json()
+
+    assert payload["validation"]["artifacts"] == [
+        {
+            "source": "simple.cgl",
+            "target": "opengl",
+            "path": "out/opengl/simple.glsl",
+            "exists": True,
+            "status": "ok",
+        }
+    ]
+    assert payload["validation"]["toolchains"][0]["target"] == "opengl"
+    assert payload["validation"]["toolchains"][0]["status"] in {
+        "available",
+        "unavailable",
+    }
+    assert payload["diagnosticCounts"]["error"] == 0
+
+
 def test_translate_project_records_structured_diagnostics_for_failures(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "broken.cgl").write_text("shader Broken { vertex {", encoding="utf-8")
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
 
-    report = translate_project(repo, targets=["metal"], output_dir="out")
+    report = translate_project(repo, targets=["not-a-backend"], output_dir="out")
     payload = report.to_json()
 
     assert payload["summary"]["failedCount"] == 1
@@ -119,8 +189,8 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["severity"] == "error"
     assert diagnostic["code"] == "project.translate.failed"
-    assert diagnostic["target"] == "metal"
-    assert diagnostic["location"]["file"] == "broken.cgl"
+    assert diagnostic["target"] == "not-a-backend"
+    assert diagnostic["location"]["file"] == "simple.cgl"
     assert payload["artifacts"][0]["status"] == "failed"
     assert payload["artifacts"][0]["error"]
 
