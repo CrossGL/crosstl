@@ -1366,7 +1366,10 @@ class GLSLParser:
                 init_decls = self.parse_variable_declarations(
                     type_name, qualifiers=qualifiers, consume_semicolon=False
                 )
-                init = init_decls[0] if init_decls else None
+                if len(init_decls) == 1:
+                    init = init_decls[0]
+                elif init_decls:
+                    init = init_decls
             else:
                 init = self.parse_assignment_expression()
 

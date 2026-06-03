@@ -1767,7 +1767,7 @@ class GLSLToCrossGLConverter:
         return result
 
     def generate_for(self, node):
-        init = self.generate_statement(node.init).rstrip(";") if node.init else ""
+        init = self.generate_for_clause(node.init)
         condition = self.generate_expression(node.condition) if node.condition else ""
         update_node = getattr(node, "update", None) or getattr(node, "iteration", None)
         if isinstance(update_node, list):
@@ -1787,6 +1787,56 @@ class GLSLToCrossGLConverter:
         self.decrease_indent()
         result += self.indent() + "}"
         return result
+
+    def generate_for_clause(self, node):
+        if node is None:
+            return ""
+        if isinstance(node, list):
+            return self.generate_for_declaration_list(node)
+        return self.generate_statement(node).rstrip(";")
+
+    def generate_for_declaration_list(self, declarations):
+        declarations = [decl for decl in declarations if decl is not None]
+        if not declarations:
+            return ""
+        if not all(isinstance(decl, VariableNode) for decl in declarations):
+            return ", ".join(self.generate_for_clause(decl) for decl in declarations)
+
+        for decl in declarations:
+            self.register_variable_type(decl)
+
+        first = declarations[0]
+        first_type = self.variable_declaration_type(first)
+        first_qualifiers = list(getattr(first, "qualifiers", None) or [])
+        if all(
+            self.variable_declaration_type(decl) == first_type
+            and list(getattr(decl, "qualifiers", None) or []) == first_qualifiers
+            for decl in declarations
+        ):
+            prefix = self.for_declaration_prefix(first, first_type)
+            declarators = []
+            for decl in declarations:
+                declarator = f"{decl.name}{self.array_suffix(decl)}"
+                if getattr(decl, "value", None) is not None:
+                    declarator += f" = {self.generate_expression(decl.value)}"
+                declarators.append(declarator)
+            return prefix + ", ".join(declarators)
+
+        return ", ".join(
+            self.generate_variable_declaration(decl) for decl in declarations
+        )
+
+    def for_declaration_prefix(self, node, var_type):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
+        prefix_parts = []
+        if "shared" in qualifiers:
+            prefix_parts.append("shared")
+        if getattr(node, "is_const", False) or "const" in qualifiers:
+            prefix_parts.append("const")
+        interface_prefix = self.interface_qualifier_prefix(node)
+        if interface_prefix:
+            prefix_parts.append(interface_prefix)
+        return f"{' '.join(prefix_parts + [var_type])} "
 
     def generate_while(self, node):
         if self.is_condition_declaration(node.condition):

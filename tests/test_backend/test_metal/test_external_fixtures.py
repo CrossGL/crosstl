@@ -505,6 +505,27 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "mlx_gemv_template_struct_alias_specialization",
+        "repo_url": MLX_REPO,
+        "commit": MLX_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/gemv.metal",
+        "roundtrip": False,
+        "struct_names": ["DefaultAccT", "DefaultAccT<complex64_t>"],
+        "source": (
+            """
+            template <typename U>
+            struct DefaultAccT {
+                using type = float;
+            };
+
+            template <>
+            struct DefaultAccT<complex64_t> {
+                using type = complex64_t;
+            };
+        """
+        ),
+    },
+    {
         "name": "imgui_backend_uchar_color_half_sample",
         "repo_url": IMGUI_REPO,
         "commit": IMGUI_COMMIT,
@@ -806,6 +827,9 @@ def test_external_metal_fixture_parse_and_roundtrip(fixture):
     assert fixture["repo_url"]
     assert fixture["commit"]
     assert fixture["source_path"]
+    struct_names = {struct.name for struct in ast.structs}
+    for expected in fixture.get("struct_names", []):
+        assert expected in struct_names
 
     should_generate = (
         fixture["roundtrip"] or fixture.get("contains") or fixture.get("not_contains")

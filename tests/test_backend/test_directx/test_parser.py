@@ -2419,6 +2419,40 @@ def test_parse_struct_methods_from_dxc_rewriter_samples():
     assert isinstance(struct.methods[0].body[0].value, VectorConstructorNode)
 
 
+def test_parse_nested_struct_method_prototype_from_wickedengine_sh_lite():
+    # Source: https://github.com/turanszkij/WickedEngine/blob/9df7a530aed53cc59b345f751939e513170ddf3c/WickedEngine/shaders/SH_Lite.hlsli
+    ast = parse_code("""
+        namespace SH
+        {
+            struct L1
+            {
+                static const uint NumCoefficients = 4;
+                half C[NumCoefficients];
+
+                struct Packed
+                {
+                    uint C[NumCoefficients / 2];
+                    L1 Unpack();
+                };
+            };
+
+            L1 L1::Packed::Unpack()
+            {
+                L1 ret;
+                return ret;
+            }
+        }
+    """)
+
+    packed = next(struct for struct in ast.structs if struct.name == "Packed")
+
+    assert [member.name for member in packed.members] == ["C"]
+    assert [method.name for method in packed.methods] == ["Unpack"]
+    assert packed.methods[0].return_type == "L1"
+    assert packed.methods[0].is_prototype is True
+    assert [function.name for function in ast.functions] == ["L1::Packed::Unpack"]
+
+
 def test_parse_struct_operator_methods_from_dxc_intrinsics_tests():
     code = textwrap.dedent("""
         struct Vector {

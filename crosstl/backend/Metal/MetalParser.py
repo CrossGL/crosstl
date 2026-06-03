@@ -1276,6 +1276,10 @@ class MetalParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.known_types.add(name)
+        if self.current_token[0] == "LESS_THAN":
+            template_args = self.parse_template_argument_suffix()
+            name = f"{name}<{self.format_generic_type_tokens(template_args)}>"
+            self.known_types.add(name)
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
@@ -1315,6 +1319,9 @@ class MetalParser:
     def parse_struct_members(self):
         members = []
         while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "USING":
+                self.parse_using_statement()
+                continue
             if self.is_template_declaration_start():
                 self.skip_template_declaration()
                 continue

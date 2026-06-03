@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from crosstl.backend.GLSL.OpenglAst import ForNode
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
@@ -381,6 +382,29 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    ExternalFixture(
+        name="ekmett-vr-scan-multi-declarator-for-init",
+        repo="https://github.com/ekmett/vr",
+        commit="e2b9ff4fbcd3f6bf885fbc60d4425a63c5e5f2a3",
+        path="shaders/scan.glsl",
+        shader_type="compute",
+        code=textwrap.dedent("""
+            #version 450
+
+            uint warp_scan_inclusive(uint d, uint N) {
+              for (uint i = 1, i_max = min(N >> 1, 5u); i < i_max; i <<= 1) {
+                bool valid = false;
+                uint t = shuffleUpNV(d, i, 32, valid);
+                if (valid) d += t;
+              }
+              return d;
+            }
+
+            void main() {
+              uint total = warp_scan_inclusive(1u, 8u);
+            }
+        """).strip(),
+    ),
 ]
 
 
@@ -525,6 +549,23 @@ def test_parse_vulkan_samples_buffer_device_address_fixture():
     assert local_alias.qualifiers == ["restrict"]
 
 
+def test_parse_ekmett_vr_scan_multi_declarator_for_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "ekmett-vr-scan-multi-declarator-for-init"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    scan = next(
+        function for function in ast.functions if function.name == "warp_scan_inclusive"
+    )
+    loop = next(statement for statement in scan.body if isinstance(statement, ForNode))
+
+    assert [declaration.name for declaration in loop.init] == ["i", "i_max"]
+    assert [declaration.vtype for declaration in loop.init] == ["uint", "uint"]
+
+
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda fixture: fixture.name)
 def test_codegen_external_glsl_fixture_to_parseable_crossgl(fixture):
     crossgl = generate_crossgl(fixture.code, fixture.shader_type)
@@ -551,3 +592,18 @@ def test_codegen_vulkan_samples_buffer_device_address_fixture_snippets():
     assert "PositionReferences references;" in crossgl
     assert "restrict Position positions = references.buffers[slice];" in crossgl
     assert "\n     Position;\n" not in crossgl
+
+
+def test_codegen_ekmett_vr_scan_multi_declarator_for_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "ekmett-vr-scan-multi-declarator-for-init"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert (
+        "for (uint i = 1, i_max = min((N >> 1), 5u); (i < i_max); i <<= 1)" in crossgl
+    )
+    assert "for (uint i = 1; (i < i_max);" not in crossgl

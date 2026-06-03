@@ -331,6 +331,50 @@ def test_vulkan_shader_examples_compute_atomic_const_generics_codegen():
     ) in result
 
 
+def test_vulkan_shader_examples_emboss_2d_compute_image_macro_codegen():
+    # Reduced from https://github.com/Rust-GPU/VulkanShaderExamples commit
+    # b29a37eb46802b5ea6882af4808d6887fc184581,
+    # shaders/rust/computeshader/emboss/src/lib.rs.
+    code = """
+    use spirv_std::{glam::{IVec2, UVec3, Vec4, vec4}, spirv, Image};
+
+    #[spirv(compute(threads(16, 16)))]
+    pub fn main_cs(
+        #[spirv(global_invocation_id)] global_id: UVec3,
+        #[spirv(descriptor_set = 0, binding = 0)] input_image: &Image!(
+            2D,
+            format = rgba8,
+            sampled = false
+        ),
+        #[spirv(descriptor_set = 0, binding = 1)] result_image: &Image!(
+            2D,
+            format = rgba8,
+            sampled = false
+        ),
+    ) {
+        let coord = IVec2::new(global_id.x as i32, global_id.y as i32);
+        let rgb: Vec4 = input_image.read(coord);
+        let gray = (rgb.x + rgb.y + rgb.z) / 3.0;
+        let res = vec4(gray, gray, gray, 1.0);
+        unsafe {
+            result_image.write(coord, res);
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "compute main_cs {" in result
+    assert "uvec3 global_id @ gl_GlobalInvocationID" in result
+    assert "image2D input_image @ set(0) @ binding(0)" in result
+    assert "image2D result_image @ set(0) @ binding(1)" in result
+    assert "@numthreads(16, 16, 1)" in result
+    assert "let coord = ivec2((int)global_id.x, (int)global_id.y);" in result
+    assert "vec4 rgb = input_image.read(coord);" in result
+    assert "let gray = (((rgb.x + rgb.y) + rgb.z) / 3.0);" in result
+    assert "result_image.write(coord, res);" in result
+
+
 def test_rust_gpu_final_parenthesized_binary_expression_codegen():
     code = """
     fn total_rayleigh(lambda: Vec3) -> Vec3 {

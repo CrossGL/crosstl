@@ -437,6 +437,60 @@ def test_vulkan_shader_examples_compute_atomic_const_generics_parsing():
     assert atomic_call.args[0].expression.index.target_type == "usize"
 
 
+def test_vulkan_shader_examples_emboss_2d_compute_image_macro_parsing():
+    # Reduced from https://github.com/Rust-GPU/VulkanShaderExamples commit
+    # b29a37eb46802b5ea6882af4808d6887fc184581,
+    # shaders/rust/computeshader/emboss/src/lib.rs.
+    code = """
+    use spirv_std::{glam::{IVec2, UVec3, Vec4, vec4}, spirv, Image};
+
+    #[spirv(compute(threads(16, 16)))]
+    pub fn main_cs(
+        #[spirv(global_invocation_id)] global_id: UVec3,
+        #[spirv(descriptor_set = 0, binding = 0)] input_image: &Image!(
+            2D,
+            format = rgba8,
+            sampled = false
+        ),
+        #[spirv(descriptor_set = 0, binding = 1)] result_image: &Image!(
+            2D,
+            format = rgba8,
+            sampled = false
+        ),
+    ) {
+        let coord = IVec2::new(global_id.x as i32, global_id.y as i32);
+        let rgb: Vec4 = input_image.read(coord);
+        let gray = (rgb.x + rgb.y + rgb.z) / 3.0;
+        let res = vec4(gray, gray, gray, 1.0);
+        unsafe {
+            result_image.write(coord, res);
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.attributes[0].args == [
+        "compute",
+        "(",
+        "threads",
+        "(",
+        "16",
+        "16",
+        ")",
+        ")",
+    ]
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("global_id", "UVec3"),
+        ("input_image", "&Image!(2D, format=rgba8, sampled=false)"),
+        ("result_image", "&Image!(2D, format=rgba8, sampled=false)"),
+    ]
+    assert function.body[0].name == "coord"
+    assert isinstance(function.body[1].value, FunctionCallNode)
+    assert isinstance(function.body[-1], UnsafeBlockNode)
+
+
 def test_underscore_parameter_name_parsing():
     code = """
     pub fn fallback(_value: u32) -> u32 {

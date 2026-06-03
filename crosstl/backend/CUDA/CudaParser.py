@@ -3661,6 +3661,8 @@ class CudaParser:
             return False
 
         index = self.skip_lambda_specifiers_at_index(index)
+        index = self.skip_lambda_template_parameters_at_index(index)
+        index = self.skip_lambda_specifiers_at_index(index)
         return index < len(self.tokens) and self.tokens[index][0] in {
             "LPAREN",
             "LBRACE",
@@ -3686,6 +3688,13 @@ class CudaParser:
             break
         return index
 
+    def skip_lambda_template_parameters_at_index(self, index):
+        if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
+            skipped = self.skip_template_at_index(index)
+            if skipped is not None:
+                return skipped
+        return index
+
     def skip_balanced_tokens_at_index(self, index, open_token, close_token):
         depth = 0
         while index < len(self.tokens):
@@ -3703,6 +3712,8 @@ class CudaParser:
 
     def parse_lambda_expression(self):
         self.consume_balanced_lambda_tokens("LBRACKET", "RBRACKET")
+        self.skip_lambda_specifiers()
+        self.skip_lambda_template_parameters()
         self.skip_lambda_specifiers()
 
         args = []
@@ -3738,6 +3749,10 @@ class CudaParser:
                     self.consume_balanced_lambda_tokens("LPAREN", "RPAREN")
                 continue
             break
+
+    def skip_lambda_template_parameters(self):
+        if self.current_token[0] == "LESS_THAN":
+            self.parse_template_suffix()
 
     def skip_lambda_trailing_return_type(self):
         self.eat("ARROW")

@@ -906,6 +906,7 @@ class HLSLParser:
 
         self.eat("LBRACE")
         nested_members = []
+        nested_methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             member_attributes = self.parse_attribute_list()
             member_qualifiers = self.parse_qualifiers()
@@ -922,13 +923,28 @@ class HLSLParser:
                 raise SyntaxError(
                     f"Expected type in struct member, got {self.current_token[0]}"
                 )
-            declarations = self.parse_variable_declaration(
-                qualifiers=member_qualifiers,
-                attributes=member_attributes,
-                allow_semantic=True,
-                consume_semicolon=True,
-            )
-            nested_members.extend(self.ensure_statement_list(declarations))
+            return_type = self.parse_type()
+            member_qualifiers.extend(self.parse_post_type_qualifiers())
+            member_name = self.parse_member_declarator_name()
+            if self.current_token[0] == "LPAREN":
+                nested_methods.append(
+                    self.parse_function(
+                        return_type,
+                        member_name,
+                        qualifiers=member_qualifiers,
+                        attributes=member_attributes,
+                    )
+                )
+            else:
+                declarations = self.parse_variable_declaration_list_rest(
+                    return_type,
+                    member_name,
+                    qualifiers=member_qualifiers,
+                    attributes=member_attributes,
+                    allow_semantic=True,
+                    consume_semicolon=True,
+                )
+                nested_members.extend(self.ensure_statement_list(declarations))
 
         self.eat("RBRACE")
 
@@ -937,14 +953,18 @@ class HLSLParser:
                 raise SyntaxError("Expected identifier after anonymous struct member")
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-            self.synthetic_structs.append(StructNode(nested_name, nested_members))
+            nested_struct = StructNode(nested_name, nested_members)
+            nested_struct.methods = nested_methods
+            self.synthetic_structs.append(nested_struct)
             return []
 
         first_name = self.parse_identifier()
         struct_type = nested_name or self.synthetic_struct_type_name(
             parent_name, first_name
         )
-        self.synthetic_structs.append(StructNode(struct_type, nested_members))
+        nested_struct = StructNode(struct_type, nested_members)
+        nested_struct.methods = nested_methods
+        self.synthetic_structs.append(nested_struct)
         return self.parse_variable_declaration_list_rest(
             struct_type,
             first_name,

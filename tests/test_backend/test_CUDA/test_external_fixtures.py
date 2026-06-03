@@ -1,5 +1,6 @@
 from crosstl.backend.CUDA.CudaAst import (
     AtomicOperationNode,
+    FunctionCallNode,
     SharedMemoryNode,
     StructNode,
     TypeAliasNode,
@@ -31,6 +32,7 @@ EXTERNAL_SAMPLES = [
         "paths": [
             "cudax/test/stf/examples/05-stencil.cu",
             "cub/examples/block/example_block_reduce_dyn_smem.cu",
+            "libcudacxx/include/cuda/std/__variant/comparison.h",
             "thrust/examples/cuda/async_reduce.cu",
         ],
     },
@@ -329,6 +331,32 @@ def test_cccl_cub_local_union_aligned_dynamic_shared_codegen_reparse():
     assert "struct ShmemLayout" in crossgl
     assert "var<workgroup> smem: array<i8>;" in crossgl
     assert "workgroupBarrier();" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cccl_libcudacxx_templated_lambda_codegen_reparse():
+    source = """
+    __global__ void compare_kernel(int* out) {
+        auto __three_way = []<class _Type>(
+            const _Type& __v, const _Type& __w) -> int {
+            return __v < __w;
+        };
+        out[threadIdx.x] = __three_way(1, 2);
+    }
+    """
+
+    ast = parse_cuda(source)
+    templated_lambda = ast.kernels[0].body[0].value
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(templated_lambda, FunctionCallNode)
+    assert templated_lambda.name == "lambda"
+    assert [(arg.vtype, arg.name) for arg in templated_lambda.args[:-1]] == [
+        ("const _Type &", "__v"),
+        ("const _Type &", "__w"),
+    ]
+    assert "lambda(_Type __v, _Type __w, (__v < __w))" in crossgl
+    assert "out[gl_LocalInvocationID.x] = __three_way(1, 2);" in crossgl
     assert_crossgl_reparse(crossgl)
 
 
