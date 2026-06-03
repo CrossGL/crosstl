@@ -43,6 +43,12 @@ DOCS_REPORT_REQUIRED_FIELDS = (
 )
 FRONTEND_ID = "frontend"
 FRONTEND_NAME = "Frontend / IR / Parser"
+PROJECT_FEATURE_PREFIX = "project."
+PROJECT_IMPLEMENTATION_PATHS = (
+    "crosstl/project",
+    "crosstl/_crosstl.py",
+)
+PROJECT_TEST_PATHS = ("tests/test_translator/test_project_translation.py",)
 
 BACKLOG_STATUSES = {
     "partial",
@@ -698,6 +704,21 @@ def backend_implementation_paths(backend: dict[str, Any]) -> list[str]:
         if value:
             paths.append(value)
     return paths
+
+
+def feature_implementation_paths(
+    feature: dict[str, Any],
+    backend: dict[str, Any],
+) -> list[str]:
+    if feature.get("id", "").startswith(PROJECT_FEATURE_PREFIX):
+        return list(PROJECT_IMPLEMENTATION_PATHS)
+    return backend_implementation_paths(backend)
+
+
+def feature_test_paths(feature: dict[str, Any], backend: dict[str, Any]) -> list[str]:
+    if feature.get("id", "").startswith(PROJECT_FEATURE_PREFIX):
+        return list(PROJECT_TEST_PATHS)
+    return list(backend.get("tests", []))
 
 
 def split_identifier(token: str) -> list[str]:
@@ -1548,13 +1569,11 @@ def build_report(
         support_by_backend = {}
         for backend_id, support in feature.get("support", {}).items():
             backend = backend_by_id[backend_id]
-            implementation_hits = collect_file_hits(
-                backend_implementation_paths(backend), terms
-            )
-            test_hits = collect_test_hits(backend.get("tests", []), terms)
-            unsupported_hits = collect_unsupported_hits(
-                backend_implementation_paths(backend), terms
-            )
+            implementation_paths = feature_implementation_paths(feature, backend)
+            test_paths = feature_test_paths(feature, backend)
+            implementation_hits = collect_file_hits(implementation_paths, terms)
+            test_hits = collect_test_hits(test_paths, terms)
+            unsupported_hits = collect_unsupported_hits(implementation_paths, terms)
             doc_hits = docs_feature_hits(docs_report, backend_id, feature["id"])
             state = infer_state(
                 support, implementation_hits, test_hits, unsupported_hits

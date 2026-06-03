@@ -361,6 +361,48 @@ def test_build_report_scans_repo_implementation_and_tests():
     assert report["issues"] == []
 
 
+def test_build_report_scans_project_feature_roots_independently_of_backend_paths():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "missing/directx_codegen.py",
+                "native_backend": "missing/directx_backend",
+                "tests": ["missing/directx_tests.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "project.batch_translation",
+                "category": "project",
+                "name": "Batch project translation",
+                "description": (
+                    "Translate discovered project units to target backends and "
+                    "write translated artifacts."
+                ),
+                "support": {"directx": {"status": "supported"}},
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features)
+    support = report["features"][0]["support"]["directx"]
+
+    assert support["state"] == "tested"
+    implementation_paths = {hit["path"] for hit in support["implementation"]}
+    assert "crosstl/project/pipeline.py" in implementation_paths
+    assert "crosstl/_crosstl.py" in implementation_paths
+    assert any(
+        hit["path"] == "tests/test_translator/test_project_translation.py"
+        for hit in support["tests"]
+    )
+    assert report["issues"] == []
+
+
 def test_build_report_counts_test_class_names_as_evidence():
     module = load_signals_module()
     backends = {
