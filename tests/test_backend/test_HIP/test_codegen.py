@@ -450,6 +450,34 @@ class TestHipCodeGen:
         assert "var value: uint" not in result
         assert "var result: uint" not in result
 
+    def test_public_rocm_graph_api_vector_braced_constructor_conversion(self):
+        """Covers rocm-examples graph_api phantom.hip float3{...} constructors."""
+        code = """
+        __global__ void create_phantom_kernel(
+            float* vol,
+            ulonglong3 dim,
+            float3 voxelDim) {
+            auto const denorm = float3{
+                ((dim.x - 1) * voxelDim.x) / 2.f,
+                ((dim.y - 1) * voxelDim.y) / 2.f,
+                ((dim.z - 1) * voxelDim.z) / 2.f
+            };
+            vol[threadIdx.x] = denorm.x;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "var denorm: auto = vec3<f32>(" in result
+        assert "(((dim.x - 1) * voxelDim.x) / 2.f)" in result
+        assert "vol[gl_LocalInvocationID.x] = denorm.x;" in result
+        assert "float3{" not in result
+        assert "float3(" not in result
+
     def test_hip_fp16_half2_types_and_intrinsics_convert_to_crossgl(self):
         code = """
         __device__ half2 fp16_ops(half2 a, half2 b, float x) {

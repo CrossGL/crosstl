@@ -184,6 +184,75 @@ class VulkanParser:
         "Not": "~",
         "SNegate": "-",
     }
+    SPIRV_GLSL_STD_450_EXT_INST_FUNCTIONS = {
+        "Acos": "acos",
+        "Acosh": "acosh",
+        "Asin": "asin",
+        "Asinh": "asinh",
+        "Atan": "atan",
+        "Atan2": "atan2",
+        "Atanh": "atanh",
+        "Ceil": "ceil",
+        "Cos": "cos",
+        "Cosh": "cosh",
+        "Cross": "cross",
+        "Degrees": "degrees",
+        "Distance": "distance",
+        "Exp": "exp",
+        "Exp2": "exp2",
+        "FAbs": "abs",
+        "FClamp": "clamp",
+        "FindILsb": "findLSB",
+        "FindSMsb": "findMSB",
+        "FindUMsb": "findMSB",
+        "Floor": "floor",
+        "FMax": "max",
+        "FMin": "min",
+        "FMix": "mix",
+        "FSign": "sign",
+        "Fma": "fma",
+        "Fract": "fract",
+        "InverseSqrt": "inversesqrt",
+        "Length": "length",
+        "Log": "log",
+        "Log2": "log2",
+        "Normalize": "normalize",
+        "NMax": "max",
+        "NMin": "min",
+        "PackDouble2x32": "packDouble2x32",
+        "PackHalf2x16": "packHalf2x16",
+        "PackSnorm2x16": "packSnorm2x16",
+        "PackSnorm4x8": "packSnorm4x8",
+        "PackUnorm2x16": "packUnorm2x16",
+        "PackUnorm4x8": "packUnorm4x8",
+        "Pow": "pow",
+        "Radians": "radians",
+        "Reflect": "reflect",
+        "Refract": "refract",
+        "Round": "round",
+        "RoundEven": "roundEven",
+        "SAbs": "abs",
+        "SClamp": "clamp",
+        "SMax": "max",
+        "SMin": "min",
+        "SSign": "sign",
+        "Sin": "sin",
+        "Sinh": "sinh",
+        "SmoothStep": "smoothstep",
+        "Step": "step",
+        "Tan": "tan",
+        "Tanh": "tanh",
+        "Trunc": "trunc",
+        "UClamp": "clamp",
+        "UMax": "max",
+        "UMin": "min",
+        "UnpackDouble2x32": "unpackDouble2x32",
+        "UnpackHalf2x16": "unpackHalf2x16",
+        "UnpackSnorm2x16": "unpackSnorm2x16",
+        "UnpackSnorm4x8": "unpackSnorm4x8",
+        "UnpackUnorm2x16": "unpackUnorm2x16",
+        "UnpackUnorm4x8": "unpackUnorm4x8",
+    }
 
     def __init__(self, tokens):
         self.tokens = tokens
@@ -404,6 +473,7 @@ class VulkanParser:
         constants = {}
         constant_types = {}
         spec_constant_ids = []
+        extended_instruction_imports = {}
         variables = []
         entry_points = []
         execution_modes = {}
@@ -574,6 +644,8 @@ class VulkanParser:
                         operands[1], operands[2:], names, constants
                     )
                     spec_constant_ids.append(result_id)
+            elif result_id and opcode == "OpExtInstImport" and operands:
+                extended_instruction_imports[result_id] = operands[0]
             elif result_id and opcode == "OpVariable" and len(operands) >= 2:
                 variables.append(
                     {
@@ -619,6 +691,7 @@ class VulkanParser:
             entry_points,
             execution_modes,
             constants,
+            extended_instruction_imports,
         )
         if not global_variables and not structs and not functions:
             raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
@@ -638,6 +711,7 @@ class VulkanParser:
             spirv_constants=constants,
             spirv_constant_types=constant_types,
             spirv_spec_constant_ids=spec_constant_ids,
+            spirv_extended_instruction_imports=extended_instruction_imports,
         )
 
     def spirv_assembly_functions(
@@ -649,6 +723,7 @@ class VulkanParser:
         entry_points,
         execution_modes,
         constants,
+        extended_instruction_imports,
     ):
         functions = []
         entry_points_by_id = {}
@@ -717,6 +792,7 @@ class VulkanParser:
                     decorations,
                     types,
                     constants,
+                    extended_instruction_imports,
                 ),
             )
             function_entry_points = entry_points_by_id.get(function_id, [])
@@ -737,6 +813,7 @@ class VulkanParser:
             node.spirv_names = names
             node.spirv_constants = constants
             node.spirv_decorations = decorations
+            node.spirv_extended_instruction_imports = extended_instruction_imports
             node.spirv_instructions = list(raw_instructions)
             node.spirv_raw_instructions = [
                 {
@@ -761,6 +838,7 @@ class VulkanParser:
         decorations,
         types,
         constants,
+        extended_instruction_imports,
     ):
         statements = []
         expressions = {}
@@ -895,6 +973,26 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode == "OpExtInst" and len(operands) >= 3:
+                expressions[result_id] = FunctionCallNode(
+                    self.spirv_ext_inst_function_name(
+                        extended_instruction_imports.get(operands[1]),
+                        operands[2],
+                    ),
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operand,
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                        for operand in operands[3:]
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             operation = opcode[2:] if opcode.startswith("Op") else opcode
             if (
                 result_id
@@ -997,6 +1095,19 @@ class VulkanParser:
                 statements.append(ReturnNode())
 
         return statements
+
+    def spirv_ext_inst_function_name(self, instruction_set, instruction):
+        if instruction_set == "GLSL.std.450":
+            mapped_name = self.SPIRV_GLSL_STD_450_EXT_INST_FUNCTIONS.get(instruction)
+            if mapped_name is not None:
+                return mapped_name
+        if not instruction:
+            return "spirv_ext_inst"
+        sanitized_set = self.spirv_fallback_identifier(instruction_set, "ext_inst")
+        sanitized_instruction = self.spirv_fallback_identifier(
+            instruction, "instruction"
+        )
+        return f"spirv_{sanitized_set}_{sanitized_instruction}"
 
     def spirv_assembly_vector_shuffle_expression(
         self,

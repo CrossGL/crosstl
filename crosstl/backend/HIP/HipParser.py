@@ -3029,7 +3029,7 @@ class HipParser:
         elif (
             self.is_type_token(allow_identifier=False)
             and self.peek()
-            and self.peek().type == "LPAREN"
+            and self.peek().type in {"LPAREN", "LBRACE"}
         ):
             return self.parse_type_without_array_suffix()
 

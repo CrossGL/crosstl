@@ -420,6 +420,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSL_STD450_EXTINST_BODY_ASSEMBLY = """
+; Reduced from Khronos glslang Test/baseResults/web.basic.vert.out Normalize.
+OpCapability Shader
+%std450 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %input_vec %output_vec
+OpName %input_vec "inputVec"
+OpName %output_vec "outputVec"
+OpDecorate %input_vec Location 0
+OpDecorate %output_vec Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%input_vec = OpVariable %ptr_input_v4float Input
+%output_vec = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %input_vec
+%normalized = OpExtInst %v4float %std450 Normalize %loaded
+OpStore %output_vec %normalized
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_LOCAL_SIZE_ID_ASSEMBLY = """
 ; Reduced from specialization-driven compute local sizes.
 OpCapability Shader
@@ -861,6 +888,18 @@ def test_spirv_assembly_vector_shuffle_swizzle_body_codegen():
     assert "float3 color @output @location(0);" in generated_code
     assert "color = value.xyz;" in generated_code
     assert "color = rgb;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_glsl_std450_extinst_body_codegen():
+    tokens = tokenize_code(SPIRV_GLSL_STD450_EXTINST_BODY_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 inputVec @input @location(0);" in generated_code
+    assert "float4 outputVec @output @location(0);" in generated_code
+    assert "outputVec = normalize(inputVec);" in generated_code
+    assert "outputVec = normalized;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
