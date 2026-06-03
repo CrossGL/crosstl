@@ -571,6 +571,31 @@ def test_rust_gpu_builtin_spirv_aliases_drive_parameter_semantics():
     assert "uint local_index @ gl_LocalInvocationIndex" in result
 
 
+def test_vulkan_shader_examples_multiview_view_index_semantic_codegen():
+    # Reduced from Rust-GPU/VulkanShaderExamples commit
+    # b29a37eb46802b5ea6882af4808d6887fc184581,
+    # shaders/rust/multiview/multiview/src/lib.rs main_vs.
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(vertex)]
+    pub fn main_vs(
+        in_pos: Vec3,
+        #[spirv(view_index)] view_index: u32,
+        #[spirv(position)] out_position: &mut Vec4,
+    ) {
+        *out_position = Vec4::new(view_index as f32, in_pos.y, in_pos.z, 1.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vertex main_vs {" in result
+    assert "uint view_index @ gl_ViewIndex" in result
+    assert "vec4 out_position @ gl_Position" in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_reduce_subgroup_builtins_codegen_from_upstream_example():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

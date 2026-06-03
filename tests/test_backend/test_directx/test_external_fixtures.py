@@ -355,6 +355,45 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_contextual_keyword_identifiers",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/objects/Texture/sample_kwd.hlsl",
+        code=textwrap.dedent("""
+            float3 foo(float3 sample) {
+                return sample;
+            }
+
+            struct S {
+              float4 center;
+              float4 precise;
+              float4 sample;
+              float4 globallycoherent;
+            };
+
+            float4 main(float4 input : SV_POSITION) : SV_TARGET
+            {
+                float precise = 1.0f;
+                int globallycoherent = 1;
+                float sample;
+
+                sample = 1.0f;
+                globallycoherent += 10;
+
+                return float4(foo(float3(precise, globallycoherent, sample)), input.x);
+            }
+        """).strip(),
+        contains=(
+            "vec4 precise;",
+            "vec4 globallycoherent;",
+            "vec3 foo(vec3 sample)",
+            "float precise = 1.0;",
+            "int globallycoherent = 1;",
+            "sample = 1.0;",
+            "globallycoherent += 10;",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_sampler_kind_modifiers",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

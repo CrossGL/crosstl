@@ -822,6 +822,7 @@ class VulkanParser:
             entry_points,
             execution_modes,
             constants,
+            constant_types,
             extended_instruction_imports,
         )
         if not global_variables and not structs and not functions:
@@ -857,6 +858,7 @@ class VulkanParser:
         entry_points,
         execution_modes,
         constants,
+        constant_types,
         extended_instruction_imports,
     ):
         functions = []
@@ -937,6 +939,7 @@ class VulkanParser:
                     types,
                     variables,
                     constants,
+                    constant_types,
                     extended_instruction_imports,
                 ),
             )
@@ -986,6 +989,7 @@ class VulkanParser:
         types,
         variables,
         constants,
+        constant_types,
         extended_instruction_imports,
     ):
         statements = []
@@ -1186,6 +1190,21 @@ class VulkanParser:
                             constants,
                         )
                     ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode == "OpBitcast" and len(operands) >= 2:
+                expressions[result_id] = self.spirv_assembly_bitcast_expression(
+                    operands[0],
+                    operands[1],
+                    expressions,
+                    expression_type_ids,
+                    names,
+                    decorations,
+                    constants,
+                    constant_types,
+                    types,
                 )
                 expression_type_ids[result_id] = operands[0]
                 continue
@@ -1685,6 +1704,60 @@ class VulkanParser:
         if "Lod" in parsed_operands and parsed_operands["Lod"]:
             args.append(parsed_operands["Lod"][0])
         return FunctionCallNode("texelFetch", args)
+
+    def spirv_assembly_bitcast_expression(
+        self,
+        result_type_id,
+        operand_id,
+        expressions,
+        expression_type_ids,
+        names,
+        decorations,
+        constants,
+        constant_types,
+        types,
+    ):
+        operand = self.spirv_assembly_operand_expression(
+            operand_id, expressions, names, decorations, constants
+        )
+        source_type_id = expression_type_ids.get(operand_id) or constant_types.get(
+            operand_id
+        )
+        source_family = self.spirv_bitcast_component_family(source_type_id, types)
+        result_family = self.spirv_bitcast_component_family(result_type_id, types)
+
+        if source_family == result_family and source_family is not None:
+            return operand
+
+        function_name = self.spirv_bitcast_function_name(source_family, result_family)
+        if function_name is None:
+            result_type_name = self.spirv_type_name(result_type_id, types)
+            fallback_type = self.spirv_fallback_identifier(
+                result_type_name or result_type_id, "type"
+            )
+            function_name = f"spirvBitcast_{fallback_type}"
+
+        return FunctionCallNode(function_name, [operand])
+
+    def spirv_bitcast_component_family(self, type_id, types):
+        type_info = types.get(type_id, {})
+        if type_info.get("kind") == "vector":
+            return self.spirv_bitcast_component_family(
+                type_info.get("component_type"), types
+            )
+
+        type_name = self.spirv_type_name(type_id, types)
+        if type_name in {"float", "int", "uint"}:
+            return type_name
+        return None
+
+    def spirv_bitcast_function_name(self, source_family, result_family):
+        return {
+            ("float", "int"): "floatBitsToInt",
+            ("float", "uint"): "floatBitsToUint",
+            ("int", "float"): "intBitsToFloat",
+            ("uint", "float"): "uintBitsToFloat",
+        }.get((source_family, result_family))
 
     def spirv_assembly_composite_insert_expression(
         self,

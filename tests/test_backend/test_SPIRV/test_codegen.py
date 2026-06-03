@@ -757,6 +757,43 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_BITCAST_SUCCESS_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
+; Source path: test/val/val_conversion_test.cpp
+; Reduced from ValidateConversion::BitcastSuccess OpBitcast %f32 %u32_1
+; and OpBitcast %f32vec2 %u32vec2_12.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %float_out %vec_out
+OpExecutionMode %main OriginUpperLeft
+OpName %float_out "floatOut"
+OpName %vec_out "vecOut"
+OpDecorate %float_out Location 0
+OpDecorate %vec_out Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%v2uint = OpTypeVector %uint 2
+%v2float = OpTypeVector %float 2
+%ptr_output_float = OpTypePointer Output %float
+%ptr_output_v2float = OpTypePointer Output %v2float
+%u32_1 = OpConstant %uint 1
+%u32_2 = OpConstant %uint 2
+%u32vec2_12 = OpConstantComposite %v2uint %u32_1 %u32_2
+%float_out = OpVariable %ptr_output_float Output
+%vec_out = OpVariable %ptr_output_v2float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%float_value = OpBitcast %float %u32_1
+OpStore %float_out %float_value
+%vec_value = OpBitcast %v2float %u32vec2_12
+OpStore %vec_out %vec_value
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_CROSS_COMPOSITE_INSERT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
 ; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
@@ -1634,6 +1671,21 @@ def test_spirv_tools_image_query_size_codegen():
     assert "Texture2DMS uImage @set(0) @binding(0);" in generated_code
     assert "Size = textureSize(uImage);" in generated_code
     assert "Size = size;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_bitcast_success_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_BITCAST_SUCCESS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float floatOut @output @location(0);" in generated_code
+    assert "float2 vecOut @output @location(1);" in generated_code
+    assert "floatOut = uintBitsToFloat(1);" in generated_code
+    assert "vecOut = uintBitsToFloat(uint2(1, 2));" in generated_code
+    assert "float_value" not in generated_code
+    assert "vec_value" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

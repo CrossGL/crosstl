@@ -242,6 +242,7 @@ class RustToCrossGLConverter:
             "workgroup_id": "gl_WorkGroupID",
             "workgroup_size": "gl_WorkGroupSize",
             "num_workgroups": "gl_NumWorkGroups",
+            "view_index": "gl_ViewIndex",
             "subgroup_local_invocation_id": "gl_SubgroupInvocationID",
             "subgroup_invocation_id": "gl_SubgroupInvocationID",
             "subgroup_size": "gl_SubgroupSize",

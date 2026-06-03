@@ -75,6 +75,38 @@ class MetalToCrossGLConverter:
         "while",
     }
     storage_texture_accesses = {"access::read", "access::write", "access::read_write"}
+    pixel_data_type_wrappers = {
+        "r8unorm",
+        "r8snorm",
+        "r8uint",
+        "r8sint",
+        "r16unorm",
+        "r16snorm",
+        "r16uint",
+        "r16sint",
+        "r16float",
+        "rg8unorm",
+        "rg8snorm",
+        "rg8uint",
+        "rg8sint",
+        "rg16unorm",
+        "rg16snorm",
+        "rg16uint",
+        "rg16sint",
+        "rg16float",
+        "rgba8unorm",
+        "rgba8snorm",
+        "rgba8uint",
+        "rgba8sint",
+        "rgba16unorm",
+        "rgba16snorm",
+        "rgba16uint",
+        "rgba16sint",
+        "rgba16float",
+        "rgba32uint",
+        "rgba32sint",
+        "rgba32float",
+    }
 
     def __init__(self):
         self.rt_qualifiers = {
@@ -1617,6 +1649,10 @@ class MetalToCrossGLConverter:
             suffix = base[-1] + suffix
             base = base[:-1].strip()
 
+        pixel_payload_type = self.pixel_data_payload_type(base)
+        if pixel_payload_type:
+            return f"{self.map_type(pixel_payload_type)}{suffix}"
+
         vector_type = self.metal_vector_type_parts(base)
         if vector_type:
             element_type, size = vector_type
@@ -1633,6 +1669,12 @@ class MetalToCrossGLConverter:
 
         mapped = self.type_map.get(base, base)
         return f"{mapped}{suffix}"
+
+    def pixel_data_payload_type(self, metal_type):
+        base_name, generic_args = self.generic_type_parts(metal_type)
+        if base_name in self.pixel_data_type_wrappers and len(generic_args) == 1:
+            return generic_args[0].strip()
+        return None
 
     def should_elide_resource_access_qualifier(self, base_name, generic_args):
         if len(generic_args) < 2 or not self.is_metal_resource_type_name(base_name):

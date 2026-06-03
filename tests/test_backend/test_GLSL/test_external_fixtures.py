@@ -199,6 +199,25 @@ EXTERNAL_FIXTURES = [
         """).strip(),
     ),
     ExternalFixture(
+        name="glslang-texture-frag-legacy-varying-input",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/texture.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 130
+
+            uniform sampler2D texSampler2D;
+
+            varying vec2 coords2D;
+
+            void main()
+            {
+                gl_FragColor = texture2D(texSampler2D, coords2D);
+            }
+        """).strip(),
+    ),
+    ExternalFixture(
         name="saschawillems-compute-particles-ssbo",
         repo="https://github.com/SaschaWillems/Vulkan",
         commit="180be3f9f9a0e86fff2a7de283a54063999f2b69",
@@ -741,6 +760,27 @@ def test_codegen_glslang_legacy_projected_texture_fixture_snippet():
     assert "textureProj(texSampler3D, coords4D, bias)" in crossgl
     assert "texture2DProj(" not in crossgl
     assert "texture3DProj(" not in crossgl
+
+
+def test_codegen_glslang_legacy_varying_fragment_input_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-texture-frag-legacy-varying-input"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    coords = next(var for var in ast.io_variables if var.name == "coords2D")
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert coords.qualifiers == ["varying"]
+    assert coords.io_type == "IN"
+    assert not any(var.name == "coords2D" for var in ast.global_variables)
+    assert "struct FragmentInput" in crossgl
+    assert "vec2 coords2D;" in crossgl
+    assert "texture(texSampler2D, input.coords2D)" in crossgl
+    assert "texture(texSampler2D, coords2D)" not in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_glslang_perprimitive_nv_fixture_canonical_qualifier():

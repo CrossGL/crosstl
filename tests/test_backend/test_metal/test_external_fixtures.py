@@ -163,6 +163,41 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "apple_imageblock_pixel_format_member_payload_type",
+        "repo_url": APPLE_SAMPLE_REPO,
+        "commit": APPLE_SAMPLE_COMMIT,
+        "source_path": (
+            "MetalSampleCodeLibrary/RenderWorkflows/"
+            "ImplementingOrderIndependentTransparencyWithImageBlocks/"
+            "Renderer/Shaders/AAPLShaders.metal"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "f16vec4[kNumLayers] colors @raster_order_group(0);",
+            "f16vec4 layerColor = fragmentValues.colors[0];",
+        ],
+        "not_contains": ["rgba8unorm<half4>"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            static constexpr constant short kNumLayers = 4;
+
+            struct TransparentFragmentValues {
+                rgba8unorm<half4> colors [[raster_order_group(0)]] [kNumLayers];
+                half depths [[raster_order_group(0)]] [kNumLayers];
+            };
+
+            fragment half4 blendFragments(
+                TransparentFragmentValues fragmentValues [[imageblock_data]]) {
+                half4 layerColor = fragmentValues.colors[0];
+                return layerColor;
+            }
+        """
+        ),
+    },
+    {
         "name": "moltenvk_embedded_watermark_shader",
         "repo_url": MOLTENVK_REPO,
         "commit": MOLTENVK_COMMIT,

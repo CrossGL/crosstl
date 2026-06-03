@@ -431,7 +431,7 @@ class GLSLParser:
                         uniforms.append(var)
                     elif "const" in lowered:
                         constants.append(var)
-                    elif "in" in lowered or "out" in lowered or "inout" in lowered:
+                    elif self.is_io_qualifier_set(lowered):
                         io_variables.append(var)
                     else:
                         global_variables.append(var)
@@ -471,7 +471,7 @@ class GLSLParser:
                         uniforms.append(var)
                     elif "const" in lowered:
                         constants.append(var)
-                    elif "in" in lowered or "out" in lowered or "inout" in lowered:
+                    elif self.is_io_qualifier_set(lowered):
                         io_variables.append(var)
                     else:
                         global_variables.append(var)
@@ -598,10 +598,23 @@ class GLSLParser:
             lowered = {q.lower() for q in var.qualifiers or []}
             if "uniform" in lowered:
                 uniforms.append(var)
-            elif "in" in lowered or "out" in lowered or "inout" in lowered:
+            elif self.is_io_qualifier_set(lowered):
                 io_variables.append(var)
             else:
                 global_variables.append(var)
+
+    def is_io_qualifier_set(self, qualifiers):
+        return bool({"in", "out", "inout", "varying"} & set(qualifiers))
+
+    def apply_variable_io_type(self, var, qualifiers):
+        if "inout" in qualifiers:
+            var.io_type = "INOUT"
+        elif "in" in qualifiers:
+            var.io_type = "IN"
+        elif "out" in qualifiers:
+            var.io_type = "OUT"
+        elif "varying" in qualifiers:
+            var.io_type = "IN" if self.shader_type == "fragment" else "OUT"
 
     def is_extension_interface_block_start(self):
         return (
@@ -955,12 +968,7 @@ class GLSLParser:
             )
 
             lowered = {q.lower() for q in qualifiers or []}
-            if "in" in lowered:
-                var.io_type = "IN"
-            if "out" in lowered:
-                var.io_type = "OUT"
-            if "inout" in lowered:
-                var.io_type = "INOUT"
+            self.apply_variable_io_type(var, lowered)
             if "const" in lowered:
                 var.is_const = True
 
