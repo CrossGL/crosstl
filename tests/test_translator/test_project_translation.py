@@ -297,6 +297,7 @@ def test_scan_report_records_unsupported_targets(tmp_path):
     assert diagnostic["target"] == "not-a-backend"
     assert diagnostic["missingCapabilities"] == ["target.backend"]
     assert "Supported targets:" in diagnostic["message"]
+    assert payload["migration"]["actions"] == []
 
 
 def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
@@ -2844,6 +2845,7 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     )
     assert failed_artifact["target"] == "not-a-backend"
     assert failed_artifact["error"]
+    assert payload["migration"]["actions"][0]["targets"] == ["opengl"]
 
 
 def test_project_cli_translate_project_writes_report(tmp_path):

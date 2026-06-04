@@ -1307,10 +1307,35 @@ def _artifact_source_map(
     }
 
 
-def _runtime_migration_actions(
-    units: Sequence[ProjectTranslationUnit], targets: Sequence[str]
-) -> list[dict[str, Any]]:
+def _runtime_migration_targets(
+    units: Sequence[ProjectTranslationUnit],
+    targets: Sequence[str],
+    artifacts: Sequence[Mapping[str, Any]] | None = None,
+) -> list[str]:
     if not units or not targets:
+        return []
+    supported_targets = set(_supported_target_names())
+    selected_targets = [
+        target for target in _normalized_targets(targets) if target in supported_targets
+    ]
+    if artifacts is None:
+        return selected_targets
+
+    translated_targets = {
+        artifact.get("target")
+        for artifact in artifacts
+        if isinstance(artifact, Mapping) and artifact.get("status") == "translated"
+    }
+    return [target for target in selected_targets if target in translated_targets]
+
+
+def _runtime_migration_actions(
+    units: Sequence[ProjectTranslationUnit],
+    targets: Sequence[str],
+    artifacts: Sequence[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    action_targets = _runtime_migration_targets(units, targets, artifacts)
+    if not action_targets:
         return []
     return [
         {
@@ -1321,7 +1346,7 @@ def _runtime_migration_actions(
                 "host runtime API calls, resource binding setup, build scripts, "
                 "and backend framework integration separately."
             ),
-            "targets": list(targets),
+            "targets": action_targets,
         }
     ]
 
@@ -1457,7 +1482,9 @@ def translate_project(
         artifacts=artifacts,
         diagnostics=diagnostics,
         validation=validation,
-        migration_actions=_runtime_migration_actions(scan.units, selected_targets),
+        migration_actions=_runtime_migration_actions(
+            scan.units, selected_targets, artifacts
+        ),
     )
 
 

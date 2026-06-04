@@ -204,6 +204,7 @@ Project reports are JSON documents with:
   availability, and opt-in toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. Each action has a documented kind, severity, message, and target
-  list; the current project pipeline emits ``manual-runtime-integration`` for
-  host runtime API, resource binding, build script, and backend integration
-  review.
+  list. Scan-only reports include supported requested targets when translation
+  units are present. Translation reports scope ``manual-runtime-integration`` to
+  targets that produced translated artifacts, covering host runtime API,
+  resource binding, build script, and backend integration review.
