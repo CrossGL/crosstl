@@ -73,9 +73,9 @@ Validate artifacts referenced by a report:
 Validation exits nonzero when the report metadata is malformed, artifact
 records, source-map records, or preserved diagnostics are malformed, artifact
 targets are not declared by the report, translated outputs are missing, artifact
-paths resolve outside the repository, or opt-in toolchain smoke checks fail.
-Toolchain smoke checks only run for translated artifacts that still exist inside
-the repository.
+paths resolve outside the repository, generated artifact hashes no longer match
+the files on disk, or opt-in toolchain smoke checks fail. Toolchain smoke checks
+only run for translated artifacts that still exist inside the repository.
 
 Inspect an existing report as a concise JSON or text summary:
 
@@ -175,10 +175,10 @@ Project reports are JSON documents with:
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, and source overrides.
 - ``artifacts``: attempted outputs with source path, source backend, target,
-  optional variant name, output path, status, source hash, pipeline provenance,
-  and file-granularity source-map anchors for successful translations. Invalid
-  project output directories are recorded as failed artifacts without writing
-  files.
+  optional variant name, output path, status, source hash, generated artifact
+  hash, pipeline provenance, and file-granularity source-map anchors for
+  successful translations. Invalid project output directories are recorded as
+  failed artifacts without writing files.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, and translated/failed artifact outcomes for manifest entries.
@@ -188,14 +188,14 @@ Project reports are JSON documents with:
 - ``validation``: report contract checks, generated timestamp and generator
   metadata checks, report inspection summaries, failed
   source artifact checks, project metadata and config count checks, unit and
-  skipped record shape checks, artifact record shape checks, source hash and
-  provenance checks, source-map record shape and anchor consistency checks,
-  external corpus record and summary checks, summary consistency checks,
-  migration action shape checks, preserved diagnostic shape checks, validation
-  result and toolchain run record shape checks, artifact target and variant
-  declaration checks, translated artifact existence checks, escaped
-  artifact-path checks, optional external toolchain availability, and opt-in
-  toolchain smoke results.
+  skipped record shape checks, artifact record shape checks, source and
+  generated hash checks, provenance checks, source-map record shape and anchor
+  consistency checks, external corpus record and summary checks, summary
+  consistency checks, migration action shape checks, preserved diagnostic shape
+  checks, validation result and toolchain run record shape checks, artifact
+  target and variant declaration checks, translated artifact existence checks,
+  escaped artifact-path checks, generated artifact hash mismatch checks,
+  optional external toolchain availability, and opt-in toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. Each action has a documented kind, severity, message, and target
   list; the current project pipeline emits ``manual-runtime-integration`` for

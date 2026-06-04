@@ -5095,104 +5095,113 @@
       "id": "project.artifact_manifest",
       "category": "project",
       "name": "Artifact manifest",
-      "description": "Emit machine-readable translated artifact records with source, target, path, status, and source hash metadata.",
+      "description": "Emit machine-readable translated artifact records with source, target, path, status, source hash, and generated artifact hash metadata.",
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "cuda": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "hip": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "mojo": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "slang": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         }

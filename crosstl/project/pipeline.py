@@ -216,6 +216,15 @@ def _source_hash(path: Path) -> dict[str, str]:
     return {"algorithm": "sha256", "value": digest}
 
 
+def _hash_matches_report(
+    actual: Mapping[str, str], expected: Mapping[str, Any]
+) -> bool:
+    return (actual["algorithm"], actual["value"]) == (
+        expected.get("algorithm"),
+        expected.get("value"),
+    )
+
+
 def _package_version() -> str:
     try:
         return importlib_metadata.version(REPORT_PACKAGE_NAME)
@@ -1378,6 +1387,7 @@ def translate_project(
                         include_paths=include_paths,
                         defines=defines,
                     )
+                    artifact["generatedHash"] = _source_hash(output_path)
                     artifact["sourceMap"] = _artifact_source_map(
                         config, unit, target, output_path
                     )
@@ -1498,6 +1508,28 @@ def _validate_artifacts(
                     missing_capabilities=["artifact.manifest"],
                 )
             )
+        generated_hash = artifact.get("generatedHash")
+        if (
+            artifact_inside_project
+            and exists
+            and artifact.get("status") == "translated"
+            and isinstance(generated_hash, Mapping)
+        ):
+            actual_hash = _source_hash(artifact_path)
+            if not _hash_matches_report(actual_hash, generated_hash):
+                diagnostics.append(
+                    ProjectDiagnostic(
+                        severity="error",
+                        code="project.validate.generated-hash-mismatch",
+                        message=(
+                            "Generated artifact hash does not match report: "
+                            f"{artifact['path']}"
+                        ),
+                        location=SourceLocation(file=str(artifact["source"])),
+                        target=str(artifact["target"]),
+                        missing_capabilities=["artifact.manifest"],
+                    )
+                )
         if artifact.get("status") == "failed":
             error = str(artifact.get("error", "")).strip()
             message = (
@@ -1771,21 +1803,34 @@ def _is_sha256_digest(value: Any) -> bool:
     )
 
 
-def _source_hash_contract_reasons(index: int, artifact: Mapping[str, Any]) -> list[str]:
-    if "sourceHash" not in artifact:
-        return []
-
-    prefix = f"artifacts[{index}].sourceHash"
-    source_hash = artifact.get("sourceHash")
-    if not isinstance(source_hash, Mapping):
+def _hash_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
 
     reasons = []
-    if source_hash.get("algorithm") != "sha256":
+    if value.get("algorithm") != "sha256":
         reasons.append(f"{prefix}.algorithm must be sha256")
-    if not _is_sha256_digest(source_hash.get("value")):
+    if not _is_sha256_digest(value.get("value")):
         reasons.append(f"{prefix}.value must be a lowercase 64-character hex digest")
     return reasons
+
+
+def _source_hash_contract_reasons(index: int, artifact: Mapping[str, Any]) -> list[str]:
+    if "sourceHash" not in artifact:
+        return []
+    return _hash_contract_reasons(
+        f"artifacts[{index}].sourceHash", artifact.get("sourceHash")
+    )
+
+
+def _generated_hash_contract_reasons(
+    index: int, artifact: Mapping[str, Any]
+) -> list[str]:
+    if "generatedHash" not in artifact:
+        return []
+    return _hash_contract_reasons(
+        f"artifacts[{index}].generatedHash", artifact.get("generatedHash")
+    )
 
 
 def _provenance_contract_reasons(index: int, artifact: Mapping[str, Any]) -> list[str]:
@@ -2728,6 +2773,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"artifacts[{index}].variant must be listed in project.variants"
                     )
             reasons.extend(_source_hash_contract_reasons(index, artifact))
+            reasons.extend(_generated_hash_contract_reasons(index, artifact))
             reasons.extend(_provenance_contract_reasons(index, artifact))
             reasons.extend(_source_map_contract_reasons(index, artifact))
 

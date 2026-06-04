@@ -778,6 +778,9 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
         "translated/opengl/shaders/graphics/simple.glsl"
     )
     assert payload["artifacts"][0]["sourceHash"]["algorithm"] == "sha256"
+    assert payload["artifacts"][0]["generatedHash"] == project_pipeline._source_hash(
+        output
+    )
     assert payload["migration"]["nonGoals"] == [
         "automatic runtime API migration",
         "application build-system rewrites",
@@ -983,6 +986,29 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
             "status": "ok",
         }
     ]
+
+
+def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report_path = repo / "portability-report.json"
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report.write_json(report_path)
+    (repo / "out" / "cgl" / "simple.cgl").write_text(
+        SIMPLE_CROSSL + "\n// edited after report\n", encoding="utf-8"
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.generated-hash-mismatch"
+    assert diagnostic["location"]["file"] == "simple.cgl"
+    assert diagnostic["target"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
 
 
 def test_translate_project_normalizes_and_deduplicates_targets(tmp_path):
@@ -1816,6 +1842,10 @@ def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
                             "algorithm": "md5",
                             "value": "A" * 64,
                         },
+                        "generatedHash": {
+                            "algorithm": "sha1",
+                            "value": "not-a-hash",
+                        },
                         "provenance": {
                             "pipeline": "",
                             "intermediate": [],
@@ -1838,6 +1868,13 @@ def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
     assert "artifacts[0].sourceHash.algorithm must be sha256" in (diagnostic["message"])
     assert (
         "artifacts[0].sourceHash.value must be a lowercase 64-character hex digest"
+        in diagnostic["message"]
+    )
+    assert "artifacts[0].generatedHash.algorithm must be sha256" in (
+        diagnostic["message"]
+    )
+    assert (
+        "artifacts[0].generatedHash.value must be a lowercase 64-character hex digest"
         in diagnostic["message"]
     )
     assert "artifacts[0].provenance.pipeline must be a string" in (
