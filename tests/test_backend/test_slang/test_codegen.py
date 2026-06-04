@@ -1098,6 +1098,27 @@ def test_resource_binding_metadata_round_trips_to_crossgl_attributes():
     assert "sampler linearSampler @register(s4);" in generated_code
 
 
+def test_standalone_layout_declarations_from_first_slang_shader_docs_codegen():
+    code = """
+    layout(row_major) uniform;
+    layout(row_major) buffer;
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+    void main()
+    {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "layout(row_major)" not in generated_code
+    assert "layout(local_size_x" not in generated_code
+    assert "void main()" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_vulkan_binding_attribute_global_resource_codegen():
     code = """
     [[vk::binding(0, 1)]]

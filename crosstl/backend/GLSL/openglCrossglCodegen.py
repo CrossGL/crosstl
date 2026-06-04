@@ -79,6 +79,7 @@ class GLSLToCrossGLConverter:
     VARIABLE_QUALIFIER_ATTRIBUTES = {
         "invariant": "invariant",
         "precise": "precise",
+        "nonuniformext": "nonuniformEXT",
         "lowp": "lowp",
         "mediump": "mediump",
         "highp": "highp",

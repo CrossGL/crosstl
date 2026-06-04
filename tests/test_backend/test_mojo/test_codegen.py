@@ -217,6 +217,28 @@ def test_single_quoted_string_literal_codegen():
     assert "return status;" in generated_code
 
 
+def test_documented_numeric_literal_forms_codegen_from_mojo_reference():
+    # Reduced from https://mojolang.org/docs/reference/literals/
+    code = """
+    fn main():
+        let grouped = 1_000_000
+        let relaxed = 1__000_
+        let fraction_only = .5
+        let trailing_point = 2.
+        let grouped_float = 1_000.000_5
+        let exponent_only = 1E10
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "let grouped = 1_000_000;" in generated_code
+    assert "let relaxed = 1__000_;" in generated_code
+    assert "let fraction_only = .5;" in generated_code
+    assert "let trailing_point = 2.;" in generated_code
+    assert "let grouped_float = 1_000.000_5;" in generated_code
+    assert "let exponent_only = 1E10;" in generated_code
+
+
 def test_function_capturing_raises_effects_codegen_are_dropped():
     code = """
     def sum_kernel_benchmark(

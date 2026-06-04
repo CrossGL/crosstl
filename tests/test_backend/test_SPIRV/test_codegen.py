@@ -1144,6 +1144,63 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_IMAGE_QUERY_LOD_LEVELS_SAMPLES_ASSEMBLY = """
+; Source: SPIR-V spec image query instructions plus Vulkan image query semantics.
+; Reduced to OpImageQueryLod, OpImageQueryLevels, and OpImageQuerySamples.
+OpCapability Shader
+OpCapability ImageQuery
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %uv %lod_out %levels_out %samples_out %query_tex %ms_tex
+OpExecutionMode %main OriginUpperLeft
+OpName %uv "uv"
+OpName %lod_out "lodOut"
+OpName %levels_out "levelsOut"
+OpName %samples_out "samplesOut"
+OpName %query_tex "queryTex"
+OpName %ms_tex "msTex"
+OpDecorate %uv Location 0
+OpDecorate %lod_out Location 0
+OpDecorate %levels_out Location 1
+OpDecorate %samples_out Location 2
+OpDecorate %query_tex DescriptorSet 0
+OpDecorate %query_tex Binding 0
+OpDecorate %ms_tex DescriptorSet 0
+OpDecorate %ms_tex Binding 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2float = OpTypeVector %float 2
+%ptr_input_v2float = OpTypePointer Input %v2float
+%ptr_output_v2float = OpTypePointer Output %v2float
+%ptr_output_int = OpTypePointer Output %int
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%ms_image = OpTypeImage %float 2D 0 0 1 1 Unknown
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%ptr_ms_image = OpTypePointer UniformConstant %ms_image
+%uv = OpVariable %ptr_input_v2float Input
+%lod_out = OpVariable %ptr_output_v2float Output
+%levels_out = OpVariable %ptr_output_int Output
+%samples_out = OpVariable %ptr_output_int Output
+%query_tex = OpVariable %ptr_sampled UniformConstant
+%ms_tex = OpVariable %ptr_ms_image UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_query = OpLoad %sampled %query_tex
+%loaded_uv = OpLoad %v2float %uv
+%lod = OpImageQueryLod %v2float %loaded_query %loaded_uv
+OpStore %lod_out %lod
+%image_only = OpImage %image %loaded_query
+%levels = OpImageQueryLevels %int %image_only
+OpStore %levels_out %levels
+%loaded_ms = OpLoad %ms_image %ms_tex
+%samples = OpImageQuerySamples %int %loaded_ms
+OpStore %samples_out %samples
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_IMAGE_READ_SAMPLE_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
@@ -2269,6 +2326,27 @@ def test_spirv_tools_image_query_size_codegen():
     assert "Texture2DMS uImage @set(0) @binding(0);" in generated_code
     assert "Size = textureSize(uImage);" in generated_code
     assert "Size = size;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_image_query_lod_levels_samples_codegen_reparse():
+    tokens = tokenize_code(SPIRV_IMAGE_QUERY_LOD_LEVELS_SAMPLES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float2 uv @input @location(0);" in generated_code
+    assert "float2 lodOut @output @location(0);" in generated_code
+    assert "int levelsOut @output @location(1);" in generated_code
+    assert "int samplesOut @output @location(2);" in generated_code
+    assert "Texture2D queryTex @set(0) @binding(0);" in generated_code
+    assert "Texture2DMS msTex @set(0) @binding(1);" in generated_code
+    assert "lodOut = textureQueryLod(queryTex, uv);" in generated_code
+    assert "levelsOut = textureQueryLevels(queryTex);" in generated_code
+    assert "samplesOut = textureSamples(msTex);" in generated_code
+    assert "lodOut = lod;" not in generated_code
+    assert "levelsOut = levels;" not in generated_code
+    assert "samplesOut = samples;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

@@ -2565,6 +2565,30 @@ def test_numeric_literals_parsing():
         pytest.fail("Numeric literals parsing not implemented.")
 
 
+def test_documented_numeric_literal_forms_parse_from_mojo_reference():
+    # Reduced from https://mojolang.org/docs/reference/literals/
+    code = """
+    fn main():
+        let grouped = 1_000_000
+        let relaxed = 1__000_
+        let fraction_only = .5
+        let trailing_point = 2.
+        let grouped_float = 1_000.000_5
+        let exponent_only = 1E10
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+
+    assert [declaration.initial_value for declaration in function.body] == [
+        "1_000_000",
+        "1__000_",
+        ".5",
+        "2.",
+        "1_000.000_5",
+        "1E10",
+    ]
+
+
 def test_if_block_stops_at_dedent():
     code = """
     fn fragment_main(input: PSInput) -> PSOutput:
