@@ -748,6 +748,41 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_CROSS_COPY_MEMORY_INTERFACE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
+; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
+; Source path: shaders-msl/asm/vert/copy-memory-interface.asm.vert
+; Reduced from two interface OpCopyMemory instructions copying inputs to outputs.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %v0 %v1 %position %o1
+OpName %main "main"
+OpName %v0 "v0"
+OpName %v1 "v1"
+OpName %position "o0"
+OpName %o1 "o1"
+OpDecorate %v0 Location 0
+OpDecorate %v1 Location 1
+OpDecorate %position BuiltIn Position
+OpDecorate %o1 Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%v0 = OpVariable %ptr_input_v4float Input
+%v1 = OpVariable %ptr_input_v4float Input
+%position = OpVariable %ptr_output_v4float Output
+%o1 = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpCopyMemory %position %v0
+OpCopyMemory %o1 %v1
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_CROSS_IMAGE_QUERY_SIZE_LOD_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
 ; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
@@ -1871,6 +1906,21 @@ def test_spirv_assembly_vector_shuffle_swizzle_body_codegen():
     assert "float3 color @output @location(0);" in generated_code
     assert "color = value.xyz;" in generated_code
     assert "color = rgb;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_cross_copy_memory_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_CROSS_COPY_MEMORY_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 v0 @input @location(0);" in generated_code
+    assert "float4 v1 @input @location(1);" in generated_code
+    assert "float4 gl_Position @output @gl_Position;" in generated_code
+    assert "float4 o1 @output @location(1);" in generated_code
+    assert "gl_Position = v0;" in generated_code
+    assert "o1 = v1;" in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

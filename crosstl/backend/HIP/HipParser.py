@@ -198,6 +198,7 @@ class HipParser:
         "atomicXor",
         "hipAtomicXor",
     }
+    PACK_EXPANSION_FUNCTION_NAME = "__hip_pack_expand__"
     BUILTIN_TYPE_TOKENS = {
         "INT",
         "FLOAT",
@@ -2072,6 +2073,16 @@ class HipParser:
                 self.advance()
                 self.skip_cpp_attributes()
 
+            if self.match("ELLIPSIS"):
+                param_type += " ..."
+                self.advance()
+                self.skip_newlines()
+
+            if not param_name and self.is_declarator_name_token():
+                param_name = self.current_token.value
+                self.advance()
+                self.skip_cpp_attributes()
+
             param_type += self.parse_array_suffix()
             self.skip_default_parameter_value()
             params.append({"type": param_type, "name": param_name})
@@ -2824,6 +2835,9 @@ class HipParser:
                 expr = self.parse_function_call_node(expr, initializer.elements)
             elif self.match("KERNEL_LAUNCH_START"):
                 expr = self.parse_kernel_launch(expr)
+            elif self.match("ELLIPSIS"):
+                self.advance()
+                expr = FunctionCallNode(self.PACK_EXPANSION_FUNCTION_NAME, [expr])
             elif self.match("INCREMENT", "DECREMENT"):
                 op = self.current_token.value
                 self.advance()
@@ -3611,6 +3625,11 @@ class HipParser:
 
     def parse_new_expression(self):
         self.advance()
+        placement_args = None
+        if self.match("LPAREN"):
+            placement_args = self.parse_parenthesized_argument_list()
+            self.skip_newlines()
+
         target_type = self.parse_type_without_array_suffix()
 
         if self.match("LBRACKET"):
@@ -3619,7 +3638,9 @@ class HipParser:
             if not self.match("RBRACKET"):
                 size = self.parse_expression()
             self.consume("RBRACKET")
-            return NewNode(target_type, size=size, is_array=True)
+            node = NewNode(target_type, size=size, is_array=True)
+            node.placement_args = placement_args
+            return node
 
         args = []
         if self.match("LPAREN"):
@@ -3627,7 +3648,9 @@ class HipParser:
             args = self.parse_argument_list()
             self.consume("RPAREN")
 
-        return NewNode(target_type, args=args)
+        node = NewNode(target_type, args=args)
+        node.placement_args = placement_args
+        return node
 
     def parse_initializer_list(self):
         self.consume("LBRACE")

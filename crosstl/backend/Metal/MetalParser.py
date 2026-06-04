@@ -921,7 +921,7 @@ class MetalParser:
             self.eat("SEMICOLON")
             self.known_types.add(alias_name)
             return TypeAliasNode(alias_type, alias_name)
-        alias_name, _array = self.parse_declarator()
+        alias_name, _array, _type_suffix, _grouped_suffix = self.parse_declarator()
         if self.current_token[0] == "LPAREN":
             self.parse_parenthesized_parameter_tokens()
             self.eat("SEMICOLON")
@@ -940,7 +940,12 @@ class MetalParser:
             self.eat("LBRACE")
             members = self.parse_enum_members()
             self.eat("RBRACE")
-            alias_name, _array_sizes = self.parse_declarator()
+            (
+                alias_name,
+                _array_sizes,
+                _type_suffix,
+                _grouped_suffix,
+            ) = self.parse_declarator()
             self.eat("SEMICOLON")
             enum_name = alias_name or tag_name
             if not enum_name:
@@ -954,7 +959,9 @@ class MetalParser:
 
         if not tag_name:
             raise SyntaxError("Expected typedef enum body or tag name")
-        alias_name, _array_sizes = self.parse_declarator()
+        alias_name, _array_sizes, _type_suffix, _grouped_suffix = (
+            self.parse_declarator()
+        )
         self.eat("SEMICOLON")
         if alias_name == tag_name:
             return None
@@ -1023,7 +1030,12 @@ class MetalParser:
             members = self.parse_struct_members()
             self.eat("RBRACE")
             struct_attributes.extend(self.parse_attributes())
-            alias_name, _array_sizes = self.parse_declarator()
+            (
+                alias_name,
+                _array_sizes,
+                _type_suffix,
+                _grouped_suffix,
+            ) = self.parse_declarator()
             self.eat("SEMICOLON")
             struct_name = alias_name or tag_name
             if not struct_name:
@@ -1037,7 +1049,9 @@ class MetalParser:
 
         if not tag_name:
             raise SyntaxError("Expected typedef struct body or tag name")
-        alias_name, _array_sizes = self.parse_declarator()
+        alias_name, _array_sizes, _type_suffix, _grouped_suffix = (
+            self.parse_declarator()
+        )
         self.eat("SEMICOLON")
         if alias_name == tag_name:
             return None
@@ -1083,7 +1097,8 @@ class MetalParser:
         attributes = self.parse_attributes()
         alignas_specs = pre_alignas or self.parse_alignas_specifiers()
         vtype, qualifiers = self.parse_type_specifier()
-        name, array_sizes = self.parse_declarator()
+        name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+        vtype = self.apply_declarator_type_suffix(vtype, type_suffix)
         var_attributes = self.parse_attributes()
         attributes.extend(var_attributes)
 
@@ -1091,6 +1106,7 @@ class MetalParser:
             vtype, name, qualifiers=qualifiers, attributes=attributes
         )
         var_node.array_sizes = array_sizes
+        self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
         var_node.alignas = alignas_specs
         self.register_local_variable_name(name)
         if "const" in qualifiers or "constexpr" in qualifiers:
@@ -1322,9 +1338,18 @@ class MetalParser:
 
     def parse_declarator(self):
         name = ""
-        while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
-            self.eat(self.current_token[0])
-        if self.is_current_name_token():
+        type_suffix = ""
+        grouped_suffix = False
+        if self.is_parenthesized_declarator_start():
+            name, type_suffix = self.parse_parenthesized_declarator()
+            grouped_suffix = True
+        else:
+            while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+                type_suffix += self.declarator_pointer_token_suffix(
+                    self.current_token[0]
+                )
+                self.eat(self.current_token[0])
+        if not name and self.is_current_name_token():
             name = self.current_token[1]
             self.eat(self.current_token[0])
             if self.template_argument_list_followed_by_call(
@@ -1340,7 +1365,50 @@ class MetalParser:
                     )
                 name += f"::{self.current_token[1]}"
                 self.eat(self.current_token[0])
-        return name, self.parse_declarator_array_sizes()
+        return name, self.parse_declarator_array_sizes(), type_suffix, grouped_suffix
+
+    def declarator_pointer_token_suffix(self, token_type):
+        return "*" if token_type == "MULTIPLY" else "&"
+
+    def is_parenthesized_declarator_start(self):
+        if self.current_token[0] != "LPAREN":
+            return False
+        idx = self.pos + 1
+        saw_pointer_or_reference = False
+        while idx < len(self.tokens) and self.tokens[idx][0] in {
+            "MULTIPLY",
+            "BITWISE_AND",
+        }:
+            saw_pointer_or_reference = True
+            idx += 1
+        return (
+            saw_pointer_or_reference
+            and idx + 1 < len(self.tokens)
+            and self.is_name_token_at(idx)
+            and self.tokens[idx + 1][0] == "RPAREN"
+        )
+
+    def parse_parenthesized_declarator(self):
+        self.eat("LPAREN")
+        type_suffix = ""
+        while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+            type_suffix += self.declarator_pointer_token_suffix(self.current_token[0])
+            self.eat(self.current_token[0])
+        if not self.is_current_name_token():
+            raise SyntaxError(f"Expected declarator name, got {self.current_token[0]}")
+        name = self.current_token[1]
+        self.eat(self.current_token[0])
+        self.eat("RPAREN")
+        return name, type_suffix
+
+    def apply_declarator_type_suffix(self, vtype, type_suffix):
+        return f"{vtype}{type_suffix}" if type_suffix else vtype
+
+    def apply_declarator_metadata(self, var_node, type_suffix, grouped_suffix):
+        if not type_suffix:
+            return
+        var_node.declarator_type_suffix = type_suffix
+        var_node.declarator_type_suffix_grouped = grouped_suffix
 
     def is_name_token_at(self, idx):
         return (
@@ -1481,7 +1549,8 @@ class MetalParser:
             if self.current_token[0] == "OPERATOR":
                 self.skip_struct_method()
                 continue
-            var_name, array_sizes = self.parse_declarator()
+            var_name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+            member_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             if var_name == "operator":
                 self.skip_struct_method()
                 continue
@@ -1498,9 +1567,10 @@ class MetalParser:
                 default_value = self.parse_initializer_list()
             self.eat("SEMICOLON")
             var_node = VariableNode(
-                vtype, var_name, qualifiers=qualifiers, attributes=attributes
+                member_type, var_name, qualifiers=qualifiers, attributes=attributes
             )
             var_node.array_sizes = array_sizes
+            self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
             var_node.alignas = member_alignas
             var_node.default_value = default_value
             members.append(var_node)
@@ -1540,10 +1610,12 @@ class MetalParser:
         while self.current_token[0] != "RBRACE":
             member_alignas = self.parse_alignas_specifiers()
             vtype, qualifiers = self.parse_type_specifier()
-            var_name, array_sizes = self.parse_declarator()
+            var_name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+            member_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             self.eat("SEMICOLON")
-            var_node = VariableNode(vtype, var_name, qualifiers=qualifiers)
+            var_node = VariableNode(member_type, var_name, qualifiers=qualifiers)
             var_node.array_sizes = array_sizes
+            self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
             var_node.alignas = member_alignas
             members.append(var_node)
 
@@ -1631,7 +1703,8 @@ class MetalParser:
         while self.current_token[0] != "RPAREN":
             attributes = self.parse_attributes()
             vtype, qualifiers = self.parse_type_specifier()
-            name, array_sizes = self.parse_declarator()
+            name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+            param_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             default_value = None
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
@@ -1640,9 +1713,10 @@ class MetalParser:
             attributes.extend(param_attributes)
 
             var_node = VariableNode(
-                vtype, name, qualifiers=qualifiers, attributes=attributes
+                param_type, name, qualifiers=qualifiers, attributes=attributes
             )
             var_node.array_sizes = array_sizes
+            self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
             var_node.default_value = default_value
             params.append(var_node)
 
@@ -1920,13 +1994,15 @@ class MetalParser:
         alignas_specs = self.parse_alignas_specifiers()
         attributes.extend(self.parse_attributes())
         vtype, qualifiers = self.parse_type_specifier()
-        name, array_sizes = self.parse_declarator()
+        name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+        vtype = self.apply_declarator_type_suffix(vtype, type_suffix)
         attributes.extend(self.parse_attributes())
 
         var_node = VariableNode(
             vtype, name, qualifiers=qualifiers, attributes=attributes
         )
         var_node.array_sizes = array_sizes
+        self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
         var_node.alignas = alignas_specs
         self.register_local_variable_name(name)
         if "const" in qualifiers or "constexpr" in qualifiers:
@@ -1990,12 +2066,14 @@ class MetalParser:
     def parse_remaining_variable_declarations(self, vtype, qualifiers, nodes):
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
-            name, array_sizes = self.parse_declarator()
+            name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+            decl_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             attributes = self.parse_attributes()
             var_node = VariableNode(
-                vtype, name, qualifiers=list(qualifiers), attributes=attributes
+                decl_type, name, qualifiers=list(qualifiers), attributes=attributes
             )
             var_node.array_sizes = array_sizes
+            self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
             self.register_local_variable_name(name)
             if "const" in qualifiers or "constexpr" in qualifiers:
                 var_node.is_const = True
@@ -2119,7 +2197,7 @@ class MetalParser:
 
     def parse_range_for_statement(self):
         vtype, _qualifiers = self.parse_type_specifier()
-        name, _array_sizes = self.parse_declarator()
+        name, _array_sizes, _type_suffix, _grouped_suffix = self.parse_declarator()
         self.eat("COLON")
         iterable = self.parse_expression(allow_comma=True)
         self.eat("RPAREN")
@@ -2131,9 +2209,11 @@ class MetalParser:
     def parse_for_init(self):
         if self.is_declaration_start():
             vtype, qualifiers = self.parse_type_specifier()
-            name, array_sizes = self.parse_declarator()
-            var_node = VariableNode(vtype, name, qualifiers=qualifiers)
+            name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+            init_type = self.apply_declarator_type_suffix(vtype, type_suffix)
+            var_node = VariableNode(init_type, name, qualifiers=qualifiers)
             var_node.array_sizes = array_sizes
+            self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
             self.register_local_variable_name(name)
             if "const" in qualifiers or "constexpr" in qualifiers:
                 var_node.is_const = True

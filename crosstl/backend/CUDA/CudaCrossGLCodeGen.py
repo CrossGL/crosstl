@@ -4117,6 +4117,13 @@ class CudaToCrossGLConverter:
                 return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
             return f"WaveReadLaneAt({args[1]}, {args[2]})"
 
+        if function_name == "__reduce_add_sync":
+            if len(args) != 2:
+                return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
+            if self.is_full_or_active_warp_mask(args[0]):
+                return f"WaveActiveSum({args[1]})"
+            return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
+
         if function_name in {
             "__ballot",
             "__any",

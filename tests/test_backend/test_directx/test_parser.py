@@ -814,6 +814,37 @@ def test_parse_enum_and_typedef():
     assert ast.typedefs[2].qualifiers == ["precise", "const"]
 
 
+def test_parse_enum_underlying_type_from_dxc_sema_enums():
+    # Source: https://github.com/microsoft/DirectXShaderCompiler
+    # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # Path: tools/clang/test/SemaHLSL/enums.hlsl
+    ast = parse_code("""
+    enum MyEnumUInt : uint {
+        ZEROU,
+        ONEU,
+        FOURU = 4,
+    };
+
+    enum class MyEnumMin16int : min16int {
+        ZEROMIN16INT,
+    };
+    """)
+
+    unsigned_enum, scoped_enum = ast.enums
+
+    assert unsigned_enum.name == "MyEnumUInt"
+    assert unsigned_enum.underlying_type == "uint"
+    assert unsigned_enum.is_scoped is False
+    assert [name for name, _ in unsigned_enum.members] == [
+        "ZEROU",
+        "ONEU",
+        "FOURU",
+    ]
+    assert scoped_enum.name == "MyEnumMin16int"
+    assert scoped_enum.underlying_type == "min16int"
+    assert scoped_enum.is_scoped is True
+
+
 def test_parse_anonymous_enum_constants_inside_namespace_from_directx_samples():
     code = """
     namespace SMem

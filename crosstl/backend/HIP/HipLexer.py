@@ -194,6 +194,7 @@ TOKENS = tuple(
         ("NE", r"!="),
         ("LE", r"<="),
         ("GE", r">="),
+        ("ELLIPSIS", r"\.\.\."),
         ("INCREMENT", r"\+\+"),
         ("DECREMENT", r"--"),
         ("ARROW", r"->"),

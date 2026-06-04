@@ -4595,6 +4595,11 @@ class HipToCrossGLConverter:
         elif hasattr(node, "arguments") and node.arguments:
             raw_args = node.arguments
 
+        if func_name == "__hip_pack_expand__":
+            if raw_args:
+                return f"{self.visit(raw_args[0])}..."
+            return "..."
+
         cooperative_call = self.format_cooperative_group_call(node)
         if cooperative_call is not None:
             return cooperative_call
@@ -5389,6 +5394,17 @@ class HipToCrossGLConverter:
         return args[0]
 
     def visit_NewNode(self, node):
+        placement_args = getattr(node, "placement_args", None)
+        if placement_args is not None:
+            target_type = self.convert_hip_type_to_crossgl(node.target_type)
+            args = ", ".join(self.visit(arg) for arg in node.args)
+            placement = ", ".join(self.visit(arg) for arg in placement_args)
+            fallback = self.visit(placement_args[0]) if placement_args else "nullptr"
+            return (
+                f"(/* HIP placement new: new({placement}) {target_type}({args}) "
+                f"not directly supported in CrossGL */ {fallback})"
+            )
+
         target_type = self.convert_hip_type_to_crossgl(node.target_type)
         if node.is_array:
             size = self.visit(node.size) if node.size is not None else ""
