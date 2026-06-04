@@ -32,6 +32,7 @@ REPORT_MIGRATION_NON_GOALS = (
     "backend framework integration",
 )
 REPORT_MIGRATION_ACTION_KINDS = ("manual-runtime-integration",)
+EXTERNAL_CORPUS_SCHEMA_VERSION = 1
 DEFAULT_CONFIG_NAME = "crosstl.toml"
 DEFAULT_OUTPUT_DIR = "crosstl-out"
 OUTPUT_DIR_OUTSIDE_PROJECT_CODE = "project.config.output-dir-outside-project"
@@ -254,6 +255,212 @@ def _source_map_counts(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, int]
     }
 
 
+def _external_corpus_empty_summary() -> dict[str, Any]:
+    return {
+        "entryCount": 0,
+        "presentCount": 0,
+        "missingCount": 0,
+        "discoveredUnitCount": 0,
+        "undiscoveredPresentCount": 0,
+        "entriesBySourceBackend": {},
+        "entriesByTarget": {},
+        "artifactsByTarget": {},
+    }
+
+
+def _external_corpus_manifest_path(config: ProjectConfig) -> Path | None:
+    manifest = config.external_corpus_manifest
+    if not manifest:
+        return None
+    path = Path(manifest)
+    if not path.is_absolute():
+        path = config.root / path
+    return path.resolve()
+
+
+def _load_external_corpus_manifest(
+    config: ProjectConfig,
+) -> tuple[Mapping[str, Any] | None, str | None]:
+    manifest_path = _external_corpus_manifest_path(config)
+    if manifest_path is None:
+        return None, None
+    if not _is_relative_to(manifest_path, config.root):
+        return None, "outside-project"
+    if not manifest_path.exists():
+        return None, "missing"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, "invalid"
+    if not isinstance(manifest, Mapping):
+        return None, "invalid"
+    if manifest.get("schemaVersion") != EXTERNAL_CORPUS_SCHEMA_VERSION:
+        return None, "invalid"
+    if not isinstance(manifest.get("entries"), list):
+        return None, "invalid"
+    return manifest, None
+
+
+def _external_corpus_manifest_reference(config: ProjectConfig) -> str:
+    return str(config.external_corpus_manifest or "")
+
+
+def _manifest_entry_targets(
+    entry: Mapping[str, Any], fallback_targets: Sequence[str]
+) -> list[str]:
+    targets = entry.get("targets")
+    if isinstance(targets, str):
+        return _normalized_targets([targets])
+    if isinstance(targets, Sequence) and not isinstance(targets, (bytes, bytearray)):
+        valid_targets = [target for target in targets if isinstance(target, str)]
+        if valid_targets:
+            return _normalized_targets(valid_targets)
+    return list(fallback_targets)
+
+
+def _external_corpus_entries_by_source_backend(
+    entries: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entry in entries:
+        source_backend = str(entry.get("sourceBackend", "unknown"))
+        counts[source_backend] = counts.get(source_backend, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _external_corpus_entries_by_target(
+    entries: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entry in entries:
+        for target in entry.get("targets", []):
+            target_name = str(target)
+            counts[target_name] = counts.get(target_name, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _external_corpus_artifacts(
+    entries: Sequence[Mapping[str, Any]], artifacts: Sequence[Mapping[str, Any]]
+) -> list[Mapping[str, Any]]:
+    entry_targets: dict[str, set[str]] = {}
+    for entry in entries:
+        path = entry.get("path")
+        if not _is_non_empty_string(path):
+            continue
+        targets = {
+            target for target in entry.get("targets", []) if isinstance(target, str)
+        }
+        entry_targets.setdefault(path, set()).update(targets)
+
+    corpus_artifacts = []
+    for artifact in artifacts:
+        source = artifact.get("source")
+        target = artifact.get("target")
+        if not _is_non_empty_string(source) or source not in entry_targets:
+            continue
+        targets = entry_targets[source]
+        if targets and target not in targets:
+            continue
+        corpus_artifacts.append(artifact)
+    return corpus_artifacts
+
+
+def _external_corpus_report(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+    artifacts: Sequence[Mapping[str, Any]],
+    targets: Sequence[str],
+) -> dict[str, Any] | None:
+    if not config.external_corpus_manifest:
+        return None
+
+    manifest, status = _load_external_corpus_manifest(config)
+    if manifest is None:
+        return {
+            "schemaVersion": EXTERNAL_CORPUS_SCHEMA_VERSION,
+            "manifest": _external_corpus_manifest_reference(config),
+            "status": status or "invalid",
+            "entries": [],
+            "summary": _external_corpus_empty_summary(),
+        }
+
+    units_by_path = {unit.relative_path: unit for unit in units}
+    artifacts_by_source: dict[str, list[Mapping[str, Any]]] = {}
+    for artifact in artifacts:
+        source = str(artifact.get("source", ""))
+        if source:
+            artifacts_by_source.setdefault(source, []).append(artifact)
+
+    entries = []
+    for index, raw_entry in enumerate(manifest.get("entries", [])):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        path = str(raw_entry.get("path", "")).replace("\\", "/")
+        entry_targets = _manifest_entry_targets(raw_entry, targets)
+        source_backend = str(raw_entry.get("sourceBackend", "unknown"))
+        entry_artifacts = [
+            artifact
+            for artifact in artifacts_by_source.get(path, [])
+            if not entry_targets or artifact.get("target") in entry_targets
+        ]
+        entry_path = config.root / path
+        present = (
+            bool(path)
+            and _is_repository_relative_report_path(path)
+            and entry_path.exists()
+        )
+        discovered = path in units_by_path
+        entry_payload = {
+            "id": str(raw_entry.get("id") or path or f"entry-{index + 1}"),
+            "path": path,
+            "sourceBackend": source_backend,
+            "targets": entry_targets,
+            "present": present,
+            "discovered": discovered,
+            "artifactCount": len(entry_artifacts),
+            "translatedCount": sum(
+                1
+                for artifact in entry_artifacts
+                if artifact.get("status") == "translated"
+            ),
+            "failedCount": sum(
+                1 for artifact in entry_artifacts if artifact.get("status") == "failed"
+            ),
+        }
+        for field_name in ("repository", "commit", "sourceUrl"):
+            value = raw_entry.get(field_name)
+            if isinstance(value, str) and value:
+                entry_payload[field_name] = value
+        entries.append(entry_payload)
+
+    summary = {
+        "entryCount": len(entries),
+        "presentCount": sum(1 for entry in entries if entry["present"]),
+        "missingCount": sum(1 for entry in entries if not entry["present"]),
+        "discoveredUnitCount": sum(1 for entry in entries if entry["discovered"]),
+        "undiscoveredPresentCount": sum(
+            1 for entry in entries if entry["present"] and not entry["discovered"]
+        ),
+        "entriesBySourceBackend": _external_corpus_entries_by_source_backend(entries),
+        "entriesByTarget": _external_corpus_entries_by_target(entries),
+        "artifactsByTarget": _artifact_counts_by_target(
+            _external_corpus_artifacts(entries, artifacts)
+        ),
+    }
+    payload = {
+        "schemaVersion": EXTERNAL_CORPUS_SCHEMA_VERSION,
+        "manifest": _external_corpus_manifest_reference(config),
+        "status": "ok",
+        "entries": entries,
+        "summary": summary,
+    }
+    for field_name in ("name", "description"):
+        value = manifest.get(field_name)
+        if isinstance(value, str) and value:
+            payload[field_name] = value
+    return payload
+
+
 def _resolved_include_dir(config: ProjectConfig, include_dir: str) -> Path:
     path = Path(include_dir)
     if not path.is_absolute():
@@ -301,6 +508,7 @@ class ProjectConfig:
     include_dirs: Sequence[str] = ()
     defines: Mapping[str, str] = field(default_factory=dict)
     variants: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    external_corpus_manifest: str | None = None
 
     def normalized_targets(self) -> list[str]:
         return _normalized_targets(self.targets)
@@ -393,6 +601,38 @@ def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]
                 missing_capabilities=["macro.variants"],
             )
         )
+    if config.external_corpus_manifest:
+        manifest_path = _external_corpus_manifest_path(config)
+        if manifest_path is not None and not _is_relative_to(
+            manifest_path, config.root
+        ):
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.config.external-corpus-outside-project",
+                    message=(
+                        "Configured external corpus manifest resolves outside "
+                        f"the repository: {manifest_path}"
+                    ),
+                    location=location,
+                    missing_capabilities=["external.corpus"],
+                )
+            )
+        else:
+            _, status = _load_external_corpus_manifest(config)
+            if status in {"missing", "invalid"}:
+                diagnostics.append(
+                    ProjectDiagnostic(
+                        severity="warning",
+                        code=f"project.config.external-corpus-{status}",
+                        message=(
+                            "Configured external corpus manifest is "
+                            f"{status}: {config.external_corpus_manifest}"
+                        ),
+                        location=location,
+                        missing_capabilities=["external.corpus"],
+                    )
+                )
     return diagnostics
 
 
@@ -599,7 +839,10 @@ class ProjectPortabilityReport:
         )
         diagnostics = [diagnostic.to_json() for diagnostic in self.diagnostics]
         source_map_counts = _source_map_counts(self.artifacts)
-        return {
+        external_corpus = _external_corpus_report(
+            self.config, self.units, self.artifacts, self.targets
+        )
+        payload = {
             "schemaVersion": REPORT_SCHEMA_VERSION,
             "kind": REPORT_KIND,
             "generator": {
@@ -624,6 +867,7 @@ class ProjectPortabilityReport:
                     for name, defines in sorted(self.config.variants.items())
                 },
                 "variantCount": len(self.config.variants),
+                "externalCorpusManifest": self.config.external_corpus_manifest,
             },
             "summary": {
                 "unitCount": len(self.units),
@@ -649,6 +893,9 @@ class ProjectPortabilityReport:
                 "actions": list(self.migration_actions),
             },
         }
+        if external_corpus is not None:
+            payload["externalCorpus"] = external_corpus
+        return payload
 
     def write_json(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -678,6 +925,13 @@ def load_project_config(
     variants = project.get("variants", {})
     if not isinstance(variants, Mapping):
         raise ValueError("crosstl.toml [project.variants] must be a table")
+    external_corpus_manifest = project.get("external_corpus_manifest")
+    if external_corpus_manifest is not None and not isinstance(
+        external_corpus_manifest, str
+    ):
+        raise ValueError(
+            "crosstl.toml project.external_corpus_manifest must be a string"
+        )
 
     excludes = _as_str_list(project.get("exclude"), field_name="project.exclude")
     if not excludes:
@@ -701,6 +955,7 @@ def load_project_config(
         ),
         defines={str(key): str(value) for key, value in defines.items()},
         variants=_variant_defines(variants),
+        external_corpus_manifest=external_corpus_manifest,
     )
 
 
@@ -924,6 +1179,7 @@ def translate_project(
             include_dirs=config.include_dirs,
             defines=config.defines,
             variants=config.variants,
+            external_corpus_manifest=config.external_corpus_manifest,
         )
 
     selected_targets = _normalized_targets(
@@ -1484,6 +1740,15 @@ def _project_metadata_contract_reasons(
         elif variants_is_mapping and variant_count != len(variants):
             reasons.append("project.variantCount must match project.variants")
 
+    if _optional_project_field(
+        project, "externalCorpusManifest", required=require_full_metadata
+    ):
+        external_corpus_manifest = project.get("externalCorpusManifest")
+        if external_corpus_manifest is not None and not isinstance(
+            external_corpus_manifest, str
+        ):
+            reasons.append("project.externalCorpusManifest must be a string or null")
+
     return reasons
 
 
@@ -1578,6 +1843,143 @@ def _validation_contract_reasons(
     else:
         for index, artifact in enumerate(artifact_checks):
             reasons.extend(_validation_artifact_contract_reasons(index, artifact))
+    return reasons
+
+
+def _external_corpus_entry_contract_reasons(index: int, entry: Any) -> list[str]:
+    prefix = f"externalCorpus.entries[{index}]"
+    if not isinstance(entry, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    for field_name in ("id", "path", "sourceBackend"):
+        if not _is_non_empty_string(entry.get(field_name)):
+            reasons.append(f"{prefix}.{field_name} must be a string")
+    path = entry.get("path")
+    if _is_non_empty_string(path) and not _is_repository_relative_report_path(path):
+        reasons.append(f"{prefix}.path must be repository-relative")
+    reasons.extend(
+        _string_list_contract_reasons(f"{prefix}.targets", entry.get("targets"))
+    )
+    for field_name in ("present", "discovered"):
+        if not isinstance(entry.get(field_name), bool):
+            reasons.append(f"{prefix}.{field_name} must be a boolean")
+    for field_name in ("artifactCount", "translatedCount", "failedCount"):
+        if not _is_non_negative_int(entry.get(field_name)):
+            reasons.append(f"{prefix}.{field_name} must be a non-negative integer")
+    for field_name in ("repository", "commit", "sourceUrl"):
+        if field_name in entry and not _is_non_empty_string(entry.get(field_name)):
+            reasons.append(f"{prefix}.{field_name} must be a string")
+    return reasons
+
+
+def _external_corpus_summary_contract_reasons(
+    summary: Any, entries: Sequence[Any], artifacts: Any
+) -> list[str]:
+    if not isinstance(summary, Mapping):
+        return ["externalCorpus.summary must be an object"]
+
+    entry_records = [entry for entry in entries if isinstance(entry, Mapping)]
+    reasons = []
+    expected_counts = {
+        "entryCount": len(entries),
+        "presentCount": sum(1 for entry in entry_records if entry.get("present")),
+        "missingCount": sum(1 for entry in entry_records if not entry.get("present")),
+        "discoveredUnitCount": sum(
+            1 for entry in entry_records if entry.get("discovered")
+        ),
+        "undiscoveredPresentCount": sum(
+            1
+            for entry in entry_records
+            if entry.get("present") and not entry.get("discovered")
+        ),
+    }
+    for field_name, expected in expected_counts.items():
+        reasons.extend(
+            _count_field_contract_reasons(
+                f"externalCorpus.summary.{field_name}",
+                summary.get(field_name),
+                expected,
+                "externalCorpus.entries",
+            )
+        )
+    reasons.extend(
+        _mapping_field_contract_reasons(
+            "externalCorpus.summary.entriesBySourceBackend",
+            summary.get("entriesBySourceBackend"),
+            _external_corpus_entries_by_source_backend(entry_records),
+            "externalCorpus.entries",
+        )
+    )
+    reasons.extend(
+        _mapping_field_contract_reasons(
+            "externalCorpus.summary.entriesByTarget",
+            summary.get("entriesByTarget"),
+            _external_corpus_entries_by_target(entry_records),
+            "externalCorpus.entries",
+        )
+    )
+    if isinstance(artifacts, list):
+        artifact_records = _payload_artifact_records(artifacts)
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "externalCorpus.summary.artifactsByTarget",
+                summary.get("artifactsByTarget"),
+                _artifact_counts_by_target(
+                    _external_corpus_artifacts(entry_records, artifact_records)
+                ),
+                "externalCorpus.entries",
+            )
+        )
+    elif not isinstance(summary.get("artifactsByTarget"), Mapping):
+        reasons.append("externalCorpus.summary.artifactsByTarget must be an object")
+    return reasons
+
+
+def _external_corpus_contract_reasons(
+    report: Mapping[str, Any], artifacts: Any, *, require_external_corpus: bool
+) -> list[str]:
+    if "externalCorpus" not in report:
+        return ["externalCorpus must be an object"] if require_external_corpus else []
+
+    external_corpus = report.get("externalCorpus")
+    if not isinstance(external_corpus, Mapping):
+        return ["externalCorpus must be an object"]
+
+    reasons = []
+    if external_corpus.get("schemaVersion") != EXTERNAL_CORPUS_SCHEMA_VERSION:
+        reasons.append(
+            f"externalCorpus.schemaVersion must be {EXTERNAL_CORPUS_SCHEMA_VERSION}"
+        )
+    if not _is_non_empty_string(external_corpus.get("manifest")):
+        reasons.append("externalCorpus.manifest must be a string")
+    if external_corpus.get("status") not in {
+        "ok",
+        "missing",
+        "invalid",
+        "outside-project",
+    }:
+        reasons.append(
+            "externalCorpus.status must be ok, missing, invalid, or outside-project"
+        )
+    for field_name in ("name", "description"):
+        if field_name in external_corpus and not _is_non_empty_string(
+            external_corpus.get(field_name)
+        ):
+            reasons.append(f"externalCorpus.{field_name} must be a string")
+
+    entries = external_corpus.get("entries")
+    if not isinstance(entries, list):
+        reasons.append("externalCorpus.entries must be a list")
+        entries = []
+    else:
+        for index, entry in enumerate(entries):
+            reasons.extend(_external_corpus_entry_contract_reasons(index, entry))
+    reasons.extend(
+        _external_corpus_summary_contract_reasons(
+            external_corpus.get("summary"), entries, artifacts
+        )
+    )
     return reasons
 
 
@@ -2011,6 +2413,16 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 )
 
     reasons.extend(_validation_contract_reasons(report, require_validation=has_summary))
+    require_external_corpus = (
+        has_summary
+        and isinstance(project, Mapping)
+        and project.get("externalCorpusManifest") is not None
+    )
+    reasons.extend(
+        _external_corpus_contract_reasons(
+            report, artifacts, require_external_corpus=require_external_corpus
+        )
+    )
     if "diagnosticCounts" in report and isinstance(diagnostics, list):
         reasons.extend(
             _diagnostic_counts_contract_reasons(

@@ -85,6 +85,7 @@ configuration contract is intentionally small:
    targets = ["metal", "opengl"]
    output_dir = "crosstl-out"
    include_dirs = ["shaders/include"]
+   external_corpus_manifest = "external-corpus.json"
 
    [project.sources]
    "legacy/**/*.shader" = "cgl"
@@ -117,6 +118,14 @@ expansion through every native preprocessor remains a tracked project-porting
 capability, and reports emit structured warnings when variants are present but
 not yet expanded.
 
+``external_corpus_manifest`` points at an optional repository-relative JSON
+manifest of pinned upstream shader or GPU-source reductions. Project reports use
+the manifest for coverage accounting only: they record declared paths, present
+and missing entries, discovered translation units, source-backend and target
+rollups, and artifact outcomes for entries included in the project run. CrossTL
+does not clone upstream repositories, run native build systems, or claim whole
+corpus semantic parity from this manifest.
+
 Project reports include configured define and variant names and values. Review
 reports before sharing them outside the repository if those values include
 private build metadata.
@@ -137,6 +146,9 @@ Project reports are JSON documents with:
   output path, status, source hash, pipeline provenance, and file-granularity
   source-map anchors for successful translations. Invalid project output
   directories are recorded as failed artifacts without writing files.
+- ``externalCorpus``: optional manifest-backed corpus accounting with declared
+  entries, present/missing and discovered-unit status, source-backend and target
+  rollups, and translated/failed artifact outcomes for manifest entries.
 - ``diagnostics``: structured diagnostics using severity, code, message,
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract.
@@ -144,11 +156,11 @@ Project reports are JSON documents with:
   source artifact checks, project metadata and config count checks, unit and
   skipped record shape checks, artifact record shape checks, source hash and
   provenance checks, source-map record shape and anchor consistency checks,
-  summary consistency checks, migration action shape checks, preserved
-  diagnostic shape checks, validation result record shape checks, artifact
-  target declaration checks, translated artifact existence checks, escaped
-  artifact-path checks, optional external toolchain availability, and opt-in
-  toolchain smoke results.
+  external corpus record and summary checks, summary consistency checks,
+  migration action shape checks, preserved diagnostic shape checks, validation
+  result record shape checks, artifact target declaration checks, translated
+  artifact existence checks, escaped artifact-path checks, optional external
+  toolchain availability, and opt-in toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. Each action has a documented kind, severity, message, and target
   list; the current project pipeline emits ``manual-runtime-integration`` for

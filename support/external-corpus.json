@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "name": "CrossTL reduced external corpus",
+  "description": "Pinned upstream shader and GPU source reductions covered by backend fixture tests. Entries are provenance records only; project runs do not clone upstream repositories.",
+  "entries": [
+    {
+      "id": "glslang-spv-spec-constant-layout-only-builtin",
+      "path": "Test/spv.specConstant.vert",
+      "sourceBackend": "opengl",
+      "targets": ["cgl"],
+      "repository": "https://github.com/KhronosGroup/glslang",
+      "commit": "98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+      "sourceUrl": "https://github.com/KhronosGroup/glslang/blob/98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515/Test/spv.specConstant.vert"
+    },
+    {
+      "id": "directx-graphics-samples-hello-triangle",
+      "path": "Samples/Desktop/D3D12HelloWorld/src/HelloTriangle/shaders.hlsl",
+      "sourceBackend": "directx",
+      "targets": ["cgl"],
+      "repository": "https://github.com/microsoft/DirectX-Graphics-Samples",
+      "commit": "31ae3c91160d8634264004cdaf4e41a99c41243e",
+      "sourceUrl": "https://github.com/microsoft/DirectX-Graphics-Samples/blob/31ae3c91160d8634264004cdaf4e41a99c41243e/Samples/Desktop/D3D12HelloWorld/src/HelloTriangle/shaders.hlsl"
+    },
+    {
+      "id": "apple-modern-rendering-imported-typedef-cast",
+      "path": "MetalSampleCodeLibrary/MultipleTechniques/ModernRenderingWithMetal/Renderer/Shaders/AAPLMeshRenderer.metal",
+      "sourceBackend": "metal",
+      "targets": ["cgl"],
+      "repository": "https://github.com/donaldwuid/apple_metal_sample_code",
+      "commit": "0bc50e5b3670b3169855ab260e8da5ff07b53749",
+      "sourceUrl": "https://github.com/donaldwuid/apple_metal_sample_code/blob/0bc50e5b3670b3169855ab260e8da5ff07b53749/MetalSampleCodeLibrary/MultipleTechniques/ModernRenderingWithMetal/Renderer/Shaders/AAPLMeshRenderer.metal"
+    },
+    {
+      "id": "cuda-samples-simple-atomic-intrinsics",
+      "path": "cpp/0_Introduction/simpleAtomicIntrinsics/simpleAtomicIntrinsics_kernel.cuh",
+      "sourceBackend": "cuda",
+      "targets": ["cgl"],
+      "repository": "https://github.com/NVIDIA/cuda-samples",
+      "commit": "b7c5481c556c3fe98db060207ecaa41a4b9a9abc",
+      "sourceUrl": "https://github.com/NVIDIA/cuda-samples/blob/b7c5481c556c3fe98db060207ecaa41a4b9a9abc/cpp/0_Introduction/simpleAtomicIntrinsics/simpleAtomicIntrinsics_kernel.cuh"
+    },
+    {
+      "id": "rocm-examples-bit-extract",
+      "path": "HIP-Basic/bit_extract/main.hip",
+      "sourceBackend": "hip",
+      "targets": ["cgl"],
+      "repository": "https://github.com/ROCm/rocm-examples",
+      "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
+      "sourceUrl": "https://github.com/ROCm/rocm-examples/blob/cf369da68f209c315074204bd0eb61d1a5c015d1/HIP-Basic/bit_extract/main.hip"
+    }
+  ]
+}

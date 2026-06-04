@@ -39,6 +39,24 @@ SIMPLE_CROSSL = textwrap.dedent("""
     """).strip()
 
 
+def test_support_external_corpus_manifest_documents_pinned_reductions():
+    manifest = json.loads(
+        (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
+    )
+
+    assert manifest["schemaVersion"] == 1
+    assert manifest["entries"]
+    source_backends = {entry["sourceBackend"] for entry in manifest["entries"]}
+    assert {"opengl", "directx", "metal", "cuda", "hip"}.issubset(source_backends)
+    for entry in manifest["entries"]:
+        assert entry["id"]
+        assert entry["path"]
+        assert entry["repository"].startswith("https://github.com/")
+        assert len(entry["commit"]) == 40
+        assert entry["sourceUrl"].startswith(entry["repository"])
+        assert entry["targets"] == ["cgl"]
+
+
 def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported(
     tmp_path,
 ):
@@ -599,6 +617,99 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
     ]
 
 
+def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "name": "Reduced project corpus",
+                "entries": [
+                    {
+                        "id": "repo/simple",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "commit": "0" * 40,
+                    },
+                    {
+                        "id": "repo/missing-hlsl",
+                        "path": "missing.hlsl",
+                        "sourceBackend": "directx",
+                        "targets": ["cgl", "opengl"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["project"]["externalCorpusManifest"] == "corpus.json"
+    external_corpus = payload["externalCorpus"]
+    assert external_corpus["schemaVersion"] == 1
+    assert external_corpus["manifest"] == "corpus.json"
+    assert external_corpus["status"] == "ok"
+    assert external_corpus["name"] == "Reduced project corpus"
+    assert external_corpus["summary"] == {
+        "entryCount": 2,
+        "presentCount": 1,
+        "missingCount": 1,
+        "discoveredUnitCount": 1,
+        "undiscoveredPresentCount": 0,
+        "entriesBySourceBackend": {"cgl": 1, "directx": 1},
+        "entriesByTarget": {"cgl": 2, "opengl": 1},
+        "artifactsByTarget": {
+            "cgl": {
+                "artifactCount": 1,
+                "translatedCount": 1,
+                "failedCount": 0,
+            }
+        },
+    }
+    assert external_corpus["entries"][0] == {
+        "id": "repo/simple",
+        "path": "simple.cgl",
+        "sourceBackend": "cgl",
+        "targets": ["cgl"],
+        "present": True,
+        "discovered": True,
+        "artifactCount": 1,
+        "translatedCount": 1,
+        "failedCount": 0,
+        "repository": "https://github.com/example/project",
+        "commit": "0" * 40,
+    }
+    assert external_corpus["entries"][1] == {
+        "id": "repo/missing-hlsl",
+        "path": "missing.hlsl",
+        "sourceBackend": "directx",
+        "targets": ["cgl", "opengl"],
+        "present": False,
+        "discovered": False,
+        "artifactCount": 0,
+        "translatedCount": 0,
+        "failedCount": 0,
+    }
+
+
 def test_validate_project_report_accepts_generated_source_maps(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1063,6 +1174,117 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
         diagnostic["message"]
     )
     assert "validation.artifacts[1] must be an object" in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_malformed_external_corpus_records(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-external-corpus-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "externalCorpusManifest": "corpus.json",
+                },
+                "artifacts": [],
+                "externalCorpus": {
+                    "schemaVersion": 2,
+                    "manifest": "",
+                    "status": "ready",
+                    "name": "",
+                    "entries": [
+                        {
+                            "id": "",
+                            "path": "../outside.cgl",
+                            "sourceBackend": "",
+                            "targets": ["opengl", 1],
+                            "present": "yes",
+                            "discovered": "no",
+                            "artifactCount": -1,
+                            "translatedCount": "0",
+                            "failedCount": False,
+                            "repository": "",
+                        },
+                        "not an entry",
+                    ],
+                    "summary": {
+                        "entryCount": "2",
+                        "presentCount": 2,
+                        "missingCount": 0,
+                        "discoveredUnitCount": 2,
+                        "undiscoveredPresentCount": 1,
+                        "entriesBySourceBackend": {},
+                        "entriesByTarget": {},
+                        "artifactsByTarget": [],
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.externalCorpusManifest must be a string or null" not in (
+        diagnostic["message"]
+    )
+    assert "externalCorpus.schemaVersion must be 1" in diagnostic["message"]
+    assert "externalCorpus.manifest must be a string" in diagnostic["message"]
+    assert (
+        "externalCorpus.status must be ok, missing, invalid, or outside-project"
+    ) in diagnostic["message"]
+    assert "externalCorpus.name must be a string" in diagnostic["message"]
+    assert "externalCorpus.entries[0].id must be a string" in diagnostic["message"]
+    assert "externalCorpus.entries[0].path must be repository-relative" in (
+        diagnostic["message"]
+    )
+    assert "externalCorpus.entries[0].sourceBackend must be a string" in (
+        diagnostic["message"]
+    )
+    assert "externalCorpus.entries[0].targets must be a list of strings" in (
+        diagnostic["message"]
+    )
+    assert "externalCorpus.entries[0].present must be a boolean" in (
+        diagnostic["message"]
+    )
+    assert "externalCorpus.entries[0].discovered must be a boolean" in (
+        diagnostic["message"]
+    )
+    assert (
+        "externalCorpus.entries[0].artifactCount must be a non-negative integer"
+    ) in diagnostic["message"]
+    assert (
+        "externalCorpus.entries[0].translatedCount must be a non-negative integer"
+    ) in diagnostic["message"]
+    assert (
+        "externalCorpus.entries[0].failedCount must be a non-negative integer"
+    ) in diagnostic["message"]
+    assert "externalCorpus.entries[0].repository must be a string" in (
+        diagnostic["message"]
+    )
+    assert "externalCorpus.entries[1] must be an object" in diagnostic["message"]
+    assert "externalCorpus.summary.entryCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "externalCorpus.summary.presentCount must match externalCorpus.entries" in (
+        diagnostic["message"]
+    )
+    assert (
+        "externalCorpus.summary.entriesBySourceBackend must match "
+        "externalCorpus.entries"
+    ) in diagnostic["message"]
+    assert "externalCorpus.summary.artifactsByTarget must be an object" in (
+        diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):

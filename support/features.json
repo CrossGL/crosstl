@@ -4669,7 +4669,7 @@
       "support": {
         "directx": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4689,12 +4689,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records"
           ]
         },
         "opengl": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4714,12 +4715,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records"
           ]
         },
         "metal": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4739,12 +4741,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records"
           ]
         },
         "vulkan": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4764,12 +4767,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records"
           ]
         },
         "cuda": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4789,12 +4793,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records"
           ]
         },
         "hip": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4814,12 +4819,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records"
           ]
         },
         "mojo": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4839,12 +4845,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records"
           ]
         },
         "rust": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4864,12 +4871,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records"
           ]
         },
         "slang": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4889,7 +4897,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records"
           ]
         }
       }
@@ -5384,92 +5393,110 @@
       "support": {
         "directx": {
           "status": "partial",
-          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest and summarize declared paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
             "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
             "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
             "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions"
           ]
         },
         "opengl": {
           "status": "partial",
-          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest and summarize declared paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
             "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
             "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
             "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions"
           ]
         },
         "metal": {
           "status": "partial",
-          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest and summarize declared paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
             "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
             "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
             "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions"
           ]
         },
         "vulkan": {
           "status": "partial",
-          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest and summarize declared paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
             "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
             "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
             "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions"
           ]
         },
         "cuda": {
           "status": "partial",
-          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest and summarize declared paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
             "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
             "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
             "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions"
           ]
         },
         "hip": {
           "status": "partial",
-          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest and summarize declared paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
             "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
             "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
             "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions"
           ]
         },
         "mojo": {
           "status": "partial",
-          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest and summarize declared paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
             "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
             "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
             "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions"
           ]
         },
         "rust": {
           "status": "partial",
-          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest and summarize declared paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
             "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
             "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
             "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions"
           ]
         },
         "slang": {
           "status": "partial",
-          "notes": "Backend-local external fixture reductions exist for several ecosystems, but repo-scale corpus manifests and project-run summaries are not implemented yet.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest and summarize declared paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
             "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
             "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
             "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_"
+            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions"
           ]
         }
       }
