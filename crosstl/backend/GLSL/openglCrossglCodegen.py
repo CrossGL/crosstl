@@ -1021,6 +1021,11 @@ class GLSLToCrossGLConverter:
         layout_str = f"layout({', '.join(parts)})" if parts else "layout()"
         if qualifiers:
             layout_str += " " + " ".join(qualifiers)
+        declaration_type = (
+            layout_entry.get("type") if isinstance(layout_entry, dict) else None
+        )
+        if declaration_type:
+            layout_str += f" {declaration_type}"
         return layout_str.strip()
 
     def is_graphics_interface_block_struct(self, node):

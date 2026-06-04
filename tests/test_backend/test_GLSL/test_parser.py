@@ -746,6 +746,30 @@ def test_parse_repeated_layout_qualifiers_from_slang_glsl():
     assert image_var.layout == {"r32ui": None, "binding": "1"}
 
 
+def test_parse_type_only_atomic_uint_layout_default_from_glslang_spec_examples():
+    # Reduced from KhronosGroup/glslang Test/specExamples.vert.
+    code = textwrap.dedent("""
+        #version 430
+
+        layout (binding = 2, offset = 4) uniform atomic_uint;
+        layout (binding = 2) uniform atomic_uint bar;
+
+        void main()
+        {
+        }
+        """)
+
+    ast = parse_ok(code, "vertex")
+
+    assert ast.layouts[0] == {
+        "layout": {"binding": "2", "offset": "4"},
+        "qualifiers": ["uniform"],
+        "type": "atomic_uint",
+    }
+    assert ast.uniforms[0].name == "bar"
+    assert ast.uniforms[0].vtype == "atomic_uint"
+
+
 def test_parse_layout_after_extension_qualifier_from_mesh_shader_glsl():
     code = textwrap.dedent("""
         #version 460

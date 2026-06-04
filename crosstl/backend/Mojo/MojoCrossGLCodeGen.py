@@ -560,6 +560,14 @@ class MojoToCrossGLConverter:
             code += f" catch{exception_name} {{\n"
             code += self.generate_function_body(node.except_body, indent + 1)
             code += indent_str + "}"
+        if getattr(node, "else_body", None):
+            code += " else {\n"
+            code += self.generate_function_body(node.else_body, indent + 1)
+            code += indent_str + "}"
+        if getattr(node, "finally_body", None):
+            code += " finally {\n"
+            code += self.generate_function_body(node.finally_body, indent + 1)
+            code += indent_str + "}"
         code += "\n"
         return code
 

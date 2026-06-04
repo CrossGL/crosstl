@@ -1411,6 +1411,9 @@ class MojoParser:
 
         except_body = []
         exception_name = None
+        else_body = []
+        finally_body = []
+
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "except":
             self.eat("IDENTIFIER")
             if self.current_token[0] == "IDENTIFIER":
@@ -1418,8 +1421,30 @@ class MojoParser:
                 self.eat("IDENTIFIER")
             self.eat("COLON")
             except_body = self.parse_block()
+            self.skip_newlines()
 
-        return TryExceptNode(try_body, except_body, exception_name)
+        if self.current_token[0] == "ELSE":
+            self.eat("ELSE")
+            self.eat("COLON")
+            else_body = self.parse_block()
+            self.skip_newlines()
+
+        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "finally":
+            self.eat("IDENTIFIER")
+            self.eat("COLON")
+            finally_body = self.parse_block()
+            self.skip_newlines()
+
+        if not except_body and not finally_body:
+            raise SyntaxError("Expected except or finally clause after try block")
+
+        return TryExceptNode(
+            try_body,
+            except_body,
+            exception_name,
+            else_body=else_body,
+            finally_body=finally_body,
+        )
 
     def parse_switch_statement(self):
         self.eat("SWITCH")

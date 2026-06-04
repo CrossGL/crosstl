@@ -440,6 +440,34 @@ def test_try_except_codegen_from_layout_tensor_gpu_docs():
     assert "print(error);" in generated_code
 
 
+def test_try_except_else_finally_codegen_from_official_error_docs():
+    # Reduced from the full try syntax documented at:
+    # https://docs.modular.com/mojo/manual/errors/
+    code = """
+    def main():
+        try:
+            run_kernel()
+        except error:
+            recover(error)
+        else:
+            mark_success()
+        finally:
+            cleanup()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "try {" in generated_code
+    assert "run_kernel();" in generated_code
+    assert "catch (error)" in generated_code
+    assert "recover(error);" in generated_code
+    assert "} else {" in generated_code
+    assert "mark_success();" in generated_code
+    assert "} finally {" in generated_code
+    assert "cleanup();" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
 def test_modular_trait_codegen_omits_abstract_contract_methods():
     code = """
     trait PipelineSchedule:

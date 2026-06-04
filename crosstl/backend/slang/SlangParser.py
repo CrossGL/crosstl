@@ -85,6 +85,7 @@ class SlangParser:
     }
     MESH_OUTPUT_PARAMETER_QUALIFIERS = {"indices", "vertices", "primitives"}
     STANDALONE_LAYOUT_DECLARATION_QUALIFIERS = {"buffer"}
+    MODERN_VARIABLE_KEYWORDS = {"let", "var"}
     BUILTIN_IDENTIFIER_TYPES = {
         "double",
         "double2",
@@ -983,6 +984,14 @@ class SlangParser:
     def parse_global_variable(self, attributes=None):
         attributes = attributes or []
         qualifiers = self.parse_qualifiers()
+        if self.is_current_modern_variable_declaration():
+            return self.parse_modern_variable_declaration(
+                qualifiers=qualifiers,
+                attributes=attributes,
+                allow_register=True,
+                allow_semantic=True,
+            )
+
         var_type = self.parse_type_name(allow_array_suffix=True)
         var_type += self.parse_pointer_suffix()
         declarations = []
@@ -1218,6 +1227,16 @@ class SlangParser:
         attributes = attributes or []
         members = []
         qualifiers = self.parse_qualifiers()
+        if self.is_current_modern_variable_declaration():
+            return [
+                self.parse_modern_variable_declaration(
+                    qualifiers=qualifiers,
+                    attributes=attributes,
+                    allow_semantic=True,
+                    field_initializer_as_value=True,
+                )
+            ]
+
         vtype = self.parse_type_name(allow_array_suffix=True)
         vtype += self.parse_pointer_suffix()
         while True:
@@ -1831,6 +1850,9 @@ class SlangParser:
 
     def parse_variable_declaration_or_assignment(self):
         qualifiers = self.parse_qualifiers()
+        if self.is_current_modern_variable_declaration():
+            return self.parse_modern_variable_declaration(qualifiers=qualifiers)
+
         var_type = self.parse_type_name(allow_array_suffix=True)
         var_type += self.parse_pointer_suffix()
         declarations = []
@@ -1865,6 +1887,72 @@ class SlangParser:
             return declarations
 
         raise SyntaxError(f"Unexpected token in declaration: {self.current_token[0]}")
+
+    def is_current_modern_variable_declaration(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in self.MODERN_VARIABLE_KEYWORDS
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "IDENTIFIER"
+        )
+
+    def parse_modern_variable_declaration(
+        self,
+        qualifiers=None,
+        attributes=None,
+        allow_register=False,
+        allow_semantic=False,
+        field_initializer_as_value=False,
+    ):
+        qualifiers = qualifiers or []
+        attributes = attributes or []
+        storage_modifier = self.current_token[1]
+        self.eat("IDENTIFIER")
+
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        array_sizes = self.parse_array_suffixes()
+
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            var_type = self.parse_type_name(allow_array_suffix=True)
+            var_type += self.parse_pointer_suffix()
+        else:
+            var_type = storage_modifier
+
+        register_name = None
+        if allow_register:
+            register_name = self.parse_register_annotation()
+
+        semantic = None
+        if allow_semantic and self.current_token[0] == "COLON":
+            semantic = self.parse_semantic_annotations()
+
+        variable = VariableNode(
+            var_type,
+            name,
+            qualifiers=qualifiers,
+            attributes=attributes,
+            array_sizes=array_sizes,
+            register=register_name,
+            semantic=semantic,
+            storage_modifier=storage_modifier,
+        )
+
+        if self.current_token[0] in self.ASSIGNMENT_TOKENS:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            value = self.parse_expression()
+            if field_initializer_as_value:
+                variable.value = value
+                declaration = variable
+            else:
+                declaration = AssignmentNode(variable, value, op)
+        else:
+            declaration = variable
+
+        self.eat("SEMICOLON")
+        return declaration
 
     def parse_if_statement(self):
         self.eat("IF")

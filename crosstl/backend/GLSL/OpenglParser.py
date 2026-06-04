@@ -375,6 +375,12 @@ class GLSLParser:
                 layouts.append({"layout": layout, "qualifiers": qualifiers})
                 continue
 
+            if self.is_type_only_layout_declaration_start(qualifiers, layout):
+                layouts.append(
+                    self.parse_type_only_layout_declaration(qualifiers, layout)
+                )
+                continue
+
             if self.is_qualifier_only_declaration_start(qualifiers, layout):
                 global_variables.extend(
                     self.parse_qualifier_only_declarations(qualifiers, layout)
@@ -1339,6 +1345,19 @@ class GLSLParser:
             index = self.skip_newline_index(index + 1)
 
         return self.token_at(index)[0] == "SEMICOLON"
+
+    def is_type_only_layout_declaration_start(self, qualifiers, layout):
+        if layout is None or not qualifiers:
+            return False
+        if self.current_token[0] != "ATOMIC_UINT":
+            return False
+        return self.peek_non_newline()[0] == "SEMICOLON"
+
+    def parse_type_only_layout_declaration(self, qualifiers, layout):
+        type_name = self.parse_type()
+        self.skip_newlines()
+        self.eat("SEMICOLON")
+        return {"layout": layout, "qualifiers": qualifiers, "type": type_name}
 
     def parse_qualifier_only_declarations(self, qualifiers, layout):
         variables = []
