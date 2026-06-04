@@ -98,12 +98,47 @@ def _as_str_list(value: Any, *, field_name: str) -> list[str]:
     raise ValueError(f"{field_name} must be a string or list of strings")
 
 
+def _as_optional_str(value: Any, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    raise ValueError(f"{field_name} must be a string")
+
+
+def _as_optional_non_empty_str(value: Any, *, field_name: str) -> str | None:
+    result = _as_optional_str(value, field_name=field_name)
+    if result is not None and not result.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return result
+
+
+def _as_str_mapping(value: Any, *, field_name: str) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+
+    result: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not isinstance(item, str):
+            raise ValueError(f"{field_name} entries must map strings to strings")
+        result[key] = item
+    return result
+
+
 def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
     for name, value in variants.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(
+                "crosstl.toml [project.variants] keys must be non-empty strings"
+            )
         if not isinstance(value, Mapping):
             raise ValueError(f"crosstl.toml [project.variants.{name}] must be a table")
-        result[str(name)] = {str(key): str(value) for key, value in value.items()}
+        result[name] = _as_str_mapping(
+            value, field_name=f"crosstl.toml [project.variants.{name}]"
+        )
     return result
 
 
@@ -986,22 +1021,23 @@ def load_project_config(
     if not isinstance(project, Mapping):
         raise ValueError("crosstl.toml [project] must be a table")
 
-    sources = project.get("sources", {})
-    if not isinstance(sources, Mapping):
-        raise ValueError("crosstl.toml [project.sources] must be a table")
-    defines = project.get("defines", {})
-    if not isinstance(defines, Mapping):
-        raise ValueError("crosstl.toml [project.defines] must be a table")
+    sources = _as_str_mapping(
+        project.get("sources"), field_name="crosstl.toml [project.sources]"
+    )
+    defines = _as_str_mapping(
+        project.get("defines"), field_name="crosstl.toml [project.defines]"
+    )
     variants = project.get("variants", {})
     if not isinstance(variants, Mapping):
         raise ValueError("crosstl.toml [project.variants] must be a table")
-    external_corpus_manifest = project.get("external_corpus_manifest")
-    if external_corpus_manifest is not None and not isinstance(
-        external_corpus_manifest, str
-    ):
-        raise ValueError(
-            "crosstl.toml project.external_corpus_manifest must be a string"
-        )
+    output_dir = _as_optional_non_empty_str(
+        project.get("output_dir"),
+        field_name="crosstl.toml project.output_dir",
+    )
+    external_corpus_manifest = _as_optional_str(
+        project.get("external_corpus_manifest"),
+        field_name="crosstl.toml project.external_corpus_manifest",
+    )
 
     excludes = _as_str_list(project.get("exclude"), field_name="project.exclude")
     if not excludes:
@@ -1018,12 +1054,12 @@ def load_project_config(
         ),
         exclude_patterns=excludes,
         targets=_as_str_list(project.get("targets"), field_name="project.targets"),
-        output_dir=str(project.get("output_dir", DEFAULT_OUTPUT_DIR)),
-        source_overrides={str(key): str(value) for key, value in sources.items()},
+        output_dir=output_dir or DEFAULT_OUTPUT_DIR,
+        source_overrides=sources,
         include_dirs=_as_str_list(
             project.get("include_dirs"), field_name="project.include_dirs"
         ),
-        defines={str(key): str(value) for key, value in defines.items()},
+        defines=defines,
         variants=_variant_defines(variants),
         external_corpus_manifest=external_corpus_manifest,
     )

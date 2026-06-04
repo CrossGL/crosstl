@@ -130,6 +130,10 @@ variant path segment inside each target output directory, and the original
 variant name is recorded on the artifact and validation records. Native
 preprocessor behavior remains backend-dependent.
 
+Configuration scalar values and define/source-override maps are type checked
+when ``crosstl.toml`` is loaded. Malformed values are rejected before scan or
+translation so reports do not silently stringify invalid project metadata.
+
 ``external_corpus_manifest`` points at an optional repository-relative JSON
 manifest of pinned upstream shader or GPU-source reductions. Project reports use
 the manifest for coverage accounting only: they record declared paths, present

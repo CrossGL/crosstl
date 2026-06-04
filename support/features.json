@@ -4205,7 +4205,7 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4218,12 +4218,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4236,12 +4237,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4254,12 +4256,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4272,12 +4275,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "cuda": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4290,12 +4294,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "hip": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4308,12 +4313,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "mojo": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4326,12 +4332,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4344,12 +4351,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "slang": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4362,7 +4370,8 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         }
       }
@@ -4482,7 +4491,7 @@
       "support": {
         "directx": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, rejects malformed define and variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4490,12 +4499,13 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "opengl": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, rejects malformed define and variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4503,12 +4513,13 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "metal": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, rejects malformed define and variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4516,12 +4527,13 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "vulkan": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, rejects malformed define and variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4529,12 +4541,13 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "cuda": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, rejects malformed define and variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4542,12 +4555,13 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "hip": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, rejects malformed define and variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4555,12 +4569,13 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "mojo": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, rejects malformed define and variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4568,12 +4583,13 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "rust": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, rejects malformed define and variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4581,12 +4597,13 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         },
         "slang": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, rejects malformed define and variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4594,7 +4611,8 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
           ]
         }
       }

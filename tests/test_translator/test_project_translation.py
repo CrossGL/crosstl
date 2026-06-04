@@ -386,6 +386,77 @@ def test_project_config_rejects_malformed_variant_entries(tmp_path):
         load_project_config(repo)
 
 
+@pytest.mark.parametrize(
+    ("toml_text", "message"),
+    [
+        (
+            """
+            [project]
+            output_dir = 1
+            """,
+            "crosstl.toml project.output_dir must be a string",
+        ),
+        (
+            """
+            [project]
+            output_dir = ""
+            """,
+            "crosstl.toml project.output_dir must be a non-empty string",
+        ),
+        (
+            """
+            [project]
+            external_corpus_manifest = ["corpus.json"]
+            """,
+            "crosstl.toml project.external_corpus_manifest must be a string",
+        ),
+        (
+            """
+            [project.sources]
+            "gpu/*.shader" = 1
+            """,
+            "crosstl.toml [project.sources] entries must map strings to strings",
+        ),
+        (
+            """
+            [project.defines]
+            USE_FAST_PATH = 1
+            """,
+            "crosstl.toml [project.defines] entries must map strings to strings",
+        ),
+        (
+            """
+            [project.variants.debug]
+            MODE = 1
+            """,
+            (
+                "crosstl.toml [project.variants.debug] entries must map "
+                "strings to strings"
+            ),
+        ),
+        (
+            """
+            [project.variants.""]
+            MODE = "debug"
+            """,
+            "crosstl.toml [project.variants] keys must be non-empty strings",
+        ),
+    ],
+)
+def test_project_config_rejects_malformed_string_metadata(tmp_path, toml_text, message):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(toml_text).strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        load_project_config(repo)
+
+    assert message in str(excinfo.value)
+
+
 def test_translate_project_honors_source_backend_overrides(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
