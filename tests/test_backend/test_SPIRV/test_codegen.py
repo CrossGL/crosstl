@@ -2276,6 +2276,56 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_PTR_ACCESS_CHAIN_ASSEMBLY = """
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/opt/combine_access_chains_test.cpp
+; Reduced from CombineAccessChainsTest OpPtrAccessChain fixtures and adapted
+; to store through the derived pointers so CrossGL output exposes the lowering.
+OpCapability Shader
+OpCapability VariablePointers
+OpCapability Addresses
+OpExtension "SPV_KHR_variable_pointers"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_a %out_b
+OpExecutionMode %main OriginUpperLeft
+OpName %workgroup_values "workgroupValues"
+OpName %out_a "outA"
+OpName %out_b "outB"
+OpName %ptr_access "ptrAccess"
+OpName %in_bounds_ptr "inBoundsPtr"
+OpDecorate %out_a Location 0
+OpDecorate %out_b Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%uint_0 = OpConstant %uint 0
+%uint_1 = OpConstant %uint 1
+%uint_2 = OpConstant %uint 2
+%uint_4 = OpConstant %uint 4
+%arr_uint = OpTypeArray %uint %uint_4
+%arr_arr_uint = OpTypeArray %arr_uint %uint_4
+%ptr_workgroup_uint = OpTypePointer Workgroup %uint
+%ptr_workgroup_arr_uint = OpTypePointer Workgroup %arr_uint
+%ptr_workgroup_arr_arr_uint = OpTypePointer Workgroup %arr_arr_uint
+%ptr_output_uint = OpTypePointer Output %uint
+%workgroup_values = OpVariable %ptr_workgroup_arr_arr_uint Workgroup
+%out_a = OpVariable %ptr_output_uint Output
+%out_b = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%access = OpAccessChain %ptr_workgroup_arr_uint %workgroup_values %uint_1
+%ptr_access = OpPtrAccessChain %ptr_workgroup_uint %access %uint_2
+%value = OpLoad %uint %ptr_access
+OpStore %out_a %value
+%in_bounds_ptr = OpInBoundsPtrAccessChain %ptr_workgroup_uint %workgroup_values %uint_0 %uint_1
+%value_in_bounds = OpLoad %uint %in_bounds_ptr
+OpStore %out_b %value_in_bounds
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -3377,6 +3427,23 @@ def test_spirv_tools_gl_pervertex_access_chain_codegen():
     assert "float gl_ClipDistance[8] @output @gl_ClipDistance;" in generated_code
     assert "gl_Position = _ua_position;" in generated_code
     assert "value_19[0]" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_ptr_access_chain_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_PTR_ACCESS_CHAIN_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "uint outA @output @location(0);" in generated_code
+    assert "uint outB @output @location(1);" in generated_code
+    assert "outA = workgroupValues[1][2];" in generated_code
+    assert "outB = workgroupValues[0][1];" in generated_code
+    assert "outA = ptrAccess;" not in generated_code
+    assert "outB = inBoundsPtr;" not in generated_code
+    assert "OpPtrAccessChain" not in generated_code
+    assert "OpInBoundsPtrAccessChain" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

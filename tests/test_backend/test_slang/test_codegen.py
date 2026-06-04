@@ -1244,6 +1244,44 @@ def test_global_resource_array_codegen():
     assert "sampler samplers[];" in generated_code
 
 
+def test_namespace_global_resource_array_codegen_from_current_slang_spirv_test():
+    # Source: shader-slang/slang tests/spirv/namespace-texture-array.slang
+    # at 8c4e02e4021d73091a4f1d4eba842c0dd986997e.
+    code = """
+    struct ComputePush
+    {
+        uint image_id;
+    };
+    [[vk::push_constant]] ComputePush p;
+
+    namespace test_namespace
+    {
+        [[vk::binding(0, 0)]] RWTexture2D<float4> textureTable[];
+    }
+
+    [shader("compute")]
+    [numthreads(8, 8, 1)]
+    void main(uint3 pixel_i : SV_DispatchThreadID)
+    {
+        test_namespace.textureTable[p.image_id][pixel_i.xy] = float4(0,1,0,0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "ComputePush p @push_constant;" in generated_code
+    assert (
+        "image2D test_namespace_textureTable[] @set(0) @binding(0);" in generated_code
+    )
+    assert (
+        "test_namespace_textureTable[p.image_id][pixel_i.xy] = "
+        "vec4(0, 1, 0, 0);" in generated_code
+    )
+    assert "test_namespace.textureTable" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_local_and_parameter_array_declarator_codegen():
     code = """
     float bump(float values[2], int idx) {

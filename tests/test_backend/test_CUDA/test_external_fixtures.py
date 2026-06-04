@@ -1026,6 +1026,46 @@ def test_cuda_math_api_long_long_integer_intrinsics_codegen_reparse():
     assert "__ffsll" not in crossgl
 
 
+def test_cuda_cccl_integer_average_intrinsics_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: bfea3082381a656d9a36fc3dc39f2057f4c31615
+    # path: c/parallel.v2/src/hostjit/include/hostjit/cuda_minimal/
+    #       __clang_cuda_device_functions.h
+    source = """
+    __device__ int signed_average(int x, int y) {
+        int floor_avg = ::__hadd(x, y);
+        int rounded_avg = __rhadd(x, y);
+        return floor_avg + rounded_avg;
+    }
+
+    __device__ unsigned int unsigned_average(unsigned int x, unsigned int y) {
+        unsigned int floor_avg = __uhadd(x, y);
+        unsigned int rounded_avg = __urhadd(x, y);
+        return floor_avg + rounded_avg;
+    }
+    """
+
+    ast = parse_cuda(source)
+    signed_body = ast.functions[0].body
+    unsigned_body = ast.functions[1].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert signed_body[0].value.name == "::__hadd"
+    assert signed_body[1].value.name == "__rhadd"
+    assert unsigned_body[0].value.name == "__uhadd"
+    assert unsigned_body[1].value.name == "__urhadd"
+    assert "var floor_avg: i32 = ((x & y) + ((x ^ y) >> 1));" in crossgl
+    assert "var rounded_avg: i32 = ((x | y) - ((x ^ y) >> 1));" in crossgl
+    assert "var floor_avg: u32 = ((x & y) + ((x ^ y) >> 1));" in crossgl
+    assert "var rounded_avg: u32 = ((x | y) - ((x ^ y) >> 1));" in crossgl
+    assert "__hadd" not in crossgl
+    assert "__rhadd" not in crossgl
+    assert "__uhadd" not in crossgl
+    assert "__urhadd" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_math_api_funnelshift_integer_intrinsics_emit_diagnostics():
     # Upstream source:
     # NVIDIA CUDA Math API v13.2, section 13 Integer Intrinsics.

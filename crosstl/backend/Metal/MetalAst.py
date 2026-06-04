@@ -55,6 +55,23 @@ class BlockNode(ASTNode):
         return f"BlockNode(statements={len(self.statements)})"
 
 
+class LambdaNode(ASTNode):
+    """Metal C++ lambda expression."""
+
+    def __init__(self, capture, params, body, return_type=None, specifiers=None):
+        self.capture = capture
+        self.params = params
+        self.body = body
+        self.return_type = return_type
+        self.specifiers = specifiers or []
+
+    def __repr__(self):
+        return (
+            f"LambdaNode(capture={self.capture!r}, "
+            f"params={len(self.params)}, statements={len(self.body)})"
+        )
+
+
 _COMMON_NODES = (
     ASTNode,
     ArrayAccessNode,
@@ -78,6 +95,7 @@ _COMMON_NODES = (
     FunctionNode,
     IfNode,
     InitializerListNode,
+    LambdaNode,
     MemberAccessNode,
     MethodCallNode,
     NewNode,

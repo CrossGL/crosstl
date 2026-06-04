@@ -2167,6 +2167,30 @@ def test_codegen_threadgroup_memory_and_barrier():
     assert "@threadgroup" in result or "threadgroup" in result
 
 
+def test_codegen_preserves_lambda_callback_from_mlx_fp_quantized_nax():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: b155224b9963cd9476363b464a559232a0868000
+    # Path: mlx/backend/metal/kernels/fp_quantized_nax.h
+    code = """
+    void run(bool is_unaligned_sm) {
+      dispatch_bool(!is_unaligned_sm, [&](auto kAlignedM) {
+        if constexpr (kAlignedM.value) {
+          threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+      });
+    }
+    """
+    result = convert(code)
+    compact = normalize(result)
+
+    assert "dispatch_bool" in compact
+    assert "[&](auto kAlignedM)" in compact
+    assert "if (kAlignedM.value)" in compact
+    assert "threadgroup_barrier" in compact
+    assert "Unhandled expression" not in compact
+
+
 def test_codegen_preserves_native_address_space_qualifiers():
     code = """
     #include <metal_stdlib>

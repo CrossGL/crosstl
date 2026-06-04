@@ -498,6 +498,31 @@ def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
     assert "cbuffer Uniforms" not in crossgl
 
 
+def test_codegen_external_yuv_sampler_uniforms_are_resources_from_glslang():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/300samplerExternalYUV.frag.
+    code = textwrap.dedent("""
+        #version 300 es
+        #extension GL_EXT_YUV_target : enable
+
+        uniform __samplerExternal2DY2YEXT sExt;
+        uniform highp __samplerExternal2DY2YEXT highExt;
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            fragColor = texture(sExt, vec2(0.2)) + texture(highExt, vec2(0.2));
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "__samplerExternal2DY2YEXT sExt;" in crossgl
+    assert "__samplerExternal2DY2YEXT highExt;" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert "texture(sExt, vec2(0.2))" in crossgl
+    assert "texture(highExt, vec2(0.2))" in crossgl
+
+
 def test_codegen_nonuniform_ext_qualifier_from_glslang_is_preserved():
     # Reduced from KhronosGroup/glslang Test/spv.nonuniform.frag.
     code = textwrap.dedent("""

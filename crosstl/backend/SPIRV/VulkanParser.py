@@ -1373,6 +1373,27 @@ class VulkanParser:
                     expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode in {
+                "OpPtrAccessChain",
+                "OpInBoundsPtrAccessChain",
+            }:
+                if len(operands) >= 3:
+                    access = self.spirv_assembly_access_chain_expression(
+                        operands[1],
+                        operands[2:],
+                        expressions,
+                        names,
+                        decorations,
+                        member_decorations,
+                        member_names,
+                        types,
+                        variables_by_id,
+                        constants,
+                    )
+                    expressions[result_id] = access
+                    expression_type_ids[result_id] = operands[0]
+                continue
+
             if result_id and opcode == "OpArrayLength" and len(operands) >= 3:
                 expressions[result_id] = FunctionCallNode(
                     "spirvArrayLength",

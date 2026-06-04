@@ -2155,6 +2155,45 @@ def test_global_resource_array_parsing():
     assert ast.global_vars[1].register == "t0"
 
 
+def test_namespace_global_resource_array_parsing_from_current_slang_spirv_test():
+    # Source: shader-slang/slang tests/spirv/namespace-texture-array.slang
+    # at 8c4e02e4021d73091a4f1d4eba842c0dd986997e.
+    code = """
+    struct ComputePush
+    {
+        uint image_id;
+    };
+    [[vk::push_constant]] ComputePush p;
+
+    namespace test_namespace
+    {
+        [[vk::binding(0, 0)]] RWTexture2D<float4> textureTable[];
+    }
+
+    [shader("compute")]
+    [numthreads(8, 8, 1)]
+    void main(uint3 pixel_i : SV_DispatchThreadID)
+    {
+        test_namespace.textureTable[p.image_id][pixel_i.xy] = float4(0,1,0,0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    namespaced_resource = ast.global_vars[1]
+    assert namespaced_resource.vtype == "RWTexture2D<float4>"
+    assert namespaced_resource.name == "test_namespace.textureTable"
+    assert namespaced_resource.array_sizes == [None]
+    assert namespaced_resource.attributes == [
+        {"name": "vk::binding", "arguments": ["0", "0"]}
+    ]
+
+    assignment = find_function(ast, "main").body[0]
+    assert isinstance(assignment.left.array.array, MemberAccessNode)
+    assert assignment.left.array.array.object.name == "test_namespace"
+    assert assignment.left.array.array.member == "textureTable"
+
+
 def test_local_and_parameter_array_declarator_parsing():
     code = """
     float bump(float values[2], int idx) {
