@@ -510,6 +510,24 @@ def test_codegen_comma_separated_for_updates():
     assert "for (uint i = 0; (i < 3); (++i), (++plane_index))" in crossgl
 
 
+def test_codegen_type_only_atomic_uint_layout_default_from_glslang_spec_examples():
+    # Reduced from KhronosGroup/glslang Test/specExamples.vert.
+    code = textwrap.dedent("""
+        #version 430
+
+        layout (binding = 2, offset = 4) uniform atomic_uint;
+        layout (binding = 2) uniform atomic_uint bar;
+
+        void main()
+        {
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "vertex")
+
+    assert "layout(binding = 2, offset = 4) uniform atomic_uint;" in crossgl
+
+
 def test_codegen_for_condition_declaration_from_glslang_debuginfo_declaration():
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/spv.debuginfo.declaration.glsl.frag.

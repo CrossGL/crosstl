@@ -190,6 +190,41 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_OUTER_PRODUCT_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Reduced from the core OpOuterProduct instruction definition.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %column %row %basis
+OpExecutionMode %main OriginUpperLeft
+OpName %column "column"
+OpName %row "row"
+OpName %basis "basis"
+OpDecorate %column Location 0
+OpDecorate %row Location 1
+OpDecorate %basis Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v2float = OpTypeVector %float 2
+%v3float = OpTypeVector %float 3
+%mat3x2 = OpTypeMatrix %v2float 3
+%ptr_input_v3float = OpTypePointer Input %v3float
+%ptr_input_v2float = OpTypePointer Input %v2float
+%ptr_output_mat3x2 = OpTypePointer Output %mat3x2
+%column = OpVariable %ptr_input_v3float Input
+%row = OpVariable %ptr_input_v2float Input
+%basis = OpVariable %ptr_output_mat3x2 Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_column = OpLoad %v3float %column
+%loaded_row = OpLoad %v2float %row
+%outer = OpOuterProduct %mat3x2 %loaded_column %loaded_row
+OpStore %basis %outer
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_FCONVERT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -2123,6 +2158,21 @@ def test_glslang_matrix_transpose_codegen_reparse():
     assert "float4x3 m43 @output @location(0);" in generated_code
     assert "m43 = transpose(sum34);" in generated_code
     assert "m43 = transposed;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_spec_outer_product_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SPEC_OUTER_PRODUCT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float3 column @input @location(0);" in generated_code
+    assert "float2 row @input @location(1);" in generated_code
+    assert "float3x2 basis @output @location(0);" in generated_code
+    assert "basis = outerProduct(column, row);" in generated_code
+    assert "basis = outer;" not in generated_code
+    assert "spirv_OuterProduct" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

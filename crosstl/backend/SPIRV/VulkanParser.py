@@ -229,6 +229,7 @@ class VulkanParser:
         "BitFieldSExtract": "bitfieldExtract",
         "BitFieldUExtract": "bitfieldExtract",
         "BitReverse": "bitfieldReverse",
+        "OuterProduct": "outerProduct",
     }
     CROSSGL_RESERVED_IDENTIFIERS = {
         "as",

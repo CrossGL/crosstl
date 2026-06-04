@@ -60,6 +60,25 @@ class TestHipCodeGen:
         assert "__managed__" not in result
         assert "__shared__" not in result
 
+    def test_official_amd_aligned_struct_attribute_conversion(self):
+        code = """
+        struct __align__(16) MyStruct {
+            float4 data;
+        };
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "struct MyStruct {" in result
+        assert "vec4<f32> data;" in result
+        assert "__align__" not in result
+        assert "StructNode" not in result
+
     def test_public_rocm_examples_device_global_variables_conversion(self):
         code = """
         __device__ auto load_callback_dev = load_callback;

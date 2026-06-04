@@ -1876,6 +1876,31 @@ def test_try_except_parse_from_layout_tensor_gpu_docs():
     assert isinstance(statement.except_body[0], FunctionCallNode)
 
 
+def test_try_except_else_finally_parse_from_official_error_docs():
+    # Reduced from the full try syntax documented at:
+    # https://docs.modular.com/mojo/manual/errors/
+    code = """
+    def main():
+        try:
+            run_kernel()
+        except error:
+            recover(error)
+        else:
+            mark_success()
+        finally:
+            cleanup()
+    """
+    ast = parse_code(tokenize_code(code))
+    statement = find_function(ast, "main").body[0]
+
+    assert isinstance(statement, TryExceptNode)
+    assert statement.exception_name == "error"
+    assert statement.try_body[0].name == "run_kernel"
+    assert statement.except_body[0].name == "recover"
+    assert statement.else_body[0].name == "mark_success"
+    assert statement.finally_body[0].name == "cleanup"
+
+
 def test_modular_pipeline_schedule_trait_parse():
     # Reduced from modular/modular commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,

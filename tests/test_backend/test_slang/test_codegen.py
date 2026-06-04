@@ -526,6 +526,41 @@ def test_generic_type_receiver_expression_codegen():
     assert "return 0;" in generated_code
 
 
+def test_modern_typed_let_var_declarations_codegen_from_official_docs():
+    code = """
+    let x : int = 7;
+    var y : float = 9.0;
+
+    struct Person
+    {
+        var age : int;
+        float height;
+    }
+
+    void main()
+    {
+        let localCount : int = x;
+        var localValue : float;
+        var inferred = y;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int x = 7;" in generated_code
+    assert "float y = 9.0;" in generated_code
+    assert "int age;" in generated_code
+    assert "float height;" in generated_code
+    assert "int localCount = x;" in generated_code
+    assert "float localValue;" in generated_code
+    assert "var inferred = y;" in generated_code
+    assert "let x :" not in generated_code
+    assert "var y :" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_generic_function_declaration_after_name_codegen():
     code = """
     float GetRayT<let RAY_QUERY_FLAGS: uint>(uint rayInlineFlags)

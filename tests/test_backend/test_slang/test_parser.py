@@ -807,6 +807,65 @@ def test_generic_type_receiver_expression_parsing():
     assert generic_method.right.args[0] == "1.0"
 
 
+def test_modern_typed_let_var_declarations_from_official_docs():
+    code = """
+    let x : int = 7;
+    var y : float = 9.0;
+
+    struct Person
+    {
+        var age : int;
+        float height;
+    }
+
+    void main()
+    {
+        let localCount : int = x;
+        var localValue : float;
+        var inferred = y;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    x = ast.global_vars[0]
+    y = ast.global_vars[1]
+    person = ast.structs[0]
+    body = find_function(ast, "main").body
+
+    assert isinstance(x, AssignmentNode)
+    assert x.left.vtype == "int"
+    assert x.left.name == "x"
+    assert x.left.storage_modifier == "let"
+    assert x.right == "7"
+
+    assert isinstance(y, AssignmentNode)
+    assert y.left.vtype == "float"
+    assert y.left.name == "y"
+    assert y.left.storage_modifier == "var"
+    assert y.right == "9.0"
+
+    assert [(member.vtype, member.name) for member in person.members] == [
+        ("int", "age"),
+        ("float", "height"),
+    ]
+    assert person.members[0].storage_modifier == "var"
+
+    assert isinstance(body[0], AssignmentNode)
+    assert body[0].left.vtype == "int"
+    assert body[0].left.name == "localCount"
+    assert body[0].left.storage_modifier == "let"
+    assert isinstance(body[1], VariableNode)
+    assert body[1].vtype == "float"
+    assert body[1].name == "localValue"
+    assert body[1].storage_modifier == "var"
+    assert isinstance(body[2], AssignmentNode)
+    assert body[2].left.vtype == "var"
+    assert body[2].left.name == "inferred"
+    assert body[2].left.storage_modifier == "var"
+
+
 def test_generic_function_declaration_after_name_parsing():
     code = """
     float GetRayT<let RAY_QUERY_FLAGS: uint>(uint rayInlineFlags)

@@ -177,7 +177,7 @@ class HipParser:
         "noexcept",
         "__noexcept",
     }
-    TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas"}
+    TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas", "__align__"}
     ATOMIC_FUNCTION_NAMES = {
         "atomicAdd",
         "hipAtomicAdd",
@@ -1420,6 +1420,10 @@ class HipParser:
 
     def parse_struct(self):
         self.consume("STRUCT")
+        self.skip_newlines()
+        self.skip_cpp_attributes()
+        self.parse_type_attribute_prefixes()
+        self.skip_newlines()
 
         name = None
         if self.match("IDENTIFIER"):

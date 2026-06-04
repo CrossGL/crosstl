@@ -299,6 +299,23 @@ class TestHipParser:
         assert tile.vtype == "float[32]"
         assert tile.qualifiers == ["__shared__"]
 
+    def test_official_amd_aligned_struct_attribute_parses(self):
+        code = """
+        struct __align__(16) MyStruct {
+            float4 data;
+        };
+        """
+        ast = self.parse_code(code)
+
+        aligned_struct = ast.statements[0]
+        member = aligned_struct.members[0]
+
+        assert isinstance(aligned_struct, StructNode)
+        assert aligned_struct.name == "MyStruct"
+        assert isinstance(member, VariableNode)
+        assert member.name == "data"
+        assert member.vtype == "float4"
+
     def test_extern_shared_memory_declaration_with_post_type_qualifier_parses(self):
         code = """
         __global__ void dynamic_shared() {
