@@ -2032,6 +2032,36 @@ class TestHipParser:
         assert body[5].expression == "q"
         assert body[5].is_array is False
 
+    def test_public_rocprim_placement_new_pack_expansion_parsing(self):
+        # Upstream: ROCm/rocPRIM
+        # Commit: 6dbfc3bb464a3f159b6a649e1d862c171bca32dc
+        # Path: rocprim/include/rocprim/types/uninitialized_array.hpp
+        code = """
+        template<typename T, typename... Args>
+        __device__ T& emplace(unsigned int index, Args&&... args) {
+            T* ptr = reinterpret_cast<T*>(&storage[0]) + index;
+            return *new(ptr) T(std::forward<Args>(args)...);
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        ptr = function.body[0]
+        returned = function.body[1]
+        placement_new = returned.value.operand
+        pack_expansion = placement_new.args[0]
+
+        assert function.params[1] == {"type": "Args && ...", "name": "args"}
+        assert isinstance(ptr.value, BinaryOpNode)
+        assert isinstance(returned.value, UnaryOpNode)
+        assert returned.value.op == "*"
+        assert isinstance(placement_new, NewNode)
+        assert placement_new.target_type == "T"
+        assert placement_new.placement_args == ["ptr"]
+        assert isinstance(pack_expansion, FunctionCallNode)
+        assert pack_expansion.name == HipParser.PACK_EXPANSION_FUNCTION_NAME
+        assert pack_expansion.args[0].name == "std::forward<Args>"
+
     def test_unique_ptr_host_allocation_parsing(self):
         code = """
         void host(int n) {

@@ -285,6 +285,39 @@ def test_codegen_return_type_before_stage_qualifier_from_metal_cpp_sample():
     parse_crossgl(crossgl)
 
 
+def test_codegen_reference_to_array_params_from_spirv_cross_reference():
+    # Upstream repo: https://github.com/KhronosGroup/SPIRV-Cross
+    # Commit: 9fbd8b789e351c2bb772cec570c1105962056b43
+    # Path: reference/opt/shaders-msl/frag/array-lut-no-loop-variable.frag
+    code = """
+    #pragma clang diagnostic ignored "-Wmissing-prototypes"
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template<typename T, uint N>
+    void spvArrayCopy(thread T (&dst)[N], thread const T (&src)[N]) {
+        for (uint i = 0; i < N; dst[i] = src[i], i++);
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+    fn = ast.functions[0]
+
+    assert fn.name == "spvArrayCopy"
+    assert fn.params[0].vtype == "T&"
+    assert fn.params[0].name == "dst"
+    assert fn.params[0].array_sizes[0].name == "N"
+    assert fn.params[0].qualifiers == ["thread"]
+    assert fn.params[1].vtype == "T&"
+    assert fn.params[1].name == "src"
+    assert fn.params[1].array_sizes[0].name == "N"
+    assert fn.params[1].qualifiers == ["thread", "const"]
+
+    crossgl = generate_code(ast)
+
+    assert "void spvArrayCopy(thread T[N]& dst, thread T[N]& src)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():
     code = """
     #include <metal_stdlib>

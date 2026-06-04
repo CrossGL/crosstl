@@ -156,6 +156,28 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: https://github.com/KhronosGroup/glslang
+    # Commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Path: Test/330.frag
+    # Reduced from lines that mark "precise" as okay before it became a keyword.
+    ExternalFixture(
+        name="glslang-330-frag-precise-contextual-identifier",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/330.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 330 compatibility
+
+            int precise;
+            struct SKeyMem { int precise; } KeyMem;
+
+            void main()
+            {
+                KeyMem.precise;
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="glslang-120-vert-invariant-builtin-list",
         repo="https://github.com/KhronosGroup/glslang",
@@ -659,6 +681,23 @@ def test_parse_glslang_patch_contextual_identifier_fixture():
     assert patch.value.value == "3.1"
 
 
+def test_parse_glslang_precise_contextual_identifier_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-330-frag-precise-contextual-identifier"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    precise_global = next(var for var in ast.global_variables if var.name == "precise")
+    key_mem = next(struct for struct in ast.structs if struct.name == "SKeyMem")
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert precise_global.vtype == "int"
+    assert key_mem.members[0].name == "precise"
+    assert main.body[0].member == "precise"
+
+
 def test_parse_glslang_invariant_builtin_list_fixture():
     fixture = next(
         item
@@ -901,6 +940,21 @@ def test_codegen_glslang_patch_contextual_identifier_fixture_snippet():
 
     assert "float patch = 3.1;" in crossgl
     assert "vec4(patch)" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_precise_contextual_identifier_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-330-frag-precise-contextual-identifier"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert crossgl.count("int precise;") == 2
+    assert "KeyMem.precise;" in crossgl
+    assert "@precise" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

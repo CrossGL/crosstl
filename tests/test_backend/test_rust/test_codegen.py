@@ -664,6 +664,50 @@ def test_rust_gpu_tessellation_control_stage_codegen_from_upstream_compiletest()
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_all_builtins_tessellation_and_nv_semantics_codegen():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/spirv-attr/all-builtins.rs.
+    code = """
+    use spirv_std::glam::*;
+    use spirv_std::spirv;
+
+    #[spirv(tessellation_control)]
+    pub fn tessellation_control(
+        #[spirv(invocation_id)] invocation_id: u32,
+        #[spirv(patch_vertices)] patch_vertices: u32,
+        #[spirv(tess_level_inner)] tess_level_inner: &mut [f32; 2],
+        #[spirv(tess_level_outer)] tess_level_outer: &mut [f32; 4],
+    ) {}
+
+    #[spirv(tessellation_evaluation)]
+    pub fn tessellation_evaluation(#[spirv(tess_coord)] tess_coord: Vec3) {}
+
+    #[spirv(vertex)]
+    pub fn vertex(
+        #[spirv(SMIDNV)] smidnv: u32,
+        #[spirv(mesh_view_count_nv)] mesh_view_count_nv: u32,
+        #[spirv(position_per_view_nv)] position_per_view_nv: u32,
+        #[spirv(warp_id_nv)] warp_id_nv: u32,
+        #[spirv(warps_per_sm_nv)] warps_per_sm_nv: u32,
+    ) {}
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint invocation_id @ gl_InvocationID" in result
+    assert "uint patch_vertices @ gl_PatchVerticesIn" in result
+    assert "float tess_level_inner[2] @ gl_TessLevelInner" in result
+    assert "float tess_level_outer[4] @ gl_TessLevelOuter" in result
+    assert "vec3 tess_coord @ gl_TessCoord" in result
+    assert "uint smidnv @ gl_SMIDNV" in result
+    assert "uint mesh_view_count_nv @ gl_MeshViewCountNV" in result
+    assert "uint position_per_view_nv @ gl_PositionPerViewNV" in result
+    assert "uint warp_id_nv @ gl_WarpIDNV" in result
+    assert "uint warps_per_sm_nv @ gl_WarpsPerSMNV" in result
+    crosstl.translator.parse(result)
+
+
 def test_vulkan_shader_examples_multiview_view_index_semantic_codegen():
     # Reduced from Rust-GPU/VulkanShaderExamples commit
     # b29a37eb46802b5ea6882af4808d6887fc184581,

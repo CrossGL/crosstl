@@ -21,6 +21,7 @@ EXTERNAL_SAMPLES = [
             "cpp/0_Introduction/simpleTexture3D/simpleTexture3D_kernel.cu",
             "cpp/0_Introduction/simpleVoteIntrinsics/simpleVote_kernel.cuh",
             "cpp/2_Concepts_and_Techniques/MC_SingleAsianOptionP/src/pricingengine.cu",
+            "cpp/2_Concepts_and_Techniques/reduction/reduction_kernel.cu",
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
             "cpp/3_CUDA_Features/cudaCompressibleMemory/saxpy.cu",
@@ -670,6 +671,34 @@ def test_cuda_samples_sobol_qrng_ffs_codegen_reparse():
     assert "(k < ((findLSB(stride) + 1) - 1))" in crossgl
     assert "v[((findLSB(stride) + 1) - 2)]" in crossgl
     assert "__ffs" not in crossgl
+
+
+def test_cuda_samples_reduction_reduce_add_sync_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/2_Concepts_and_Techniques/reduction/reduction_kernel.cu
+    source = """
+    __device__ int warpReduceSumFullMask(int mySum) {
+        return __reduce_add_sync(0xffffffffu, mySum);
+    }
+
+    __device__ int warpReduceSumMasked(unsigned int mask, int mySum) {
+        mySum = __reduce_add_sync(mask, mySum);
+        return mySum;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "return WaveActiveSum(mySum);" in crossgl
+    assert (
+        "/* cuda warp intrinsic __reduce_add_sync(mask, mySum) not directly "
+        "supported in CrossGL */ 0"
+    ) in crossgl
+    assert "__reduce_add_sync(0xffffffffu, mySum);" not in crossgl
+    assert "__reduce_add_sync(mask, mySum);" not in crossgl
 
 
 def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():

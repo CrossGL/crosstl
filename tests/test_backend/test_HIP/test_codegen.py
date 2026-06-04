@@ -2,6 +2,8 @@ from crosstl import translate
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
+from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import Parser as CrossGLParser
 
 
 class TestHipCodeGen:
@@ -15361,6 +15363,30 @@ class TestHipCodeGen:
         assert "// delete array: h" in result
         assert "// delete: q" in result
         assert "array<delete>" not in result
+
+    def test_public_rocprim_placement_new_conversion_reparse(self):
+        # Upstream: ROCm/rocPRIM
+        # Commit: 6dbfc3bb464a3f159b6a649e1d862c171bca32dc
+        # Path: rocprim/include/rocprim/types/uninitialized_array.hpp
+        code = """
+        __device__ int& emplace_int(int* ptr, int value) {
+            return *new(ptr) int(value);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "return (*(/* HIP placement new: new(ptr) i32(value) not directly "
+            "supported in CrossGL */ ptr));"
+        ) in result
+        assert "new<i32>" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_unique_ptr_host_allocation_conversion(self):
         code = """

@@ -1140,11 +1140,24 @@ class MetalToCrossGLConverter:
         mapped_type = self.map_variable_type(var)
         name_array_suffix = ""
         include_declarator_arrays = True
-        if self.use_name_array_suffix(mapped_type, var):
+        grouped_type_suffix = (
+            getattr(var, "declarator_type_suffix", "")
+            if getattr(var, "declarator_type_suffix_grouped", False)
+            else ""
+        )
+        if grouped_type_suffix and getattr(var, "array_sizes", None):
             include_declarator_arrays = False
-            name_array_suffix = self.format_declarator_array_suffix(var)
-        type_array_suffix = self.format_array_suffix(var, include_declarator_arrays)
-        type_str = f"{mapped_type}{type_array_suffix}"
+            base_type = mapped_type
+            if base_type.endswith(grouped_type_suffix):
+                base_type = base_type[: -len(grouped_type_suffix)].rstrip()
+            type_array_suffix = self.format_declarator_array_suffix(var)
+            type_str = f"{base_type}{type_array_suffix}{grouped_type_suffix}"
+        else:
+            if self.use_name_array_suffix(mapped_type, var):
+                include_declarator_arrays = False
+                name_array_suffix = self.format_declarator_array_suffix(var)
+            type_array_suffix = self.format_array_suffix(var, include_declarator_arrays)
+            type_str = f"{mapped_type}{type_array_suffix}"
         address_space = self.address_space_qualifier_prefix(var)
         const_str = (
             "const "

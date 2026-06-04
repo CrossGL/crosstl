@@ -1555,6 +1555,28 @@ class VulkanParser:
                 )
                 continue
 
+            if opcode == "OpCopyMemory" and len(operands) >= 2:
+                if operands[0] != operands[1]:
+                    statements.append(
+                        AssignmentNode(
+                            self.spirv_assembly_operand_expression(
+                                operands[0],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                            self.spirv_assembly_operand_expression(
+                                operands[1],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                        )
+                    )
+                continue
+
             if opcode == "OpReturnValue" and operands:
                 statements.append(
                     ReturnNode(

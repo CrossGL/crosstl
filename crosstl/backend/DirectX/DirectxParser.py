@@ -1038,8 +1038,10 @@ class HLSLParser:
 
     def parse_enum(self):
         self.eat("ENUM")
+        is_scoped = False
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "class":
             self.eat("IDENTIFIER")
+            is_scoped = True
             name = self.current_token[1]
             self.eat("IDENTIFIER")
         elif self.current_token[0] == "IDENTIFIER":
@@ -1047,6 +1049,12 @@ class HLSLParser:
             self.eat("IDENTIFIER")
         else:
             name = self.synthetic_enum_name()
+
+        underlying_type = None
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            underlying_type = self.parse_type()
+
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":
@@ -1068,7 +1076,10 @@ class HLSLParser:
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-        return EnumNode(name, members)
+        enum = EnumNode(name, members)
+        enum.is_scoped = is_scoped
+        enum.underlying_type = underlying_type
+        return enum
 
     def parse_typedef(self):
         self.eat("TYPEDEF")
