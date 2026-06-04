@@ -931,7 +931,23 @@ def _validate_artifacts(
         artifact_path = Path(str(artifact["path"]))
         if not artifact_path.is_absolute():
             artifact_path = config.root / artifact_path
-        exists = artifact_path.exists()
+        artifact_path = artifact_path.resolve()
+        artifact_inside_project = _is_relative_to(artifact_path, config.root)
+        if not artifact_inside_project:
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.validate.artifact-outside-project",
+                    message=(
+                        "Artifact path resolves outside the repository: "
+                        f"{artifact['path']}"
+                    ),
+                    location=SourceLocation(file=str(artifact["source"])),
+                    target=str(artifact["target"]),
+                    missing_capabilities=["artifact.manifest"],
+                )
+            )
+        exists = artifact_path.exists() if artifact_inside_project else False
         artifact_checks.append(
             {
                 "source": artifact["source"],
@@ -940,12 +956,18 @@ def _validate_artifacts(
                 "exists": exists,
                 "status": (
                     "ok"
-                    if exists and artifact.get("status") == "translated"
+                    if artifact_inside_project
+                    and exists
+                    and artifact.get("status") == "translated"
                     else "failed"
                 ),
             }
         )
-        if not exists and artifact.get("status") == "translated":
+        if (
+            artifact_inside_project
+            and not exists
+            and artifact.get("status") == "translated"
+        ):
             diagnostics.append(
                 ProjectDiagnostic(
                     severity="error",
@@ -1131,6 +1153,9 @@ def _run_toolchain_smoke(
         artifact_path = Path(str(artifact["path"]))
         if not artifact_path.is_absolute():
             artifact_path = root / artifact_path
+        artifact_path = artifact_path.resolve()
+        if not _is_relative_to(artifact_path, root):
+            continue
         if target == "opengl":
             command = [tools[0], "--stdin"]
         elif target == "vulkan":

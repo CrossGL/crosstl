@@ -772,6 +772,74 @@ def test_validate_project_report_records_failed_artifacts(tmp_path):
     assert "unsupported target backend" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_artifacts_outside_project(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    repo.mkdir()
+    outside.mkdir()
+    (outside / "simple.glsl").write_text(
+        "#version 450\nvoid main() {}\n", encoding="utf-8"
+    )
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "opengl",
+                        "path": "../outside/simple.glsl",
+                        "status": "translated",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+    monkeypatch.setattr(
+        project_pipeline.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("toolchain should not run"),
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["validation"]["artifacts"] == [
+        {
+            "source": "simple.cgl",
+            "target": "opengl",
+            "path": "../outside/simple.glsl",
+            "exists": False,
+            "status": "failed",
+        }
+    ]
+    assert payload["validation"]["toolchainRuns"] == []
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.artifact-outside-project"
+    assert diagnostic["location"]["file"] == "simple.cgl"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
+
+
 def test_translate_project_records_structured_diagnostics_for_failures(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
