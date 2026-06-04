@@ -3501,6 +3501,11 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 and source not in declared_units_by_path
             ):
                 reasons.append(f"artifacts[{index}].source must be listed in units")
+            path = artifact.get("path")
+            if _is_non_empty_string(path) and not _is_repository_relative_report_path(
+                path
+            ):
+                reasons.append(f"artifacts[{index}].path must be repository-relative")
             source_backend = artifact.get("sourceBackend")
             if has_summary or "sourceBackend" in artifact:
                 if not _is_non_empty_string(source_backend):
