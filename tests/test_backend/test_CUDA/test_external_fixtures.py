@@ -34,6 +34,7 @@ EXTERNAL_SAMPLES = [
             "cpp/3_CUDA_Features/cudaTensorCoreGemm/cudaTensorCoreGemm.cu",
             "cpp/5_Domain_Specific/BlackScholes/BlackScholes_kernel.cuh",
             "cpp/6_Performance/transpose/transpose.cu",
+            "cpp/9_CUDA_Tile/Benchmark_Common/matmul_benchmark.h",
         ],
     },
     {
@@ -193,6 +194,37 @@ def test_cuda_samples_fp16_scalar_product_high2float_codegen_reparse():
     assert_crossgl_reparse(crossgl)
     assert "var f_result: f32 = (f32(result.x) + f32(result.y));" in crossgl
     assert "__high2float" not in crossgl
+
+
+def test_cuda_tile_matmul_half2float_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/9_CUDA_Tile/Benchmark_Common/matmul_benchmark.h
+    source = """
+    void matmul_cpu(float* C,
+                    const __half* A,
+                    const __half* B,
+                    int i,
+                    int j,
+                    int k,
+                    int K,
+                    int N) {
+        float sum = 0.0f;
+        sum += __half2float(A[i * K + k]) * __half2float(B[k * N + j]);
+        C[i * N + j] = sum;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[1].right.left.name == "__half2float"
+    assert body[1].right.right.name == "__half2float"
+    assert "sum += (f32(A[((i * K) + k)]) * f32(B[((k * N) + j)]));" in crossgl
+    assert "__half2float" not in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_samples_interval_bit_reinterpret_intrinsics_codegen_reparse():

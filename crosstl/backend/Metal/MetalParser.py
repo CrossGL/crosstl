@@ -3102,6 +3102,11 @@ class MetalParser:
         while self.current_token[0] == "SCOPE":
             self.eat("SCOPE")
             if (
+                self.current_token == ("IDENTIFIER", "template")
+                and self.peek(1)[0] in TYPE_TOKENS
+            ):
+                self.eat("IDENTIFIER")
+            if (
                 self.current_token[0] not in TYPE_TOKENS
                 and self.current_token[0] not in STAGE_TOKENS
                 and self.current_token[0] != "METAL"

@@ -163,6 +163,43 @@ def test_codegen_fragment_roundtrip():
         assert name in output
 
 
+def test_codegen_block_scope_precision_statement_from_glslang_precision_frag():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/precision.frag, which declares precision defaults inside nested blocks.
+    code = textwrap.dedent("""
+        #version 100
+        precision highp int;
+
+        void main()
+        {
+            precision lowp int;
+            lowp int sum = 0;
+
+            {
+                precision highp int;
+                int level2_high = sum;
+            }
+
+            do {
+                if (true) {
+                    precision mediump int;
+                    int level4_medium = sum;
+                }
+            } while (false);
+
+            gl_FragColor = vec4(float(sum));
+        }
+    """).strip()
+
+    output = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "int sum @lowp = 0;" in output
+    assert "int level2_high = sum;" in output
+    assert "int level4_medium = sum;" in output
+    assert "precision lowp int" not in output
+    assert "precision mediump int" not in output
+
+
 def test_codegen_default_function_argument_from_glslang_default_args():
     code = textwrap.dedent("""
         #version 450

@@ -846,6 +846,38 @@ class TestHipCodeGen:
         assert "__shfl_sync(0xffffffffffffffff, value, lane)" not in result
         assert "__activemask();" not in result
 
+    def test_public_llama_cpp_full_warp_shfl_xor_sync_codegen(self):
+        # Upstream: ggml-org/llama.cpp@7c158fbb4aec1bdc9c81d6ca0e785139f4826fae,
+        # ggml/src/ggml-cuda/argmax.cu.
+        # Reduced from the warp reduction loop:
+        #   __shfl_xor_sync(0xFFFFFFFF, maxval, offset, WARP_SIZE)
+        code = """
+        #define WARP_SIZE 32
+        __global__ void argmax_f32(const float* x, float* out) {
+            float maxval = x[threadIdx.x];
+
+            #pragma unroll
+            for (int offset = WARP_SIZE/2; offset > 0; offset >>= 1) {
+                const float val =
+                    __shfl_xor_sync(0xFFFFFFFF, maxval, offset, WARP_SIZE);
+                maxval = fmaxf(maxval, val);
+            }
+
+            out[threadIdx.x] = maxval;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "WaveReadLaneAt(maxval, (WaveGetLaneIndex() ^ offset))" in result
+        assert "hip warp intrinsic __shfl_xor_sync" not in result
+        assert "__shfl_xor_sync" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_cooperative_groups_thread_block_sync_rank_and_size_convert(self):
         code = """
         #include <hip/hip_cooperative_groups.h>

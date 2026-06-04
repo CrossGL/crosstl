@@ -230,6 +230,7 @@ class VulkanParser:
         "BitFieldUExtract": "bitfieldExtract",
         "BitReverse": "bitfieldReverse",
         "OuterProduct": "outerProduct",
+        "QuantizeToF16": "spirvQuantizeToF16",
     }
     SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS = {
         "IAddCarry": "spirvIAddCarry",

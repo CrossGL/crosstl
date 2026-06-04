@@ -1803,6 +1803,35 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_QUANTIZE_TO_F16_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/opt/fold_test.cpp
+; Reduced from FloatScalarInstructionFoldingTest OpQuantizeToF16 cases.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %color
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %color "color"
+OpDecorate %input_value Location 0
+OpDecorate %color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_float = OpTypePointer Output %float
+%input_value = OpVariable %ptr_input_float Input
+%color = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %input_value
+%quantized = OpQuantizeToF16 %float %loaded
+OpStore %color %quantized
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_CROSS_COMPOSITE_INSERT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
 ; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
@@ -3285,6 +3314,20 @@ def test_spirv_tools_copy_object_codegen_reparse():
     assert "float color @output @location(0);" in generated_code
     assert "color = inputValue;" in generated_code
     assert "color = copy;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_quantize_to_f16_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_QUANTIZE_TO_F16_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float inputValue @input @location(0);" in generated_code
+    assert "float color @output @location(0);" in generated_code
+    assert "color = spirvQuantizeToF16(inputValue);" in generated_code
+    assert "color = quantized;" not in generated_code
+    assert "OpQuantizeToF16" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
