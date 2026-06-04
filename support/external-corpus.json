@@ -47,6 +47,15 @@
       "repository": "https://github.com/ROCm/rocm-examples",
       "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
       "sourceUrl": "https://github.com/ROCm/rocm-examples/blob/cf369da68f209c315074204bd0eb61d1a5c015d1/HIP-Basic/bit_extract/main.hip"
+    },
+    {
+      "id": "slang-default-parameter",
+      "path": "tests/compute/default-parameter.slang",
+      "sourceBackend": "slang",
+      "targets": ["cgl"],
+      "repository": "https://github.com/shader-slang/slang",
+      "commit": "adc996670ec281aa8a4ee131f30b324648cbbe60",
+      "sourceUrl": "https://github.com/shader-slang/slang/blob/adc996670ec281aa8a4ee131f30b324648cbbe60/tests/compute/default-parameter.slang"
     }
   ]
 }

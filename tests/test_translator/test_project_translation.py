@@ -73,7 +73,9 @@ def test_support_external_corpus_manifest_documents_pinned_reductions():
     assert manifest["schemaVersion"] == 1
     assert manifest["entries"]
     source_backends = {entry["sourceBackend"] for entry in manifest["entries"]}
-    assert {"opengl", "directx", "metal", "cuda", "hip"}.issubset(source_backends)
+    assert {"opengl", "directx", "metal", "cuda", "hip", "slang"}.issubset(
+        source_backends
+    )
     for entry in manifest["entries"]:
         assert entry["id"]
         assert entry["path"]
