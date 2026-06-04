@@ -1691,31 +1691,15 @@ class VulkanParser:
 
             if opcode == "OpImageWrite" and len(operands) >= 3:
                 statements.append(
-                    FunctionCallNode(
-                        "imageStore",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operands[0],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                            self.spirv_assembly_operand_expression(
-                                operands[1],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                            self.spirv_assembly_operand_expression(
-                                operands[2],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                        ],
+                    self.spirv_assembly_image_write_statement(
+                        operands[0],
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
                     )
                 )
                 continue
@@ -2193,6 +2177,35 @@ class VulkanParser:
         if "Sample" in parsed_operands and parsed_operands["Sample"]:
             args.append(parsed_operands["Sample"][0])
         return FunctionCallNode("imageLoad", args)
+
+    def spirv_assembly_image_write_statement(
+        self,
+        image_operand,
+        coordinate_operand,
+        texel_operand,
+        image_operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        image = self.spirv_assembly_operand_expression(
+            image_operand, expressions, names, decorations, constants
+        )
+        coordinate = self.spirv_assembly_operand_expression(
+            coordinate_operand, expressions, names, decorations, constants
+        )
+        texel = self.spirv_assembly_operand_expression(
+            texel_operand, expressions, names, decorations, constants
+        )
+        parsed_operands = self.spirv_assembly_image_operands(
+            image_operands, expressions, names, decorations, constants
+        )
+        args = [image, coordinate]
+        if "Sample" in parsed_operands and parsed_operands["Sample"]:
+            args.append(parsed_operands["Sample"][0])
+        args.append(texel)
+        return FunctionCallNode("imageStore", args)
 
     def spirv_assembly_image_offset_operand(self, parsed_operands):
         for operand_name in ("ConstOffset", "Offset"):

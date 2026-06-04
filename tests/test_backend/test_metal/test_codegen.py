@@ -839,6 +839,36 @@ def test_codegen_range_for_loop_from_mlx_random():
     assert "value += r;" in crossgl
 
 
+def test_codegen_using_union_alias_from_mlx_cexpf_header_is_diagnostic_struct():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: b155224b9963cd9476363b464a559232a0868000
+    # Path: mlx/backend/metal/kernels/cexpf.h
+    code = """
+    using ieee_float_shape_type = union {
+      float value;
+      uint32_t word;
+    };
+
+    void get_float_word(thread uint32_t& i, float d) {
+      ieee_float_shape_type gf_u;
+      gf_u.value = d;
+      i = gf_u.word;
+    }
+    """
+    crossgl = convert(code)
+
+    assert (
+        "// Metal union ieee_float_shape_type represented as struct-like layout; "
+        "overlapping storage is not modeled"
+    ) in crossgl
+    assert "struct ieee_float_shape_type {" in crossgl
+    assert "float value;" in crossgl
+    assert "uint word;" in crossgl
+    assert "using ieee_float_shape_type = union" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_template_struct_base_clause_from_mlx_type_traits():
     code = """
     namespace metal {

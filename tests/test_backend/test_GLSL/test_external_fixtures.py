@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import pytest
 
 from crosstl.backend.GLSL.OpenglAst import (
+    AssignmentNode,
     DoWhileNode,
     ForNode,
     IfNode,
@@ -309,6 +310,41 @@ EXTERNAL_FIXTURES = [
                 gl_Position = attv4;
                 gl_PointSize = 1.0;
             }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/120.frag.
+    # Reduced from GLSL 1.20 coverage where future precision/interpolation/type
+    # names are still accepted as ordinary identifiers.
+    ExternalFixture(
+        name="glslang-120-frag-contextual-keyword-identifiers",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/120.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 120
+
+            float lowp;
+            float mediump;
+            float highp;
+            float precision;
+
+            void main()
+            {
+                float flat;
+                float smooth;
+                float noperspective;
+                float uvec2;
+                float uvec3;
+                float uvec4;
+
+                uvec2 = 2.0;
+                gl_FragColor = vec4(lowp + mediump + highp + precision
+                    + flat + smooth + noperspective + uvec2 + uvec3 + uvec4);
+            }
+
+            float imageBuffer;
+            float uimage2DRect;
         """).strip(),
     ),
     ExternalFixture(
@@ -919,6 +955,59 @@ def test_parse_glslang_invariant_builtin_list_fixture():
         ["invariant"],
         ["invariant"],
     ]
+
+
+def test_parse_glslang_contextual_keyword_identifier_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-120-frag-contextual-keyword-identifiers"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    global_names = [var.name for var in ast.global_variables]
+    main = next(function for function in ast.functions if function.name == "main")
+    local_names = [stmt.name for stmt in main.body if hasattr(stmt, "name")]
+    assignment = next(stmt for stmt in main.body if isinstance(stmt, AssignmentNode))
+
+    assert global_names == [
+        "lowp",
+        "mediump",
+        "highp",
+        "precision",
+        "imageBuffer",
+        "uimage2DRect",
+    ]
+    assert local_names == ["flat", "smooth", "noperspective", "uvec2", "uvec3", "uvec4"]
+    assert assignment.left.name == "uvec2"
+
+
+def test_codegen_glslang_contextual_keyword_identifier_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-120-frag-contextual-keyword-identifiers"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    for declaration in (
+        "float lowp;",
+        "float mediump;",
+        "float highp;",
+        "float precision;",
+        "float flat;",
+        "float smooth;",
+        "float noperspective;",
+        "float uvec2;",
+        "float uvec3;",
+        "float uvec4;",
+        "float imageBuffer;",
+        "float uimage2DRect;",
+    ):
+        assert declaration in crossgl
+    assert "uvec2 = 2.0;" in crossgl
+    parse_crossgl(crossgl)
 
 
 def test_codegen_glslang_fragcoord_origin_layout_fixture():
