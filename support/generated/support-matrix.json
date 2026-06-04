@@ -1405,7 +1405,7 @@
       "category": "project",
       "feature": "External corpus coverage",
       "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, and HIP reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
       "status": "partial"
     },
     {
@@ -1432,7 +1432,7 @@
       "category": "project",
       "feature": "External corpus coverage",
       "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, and HIP reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
       "status": "partial"
     },
     {
@@ -1441,7 +1441,7 @@
       "category": "project",
       "feature": "External corpus coverage",
       "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, and HIP reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
       "status": "partial"
     },
     {
@@ -7857,7 +7857,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups"
           ],
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, and HIP reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "status": "partial"
         },
         "opengl": {
@@ -7878,7 +7878,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups"
           ],
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, and HIP reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "status": "partial"
         },
         "slang": {
@@ -7899,7 +7899,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups"
           ],
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, and HIP reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs, and text inspection surfaces the same rollups. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "status": "partial"
         }
       }

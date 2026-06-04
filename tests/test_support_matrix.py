@@ -442,6 +442,56 @@ def test_support_matrix_covers_all_cataloged_backends():
             assert sample["text"]
 
 
+def test_external_corpus_notes_match_manifest_source_backends():
+    features_path = ROOT / "support" / "features.json"
+    backends_path = ROOT / "support" / "backends.json"
+    manifest_path = ROOT / "support" / "external-corpus.json"
+    features = json.loads(features_path.read_text(encoding="utf-8"))
+    backends = json.loads(backends_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    backend_names = {
+        backend["id"]: backend["name"].partition("/")[0].strip()
+        for backend in backends["backends"]
+    }
+    manifest_backend_ids = {
+        entry["sourceBackend"]
+        for entry in manifest["entries"]
+        if "sourceBackend" in entry
+    }
+    manifest_backend_names = {
+        backend_names[backend_id] for backend_id in manifest_backend_ids
+    }
+    feature = next(
+        feature
+        for feature in features["features"]
+        if feature["id"] == "project.external_corpus_coverage"
+    )
+
+    for backend_id in manifest_backend_ids:
+        notes = feature["support"][backend_id]["notes"]
+        assert f"focused {backend_names[backend_id]} reduction" in notes
+        evidence = feature["support"][backend_id]["evidence"]
+        assert any(
+            item.startswith("tests/test_backend/")
+            and "test_external_fixtures.py" in item
+            for item in evidence
+        )
+
+    for backend_id, support in feature["support"].items():
+        if backend_id in manifest_backend_ids:
+            continue
+        assert not any(
+            item.startswith("tests/test_backend/")
+            and "test_external_fixtures.py" in item
+            for item in support["evidence"]
+        )
+        if "current pinned reduced-corpus manifest covers" not in support["notes"]:
+            continue
+        for backend_name in manifest_backend_names:
+            assert backend_name in support["notes"]
+
+
 def test_support_backend_catalog_matches_codegen_registry():
     backends_path = ROOT / "support" / "backends.json"
     catalog = json.loads(backends_path.read_text(encoding="utf-8"))
