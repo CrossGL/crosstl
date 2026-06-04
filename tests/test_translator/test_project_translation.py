@@ -1159,6 +1159,91 @@ def test_validate_project_report_rejects_malformed_source_maps(tmp_path):
     assert "artifacts[0].sourceMap.mappings must be a list" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_inconsistent_source_map_anchors(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "inconsistent-source-map-report.json"
+    source_span = {
+        "file": "other.cgl",
+        "line": 1,
+        "column": 1,
+        "offset": 0,
+        "length": 12,
+        "endLine": 1,
+        "endColumn": 13,
+        "endOffset": 12,
+    }
+    generated_span = {
+        "file": "out/opengl/other.glsl",
+        "line": 1,
+        "column": 1,
+        "offset": 0,
+        "length": 24,
+        "endLine": 1,
+        "endColumn": 25,
+        "endOffset": 24,
+    }
+    mapping_source_span = dict(source_span, file="simple.cgl")
+    mapping_generated_span = dict(generated_span, file="out/opengl/simple.glsl")
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "opengl",
+                        "path": "out/opengl/simple.glsl",
+                        "status": "translated",
+                        "sourceMap": {
+                            "schemaVersion": 1,
+                            "kind": "crosstl-artifact-source-map",
+                            "mappingGranularity": "file",
+                            "target": "opengl",
+                            "source": source_span,
+                            "generated": generated_span,
+                            "mappings": [
+                                {
+                                    "source": mapping_source_span,
+                                    "generated": mapping_generated_span,
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].sourceMap.source.file must match artifacts[0].source" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].sourceMap.generated.file must match artifacts[0].path" in (
+        diagnostic["message"]
+    )
+    assert (
+        "artifacts[0].sourceMap.mappings[0].source must match "
+        "artifacts[0].sourceMap.source"
+    ) in diagnostic["message"]
+    assert (
+        "artifacts[0].sourceMap.mappings[0].generated must match "
+        "artifacts[0].sourceMap.generated"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

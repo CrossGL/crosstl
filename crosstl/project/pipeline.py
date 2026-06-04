@@ -1771,6 +1771,48 @@ def _source_map_span_reasons(prefix: str, value: Any) -> list[str]:
     return reasons
 
 
+def _source_map_anchor_reasons(
+    index: int, source_map: Mapping[str, Any], artifact: Mapping[str, Any]
+) -> list[str]:
+    prefix = f"artifacts[{index}].sourceMap"
+    reasons = []
+    source = source_map.get("source")
+    generated = source_map.get("generated")
+
+    if isinstance(source, Mapping) and _is_non_empty_string(source.get("file")):
+        if _is_non_empty_string(artifact.get("source")):
+            if source.get("file") != artifact.get("source"):
+                reasons.append(
+                    f"{prefix}.source.file must match artifacts[{index}].source"
+                )
+    if isinstance(generated, Mapping) and _is_non_empty_string(generated.get("file")):
+        if _is_non_empty_string(artifact.get("path")):
+            if generated.get("file") != artifact.get("path"):
+                reasons.append(
+                    f"{prefix}.generated.file must match artifacts[{index}].path"
+                )
+
+    mappings = source_map.get("mappings")
+    if not isinstance(mappings, list):
+        return reasons
+
+    for mapping_index, mapping in enumerate(mappings):
+        mapping_prefix = f"{prefix}.mappings[{mapping_index}]"
+        if not isinstance(mapping, Mapping):
+            continue
+        mapping_source = mapping.get("source")
+        if isinstance(source, Mapping) and isinstance(mapping_source, Mapping):
+            if dict(mapping_source) != dict(source):
+                reasons.append(f"{mapping_prefix}.source must match {prefix}.source")
+        mapping_generated = mapping.get("generated")
+        if isinstance(generated, Mapping) and isinstance(mapping_generated, Mapping):
+            if dict(mapping_generated) != dict(generated):
+                reasons.append(
+                    f"{mapping_prefix}.generated must match {prefix}.generated"
+                )
+    return reasons
+
+
 def _source_map_contract_reasons(index: int, artifact: Mapping[str, Any]) -> list[str]:
     if "sourceMap" not in artifact:
         return []
@@ -1821,6 +1863,7 @@ def _source_map_contract_reasons(index: int, artifact: Mapping[str, Any]) -> lis
                 )
             )
 
+    reasons.extend(_source_map_anchor_reasons(index, source_map, artifact))
     return reasons
 
 

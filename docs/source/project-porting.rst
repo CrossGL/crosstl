@@ -143,11 +143,12 @@ Project reports are JSON documents with:
 - ``validation``: report contract checks, generator metadata checks, failed
   source artifact checks, project metadata and config count checks, unit and
   skipped record shape checks, artifact record shape checks, source hash and
-  provenance checks, source-map record shape checks, summary consistency
-  checks, migration action shape checks, preserved diagnostic shape checks,
-  validation result record shape checks, artifact target declaration checks,
-  translated artifact existence checks, escaped artifact-path checks, optional
-  external toolchain availability, and opt-in toolchain smoke results.
+  provenance checks, source-map record shape and anchor consistency checks,
+  summary consistency checks, migration action shape checks, preserved
+  diagnostic shape checks, validation result record shape checks, artifact
+  target declaration checks, translated artifact existence checks, escaped
+  artifact-path checks, optional external toolchain availability, and opt-in
+  toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. Each action has a documented kind, severity, message, and target
   list; the current project pipeline emits ``manual-runtime-integration`` for
