@@ -68,6 +68,12 @@ TOOLCHAIN_BY_BACKEND = {
 CROSSL_TARGETS = {"cgl", "crossgl"}
 SHA256_HEX_LENGTH = 64
 LOWERCASE_HEX_DIGITS = frozenset("0123456789abcdef")
+SOURCE_HASH_VALIDATION_STATUSES = frozenset(
+    ("ok", "missing", "mismatch", "not-recorded", "outside-project")
+)
+GENERATED_HASH_VALIDATION_STATUSES = frozenset(
+    ("ok", "missing", "mismatch", "not-applicable", "not-recorded", "outside-project")
+)
 VARIANT_OUTPUT_SAFE_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 )
@@ -1481,27 +1487,13 @@ def _validate_artifacts(
                 )
             )
         exists = artifact_path.exists() if artifact_inside_project else False
-        artifact_check = {
-            "source": artifact["source"],
-            "target": artifact["target"],
-            "path": artifact["path"],
-            "exists": exists,
-            "status": (
-                "ok"
-                if artifact_inside_project
-                and exists
-                and artifact.get("status") == "translated"
-                else "failed"
-            ),
-        }
-        if artifact.get("variant") is not None:
-            artifact_check["variant"] = artifact["variant"]
-        artifact_checks.append(artifact_check)
+        source_hash_status = "not-recorded"
         source_hash = artifact.get("sourceHash")
         if isinstance(source_hash, Mapping):
             source_path = _resolve_report_path(config, artifact["source"])
             source_inside_project = _is_relative_to(source_path, config.root)
             if not source_inside_project:
+                source_hash_status = "outside-project"
                 diagnostics.append(
                     ProjectDiagnostic(
                         severity="error",
@@ -1516,6 +1508,7 @@ def _validate_artifacts(
                     )
                 )
             elif not source_path.exists():
+                source_hash_status = "missing"
                 diagnostics.append(
                     ProjectDiagnostic(
                         severity="error",
@@ -1532,6 +1525,7 @@ def _validate_artifacts(
             else:
                 actual_source_hash = _source_hash(source_path)
                 if not _hash_matches_report(actual_source_hash, source_hash):
+                    source_hash_status = "mismatch"
                     diagnostics.append(
                         ProjectDiagnostic(
                             severity="error",
@@ -1545,6 +1539,8 @@ def _validate_artifacts(
                             missing_capabilities=["source.provenance"],
                         )
                     )
+                else:
+                    source_hash_status = "ok"
         if (
             artifact_inside_project
             and not exists
@@ -1560,28 +1556,36 @@ def _validate_artifacts(
                     missing_capabilities=["artifact.manifest"],
                 )
             )
+        generated_hash_status = (
+            "not-recorded"
+            if artifact.get("status") == "translated"
+            else "not-applicable"
+        )
         generated_hash = artifact.get("generatedHash")
-        if (
-            artifact_inside_project
-            and exists
-            and artifact.get("status") == "translated"
-            and isinstance(generated_hash, Mapping)
-        ):
-            actual_hash = _source_hash(artifact_path)
-            if not _hash_matches_report(actual_hash, generated_hash):
-                diagnostics.append(
-                    ProjectDiagnostic(
-                        severity="error",
-                        code="project.validate.generated-hash-mismatch",
-                        message=(
-                            "Generated artifact hash does not match report: "
-                            f"{artifact['path']}"
-                        ),
-                        location=SourceLocation(file=str(artifact["source"])),
-                        target=str(artifact["target"]),
-                        missing_capabilities=["artifact.manifest"],
+        if artifact.get("status") == "translated":
+            if not artifact_inside_project:
+                generated_hash_status = "outside-project"
+            elif not exists:
+                generated_hash_status = "missing"
+            elif isinstance(generated_hash, Mapping):
+                actual_hash = _source_hash(artifact_path)
+                if not _hash_matches_report(actual_hash, generated_hash):
+                    generated_hash_status = "mismatch"
+                    diagnostics.append(
+                        ProjectDiagnostic(
+                            severity="error",
+                            code="project.validate.generated-hash-mismatch",
+                            message=(
+                                "Generated artifact hash does not match report: "
+                                f"{artifact['path']}"
+                            ),
+                            location=SourceLocation(file=str(artifact["source"])),
+                            target=str(artifact["target"]),
+                            missing_capabilities=["artifact.manifest"],
+                        )
                     )
-                )
+                else:
+                    generated_hash_status = "ok"
         if artifact.get("status") == "failed":
             error = str(artifact.get("error", "")).strip()
             message = (
@@ -1599,6 +1603,26 @@ def _validate_artifacts(
                     missing_capabilities=["batch.translation"],
                 )
             )
+        artifact_check = {
+            "source": artifact["source"],
+            "target": artifact["target"],
+            "path": artifact["path"],
+            "exists": exists,
+            "status": (
+                "ok"
+                if artifact_inside_project
+                and exists
+                and artifact.get("status") == "translated"
+                and source_hash_status in {"ok", "not-recorded"}
+                and generated_hash_status in {"ok", "not-recorded"}
+                else "failed"
+            ),
+            "sourceHashStatus": source_hash_status,
+            "generatedHashStatus": generated_hash_status,
+        }
+        if artifact.get("variant") is not None:
+            artifact_check["variant"] = artifact["variant"]
+        artifact_checks.append(artifact_check)
 
     for toolchain in toolchains:
         if toolchain["status"] == "unavailable":
@@ -2204,6 +2228,24 @@ def _validation_artifact_contract_reasons(index: int, artifact: Any) -> list[str
         reasons.append(f"{prefix}.status must be ok or failed")
     if "variant" in artifact and not _is_non_empty_string(artifact.get("variant")):
         reasons.append(f"{prefix}.variant must be a string")
+    source_hash_status = artifact.get("sourceHashStatus")
+    if (
+        "sourceHashStatus" in artifact
+        and source_hash_status not in SOURCE_HASH_VALIDATION_STATUSES
+    ):
+        reasons.append(
+            f"{prefix}.sourceHashStatus must be one of "
+            f"{', '.join(sorted(SOURCE_HASH_VALIDATION_STATUSES))}"
+        )
+    generated_hash_status = artifact.get("generatedHashStatus")
+    if (
+        "generatedHashStatus" in artifact
+        and generated_hash_status not in GENERATED_HASH_VALIDATION_STATUSES
+    ):
+        reasons.append(
+            f"{prefix}.generatedHashStatus must be one of "
+            f"{', '.join(sorted(GENERATED_HASH_VALIDATION_STATUSES))}"
+        )
     return reasons
 
 

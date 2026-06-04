@@ -684,6 +684,8 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "path": "translated/opengl/debug/simple.glsl",
             "exists": True,
             "status": "ok",
+            "sourceHashStatus": "ok",
+            "generatedHashStatus": "ok",
             "variant": "debug",
         },
         {
@@ -692,6 +694,8 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "path": "translated/opengl/release/simple.glsl",
             "exists": True,
             "status": "ok",
+            "sourceHashStatus": "ok",
+            "generatedHashStatus": "ok",
             "variant": "release",
         },
     ]
@@ -984,6 +988,8 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
             "path": "out/cgl/simple.cgl",
             "exists": True,
             "status": "ok",
+            "sourceHashStatus": "ok",
+            "generatedHashStatus": "ok",
         }
     ]
 
@@ -1004,6 +1010,9 @@ def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
 
     assert payload["success"] is False
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["validation"]["artifacts"][0]["status"] == "failed"
+    assert payload["validation"]["artifacts"][0]["sourceHashStatus"] == "ok"
+    assert payload["validation"]["artifacts"][0]["generatedHashStatus"] == "mismatch"
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.generated-hash-mismatch"
     assert diagnostic["location"]["file"] == "simple.cgl"
@@ -1026,6 +1035,9 @@ def test_validate_project_report_detects_modified_source_artifacts(tmp_path):
 
     assert payload["success"] is False
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["validation"]["artifacts"][0]["status"] == "failed"
+    assert payload["validation"]["artifacts"][0]["sourceHashStatus"] == "mismatch"
+    assert payload["validation"]["artifacts"][0]["generatedHashStatus"] == "ok"
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.source-hash-mismatch"
     assert diagnostic["location"]["file"] == "simple.cgl"
@@ -1048,6 +1060,9 @@ def test_validate_project_report_detects_missing_source_artifacts(tmp_path):
 
     assert payload["success"] is False
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["validation"]["artifacts"][0]["status"] == "failed"
+    assert payload["validation"]["artifacts"][0]["sourceHashStatus"] == "missing"
+    assert payload["validation"]["artifacts"][0]["generatedHashStatus"] == "ok"
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.missing-source"
     assert diagnostic["location"]["file"] == "simple.cgl"
@@ -1177,6 +1192,8 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
             "path": "out/opengl/simple.glsl",
             "exists": True,
             "status": "ok",
+            "sourceHashStatus": "ok",
+            "generatedHashStatus": "ok",
         }
     ]
     assert payload["validation"]["toolchains"][0]["target"] == "opengl"
@@ -1467,6 +1484,8 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
                             "exists": "yes",
                             "status": "missing",
                             "variant": "",
+                            "sourceHashStatus": "ready",
+                            "generatedHashStatus": "ready",
                         },
                         "not an artifact check",
                     ],
@@ -1539,6 +1558,12 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
         diagnostic["message"]
     )
     assert "validation.artifacts[0].variant must be a string" in (diagnostic["message"])
+    assert "validation.artifacts[0].sourceHashStatus must be one of" in (
+        diagnostic["message"]
+    )
+    assert "validation.artifacts[0].generatedHashStatus must be one of" in (
+        diagnostic["message"]
+    )
     assert "validation.artifacts[1] must be an object" in diagnostic["message"]
     assert "validation.toolchainRuns[0].source must be a string" in (
         diagnostic["message"]
@@ -2294,6 +2319,8 @@ def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts(
             "path": "out/opengl/simple.glsl",
             "exists": False,
             "status": "failed",
+            "sourceHashStatus": "not-recorded",
+            "generatedHashStatus": "missing",
         }
     ]
     assert payload["validation"]["toolchainRuns"] == []
@@ -2341,6 +2368,8 @@ def test_validate_project_report_records_failed_artifacts(tmp_path):
             "path": "out/not-a-backend/simple.out",
             "exists": False,
             "status": "failed",
+            "sourceHashStatus": "not-recorded",
+            "generatedHashStatus": "not-applicable",
         }
     ]
     diagnostic = payload["diagnostics"][0]
@@ -2408,6 +2437,8 @@ def test_validate_project_report_rejects_artifacts_outside_project(
             "path": "../outside/simple.glsl",
             "exists": False,
             "status": "failed",
+            "sourceHashStatus": "not-recorded",
+            "generatedHashStatus": "outside-project",
         }
     ]
     assert payload["validation"]["toolchainRuns"] == []
