@@ -2214,6 +2214,27 @@ def _artifact_identity(record: Mapping[str, Any]) -> ArtifactIdentity | None:
     return source, _normalized_targets([target])[0], path, variant_identity
 
 
+def _duplicate_identity_contract_reasons(
+    prefix: str, records: Sequence[Any]
+) -> list[str]:
+    reasons = []
+    identities: dict[ArtifactIdentity, int] = {}
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            continue
+        identity = _artifact_identity(record)
+        if identity is None:
+            continue
+        previous_index = identities.get(identity)
+        if previous_index is None:
+            identities[identity] = index
+            continue
+        reasons.append(
+            f"{prefix}[{index}] duplicates {prefix}[{previous_index}] identity"
+        )
+    return reasons
+
+
 def _diagnostic_counts_contract_reasons(
     prefix: str, value: Any, diagnostics: Sequence[Any]
 ) -> list[str]:
@@ -2737,6 +2758,11 @@ def _validation_contract_reasons(
                     declared_artifact_identities=declared_artifact_identities,
                 )
             )
+        reasons.extend(
+            _duplicate_identity_contract_reasons(
+                "validation.artifacts", artifact_checks
+            )
+        )
 
     if "summary" in validation:
         reasons.extend(
@@ -2761,6 +2787,11 @@ def _validation_contract_reasons(
                         declared_artifact_identities=declared_artifact_identities,
                     )
                 )
+            reasons.extend(
+                _duplicate_identity_contract_reasons(
+                    "validation.toolchainRuns", toolchain_runs
+                )
+            )
     return reasons
 
 

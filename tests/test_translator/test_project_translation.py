@@ -2076,6 +2076,58 @@ def test_validate_project_report_rejects_validation_records_with_undeclared_arti
     )
 
 
+def test_validate_project_report_rejects_duplicate_validation_record_identities(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        validate=True,
+    )
+    payload = report.to_json()
+    validation_artifact = dict(payload["validation"]["artifacts"][0])
+    payload["validation"]["artifacts"].append(validation_artifact)
+    payload["validation"]["summary"] = {
+        "artifactCount": 2,
+        "okCount": 2,
+        "failedCount": 0,
+        "sourceHashStatusCounts": {"ok": 2},
+        "generatedHashStatusCounts": {"ok": 2},
+    }
+    toolchain_run = {
+        "source": "simple.cgl",
+        "target": "opengl",
+        "path": "out/opengl/simple.glsl",
+        "command": ["glslangValidator", "--stdin"],
+        "returncode": 0,
+        "status": "ok",
+        "stdout": "",
+        "stderr": "",
+    }
+    payload["validation"]["toolchainRuns"] = [toolchain_run, dict(toolchain_run)]
+    report_path = repo / "out" / "portability-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "validation.artifacts[1] duplicates validation.artifacts[0] identity" in (
+        diagnostic["message"]
+    )
+    assert (
+        "validation.toolchainRuns[1] duplicates validation.toolchainRuns[0] identity"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_accepts_legacy_validation_without_summary(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
