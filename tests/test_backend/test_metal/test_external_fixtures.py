@@ -868,6 +868,26 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "mlx_reduction_parenthesized_template_argument",
+        "repo_url": MLX_REPO,
+        "commit": MLX_STEEL_DEPENDENT_TEMPLATE_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/reduction/reduce_col.h",
+        "roundtrip": True,
+        "contains": [
+            "LoopedElemToLoc<NDIMS,IdxT,(NDIMS> 2)> loop = "
+            "LoopedElemToLoc<NDIMS,IdxT,(NDIMS> 2)>(reduce_ndim);",
+        ],
+        "source": (
+            """
+            template <typename T, typename U, typename Op, typename IdxT, int NDIMS>
+            void col_reduce_looped(int reduce_ndim) {
+                Op op;
+                LoopedElemToLoc<NDIMS, IdxT, (NDIMS > 2)> loop(reduce_ndim);
+            }
+        """
+        ),
+    },
+    {
         "name": "pytorch_bucketization_threadgroups_per_grid",
         "repo_url": PYTORCH_REPO,
         "commit": PYTORCH_BUCKETIZATION_COMMIT,

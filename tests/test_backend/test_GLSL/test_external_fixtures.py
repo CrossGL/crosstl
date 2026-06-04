@@ -210,6 +210,48 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/spv.1.6.nontemporalimage.frag.
+    # Reduced from GL_EXT_nontemporal_keyword image qualifier coverage.
+    ExternalFixture(
+        name="glslang-spv-nontemporal-image-qualifiers",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.1.6.nontemporalimage.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 460
+
+            #pragma use_vulkan_memory_model
+
+            #extension GL_EXT_nontemporal_keyword: require
+
+            layout(location=0) in vec2 in_uv;
+
+            layout(binding=1, rgba8) uniform nontemporal image2D u_nontempimage;
+            layout(binding=2, rgba8) uniform image2D u_image;
+            layout(binding=3) uniform writeonly nontemporal image2D u_nontempnoformatimage;
+            layout(binding=4) uniform writeonly image2D u_noformatimage;
+
+            void function_accepting_nontemporal(nontemporal writeonly image2D image)
+            {
+            }
+
+            void function_not_accepting_nontemporal(writeonly image2D image)
+            {
+            }
+
+            void main()
+            {
+                const ivec2 uv = ivec2(in_uv.x, in_uv.y);
+                imageStore(u_nontempimage, uv, imageLoad(u_nontempimage, uv));
+                imageStore(u_image, uv, imageLoad(u_image, uv));
+
+                function_accepting_nontemporal(u_nontempnoformatimage);
+                function_accepting_nontemporal(u_noformatimage);
+                function_not_accepting_nontemporal(u_noformatimage);
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.longVectorLiteral234.comp.
     # Reduced from GL_EXT_long_vector local template-type declarations.
     ExternalFixture(
@@ -1000,6 +1042,29 @@ def test_parse_glslang_memory_scope_semantics_qualifier_fixture():
     assert buffer_j.members[0].qualifiers == ["subgroupcoherent"]
 
 
+def test_parse_glslang_nontemporal_image_qualifier_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-nontemporal-image-qualifiers"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    image = next(var for var in ast.uniforms if var.name == "u_nontempimage")
+    writeonly_image = next(
+        var for var in ast.uniforms if var.name == "u_nontempnoformatimage"
+    )
+    function = next(
+        item for item in ast.functions if item.name == "function_accepting_nontemporal"
+    )
+
+    assert image.vtype == "image2D"
+    assert image.qualifiers == ["uniform", "nontemporal"]
+    assert image.layout == {"binding": "1", "rgba8": None}
+    assert writeonly_image.qualifiers == ["uniform", "writeonly", "nontemporal"]
+    assert function.params[0].qualifiers == ["nontemporal", "writeonly"]
+
+
 def test_parse_glslang_long_vector_template_declarations_fixture():
     fixture = next(
         item
@@ -1470,6 +1535,26 @@ def test_codegen_glslang_memory_scope_semantics_qualifier_fixture_snippet():
     assert "A a @subgroupcoherent;" in crossgl
     assert "sampler2D samp[2] @binding(6) @nonprivate;" in crossgl
     assert "BufferK bufferk @nonprivate;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_nontemporal_image_qualifier_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-nontemporal-image-qualifiers"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "image2D u_nontempimage @binding(1) @rgba8 @nontemporal;" in crossgl
+    assert (
+        "image2D u_nontempnoformatimage @binding(3) @writeonly @nontemporal;" in crossgl
+    )
+    assert (
+        "void function_accepting_nontemporal(" "image2D image @writeonly @nontemporal)"
+    ) in crossgl
+    assert "nontemporal image2D" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

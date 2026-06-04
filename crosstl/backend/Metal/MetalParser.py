@@ -1291,31 +1291,7 @@ class MetalParser:
             self.eat(self.current_token[0])
 
         if self.current_token[0] == "LESS_THAN":
-            depth = 0
-            inner = []
-            self.eat("LESS_THAN")
-            depth += 1
-            while depth > 0 and self.current_token[0] != "EOF":
-                if self.current_token[0] == "LESS_THAN":
-                    depth += 1
-                    inner.append(self.current_token[1])
-                    self.eat("LESS_THAN")
-                elif self.current_token[0] == "GREATER_THAN":
-                    depth -= 1
-                    if depth == 0:
-                        self.eat("GREATER_THAN")
-                        break
-                    inner.append(self.current_token[1])
-                    self.eat("GREATER_THAN")
-                elif self.current_token[0] == "SHIFT_RIGHT" and depth >= 2:
-                    inner.extend(">" for _ in range(min(2, depth - 1)))
-                    depth -= 2
-                    self.eat("SHIFT_RIGHT")
-                    if depth == 0:
-                        break
-                else:
-                    inner.append(self.current_token[1])
-                    self.eat(self.current_token[0])
+            inner = self.parse_template_argument_suffix()
             base_type = f"{base_type}<{self.format_generic_type_tokens(inner)}>"
 
         while self.current_token[0] == "SCOPE":
@@ -2925,28 +2901,36 @@ class MetalParser:
     def parse_template_argument_suffix(self):
         self.eat("LESS_THAN")
         depth = 1
+        grouped_depth = 0
         parts = []
         while depth > 0 and self.current_token[0] != "EOF":
-            if self.current_token[0] == "LESS_THAN":
+            token_type, token_value = self.current_token
+            if grouped_depth == 0 and token_type == "LESS_THAN":
                 depth += 1
-                parts.append(self.current_token[1])
+                parts.append(token_value)
                 self.eat("LESS_THAN")
-            elif self.current_token[0] == "GREATER_THAN":
+            elif grouped_depth == 0 and token_type == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
                     self.eat("GREATER_THAN")
                     break
-                parts.append(self.current_token[1])
+                parts.append(token_value)
                 self.eat("GREATER_THAN")
-            elif self.current_token[0] == "SHIFT_RIGHT" and depth >= 2:
+            elif grouped_depth == 0 and token_type == "SHIFT_RIGHT" and depth >= 2:
                 parts.extend(">" for _ in range(min(2, depth - 1)))
                 depth -= 2
                 self.eat("SHIFT_RIGHT")
                 if depth == 0:
                     break
             else:
-                parts.append(self.current_token[1])
-                self.eat(self.current_token[0])
+                if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
+                    grouped_depth += 1
+                elif (
+                    token_type in {"RPAREN", "RBRACKET", "RBRACE"} and grouped_depth > 0
+                ):
+                    grouped_depth -= 1
+                parts.append(token_value)
+                self.eat(token_type)
         return parts
 
     def parse_primary(self):

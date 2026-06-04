@@ -1289,6 +1289,14 @@ class SlangParser:
                     )
                 )
                 continue
+            if self.is_subscript_declaration():
+                methods.append(
+                    self.parse_subscript_declaration(
+                        attributes=pending_attributes,
+                        allow_signature=True,
+                    )
+                )
+                continue
             if self.is_function():
                 if self.is_func_keyword_declaration_start():
                     methods.append(
@@ -1389,25 +1397,7 @@ class SlangParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
         else:
-            self.eat("LBRACE")
-            while self.current_token[0] != "RBRACE":
-                if self.current_token[0] == "SEMICOLON":
-                    self.eat("SEMICOLON")
-                    continue
-                accessor_name = self.current_token[1]
-                self.eat(self.current_token[0])
-                if self.current_token[0] == "LPAREN":
-                    self.parse_balanced_parenthesized_tokens("property accessor")
-                if self.current_token[0] == "LBRACE":
-                    accessors[accessor_name] = self.parse_block()
-                elif self.current_token[0] == "SEMICOLON":
-                    self.eat("SEMICOLON")
-                    accessors[accessor_name] = []
-                else:
-                    raise SyntaxError(
-                        f"Expected property accessor body, got {self.current_token[0]}"
-                    )
-            self.eat("RBRACE")
+            accessors = self.parse_accessor_block("property accessor")
 
         return VariableNode(
             vtype,
@@ -1443,6 +1433,81 @@ class SlangParser:
             and self.pos + 1 < len(self.tokens)
             and self.tokens[self.pos + 1][0] == "COLON"
         )
+
+    def is_subscript_declaration(self):
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
+        return (
+            current_pos + 1 < len(self.tokens)
+            and self.tokens[current_pos] == ("IDENTIFIER", "__subscript")
+            and self.tokens[current_pos + 1][0] == "LPAREN"
+        )
+
+    def parse_subscript_declaration(self, attributes=None, allow_signature=False):
+        attributes = attributes or []
+        qualifiers, is_generic = self.parse_declaration_prefixes()
+        slang_name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("LPAREN")
+        params = self.parse_parameters()
+        self.eat("RPAREN")
+
+        if not (
+            self.current_token[0] == "MINUS"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "GREATER_THAN"
+        ):
+            raise SyntaxError("Expected __subscript result type")
+        self.eat("MINUS")
+        self.eat("GREATER_THAN")
+        return_type = self.parse_type_name(allow_array_suffix=True)
+        return_type += self.parse_pointer_suffix()
+
+        generic_constraints = self.parse_generic_constraint_clauses()
+        accessors = self.parse_accessor_block("subscript accessor")
+        body = accessors.get("get", [])
+
+        node = FunctionNode(
+            return_type,
+            "operator[]",
+            params,
+            body,
+            qualifiers=qualifiers,
+            is_generic=is_generic,
+            generic_constraints=generic_constraints,
+            is_declaration=False,
+            attributes=attributes,
+        )
+        node.slang_name = slang_name
+        node.is_subscript = True
+        node.property_accessors = accessors
+        return node
+
+    def parse_accessor_block(self, context):
+        accessors = {}
+        self.eat("LBRACE")
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError(f"Unterminated {context}")
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                continue
+            accessor_name = self.current_token[1]
+            self.eat(self.current_token[0])
+            if self.current_token[0] == "LPAREN":
+                self.parse_balanced_parenthesized_tokens(context)
+            if self.current_token[0] == "LBRACE":
+                accessors[accessor_name] = self.parse_block()
+            elif self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                accessors[accessor_name] = []
+            else:
+                raise SyntaxError(
+                    f"Expected {context} body, got {self.current_token[0]}"
+                )
+        self.eat("RBRACE")
+        return accessors
 
     def is_constructor(self):
         current_pos = self.skip_declaration_prefix_tokens(self.pos)
