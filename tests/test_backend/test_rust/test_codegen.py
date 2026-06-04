@@ -437,7 +437,7 @@ def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
 
     assert "vertex main_vs {" in result
     assert "int vert_id @ VertexID" in result
-    assert "vec4 out_pos @ gl_Position" in result
+    assert "vec4 out_pos @ gl_Position @ invariant" in result
     assert "compute main_cs {" in result
     assert "uvec3 id @ gl_GlobalInvocationID" in result
     assert "uint values[] @ set(0) @ binding(0)" in result

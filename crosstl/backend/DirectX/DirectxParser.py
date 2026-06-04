@@ -1274,6 +1274,7 @@ class HLSLParser:
 
     def parse_function(self, return_type, name, qualifiers, attributes):
         params = self.parse_parameters()
+        qualifiers = qualifiers + self.parse_trailing_function_qualifiers()
 
         semantic = None
         if self.current_token[0] == "COLON":
@@ -1301,6 +1302,13 @@ class HLSLParser:
         )
         function.is_prototype = is_prototype
         return function
+
+    def parse_trailing_function_qualifiers(self):
+        qualifiers = []
+        while self.current_token[0] == "CONST":
+            qualifiers.append(self.current_token[1])
+            self.eat("CONST")
+        return qualifiers
 
     def infer_function_qualifier(self, name, attributes, params, semantic):
         attribute_names = {str(attr.name).lower() for attr in attributes}

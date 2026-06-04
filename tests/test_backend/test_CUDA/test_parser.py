@@ -1140,6 +1140,78 @@ class TestCudaParser:
         assert loop.init[0].left == "sum"
         assert loop.init[1].left == "i"
 
+    def test_public_cccl_decltype_types_parse_as_declarations_and_returns(self):
+        code = """
+        struct __static_bounds {
+            [[nodiscard]] _CCCL_API static constexpr decltype(_Lower) lower() noexcept;
+        };
+
+        _CCCL_API constexpr decltype(_Lower) lower_value() noexcept {
+            return _Lower;
+        }
+
+        _CCCL_HOST_API decltype(auto) adapt_resource(Resource&& resource) noexcept {
+            return resource;
+        }
+
+        void shift_right(int __n, int __last, int __first) {
+            decltype(__n) __d = __last - __first;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.structs[0].name == "__static_bounds"
+        assert ast.structs[0].members == []
+
+        lower_value, adapt_resource, shift_right = ast.functions
+        assert lower_value.return_type == "decltype(_Lower)"
+        assert lower_value.name == "lower_value"
+        assert lower_value.qualifiers == ["_CCCL_API", "constexpr"]
+
+        assert adapt_resource.return_type == "decltype(auto)"
+        assert adapt_resource.name == "adapt_resource"
+        assert adapt_resource.params[0].vtype == "Resource &&"
+        assert adapt_resource.params[0].name == "resource"
+
+        decl = shift_right.body[0]
+        assert isinstance(decl, VariableNode)
+        assert decl.vtype == "decltype(__n)"
+        assert decl.name == "__d"
+        assert isinstance(decl.value, BinaryOpNode)
+        assert decl.value.op == "-"
+
+    def test_public_cuda_samples_decltype_lambda_parameters_parse(self):
+        code = """
+        void select_devices() {
+            auto bestFit = std::make_pair(it, it);
+            auto distance = [](decltype(bestFit) p) {
+                return p;
+            };
+            auto access = [](decltype(*itr) mapPair) {
+                return mapPair.second;
+            };
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        distance = ast.functions[0].body[1]
+        access = ast.functions[0].body[2]
+
+        assert isinstance(distance.value, FunctionCallNode)
+        assert distance.value.name == "lambda"
+        assert distance.value.args[0].vtype == "decltype(bestFit)"
+        assert distance.value.args[0].name == "p"
+
+        assert isinstance(access.value, FunctionCallNode)
+        assert access.value.args[0].vtype == "decltype(*itr)"
+        assert access.value.args[0].name == "mapPair"
+
     def test_shared_memory_parsing(self):
         code = """
         __global__ void kernel() {
