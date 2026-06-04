@@ -3275,6 +3275,11 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             for field_name in ("source", "target", "path", "status"):
                 if not _is_non_empty_string(artifact.get(field_name)):
                     reasons.append(f"artifacts[{index}].{field_name} must be a string")
+            source = artifact.get("source")
+            if _is_non_empty_string(source) and not _is_repository_relative_report_path(
+                source
+            ):
+                reasons.append(f"artifacts[{index}].source must be repository-relative")
             if "sourceBackend" in artifact and not _is_non_empty_string(
                 artifact.get("sourceBackend")
             ):

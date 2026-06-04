@@ -2238,6 +2238,47 @@ def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
     assert "artifacts[0].status must be translated or failed" in (diagnostic["message"])
 
 
+def test_validate_project_report_rejects_artifacts_with_escaped_source_paths(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    output = repo / "out" / "opengl" / "simple.glsl"
+    output.parent.mkdir(parents=True)
+    output.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+    report_path = repo / "escaped-artifact-source-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "../outside/simple.cgl",
+                        "target": "opengl",
+                        "path": "out/opengl/simple.glsl",
+                        "status": "translated",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].source must be repository-relative" in (diagnostic["message"])
+    assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
+
+
 def test_validate_project_report_rejects_duplicate_artifact_identities(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
