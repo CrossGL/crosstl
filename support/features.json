@@ -4205,13 +4205,15 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
@@ -4220,13 +4222,15 @@
         },
         "opengl": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
@@ -4235,13 +4239,15 @@
         },
         "metal": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
@@ -4250,13 +4256,15 @@
         },
         "vulkan": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
@@ -4265,13 +4273,15 @@
         },
         "cuda": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
@@ -4280,13 +4290,15 @@
         },
         "hip": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
@@ -4295,13 +4307,15 @@
         },
         "mojo": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
@@ -4310,13 +4324,15 @@
         },
         "rust": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
@@ -4325,13 +4341,15 @@
         },
         "slang": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
@@ -4990,7 +5008,7 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
@@ -5003,12 +5021,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
@@ -5021,12 +5041,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
@@ -5039,12 +5061,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
@@ -5057,12 +5081,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
           ]
         },
         "cuda": {
           "status": "supported",
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
@@ -5075,12 +5101,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
           ]
         },
         "hip": {
           "status": "supported",
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
@@ -5093,12 +5121,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
           ]
         },
         "mojo": {
           "status": "supported",
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
@@ -5111,12 +5141,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
@@ -5129,12 +5161,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
           ]
         },
         "slang": {
           "status": "supported",
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
@@ -5147,7 +5181,9 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
           ]
         }
       }

@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping, Sequence
 
 from crosstl._crosstl import translate
@@ -122,6 +122,20 @@ def _is_relative_to(path: Path, root: Path) -> bool:
 
 def _path_matches(path: str, patterns: Sequence[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+
+def _is_repository_relative_glob(pattern: str) -> bool:
+    normalized = pattern.replace("\\", "/")
+    parts = [part for part in normalized.split("/") if part and part != "."]
+    return (
+        not Path(pattern).is_absolute()
+        and not PureWindowsPath(pattern).is_absolute()
+        and ".." not in parts
+    )
+
+
+def _repository_relative_globs(patterns: Sequence[str]) -> list[str]:
+    return [pattern for pattern in patterns if _is_repository_relative_glob(pattern)]
 
 
 def _internal_exclude_patterns(config: ProjectConfig) -> tuple[str, ...]:
@@ -428,6 +442,42 @@ def _include_dir_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     return diagnostics
 
 
+def _scan_pattern_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    location = _config_location(config)
+    for pattern in config.include_patterns:
+        if _is_repository_relative_glob(pattern):
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.config.include-pattern-outside-project",
+                message=(
+                    f"Configured include pattern '{pattern}' is not "
+                    "repository-relative."
+                ),
+                location=location,
+                missing_capabilities=["repo.scan"],
+            )
+        )
+    for pattern in config.source_overrides:
+        if _is_repository_relative_glob(pattern):
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.config.source-override-pattern-outside-project",
+                message=(
+                    f"Configured source override pattern '{pattern}' is not "
+                    "repository-relative."
+                ),
+                location=location,
+                missing_capabilities=["source.override"],
+            )
+        )
+    return diagnostics
+
+
 def _target_diagnostics(
     config: ProjectConfig, targets: Sequence[str]
 ) -> list[ProjectDiagnostic]:
@@ -649,9 +699,11 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
     register_default_sources()
     discover_backend_plugins()
     known_extensions = tuple(SOURCE_REGISTRY.extensions())
-    include_patterns = list(config.include_patterns)
-    explicit_include_patterns = bool(include_patterns)
-    source_override_patterns = set(config.source_overrides)
+    explicit_include_patterns = bool(config.include_patterns)
+    include_patterns = _repository_relative_globs(config.include_patterns)
+    source_override_patterns = set(
+        _repository_relative_globs(tuple(config.source_overrides))
+    )
     if not explicit_include_patterns:
         include_patterns = [f"**/*{extension}" for extension in known_extensions]
         include_patterns.extend(source_override_patterns)
@@ -688,6 +740,7 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
     diagnostics: list[ProjectDiagnostic] = _configuration_diagnostics(config)
     diagnostics.extend(_source_root_diagnostics(config))
     diagnostics.extend(_include_dir_diagnostics(config))
+    diagnostics.extend(_scan_pattern_diagnostics(config))
     internal_exclude_patterns = _internal_exclude_patterns(config)
 
     for path in _iter_scan_candidates(config):

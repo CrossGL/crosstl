@@ -151,6 +151,49 @@ def test_scan_project_accepts_repository_relative_include_patterns(tmp_path):
     assert {diagnostic.code for diagnostic in scan.diagnostics} == set()
 
 
+def test_scan_project_reports_include_patterns_outside_project(tmp_path):
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    repo.mkdir()
+    outside.mkdir()
+    (outside / "external.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    absolute_pattern = (outside / "*.cgl").as_posix()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            include = ["{absolute_pattern}", "../outside/*.cgl"]
+            exclude = []
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report().to_json()
+
+    assert scan.units == []
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 1,
+        "error": 2,
+    }
+    diagnostics = {diagnostic["message"] for diagnostic in payload["diagnostics"]}
+    assert any(absolute_pattern in message for message in diagnostics)
+    assert any("../outside/*.cgl" in message for message in diagnostics)
+    assert [
+        diagnostic["code"]
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["severity"] == "error"
+    ] == [
+        "project.config.include-pattern-outside-project",
+        "project.config.include-pattern-outside-project",
+    ]
+    assert all(
+        diagnostic["missingCapabilities"] == ["repo.scan"]
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["severity"] == "error"
+    )
+
+
 def test_scan_report_normalizes_and_deduplicates_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -374,6 +417,45 @@ def test_scan_project_reports_unsupported_source_overrides(tmp_path):
     assert payload["diagnostics"][0]["location"]["file"] == "crosstl.toml"
     assert payload["diagnostics"][0]["missingCapabilities"] == ["source.override"]
     assert "unknown-backend" in payload["diagnostics"][0]["message"]
+
+
+def test_scan_project_reports_source_override_patterns_outside_project(tmp_path):
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    repo.mkdir()
+    outside.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (outside / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    absolute_pattern = (outside / "*.shader").as_posix()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project.sources]
+            "{absolute_pattern}" = "cgl"
+            "../outside/*.shader" = "cgl"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report().to_json()
+
+    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 2,
+    }
+    diagnostics = {diagnostic["message"] for diagnostic in payload["diagnostics"]}
+    assert any(absolute_pattern in message for message in diagnostics)
+    assert any("../outside/*.shader" in message for message in diagnostics)
+    assert [diagnostic["code"] for diagnostic in payload["diagnostics"]] == [
+        "project.config.source-override-pattern-outside-project",
+        "project.config.source-override-pattern-outside-project",
+    ]
+    assert all(
+        diagnostic["missingCapabilities"] == ["source.override"]
+        for diagnostic in payload["diagnostics"]
+    )
 
 
 def test_translate_project_applies_include_dirs_and_defines(tmp_path):
