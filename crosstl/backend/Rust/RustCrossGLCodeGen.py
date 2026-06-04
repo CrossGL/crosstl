@@ -97,6 +97,29 @@ class RustToCrossGLConverter:
         "ByteAddressBuffer",
         "RWByteAddressBuffer",
     )
+    RUST_GPU_SAMPLE_METHOD_MAP = {
+        "sample_by_lod": "textureLod",
+        "sample_by_gradient": "textureGrad",
+        "sample_with_project_coordinate": "textureProj",
+        "sample_with_project_coordinate_by_lod": "textureProjLod",
+        "sample_with_project_coordinate_by_gradient": "textureProjGrad",
+        "sample_depth_reference": "textureCompare",
+        "sample_depth_reference_by_lod": "textureCompareLod",
+        "sample_depth_reference_by_gradient": "textureCompareGrad",
+        "sample_depth_reference_with_project_coordinate": "textureCompareProj",
+        "sample_depth_reference_with_project_coordinate_by_lod": (
+            "textureCompareProjLod"
+        ),
+        "sample_depth_reference_with_project_coordinate_by_gradient": (
+            "textureCompareProjGrad"
+        ),
+    }
+    RUST_GPU_SAMPLE_WITH_METHOD_MAP = {
+        "sample_with": "texture",
+        "sample_with_project_coordinate_with": "textureProj",
+        "sample_depth_reference_with": "textureCompare",
+        "sample_depth_reference_with_project_coordinate_with": "textureCompareProj",
+    }
 
     def __init__(self):
         self.type_map = {
@@ -3825,6 +3848,15 @@ class RustToCrossGLConverter:
         if mapped_resource_type is None:
             return None
 
+        sample_with_call = self.format_rust_gpu_sample_with_method_call(
+            method_name,
+            obj,
+            args,
+            mapped_resource_type,
+        )
+        if sample_with_call is not None:
+            return sample_with_call
+
         mapped = self.function_map.get(method_name)
         if mapped is None:
             mapped = self.map_rust_gpu_resource_method(
@@ -3835,6 +3867,61 @@ class RustToCrossGLConverter:
             return None
 
         return f"{mapped}({', '.join([obj] + args)})"
+
+    def format_rust_gpu_sample_with_method_call(
+        self,
+        method_name,
+        obj,
+        args,
+        mapped_resource_type,
+    ):
+        if not mapped_resource_type.startswith("sampler"):
+            return None
+
+        base_intrinsic = self.RUST_GPU_SAMPLE_WITH_METHOD_MAP.get(method_name)
+        if base_intrinsic is None or not args:
+            return None
+
+        parsed_operand = self.parse_rust_gpu_sample_with_operand(args[-1])
+        if parsed_operand is None:
+            return None
+
+        operand_name, operand_args = parsed_operand
+        intrinsic = self.rust_gpu_sample_with_intrinsic(base_intrinsic, operand_name)
+        if intrinsic is None:
+            return None
+
+        call_args = [obj] + args[:-1] + operand_args
+        return f"{intrinsic}({', '.join(call_args)})"
+
+    def parse_rust_gpu_sample_with_operand(self, operand):
+        parsed = self.parse_generated_call_expression(operand.strip())
+        if parsed is None:
+            return None
+
+        function_name, args = parsed
+        function_name, _ = self.split_function_type_arguments(function_name)
+        operand_name = function_name.rsplit("::", 1)[-1]
+        if operand_name not in {"bias", "lod", "grad"}:
+            return None
+
+        if operand_name in {"bias", "lod"} and len(args) != 1:
+            return None
+        if operand_name == "grad" and len(args) != 2:
+            return None
+
+        return operand_name, args
+
+    def rust_gpu_sample_with_intrinsic(self, base_intrinsic, operand_name):
+        if operand_name == "bias":
+            if base_intrinsic.startswith("textureCompare"):
+                return None
+            return base_intrinsic
+        if operand_name == "lod":
+            return f"{base_intrinsic}Lod"
+        if operand_name == "grad":
+            return f"{base_intrinsic}Grad"
+        return None
 
     def is_resource_method_name(self, method_name):
         return isinstance(method_name, str) and (
@@ -3867,6 +3954,9 @@ class RustToCrossGLConverter:
             if mapped_resource_type.startswith("sampler"):
                 return "texelFetch"
             return "imageLoad"
+        mapped_sample = self.RUST_GPU_SAMPLE_METHOD_MAP.get(method_name)
+        if mapped_sample is not None and mapped_resource_type.startswith("sampler"):
+            return mapped_sample
         if method_name in {"query_size", "query_size_lod"}:
             if mapped_resource_type.startswith("sampler"):
                 return "textureSize"

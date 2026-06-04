@@ -406,6 +406,33 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_block_scope_using_linalg_aliases",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenDXIL/hlsl/linalg/api/matrix-multiply.hlsl",
+        code=textwrap.dedent("""
+            #include <dx/linalg.h>
+            using namespace dx::linalg;
+
+            [numthreads(4, 4, 4)]
+            void main()
+            {
+              using MatrixAF16WTy = Matrix<ComponentType::F16, 3, 4, MatrixUse::A, MatrixScope::Wave>;
+              using MatrixBI32WTy = Matrix<ComponentType::I32, 4, 5, MatrixUse::B, MatrixScope::Wave>;
+              using MatrixAccF32WTy = Matrix<ComponentType::F32, 3, 5, MatrixUse::Accumulator, MatrixScope::Wave>;
+
+              MatrixAF16WTy MatA1 = MatrixAF16WTy::Splat(1.5f);
+              MatrixBI32WTy MatB1 = MatrixBI32WTy::Splat(13);
+              MatrixAccF32WTy MatCFlt1 = Multiply<ComponentType::F32>(MatA1, MatB1);
+            }
+        """).strip(),
+        contains=(
+            "@ numthreads(4, 4, 4)",
+            "MatrixAF16WTy MatA1 = MatrixAF16WTy::Splat(1.5);",
+            "MatrixAccF32WTy MatCFlt1 = Multiply<ComponentType::F32>(MatA1, MatB1);",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_native_16bit_vector_aliases",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

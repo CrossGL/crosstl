@@ -199,6 +199,23 @@ class HipParser:
         "hipAtomicXor",
     }
     PACK_EXPANSION_FUNCTION_NAME = "__hip_pack_expand__"
+    TEMPLATE_SUFFIX_FOLLOW_TOKENS = {
+        "LPAREN",
+        "SCOPE",
+        "DOT",
+        "LBRACKET",
+        "LBRACE",
+        "KERNEL_LAUNCH_START",
+        "LOGICAL_OR",
+        "OR",
+        "LOGICAL_AND",
+        "AND",
+        "EQ",
+        "NE",
+        "COMMA",
+        "RPAREN",
+        "SEMICOLON",
+    }
     BUILTIN_TYPE_TOKENS = {
         "INT",
         "FLOAT",
@@ -3012,17 +3029,7 @@ class HipParser:
                         if next_index < len(self.tokens)
                         else "EOF"
                     )
-                    return next_type in {
-                        "LPAREN",
-                        "SCOPE",
-                        "DOT",
-                        "LBRACKET",
-                        "LBRACE",
-                        "KERNEL_LAUNCH_START",
-                        "COMMA",
-                        "RPAREN",
-                        "SEMICOLON",
-                    }
+                    return next_type in self.TEMPLATE_SUFFIX_FOLLOW_TOKENS
             elif token_type == "RSHIFT":
                 depth -= 2
                 if depth == 0:
@@ -3037,17 +3044,7 @@ class HipParser:
                         if next_index < len(self.tokens)
                         else "EOF"
                     )
-                    return next_type in {
-                        "LPAREN",
-                        "SCOPE",
-                        "DOT",
-                        "LBRACKET",
-                        "LBRACE",
-                        "KERNEL_LAUNCH_START",
-                        "COMMA",
-                        "RPAREN",
-                        "SEMICOLON",
-                    }
+                    return next_type in self.TEMPLATE_SUFFIX_FOLLOW_TOKENS
                 if depth < 0:
                     return False
             elif token_type == "KERNEL_LAUNCH_END":
@@ -3064,17 +3061,7 @@ class HipParser:
                         if next_index < len(self.tokens)
                         else "EOF"
                     )
-                    return next_type in {
-                        "LPAREN",
-                        "SCOPE",
-                        "DOT",
-                        "LBRACKET",
-                        "LBRACE",
-                        "KERNEL_LAUNCH_START",
-                        "COMMA",
-                        "RPAREN",
-                        "SEMICOLON",
-                    }
+                    return next_type in self.TEMPLATE_SUFFIX_FOLLOW_TOKENS
                 if depth < 0:
                     return False
             elif token_type in {"SEMICOLON", "ASSIGN"}:

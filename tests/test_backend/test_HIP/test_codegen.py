@@ -582,6 +582,28 @@ class TestHipCodeGen:
         assert "allPassed &= f.operator()<float, float>(TensorLayout::NCHW);" in result
         assert ".template" not in result
 
+    def test_public_rocm_hiptensor_variable_template_condition_conversion(self):
+        """Covers rocm-examples hiptensor_utils.hpp std::is_same_v<...> conditions."""
+        code = """
+        template<typename T>
+        void hiptensor_print_array_elements(T* vec)
+        {
+            if constexpr(std::is_same_v<T, float2> || std::is_same_v<T, double2>)
+            {
+                sink(vec);
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "std::is_same_v<T, float2> || std::is_same_v<T, double2>" in result
+        assert "sink(vec);" in result
+
     def test_hip_fp16_half2_types_and_intrinsics_convert_to_crossgl(self):
         code = """
         __device__ half2 fp16_ops(half2 a, half2 b, float x) {

@@ -235,6 +235,31 @@ def test_function_capturing_raises_effects_codegen_are_dropped():
     assert "raises" not in generated_code
 
 
+def test_function_capture_list_codegen_from_modular_packing_kernel():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/kernels/src/linalg/packing.mojo
+    # _pack_b_ndbuffer_impl.dispatch_on_kernel_type.
+    code = """
+    def pack_dispatch(output_buffer: TileTensor, b_input: TileTensor):
+        @always_inline
+        def dispatch_on_kernel_type[kernel_type: Bool]() {output_buffer, b_input}:
+            pack_b(output_buffer, b_input)
+
+        dispatch_get_kernel_type(dispatch_on_kernel_type)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "void pack_dispatch(TileTensor output_buffer, TileTensor b_input)" in (
+        generated_code
+    )
+    assert "void dispatch_on_kernel_type() @ always_inline" in generated_code
+    assert "pack_b(output_buffer, b_input);" in generated_code
+    assert "dispatch_get_kernel_type(dispatch_on_kernel_type);" in generated_code
+    assert "{output_buffer, b_input}" not in generated_code
+
+
 def test_list_literal_argument_codegen_from_modular_reduction_example():
     code = """
     def main():

@@ -1799,26 +1799,35 @@ class VulkanParser:
         coordinate = self.spirv_assembly_operand_expression(
             coordinate_operand, expressions, names, decorations, constants
         )
+        dref = None
+        if "Dref" in opcode and image_operands:
+            dref = self.spirv_assembly_operand_expression(
+                image_operands[0], expressions, names, decorations, constants
+            )
+            image_operands = image_operands[1:]
         parsed_operands = self.spirv_assembly_image_operands(
             image_operands, expressions, names, decorations, constants
         )
+        base_args = [image, coordinate]
+        if dref is not None:
+            base_args.append(dref)
 
         if "Grad" in parsed_operands and len(parsed_operands["Grad"]) >= 2:
             function_name = "textureProjGrad" if "Proj" in opcode else "textureGrad"
             return FunctionCallNode(
                 function_name,
-                [image, coordinate, *parsed_operands["Grad"][:2]],
+                [*base_args, *parsed_operands["Grad"][:2]],
             )
 
         if "Lod" in parsed_operands and parsed_operands["Lod"]:
             function_name = "textureProjLod" if "Proj" in opcode else "textureLod"
             return FunctionCallNode(
                 function_name,
-                [image, coordinate, parsed_operands["Lod"][0]],
+                [*base_args, parsed_operands["Lod"][0]],
             )
 
         function_name = "textureProj" if "Proj" in opcode else "texture"
-        return FunctionCallNode(function_name, [image, coordinate])
+        return FunctionCallNode(function_name, base_args)
 
     def spirv_assembly_image_fetch_expression(
         self,

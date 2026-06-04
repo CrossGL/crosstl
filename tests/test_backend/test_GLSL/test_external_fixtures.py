@@ -3,7 +3,15 @@ from dataclasses import dataclass
 
 import pytest
 
-from crosstl.backend.GLSL.OpenglAst import ForNode, InitializerListNode, UnaryOpNode
+from crosstl.backend.GLSL.OpenglAst import (
+    DoWhileNode,
+    ForNode,
+    IfNode,
+    InitializerListNode,
+    SwitchNode,
+    UnaryOpNode,
+    WhileNode,
+)
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
@@ -122,6 +130,44 @@ EXTERNAL_FIXTURES = [
                 uint16_t unsigned_value = max(u16c[2], uint16_t(0us));
                 color = vec4(float(signed_value + int16_t(unsigned_value)
                     + si16 + int16_t(su16) + ii16));
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/spv.controlFlowAttributes.frag.
+    # Reduced from GL_EXT_control_flow_attributes coverage for attributed control flow.
+    ExternalFixture(
+        name="glslang-spv-control-flow-statement-attributes",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.controlFlowAttributes.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 450
+
+            #extension GL_EXT_control_flow_attributes : enable
+
+            bool cond;
+            layout(location = 0) out vec4 color;
+
+            void main()
+            {
+                [[loop]] for (;;) { break; }
+                [[dont_unroll]] while(cond) {
+                    cond = false;
+                }
+                [[dependency_infinite]] do {
+                    cond = false;
+                } while(true);
+                [[dependency_length(1+3)]] for (int i = 0; i < 8; ++i) {
+                    cond = false;
+                }
+                [[flatten]] if (cond) {
+                    color = vec4(1.0);
+                } else {
+                    color = vec4(0.0);
+                }
+                [[branch]] if (cond) cond = false;
+                [ [ dont_flatten , branch ] ] switch(3) { case 3: break; }
             }
         """).strip(),
     ),
@@ -738,6 +784,27 @@ def test_parse_glslang_int16_short_literal_suffix_fixture():
     ]
 
 
+def test_parse_glslang_control_flow_statement_attributes_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-control-flow-statement-attributes"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert [type(statement) for statement in main.body] == [
+        ForNode,
+        WhileNode,
+        DoWhileNode,
+        ForNode,
+        IfNode,
+        IfNode,
+        SwitchNode,
+    ]
+
+
 def test_parse_glslang_patch_contextual_identifier_fixture():
     fixture = next(
         item
@@ -1021,6 +1088,25 @@ def test_codegen_glslang_int16_short_literal_suffix_fixture_snippet():
     assert "65535u" in crossgl
     assert "0177777us" not in crossgl
     assert "0177777u" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_control_flow_statement_attributes_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-control-flow-statement-attributes"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "[[" not in crossgl
+    assert "for (; ; )" in crossgl
+    assert "while (cond)" in crossgl
+    assert "} while (true);" in crossgl
+    assert "for (int i = 0; (i < 8); (++i))" in crossgl
+    assert "if (cond)" in crossgl
+    assert "switch (3)" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

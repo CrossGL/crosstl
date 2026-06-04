@@ -578,6 +578,78 @@ def test_rust_gpu_image_query_and_fetch_methods_codegen_from_upstream_compiletes
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_sample_with_and_depth_project_methods_codegen_from_upstream():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/spirv-std/src/image.rs, crates/spirv-std/src/image/sample_with.rs,
+    # and tests/compiletests/ui/image/{sample_lod.rs,sample_gradient.rs,
+    # sample_depth_reference/sample_lod.rs,sample_with_project_coordinate/sample_lod.rs}.
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::{Image, Sampler};
+    use spirv_std::image::sample_with;
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] color_image: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 1)] projected_image: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 2)] depth_image: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 3)] sampler: &Sampler,
+        output_color: &mut Vec4,
+        output_depth: &mut f32,
+    ) {
+        let uv = Vec2::new(0.0, 1.0);
+        let uvw = Vec3::new(0.0, 1.0, 0.5);
+        let lod_color: Vec4 = color_image.sample_by_lod(*sampler, uv, 0.0);
+        let grad_color: Vec4 = color_image.sample_by_gradient(*sampler, uv, uv, uv);
+        let biased_color: Vec4 = color_image.sample_with(*sampler, uv, sample_with::bias(0.25));
+        let direct_lod: Vec4 = color_image.sample_with(*sampler, uv, sample_with::lod(1.0));
+        let direct_grad: Vec4 = color_image.sample_with(*sampler, uv, sample_with::grad(uv, uv));
+        let projected_color: Vec4 = projected_image.sample_with_project_coordinate_by_lod(*sampler, uvw, 0.0);
+        let direct_projected: Vec4 = projected_image.sample_with_project_coordinate_with(*sampler, uvw, sample_with::lod(2.0));
+        let depth: f32 = depth_image.sample_depth_reference_by_lod(*sampler, uv, 0.5, 0.0);
+        let direct_depth: f32 = depth_image.sample_depth_reference_with(*sampler, uv, 0.5, sample_with::lod(1.0));
+        let projected_depth: f32 = depth_image.sample_depth_reference_with_project_coordinate_by_gradient(*sampler, uvw, 0.5, uv, uv);
+        *output_color = lod_color + grad_color + biased_color + direct_lod + direct_grad + projected_color + direct_projected;
+        *output_depth = depth + direct_depth + projected_depth;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "sampler2D color_image @ set(0) @ binding(0)" in result
+    assert "sampler2D projected_image @ set(0) @ binding(1)" in result
+    assert "sampler2D depth_image @ set(0) @ binding(2)" in result
+    assert "lod_color = textureLod(color_image, sampler_, uv, 0.0);" in result
+    assert "grad_color = textureGrad(color_image, sampler_, uv, uv, uv);" in result
+    assert "biased_color = texture(color_image, sampler_, uv, 0.25);" in result
+    assert "direct_lod = textureLod(color_image, sampler_, uv, 1.0);" in result
+    assert "direct_grad = textureGrad(color_image, sampler_, uv, uv, uv);" in result
+    assert (
+        "projected_color = textureProjLod(projected_image, sampler_, uvw, 0.0);"
+        in result
+    )
+    assert (
+        "direct_projected = textureProjLod(projected_image, sampler_, uvw, 2.0);"
+        in result
+    )
+    assert "depth = textureCompareLod(depth_image, sampler_, uv, 0.5, 0.0);" in result
+    assert (
+        "direct_depth = textureCompareLod(depth_image, sampler_, uv, 0.5, 1.0);"
+        in result
+    )
+    assert (
+        "projected_depth = textureCompareProjGrad(depth_image, sampler_, uvw, 0.5, uv, uv);"
+        in result
+    )
+    assert ".sample_by_lod(" not in result
+    assert ".sample_by_gradient(" not in result
+    assert ".sample_with(" not in result
+    assert ".sample_depth_reference" not in result
+    assert "sample_with::" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_sampled_image_generic_type_drives_resource_parameter():
     code = """
     use spirv_std::{spirv, Image};

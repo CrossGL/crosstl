@@ -1359,6 +1359,31 @@ class GLSLParser:
         self.skip_newlines()
         self.eat("SEMICOLON")
 
+    def is_statement_attribute_list_start(self):
+        if self.current_token[0] != "LBRACKET":
+            return False
+        return self.peek_non_newline()[0] == "LBRACKET"
+
+    def skip_statement_attribute_list(self):
+        self.eat("LBRACKET")
+        self.skip_newlines()
+        self.eat("LBRACKET")
+
+        while True:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated GLSL statement attribute list")
+            if self.current_token[0] == "RBRACKET":
+                self.eat("RBRACKET")
+                self.skip_newlines()
+                self.eat("RBRACKET")
+                break
+            self.advance()
+
+    def skip_statement_attributes(self):
+        while self.is_statement_attribute_list_start():
+            self.skip_statement_attribute_list()
+            self.skip_newlines()
+
     def parse_condition(self):
         self.skip_newlines()
         if self.is_condition_declaration_start():
@@ -1382,6 +1407,7 @@ class GLSLParser:
 
     def parse_statement(self):
         self.skip_newlines()
+        self.skip_statement_attributes()
         if self.current_token[0] in ("RBRACE", "EOF"):
             return None
         if self.current_token[0] == "SEMICOLON":

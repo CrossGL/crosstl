@@ -599,7 +599,7 @@ class MojoParser:
         params = self.parse_parameters()
         self.eat("RPAREN")
 
-        self.parse_function_effects()
+        self.parse_function_signature_modifiers()
         if self.current_token[0] == "MINUS":
             self.eat("MINUS")
             if self.current_token[0] == "GREATER_THAN":
@@ -609,7 +609,7 @@ class MojoParser:
         post_attributes = self.parse_attributes()
         attributes.extend(post_attributes)
 
-        self.parse_function_effects()
+        self.parse_function_signature_modifiers()
 
         where_clause = self.parse_where_clause()
 
@@ -625,6 +625,14 @@ class MojoParser:
         func.where_clause = where_clause
         return func
 
+    def parse_function_signature_modifiers(self):
+        while True:
+            previous_pos = self.pos
+            self.parse_function_effects()
+            self.parse_function_capture_list()
+            if self.pos == previous_pos:
+                return
+
     def parse_function_effects(self):
         while (
             self.current_token[0] == "IDENTIFIER"
@@ -637,6 +645,46 @@ class MojoParser:
             elif self.current_token[0] == "LBRACE":
                 self.skip_balanced_group("LBRACE", "RBRACE")
             self.skip_layout_tokens()
+
+    def parse_function_capture_list(self):
+        if not self.is_function_capture_list():
+            return
+
+        self.skip_balanced_group("LBRACE", "RBRACE")
+        self.skip_layout_tokens()
+
+    def is_function_capture_list(self):
+        if self.current_token[0] != "LBRACE":
+            return False
+
+        index = self.pos
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LBRACE":
+                depth += 1
+            elif token_type == "RBRACE":
+                depth -= 1
+                if depth == 0:
+                    index += 1
+                    while index < len(self.tokens) and self.tokens[index][0] in {
+                        "NEWLINE",
+                        "INDENT",
+                        "DEDENT",
+                    }:
+                        index += 1
+                    if index >= len(self.tokens):
+                        return False
+                    next_type, next_value = self.tokens[index]
+                    if next_type in {"COLON", "MINUS"}:
+                        return True
+                    return (
+                        next_type == "IDENTIFIER"
+                        and next_value in self.FUNCTION_EFFECT_IDENTIFIERS | {"where"}
+                    )
+            index += 1
+
+        return False
 
     def skip_balanced_group(self, open_token, close_token):
         self.eat(open_token)

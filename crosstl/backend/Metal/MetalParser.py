@@ -95,7 +95,8 @@ STAGE_TOKENS = {
 }
 
 UNARY_KEYWORDS = {"SIZEOF", "ALIGNOF"}
-MACRO_QUALIFIERS = {"METAL_FUNC"}
+MACRO_QUALIFIERS = {"METAL_FUNC", "STEEL_CONST"}
+MACRO_QUALIFIER_ALIASES = {"STEEL_CONST": "constant"}
 IDENTIFIER_TYPE_QUALIFIERS = MACRO_QUALIFIERS | {"object_data"}
 RAYTRACING_TYPE_QUALIFIERS = {"ray_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
@@ -1249,7 +1250,7 @@ class MetalParser:
         ):
             qualifier = self.current_token[1]
             self.eat(self.current_token[0])
-            return qualifier
+            return MACRO_QUALIFIER_ALIASES.get(qualifier, qualifier)
 
         qualifier_name = self.current_token[1]
         self.eat("IDENTIFIER")
