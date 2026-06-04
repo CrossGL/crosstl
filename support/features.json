@@ -5537,12 +5537,9 @@
       "support": {
         "directx": {
           "status": "partial",
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. The pinned reduced-corpus manifest includes a focused DirectX reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
-            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_directx/test_external_fixtures.py::def test_codegen_external_directx_fixture_to_parseable_crossgl",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
@@ -5550,12 +5547,9 @@
         },
         "opengl": {
           "status": "partial",
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. The pinned reduced-corpus manifest includes a focused OpenGL reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
-            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_parse_glslang_layout_only_builtin_spec_constant_fixture",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
@@ -5563,12 +5557,9 @@
         },
         "metal": {
           "status": "partial",
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. The pinned reduced-corpus manifest includes a focused Metal reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
-            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_metal/test_external_fixtures.py::def test_external_metal_fixture_parse_and_roundtrip",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
@@ -5576,12 +5567,8 @@
         },
         "vulkan": {
           "status": "partial",
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, and HIP reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
-            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
@@ -5589,12 +5576,9 @@
         },
         "cuda": {
           "status": "partial",
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. The pinned reduced-corpus manifest includes a focused CUDA reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
-            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_cuda_samples_simple_atomic_intrinsics_codegen_reparse",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
@@ -5602,12 +5586,9 @@
         },
         "hip": {
           "status": "partial",
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. The pinned reduced-corpus manifest includes a focused HIP reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
-            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_external_rocm_bit_extract_builtin_crossgl_reparse",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
@@ -5615,12 +5596,8 @@
         },
         "mojo": {
           "status": "partial",
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, and HIP reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
-            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
@@ -5628,12 +5605,8 @@
         },
         "rust": {
           "status": "partial",
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, and HIP reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
-            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
@@ -5641,12 +5614,8 @@
         },
         "slang": {
           "status": "partial",
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. A pinned reduced-corpus manifest is documented under support/. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend rollups, target rollups, and artifact outcomes for manifest-backed project runs. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, and HIP reductions; this backend can participate in the backend-agnostic accounting layer when a matching manifest entry is added. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
-            "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_",
-            "tests/test_backend/test_slang/test_external_fixtures.py::def test_",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
