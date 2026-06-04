@@ -2191,6 +2191,7 @@ def _declared_units_by_path(
 
 
 ArtifactIdentity = Tuple[str, str, str, Optional[str]]
+DeclaredArtifact = Tuple[int, Mapping[str, Any]]
 
 
 def _artifact_identity(record: Mapping[str, Any]) -> ArtifactIdentity | None:
@@ -2589,16 +2590,18 @@ def _tool_status_contract_reasons(
 
 
 def _validation_artifact_status_matches_record(artifact: Mapping[str, Any]) -> bool:
-    if artifact.get("status") != "ok":
-        return True
+    status = artifact.get("status")
     if artifact.get("exists") is not True:
-        return False
+        return status == "failed"
     source_hash_status = artifact.get("sourceHashStatus", "not-recorded")
     generated_hash_status = artifact.get("generatedHashStatus", "not-recorded")
-    return source_hash_status in {
-        "ok",
-        "not-recorded",
-    } and generated_hash_status in {"ok", "not-recorded"}
+    expected_status = (
+        "ok"
+        if source_hash_status in {"ok", "not-recorded"}
+        and generated_hash_status in {"ok", "not-recorded"}
+        else "failed"
+    )
+    return status == expected_status
 
 
 def _validation_artifact_contract_reasons(
@@ -2608,6 +2611,9 @@ def _validation_artifact_contract_reasons(
     declared_targets: set[str] | None = None,
     declared_variants: set[str] | None = None,
     declared_artifact_identities: set[ArtifactIdentity] | None = None,
+    declared_artifacts_by_identity: (
+        Mapping[ArtifactIdentity, DeclaredArtifact] | None
+    ) = None,
 ) -> list[str]:
     prefix = f"validation.artifacts[{index}]"
     if not isinstance(artifact, Mapping):
@@ -2641,6 +2647,9 @@ def _validation_artifact_contract_reasons(
         and identity not in declared_artifact_identities
     ):
         reasons.append(f"{prefix} must reference an artifact in report.artifacts")
+    referenced_artifact: DeclaredArtifact | None = None
+    if identity is not None and declared_artifacts_by_identity is not None:
+        referenced_artifact = declared_artifacts_by_identity.get(identity)
     source_hash_status = artifact.get("sourceHashStatus")
     if (
         "sourceHashStatus" in artifact
@@ -2673,6 +2682,14 @@ def _validation_artifact_contract_reasons(
         and not _validation_artifact_status_matches_record(artifact)
     ):
         reasons.append(f"{prefix}.status must match exists and hash statuses")
+    if (
+        status == "ok"
+        and referenced_artifact is not None
+        and referenced_artifact[1].get("status") == "failed"
+    ):
+        reasons.append(
+            f"{prefix}.status must match report.artifacts[{referenced_artifact[0]}].status"
+        )
     return reasons
 
 
@@ -2796,17 +2813,22 @@ def _validation_contract_reasons(
         else None
     )
     artifacts = report.get("artifacts", [])
-    declared_artifact_identities = (
-        {
-            identity
-            for artifact in artifacts
-            if isinstance(artifact, Mapping)
-            for identity in [_artifact_identity(artifact)]
-            if identity is not None
-        }
-        if isinstance(artifacts, list)
-        else None
+    declared_artifacts_by_identity: dict[ArtifactIdentity, DeclaredArtifact] | None = (
+        None
     )
+    declared_artifact_identities: set[ArtifactIdentity] | None = None
+    if isinstance(artifacts, list):
+        declared_artifacts_by_identity = {}
+        for artifact_index, artifact in enumerate(artifacts):
+            if not isinstance(artifact, Mapping):
+                continue
+            identity = _artifact_identity(artifact)
+            if identity is None:
+                continue
+            declared_artifacts_by_identity.setdefault(
+                identity, (artifact_index, artifact)
+            )
+        declared_artifact_identities = set(declared_artifacts_by_identity)
     toolchains = validation.get("toolchains")
     if not isinstance(toolchains, list):
         reasons.append("validation.toolchains must be a list")
@@ -2832,6 +2854,7 @@ def _validation_contract_reasons(
                     declared_targets=declared_targets,
                     declared_variants=declared_variants,
                     declared_artifact_identities=declared_artifact_identities,
+                    declared_artifacts_by_identity=declared_artifacts_by_identity,
                 )
             )
         reasons.extend(
