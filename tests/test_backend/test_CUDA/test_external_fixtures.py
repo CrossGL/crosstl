@@ -787,6 +787,30 @@ def test_cuda_samples_merge_sort_clz_codegen_reparse():
     assert "__clz" not in crossgl
 
 
+def test_cuda_math_api_long_long_integer_intrinsics_codegen_reparse():
+    # Upstream source:
+    # NVIDIA CUDA Math API v13.3, section 13 Integer Intrinsics.
+    source = """
+    __device__ int long_long_intrinsics(unsigned long long x) {
+        int leading = __clzll(x);
+        int first = __ffsll(x);
+        return leading + first;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].value.name == "__clzll"
+    assert body[1].value.name == "__ffsll"
+    assert_crossgl_reparse(crossgl)
+    assert "var leading: i32 = countLeadingZeros(x);" in crossgl
+    assert "var first: i32 = (findLSB(x) + 1);" in crossgl
+    assert "__clzll" not in crossgl
+    assert "__ffsll" not in crossgl
+
+
 def test_nvidia_hpcg_cuda_kernels_brev_hash_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/nvidia-hpcg

@@ -416,6 +416,9 @@ class MetalToCrossGLConverter:
         self.fragment_execution_attribute_names = {
             "early_fragment_tests",
         }
+        self.function_metadata_attribute_names = {
+            "host_name",
+        }
 
         self.map_semantics = {
             # Vertex attributes
@@ -1236,7 +1239,7 @@ class MetalToCrossGLConverter:
             )
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
             suffix = f" {fn_semantic}" if fn_semantic else ""
-            function_name = self.sanitize_identifier(func.name)
+            function_name = self.sanitize_identifier(self.function_output_name(func))
             code += f"{self.map_type(func.return_type)} {function_name}({params}){suffix} {{\n"
             code += self.generate_function_body(func.body, indent=indent + 1)
             code += "    }\n\n"
@@ -1247,12 +1250,42 @@ class MetalToCrossGLConverter:
             self.current_structured_buffer_names = previous_structured_buffer_names
         return code
 
+    def function_output_name(self, func):
+        host_name = self.function_host_name(func)
+        if host_name and getattr(func, "qualifier", None) in {
+            "vertex",
+            "fragment",
+            "kernel",
+        }:
+            return host_name
+        return func.name
+
+    def function_host_name(self, func):
+        for attr in getattr(func, "attributes", []) or []:
+            if getattr(attr, "name", None) != "host_name":
+                continue
+            args = getattr(attr, "args", []) or []
+            if not args:
+                return None
+            raw_name = str(args[0]).strip()
+            if (
+                len(raw_name) >= 2
+                and raw_name[0] in {'"', "'"}
+                and raw_name[-1] == raw_name[0]
+            ):
+                return raw_name[1:-1]
+            return raw_name
+        return None
+
     def function_semantic_attributes(self, func):
         return [
             attr
             for attr in getattr(func, "attributes", []) or []
             if getattr(attr, "name", None)
-            not in self.fragment_execution_attribute_names
+            not in (
+                self.fragment_execution_attribute_names
+                | self.function_metadata_attribute_names
+            )
         ]
 
     def generate_fragment_execution_layouts(self, func):

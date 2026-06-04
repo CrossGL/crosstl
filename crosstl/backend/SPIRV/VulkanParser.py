@@ -1380,6 +1380,26 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode == "OpVectorExtractDynamic" and len(operands) >= 3:
+                expressions[result_id] = ArrayAccessNode(
+                    self.spirv_assembly_operand_expression(
+                        operands[1],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                    self.spirv_assembly_operand_expression(
+                        operands[2],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             if result_id and opcode == "OpCompositeInsert" and len(operands) >= 3:
                 expressions[result_id] = (
                     self.spirv_assembly_composite_insert_expression(
