@@ -57,7 +57,8 @@ Validate artifacts referenced by a report:
 
 Validation exits nonzero when the report metadata is malformed, artifact records
 are malformed, translated outputs are missing, artifact paths resolve outside the
-repository, or opt-in toolchain smoke checks fail.
+repository, or opt-in toolchain smoke checks fail. Toolchain smoke checks only
+run for translated artifacts that still exist inside the repository.
 
 Configuration
 -------------

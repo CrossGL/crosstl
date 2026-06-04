@@ -1207,6 +1207,8 @@ def _run_toolchain_smoke(
         artifact_path = artifact_path.resolve()
         if not _is_relative_to(artifact_path, root):
             continue
+        if not artifact_path.is_file():
+            continue
         if target == "opengl":
             command = [tools[0], "--stdin"]
         elif target == "vulkan":
