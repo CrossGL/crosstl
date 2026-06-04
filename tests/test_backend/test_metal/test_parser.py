@@ -18,7 +18,7 @@ from crosstl.backend.common_ast import (
     TextureSampleNode,
     VectorConstructorNode,
 )
-from crosstl.backend.Metal.MetalAst import BlockNode
+from crosstl.backend.Metal.MetalAst import BlockNode, LambdaNode
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 
@@ -1982,6 +1982,39 @@ def test_parse_if_constexpr_from_mlx_fp_quantized():
     assert isinstance(if_node.condition, BinaryOpNode)
     assert len(if_node.else_if_chain) == 1
     assert if_node.else_body
+
+
+def test_parse_lambda_argument_from_mlx_fp_quantized_nax():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: b155224b9963cd9476363b464a559232a0868000
+    # Path: mlx/backend/metal/kernels/fp_quantized_nax.h
+    code = """
+    void run(bool is_unaligned_sm) {
+      dispatch_bool(!is_unaligned_sm, [&](auto kAlignedM) {
+        if constexpr (kAlignedM.value) {
+          threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+      });
+    }
+    """
+    ast = parse_ok(code)
+
+    call = ast.functions[0].body[0]
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "dispatch_bool"
+    lambda_arg = call.args[1]
+    assert isinstance(lambda_arg, LambdaNode)
+    assert lambda_arg.capture == "&"
+    assert lambda_arg.params[0].vtype == "auto"
+    assert lambda_arg.params[0].name == "kAlignedM"
+
+    barrier_calls = [
+        node
+        for node in iter_ast_nodes(lambda_arg)
+        if isinstance(node, FunctionCallNode) and node.name == "threadgroup_barrier"
+    ]
+    assert barrier_calls
 
 
 def test_parse_preprocessor_define():

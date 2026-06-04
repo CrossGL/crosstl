@@ -207,7 +207,7 @@ class SlangParser:
             elif declaration_token in {"TYPEDEF", "TYPEALIAS"}:
                 typedefs.append(self.parse_typedef())
             elif self.is_namespace_declaration_start():
-                self.skip_namespace_declaration()
+                global_variables.extend(self.parse_namespace_declaration())
             elif self.is_require_capability_declaration_start():
                 self.skip_semicolon_terminated_declaration()
             elif self.is_using_declaration_start():
@@ -343,10 +343,64 @@ class SlangParser:
             and self.tokens[self.pos + 2][0] == "LBRACE"
         )
 
-    def skip_namespace_declaration(self):
+    def parse_namespace_declaration(self):
         self.eat("IDENTIFIER")
-        self.eat("IDENTIFIER")
-        self.skip_balanced_block()
+        namespace_name = self.parse_module_path(allow_string=False)
+        self.eat("LBRACE")
+        global_variables = []
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated namespace block")
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                continue
+
+            pending_attributes = []
+            while self.current_token[0] == "LBRACKET":
+                pending_attributes.extend(self.parse_attribute_list())
+
+            if (
+                self.is_namespace_declaration_start()
+                or self.is_using_declaration_start()
+                or self.is_require_capability_declaration_start()
+            ):
+                self.skip_namespace_member_declaration()
+                continue
+
+            if (
+                self.is_variable_declaration_start()
+                and not self.is_func_keyword_declaration_start()
+                and not self.is_function()
+            ):
+                declaration = self.parse_global_variable(attributes=pending_attributes)
+                self.prefix_namespace_declaration_names(declaration, namespace_name)
+                self.append_parsed_statement(global_variables, declaration)
+                continue
+
+            self.skip_namespace_member_declaration()
+
+        self.eat("RBRACE")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+        return global_variables
+
+    def prefix_namespace_declaration_names(self, declaration, namespace_name):
+        for item in self.as_statement_list(declaration):
+            variable = item.left if isinstance(item, AssignmentNode) else item
+            if isinstance(variable, VariableNode):
+                variable.name = f"{namespace_name}.{variable.name}"
+
+    def skip_namespace_member_declaration(self):
+        while self.current_token[0] not in {"RBRACE", "EOF"}:
+            if self.current_token[0] == "LBRACE":
+                self.skip_balanced_block()
+                if self.current_token[0] == "SEMICOLON":
+                    self.eat("SEMICOLON")
+                return
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                return
+            self.eat(self.current_token[0])
 
     def is_require_capability_declaration_start(self):
         return self.current_token == ("IDENTIFIER", "__require_capability")

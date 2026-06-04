@@ -1263,6 +1263,15 @@ class HLSLToCrossGLConverter:
                 rendered.append(f"@ {attr_name}")
         return " ".join(rendered)
 
+    def format_geometry_primitive_parameter_qualifier(self, parameter):
+        for attr in getattr(parameter, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "primitive":
+                continue
+            args = getattr(attr, "args", getattr(attr, "arguments", []))
+            if args:
+                return str(args[0]).lower()
+        return ""
+
     def infer_ray_parameter_semantic(self, function_qualifier, parameter, index):
         if getattr(parameter, "semantic", None):
             return parameter.semantic
@@ -1296,6 +1305,11 @@ class HLSLToCrossGLConverter:
         ).strip()
         if qualifier_prefix:
             prefixes.append(qualifier_prefix)
+        primitive_qualifier = self.format_geometry_primitive_parameter_qualifier(
+            parameter
+        )
+        if primitive_qualifier:
+            prefixes.append(primitive_qualifier)
         parameter_name = parameter.name or f"_param{parameter_index}"
         parameter_name = self.render_identifier(parameter_name)
         parameter_text = (

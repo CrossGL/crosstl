@@ -524,6 +524,33 @@ def test_parse_compute_attributes_and_semantics():
     assert_parses(COMPUTE_HLSL)
 
 
+def test_parse_geometry_primitive_before_direction_from_dxc_spirv():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/CodeGenSPIRV/primitive.point.gs.hlsl
+    ast = parse_code("""
+    struct S { float4 val : VAL; };
+
+    [maxvertexcount(3)]
+    void main(point in uint id[1] : VertexID, inout LineStream<S> outData) {
+    }
+    """)
+
+    function = ast.functions[0]
+    id_param, stream_param = function.params
+
+    assert function.qualifier == "geometry"
+    assert id_param.vtype == "uint"
+    assert id_param.name == "id"
+    assert id_param.qualifiers == ["in"]
+    assert id_param.array_sizes == [1]
+    assert id_param.semantic == "VertexID"
+    assert [(attr.name, attr.args) for attr in id_param.attributes] == [
+        ("primitive", ["point"])
+    ]
+    assert stream_param.vtype == "LineStream<S>"
+    assert stream_param.qualifiers == ["inout"]
+
+
 def test_parse_noperspective_interpolation_modifier_from_hlsl_docs():
     ast = parse_code("""
     struct PSInput {

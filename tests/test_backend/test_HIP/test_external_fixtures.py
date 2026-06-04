@@ -679,6 +679,40 @@ def test_rocm_hip_math_api_sad_intrinsics_codegen_reparse():
     assert "__usad" not in crossgl
 
 
+def test_external_rocm_hip_tests_integer_average_intrinsics_codegen_reparse():
+    # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/math/integer_intrinsics.cc.
+    source = """
+    __global__ void average_kernel(int* signed_out,
+                                   unsigned int* unsigned_out,
+                                   int x,
+                                   int y,
+                                   unsigned int ux,
+                                   unsigned int uy) {
+        signed_out[0] = __hadd(x, y);
+        signed_out[1] = __rhadd(x, y);
+        unsigned_out[0] = __uhadd(ux, uy);
+        unsigned_out[1] = __urhadd(ux, uy);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert body[0].right.name == "__hadd"
+    assert body[1].right.name == "__rhadd"
+    assert body[2].right.name == "__uhadd"
+    assert body[3].right.name == "__urhadd"
+    assert "signed_out[0] = ((x & y) + ((x ^ y) >> 1));" in crossgl
+    assert "signed_out[1] = ((x | y) - ((x ^ y) >> 1));" in crossgl
+    assert "unsigned_out[0] = ((ux & uy) + ((ux ^ uy) >> 1));" in crossgl
+    assert "unsigned_out[1] = ((ux | uy) - ((ux ^ uy) >> 1));" in crossgl
+    assert "__hadd" not in crossgl
+    assert "__rhadd" not in crossgl
+    assert "__uhadd" not in crossgl
+    assert "__urhadd" not in crossgl
+
+
 def test_external_rocm_hip_complex_math_codegen_reparse():
     # Upstream: ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
     # HIP-Doc/Reference/HIP-Complex-Math-API/complex_math/main.hip.

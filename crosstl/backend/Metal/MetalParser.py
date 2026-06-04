@@ -2873,6 +2873,8 @@ class MetalParser:
             expr = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
             return expr
+        if self.current_token[0] == "LBRACKET":
+            return self.parse_lambda_expression()
         if self.current_token[0] == "LBRACE":
             return self.parse_initializer_list()
         if self.current_token[0] in CONSTRUCTOR_TYPE_TOKENS:
@@ -2896,6 +2898,65 @@ class MetalParser:
             name = self.parse_scoped_identifier()
             return VariableNode("", name)
         raise SyntaxError(f"Unexpected token in expression: {self.current_token[0]}")
+
+    def parse_lambda_expression(self):
+        capture = self.parse_lambda_capture()
+        params = []
+        if self.current_token[0] == "LPAREN":
+            self.eat("LPAREN")
+            if self.current_token[0] != "RPAREN":
+                params = self.parse_parameters()
+            self.eat("RPAREN")
+
+        return_type = None
+        specifier_tokens = []
+        while self.current_token[0] not in {"LBRACE", "EOF"}:
+            if self.current_token[0] == "ARROW":
+                self.eat("ARROW")
+                return_type, _qualifiers = self.parse_type_specifier()
+                continue
+            specifier_tokens.append(self.current_token[1])
+            self.eat(self.current_token[0])
+
+        if self.current_token[0] != "LBRACE":
+            raise SyntaxError("Expected lambda body")
+
+        self.pending_block_scope_names.append(
+            {param.name for param in params if getattr(param, "name", None)}
+        )
+        body = self.parse_block()
+        return LambdaNode(
+            capture,
+            params,
+            body,
+            return_type,
+            self.format_generic_type_tokens(specifier_tokens).split(),
+        )
+
+    def parse_lambda_capture(self):
+        self.eat("LBRACKET")
+        depth = 1
+        parts = []
+        while depth > 0 and self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if token_type == "LBRACKET":
+                depth += 1
+                parts.append(token_value)
+                self.eat(token_type)
+                continue
+            if token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RBRACKET")
+                    break
+                parts.append(token_value)
+                self.eat(token_type)
+                continue
+            parts.append(token_value)
+            self.eat(token_type)
+        if depth != 0:
+            raise SyntaxError("Unterminated lambda capture list")
+        return self.format_generic_type_tokens(parts)
 
     def parse_initializer_list(self):
         self.eat("LBRACE")

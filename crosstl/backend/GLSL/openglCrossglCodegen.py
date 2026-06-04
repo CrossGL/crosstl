@@ -529,6 +529,7 @@ class GLSLToCrossGLConverter:
         name = str(type_name)
         return name == "accelerationStructureEXT" or name.startswith(
             (
+                "__sampler",
                 "texture",
                 "subpassInput",
                 "isubpassInput",

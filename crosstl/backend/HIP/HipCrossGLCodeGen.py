@@ -4999,6 +4999,10 @@ class HipToCrossGLConverter:
             return f"countLeadingZeros({args[0]})"
         if function_name in {"__brev", "__brevll"} and len(args) == 1:
             return f"reverseBits({args[0]})"
+        if function_name in {"__hadd", "__uhadd"} and len(args) == 2:
+            return self.format_integer_average_floor(args[0], args[1])
+        if function_name in {"__rhadd", "__urhadd"} and len(args) == 2:
+            return self.format_integer_average_rounded(args[0], args[1])
         if function_name == "__sad" and len(args) == 3:
             return f"(abs({args[0]} - {args[1]}) + {args[2]})"
         if function_name == "__usad" and len(args) == 3:
@@ -5009,6 +5013,12 @@ class HipToCrossGLConverter:
         if function_name in {"__popc", "__popcll"} and len(args) == 1:
             return f"bitCount({args[0]})"
         return None
+
+    def format_integer_average_floor(self, left, right):
+        return f"(({left} & {right}) + (({left} ^ {right}) >> 1))"
+
+    def format_integer_average_rounded(self, left, right):
+        return f"(({left} | {right}) - (({left} ^ {right}) >> 1))"
 
     def format_hip_sync_vote_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):

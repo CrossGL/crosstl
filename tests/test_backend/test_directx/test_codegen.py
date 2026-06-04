@@ -1043,6 +1043,25 @@ def test_codegen_geometry_stage():
     assert "@ maxvertexcount" in lowered
 
 
+def test_codegen_geometry_primitive_before_direction_from_dxc_spirv():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/CodeGenSPIRV/primitive.point.gs.hlsl
+    output = generate_crossgl("""
+        struct S { float4 val : VAL; };
+
+        [maxvertexcount(3)]
+        void main(point in uint id[1] : VertexID, inout LineStream<S> outData) {
+        }
+    """)
+
+    assert "geometry {" in output
+    assert "@ maxvertexcount(3)" in output
+    assert (
+        "void main(in point uint id[1] @ VertexID, inout lineStream outData)" in output
+    )
+    parse_crossgl(output)
+
+
 def test_codegen_tessellation_stages():
     output = generate_crossgl(TESSELLATION_HLSL)
     lowered = output.lower()

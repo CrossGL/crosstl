@@ -1165,6 +1165,9 @@ class SlangToCrossGLConverter:
             )
             return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
+            qualified_name = self.member_access_qualified_name(expr)
+            if qualified_name and self.lookup_variable_type(qualified_name):
+                return self.format_identifier(qualified_name)
             obj = self.generate_expression(expr.object, is_main)
             if isinstance(
                 expr.object, (AssignmentNode, BinaryOpNode, TernaryOpNode, UnaryOpNode)
@@ -1407,6 +1410,11 @@ class SlangToCrossGLConverter:
         if isinstance(expr, ArrayAccessNode):
             return self.expression_type(expr.array)
         if isinstance(expr, MemberAccessNode):
+            qualified_name = self.member_access_qualified_name(expr)
+            if qualified_name:
+                qualified_type = self.lookup_variable_type(qualified_name)
+                if qualified_type:
+                    return qualified_type
             object_type = self.expression_type(expr.object)
             struct_type = self.unwrap_resource_container_type(object_type)
             if not struct_type:
@@ -1424,6 +1432,15 @@ class SlangToCrossGLConverter:
         for scope in reversed(self.variable_type_scopes):
             if base_name in scope:
                 return scope[base_name]
+        return None
+
+    def member_access_qualified_name(self, expr):
+        if isinstance(expr, VariableNode) and not expr.vtype:
+            return expr.name
+        if isinstance(expr, MemberAccessNode):
+            prefix = self.member_access_qualified_name(expr.object)
+            if prefix:
+                return f"{prefix}.{expr.member}"
         return None
 
     def unwrap_resource_container_type(self, type_name):

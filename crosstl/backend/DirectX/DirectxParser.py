@@ -1372,6 +1372,13 @@ class HLSLParser:
             "numthreads" in attribute_names or has_mesh_output_parameter
         ):
             return "mesh"
+        has_geometry_parameter = any(
+            self.is_geometry_stream_type(getattr(param, "vtype", None))
+            or self.parameter_has_geometry_primitive(param)
+            for param in params
+        )
+        if "maxvertexcount" in attribute_names or has_geometry_parameter:
+            return "geometry"
         if (
             "outputcontrolpoints" in attribute_names
             or "patchconstantfunc" in attribute_names
@@ -1405,6 +1412,16 @@ class HLSLParser:
             if getattr(param, "semantic", None) == "SV_DispatchThreadID":
                 return "compute"
         return None
+
+    def is_geometry_stream_type(self, param_type):
+        base = str(param_type or "").split("<", 1)[0].strip()
+        return base in {"PointStream", "LineStream", "TriangleStream"}
+
+    def parameter_has_geometry_primitive(self, param):
+        return any(
+            str(getattr(attr, "name", "")).lower() == "primitive"
+            for attr in getattr(param, "attributes", []) or []
+        )
 
     def semantic_names_for_stage_inference(self, semantic):
         return [
@@ -1452,25 +1469,9 @@ class HLSLParser:
         if self.current_token[0] != "RPAREN":
             while True:
                 attributes = self.parse_attribute_list()
-                qualifiers = self.parse_qualifiers()
-                if (
-                    self.current_token[0] == "IDENTIFIER"
-                    and self.current_token[1] in primitive_qualifiers
-                ):
-                    attributes.append(
-                        AttributeNode("primitive", [self.current_token[1]])
-                    )
-                    self.eat("IDENTIFIER")
-                has_direction_qualifier = any(
-                    str(qualifier).lower() in {"in", "out", "inout"}
-                    for qualifier in qualifiers
+                qualifiers = self.parse_parameter_modifiers(
+                    attributes, primitive_qualifiers, mesh_parameter_roles
                 )
-                while has_direction_qualifier and self.is_parameter_role_token_at(
-                    self.current_index, mesh_parameter_roles
-                ):
-                    role = self.current_token[1].lower()
-                    attributes.append(AttributeNode(mesh_parameter_roles[role]))
-                    self.eat("IDENTIFIER")
                 if not self.is_type_token(self.current_token[0]):
                     raise SyntaxError(
                         f"Unexpected token in parameter list: {self.current_token[0]}"
@@ -1509,6 +1510,37 @@ class HLSLParser:
 
         self.eat("RPAREN")
         return params
+
+    def parse_parameter_modifiers(
+        self, attributes, primitive_qualifiers, mesh_parameter_roles
+    ):
+        qualifiers = []
+        while True:
+            before_index = self.current_index
+            qualifiers.extend(self.parse_qualifiers())
+
+            if (
+                self.current_token[0] == "IDENTIFIER"
+                and self.current_token[1] in primitive_qualifiers
+            ):
+                attributes.append(AttributeNode("primitive", [self.current_token[1]]))
+                self.eat("IDENTIFIER")
+                continue
+
+            has_direction_qualifier = any(
+                str(qualifier).lower() in {"in", "out", "inout"}
+                for qualifier in qualifiers
+            )
+            while has_direction_qualifier and self.is_parameter_role_token_at(
+                self.current_index, mesh_parameter_roles
+            ):
+                role = self.current_token[1].lower()
+                attributes.append(AttributeNode(mesh_parameter_roles[role]))
+                self.eat("IDENTIFIER")
+
+            if self.current_index == before_index:
+                break
+        return qualifiers
 
     def is_parameter_role_token_at(self, index, roles):
         if index >= len(self.tokens):

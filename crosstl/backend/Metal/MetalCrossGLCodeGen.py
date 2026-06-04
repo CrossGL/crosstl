@@ -1572,6 +1572,8 @@ class MetalToCrossGLConverter:
                     self.generate_expression(arg, is_main) for arg in expr.args
                 )
             return f"{function_name}({args})"
+        elif isinstance(expr, LambdaNode):
+            return self.generate_lambda_expression(expr, is_main)
         elif isinstance(expr, CallNode):
             callee = self.generate_expression(expr.callee, is_main)
             args = ", ".join(
@@ -1741,6 +1743,32 @@ class MetalToCrossGLConverter:
             return str(expr)
         else:
             return f"/* Unhandled expression: {type(expr).__name__} */"
+
+    def generate_lambda_expression(self, expr, is_main=False):
+        previous_variable_types = self.current_variable_types
+        self.current_variable_types = dict(previous_variable_types)
+        self.push_identifier_scope()
+        try:
+            for param in expr.params:
+                self.current_variable_types[param.name] = param.vtype
+            params = ", ".join(
+                self.format_decl(param, include_semantic=False) for param in expr.params
+            )
+            specifiers = getattr(expr, "specifiers", []) or []
+            specifier_text = f" {' '.join(specifiers)}" if specifiers else ""
+            return_type = getattr(expr, "return_type", None)
+            return_text = f" -> {self.map_type(return_type)}" if return_type else ""
+            body = self.generate_function_body(expr.body, indent=1, is_main=is_main)
+            if body:
+                return (
+                    f"[{expr.capture}]({params}){specifier_text}{return_text} {{\n"
+                    f"{body}"
+                    "}"
+                )
+            return f"[{expr.capture}]({params}){specifier_text}{return_text} {{}}"
+        finally:
+            self.pop_identifier_scope()
+            self.current_variable_types = previous_variable_types
 
     def map_function_call_name(self, name):
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
