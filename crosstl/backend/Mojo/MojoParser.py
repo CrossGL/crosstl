@@ -1530,7 +1530,7 @@ class MojoParser:
             false_expr = self.parse_expression()
             left = TernaryOpNode(left, true_expr, false_expr)
         self.skip_expression_layout()
-        if self.current_token[0] == "IF":
+        if self.current_token[0] == "IF" and self.is_inline_if_expression():
             true_expr = left
             self.eat("IF")
             condition = self.parse_expression()
@@ -1538,6 +1538,25 @@ class MojoParser:
             false_expr = self.parse_expression()
             left = TernaryOpNode(condition, true_expr, false_expr)
         return left
+
+    def is_inline_if_expression(self):
+        depth = 0
+        idx = self.pos
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
+                depth += 1
+            elif token_type in {"RPAREN", "RBRACKET", "RBRACE"}:
+                if depth == 0:
+                    return False
+                depth -= 1
+            elif depth == 0:
+                if token_type == "ELSE":
+                    return True
+                if token_type in {"NEWLINE", "DEDENT", "EOF", "COMMA", "SEMICOLON"}:
+                    return False
+            idx += 1
+        return False
 
     def parse_logical_or(self):
         left = self.parse_logical_and()
@@ -1786,6 +1805,10 @@ class MojoParser:
         while self.current_token[0] != "RBRACKET":
             elements.append(self.parse_expression())
             self.skip_layout_tokens()
+            if len(elements) == 1 and self.current_token[0] == "FOR":
+                comprehension = self.parse_list_comprehension(elements[0])
+                self.eat("RBRACKET")
+                return self.parse_postfix_suffixes(comprehension)
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
                 self.skip_layout_tokens()
@@ -1798,6 +1821,45 @@ class MojoParser:
 
         self.eat("RBRACKET")
         return self.parse_postfix_suffixes(ListLiteralNode(elements))
+
+    def parse_list_comprehension(self, expression):
+        clauses = []
+        while self.current_token[0] == "FOR":
+            self.eat("FOR")
+            pattern = self.parse_comprehension_pattern()
+            self.eat("IN")
+            iterable = self.parse_expression()
+            clauses.append({"kind": "for", "pattern": pattern, "iterable": iterable})
+            self.skip_layout_tokens()
+
+            while self.current_token[0] == "IF":
+                self.eat("IF")
+                condition = self.parse_expression()
+                clauses.append({"kind": "if", "condition": condition})
+                self.skip_layout_tokens()
+
+        return ListComprehensionNode(expression, clauses)
+
+    def parse_comprehension_pattern(self):
+        if not self.is_identifier_like_token():
+            raise SyntaxError(
+                f"Expected comprehension target, got {self.current_token[0]}"
+            )
+
+        names = [self.current_token[1]]
+        self.eat(self.current_token[0])
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            if not self.is_identifier_like_token():
+                raise SyntaxError(
+                    f"Expected comprehension target, got {self.current_token[0]}"
+                )
+            names.append(self.current_token[1])
+            self.eat(self.current_token[0])
+
+        if len(names) == 1:
+            return names[0]
+        return TupleNode(names)
 
     def parse_vector_constructor(self, type_name):
         self.eat("LPAREN")

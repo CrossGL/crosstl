@@ -278,6 +278,20 @@ def test_list_literal_argument_codegen_from_modular_reduction_example():
     )
 
 
+def test_list_comprehension_codegen_from_current_mojo_docs():
+    code = """
+    def main():
+        var squares = [x * x for x in range(5) if x % 2 == 0]
+        var products = [(x, y) for x in range(3) for y in range(2) if x != y]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "[(x * x) for x in range(5) if ((x % 2) == 0)]" in generated_code
+    assert "[(x, y) for x in range(3) for y in range(2) if (x != y)]" in generated_code
+    assert "Unhandled expression: ListComprehensionNode" not in generated_code
+
+
 def test_dotted_type_annotation_codegen_from_modular_tiled_matmul_example():
     code = """
     def tiled_matmul_kernel(matrix_c: TileTensor):

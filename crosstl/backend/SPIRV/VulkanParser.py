@@ -1811,20 +1811,40 @@ class VulkanParser:
         base_args = [image, coordinate]
         if dref is not None:
             base_args.append(dref)
+        offset = self.spirv_assembly_image_offset_operand(parsed_operands)
 
         if "Grad" in parsed_operands and len(parsed_operands["Grad"]) >= 2:
-            function_name = "textureProjGrad" if "Proj" in opcode else "textureGrad"
+            if "Proj" in opcode:
+                function_name = "textureProjGrad"
+            elif offset is not None:
+                function_name = "textureGradOffset"
+            else:
+                function_name = "textureGrad"
+            args = [*base_args, *parsed_operands["Grad"][:2]]
+            if offset is not None and "Proj" not in opcode:
+                args.append(offset)
             return FunctionCallNode(
                 function_name,
-                [*base_args, *parsed_operands["Grad"][:2]],
+                args,
             )
 
         if "Lod" in parsed_operands and parsed_operands["Lod"]:
-            function_name = "textureProjLod" if "Proj" in opcode else "textureLod"
+            if "Proj" in opcode:
+                function_name = "textureProjLod"
+            elif offset is not None:
+                function_name = "textureLodOffset"
+            else:
+                function_name = "textureLod"
+            args = [*base_args, parsed_operands["Lod"][0]]
+            if offset is not None and "Proj" not in opcode:
+                args.append(offset)
             return FunctionCallNode(
                 function_name,
-                [*base_args, parsed_operands["Lod"][0]],
+                args,
             )
+
+        if offset is not None and "Proj" not in opcode:
+            return FunctionCallNode("textureOffset", [*base_args, offset])
 
         function_name = "textureProj" if "Proj" in opcode else "texture"
         return FunctionCallNode(function_name, base_args)
@@ -1851,6 +1871,10 @@ class VulkanParser:
         args = [image, coordinate]
         if "Lod" in parsed_operands and parsed_operands["Lod"]:
             args.append(parsed_operands["Lod"][0])
+        offset = self.spirv_assembly_image_offset_operand(parsed_operands)
+        if offset is not None:
+            args.append(offset)
+            return FunctionCallNode("texelFetchOffset", args)
         return FunctionCallNode("texelFetch", args)
 
     def spirv_assembly_image_read_expression(
@@ -1876,6 +1900,13 @@ class VulkanParser:
         if "Sample" in parsed_operands and parsed_operands["Sample"]:
             args.append(parsed_operands["Sample"][0])
         return FunctionCallNode("imageLoad", args)
+
+    def spirv_assembly_image_offset_operand(self, parsed_operands):
+        for operand_name in ("ConstOffset", "Offset"):
+            values = parsed_operands.get(operand_name)
+            if values:
+                return values[0]
+        return None
 
     def spirv_assembly_bitcast_expression(
         self,

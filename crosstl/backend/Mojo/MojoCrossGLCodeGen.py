@@ -753,6 +753,8 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, ListLiteralNode):
             elements = ", ".join(self.generate_expression(e) for e in expr.elements)
             return f"[{elements}]"
+        elif isinstance(expr, ListComprehensionNode):
+            return self.generate_list_comprehension(expr)
         elif isinstance(expr, SliceNode):
             return self.generate_slice_index(expr)
         elif isinstance(expr, AssignmentNode):
@@ -828,6 +830,25 @@ class MojoToCrossGLConverter:
                 self.generate_expression(element) for element in index.elements
             )
         return self.generate_expression(index)
+
+    def generate_list_comprehension(self, expr):
+        pieces = [self.generate_expression(expr.expression)]
+        for clause in expr.clauses:
+            if clause["kind"] == "for":
+                pattern = self.generate_comprehension_pattern(clause["pattern"])
+                iterable = self.generate_expression(clause["iterable"])
+                pieces.append(f"for {pattern} in {iterable}")
+            elif clause["kind"] == "if":
+                condition = self.generate_expression(clause["condition"])
+                pieces.append(f"if {condition}")
+        return f"[{' '.join(pieces)}]"
+
+    def generate_comprehension_pattern(self, pattern):
+        if isinstance(pattern, TupleNode):
+            return ", ".join(
+                self.generate_expression(element) for element in pattern.elements
+            )
+        return self.generate_expression(pattern)
 
     def generate_slice_index(self, index):
         start = self.generate_expression(index.start) if index.start is not None else ""

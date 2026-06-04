@@ -1201,6 +1201,28 @@ def test_codegen_enum_and_typedef():
     parse_crossgl(output)
 
 
+def test_codegen_using_alias_declarations_from_hlsl_spec():
+    hlsl = textwrap.dedent("""
+        using Float = float;
+        using Color = vector<float, 4>;
+        using IndexPair = int[2];
+
+        Color main(Color input) : SV_Target0 {
+            Float bias = 0.0;
+            IndexPair indices;
+            return input + Color(bias, bias, bias, 0.0);
+        }
+    """)
+
+    output = generate_crossgl(hlsl)
+
+    assert "type Float = float;" in output
+    assert "type Color = vec4;" in output
+    assert "type IndexPair = int[2];" in output
+    assert "Color main(Color input) @ gl_FragData[0]" in output
+    parse_crossgl(output)
+
+
 def test_codegen_anonymous_struct_array_typedef_from_dxc_codegen_debug_tests():
     hlsl = textwrap.dedent("""
         typedef struct { int a[4]; float2 b[2]; } type[3];

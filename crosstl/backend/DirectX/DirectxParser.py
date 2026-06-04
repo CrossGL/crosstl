@@ -230,7 +230,9 @@ class HLSLParser:
 
         while self.current_token[0] != "EOF":
             if self.current_token_is_keyword("USING", "using"):
-                self.parse_using_directive()
+                alias = self.parse_using_directive()
+                if alias is not None:
+                    typedefs.append(alias)
                 continue
 
             if self.current_token_is_keyword("NAMESPACE", "namespace"):
@@ -440,6 +442,32 @@ class HLSLParser:
         self.eat_keyword("USING", "using")
         if self.current_token_is_keyword("NAMESPACE", "namespace"):
             self.eat_keyword("NAMESPACE", "namespace")
+            while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+                if self.current_token_is_double_colon():
+                    self.eat_double_colon()
+                else:
+                    self.eat(self.current_token[0])
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+            return None
+
+        if (
+            self.is_identifier_token(self.current_token[0])
+            and self.peek()[0] == "EQUALS"
+        ):
+            name = self.parse_identifier()
+            self.eat("EQUALS")
+            qualifiers = self.parse_qualifiers()
+            alias_type = self.parse_type()
+            qualifiers.extend(self.parse_post_type_qualifiers())
+            array_sizes = self.parse_array_suffixes()
+            self.eat("SEMICOLON")
+
+            alias = TypeAliasNode(alias_type, name)
+            alias.qualifiers = qualifiers
+            alias.array_sizes = array_sizes
+            return alias
+
         while self.current_token[0] not in {"SEMICOLON", "EOF"}:
             if self.current_token_is_double_colon():
                 self.eat_double_colon()
@@ -447,6 +475,7 @@ class HLSLParser:
                 self.eat(self.current_token[0])
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
+        return None
 
     def is_class_declaration_prefix(self):
         return self.current_token_is_keyword(

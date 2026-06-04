@@ -814,6 +814,35 @@ def test_parse_enum_and_typedef():
     assert ast.typedefs[2].qualifiers == ["precise", "const"]
 
 
+def test_parse_using_alias_declarations_from_hlsl_spec():
+    ast = parse_code("""
+    using Float = float;
+    using Color = vector<float, 4>;
+    using RowMajorMatrix = row_major float2x3 const;
+    using IndexPair = int[2];
+    using namespace dx;
+    using FilterKernel::Radius;
+
+    Color main(Color input) : SV_Target0 {
+        return input;
+    }
+    """)
+
+    assert [typedef.name for typedef in ast.typedefs] == [
+        "Float",
+        "Color",
+        "RowMajorMatrix",
+        "IndexPair",
+    ]
+    assert ast.typedefs[0].alias_type == "float"
+    assert ast.typedefs[1].alias_type == "vector<float, 4>"
+    assert ast.typedefs[2].alias_type == "float2x3"
+    assert ast.typedefs[2].qualifiers == ["row_major", "const"]
+    assert ast.typedefs[3].alias_type == "int"
+    assert ast.typedefs[3].array_sizes == [2]
+    assert [function.name for function in ast.functions] == ["main"]
+
+
 def test_parse_enum_underlying_type_from_dxc_sema_enums():
     # Source: https://github.com/microsoft/DirectXShaderCompiler
     # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092

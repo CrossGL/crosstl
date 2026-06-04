@@ -900,6 +900,22 @@ class TestHipParser:
         assert condition.right == "std::is_same_v<T, double2>"
         assert isinstance(branch.if_body[0], FunctionCallNode)
 
+    def test_public_rocm_rocprofiler_template_static_member_definition_parse(self):
+        # Upstream: ROCm/rocm-examples@cf369da, Common/rocprofiler_utils.hpp.
+        code = """
+        template<typename T>
+        std::mutex safe_printer_impl<T>::print_mutex_{};
+        """
+        ast = self.parse_code(code)
+
+        definition = ast.statements[0]
+
+        assert isinstance(definition, VariableNode)
+        assert definition.vtype == "std::mutex"
+        assert definition.name == "safe_printer_impl<T>::print_mutex_"
+        assert isinstance(definition.value, InitializerListNode)
+        assert definition.value.elements == []
+
     def test_public_rocm_hip_doc_constexpr_qualified_size_t_global(self):
         code = """
         constexpr std::size_t const_array_size = 32;

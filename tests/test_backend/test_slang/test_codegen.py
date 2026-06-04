@@ -1425,6 +1425,42 @@ def test_texture_load_offset_method_call_codegen():
     assert "albedo.Load" not in generated_code
 
 
+def test_buffer_getdimensions_statement_codegen_from_core_module_docs():
+    code = """
+    StructuredBuffer<float4> lookupTable;
+    RWStructuredBuffer<uint> output;
+    ByteAddressBuffer rawInput;
+    RWByteAddressBuffer rawOutput;
+
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 tid : SV_DispatchThreadID) {
+        uint count;
+        uint stride;
+        uint byteCount;
+        lookupTable.GetDimensions(count, stride);
+        output.GetDimensions(count, stride);
+        rawInput.GetDimensions(byteCount);
+        rawOutput.GetDimensions(byteCount);
+        output[tid.x] = count + stride + byteCount;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "StructuredBuffer<float4> lookupTable;" in generated_code
+    assert "RWStructuredBuffer<uint> output;" in generated_code
+    assert "ByteAddressBuffer rawInput;" in generated_code
+    assert "RWByteAddressBuffer rawOutput;" in generated_code
+    assert "buffer_dimensions(lookupTable, count, stride);" in generated_code
+    assert "buffer_dimensions(output, count, stride);" in generated_code
+    assert "buffer_dimensions(rawInput, byteCount);" in generated_code
+    assert "buffer_dimensions(rawOutput, byteCount);" in generated_code
+    assert ".GetDimensions(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_texture_compare_offset_method_call_codegen():
     code = """
     Texture2D<float> shadowMap;

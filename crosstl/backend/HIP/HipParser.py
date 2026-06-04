@@ -490,6 +490,28 @@ class HipParser:
         self.advance()
         return name
 
+    def consume_variable_declarator_name(self):
+        if not self.is_declarator_name_token():
+            token_type = self.current_token.type if self.current_token else "EOF"
+            self.error(f"Expected declarator name, got {token_type}")
+
+        name = self.current_token.value
+        self.advance()
+        if self.match("LT"):
+            name += self.parse_template_suffix()
+
+        while self.match("SCOPE"):
+            self.advance()
+            if not self.is_declarator_name_token():
+                token_type = self.current_token.type if self.current_token else "EOF"
+                self.error(f"Expected declarator name after scope, got {token_type}")
+            name += f"::{self.current_token.value}"
+            self.advance()
+            if self.match("LT"):
+                name += self.parse_template_suffix()
+
+        return name
+
     def is_hip_dynamic_shared_macro(self):
         return (
             self.match("IDENTIFIER")
@@ -1752,7 +1774,7 @@ class HipParser:
         qualifiers = self.parse_declaration_qualifiers()
         var_type = self.parse_variable_declaration_type(qualifiers)
         self.skip_newlines()
-        name = self.consume_declarator_name()
+        name = self.consume_variable_declarator_name()
         var_type += self.parse_array_suffix()
         self.skip_newlines()
 
@@ -1864,7 +1886,7 @@ class HipParser:
                 ),
             )
 
-        name = self.consume_declarator_name()
+        name = self.consume_variable_declarator_name()
         var_type += self.parse_array_suffix()
         self.skip_newlines()
         value = self.parse_variable_initializer(var_type)
@@ -4000,8 +4022,9 @@ class HipParser:
             if structured_binding_end is not None:
                 return True
 
-            if self.is_declarator_name_token_at(index):
-                index += 1
+            declarator_name_end = self.skip_variable_declarator_name_at_pos(index)
+            if declarator_name_end is not None:
+                index = declarator_name_end
                 while index < len(self.tokens) and self.tokens[index].type == "NEWLINE":
                     index += 1
                 if index < len(self.tokens) and self.tokens[index].type in {
@@ -4015,6 +4038,28 @@ class HipParser:
                     return True
 
         return False
+
+    def skip_variable_declarator_name_at_pos(self, index):
+        if not self.is_declarator_name_token_at(index):
+            return None
+
+        index += 1
+        if index < len(self.tokens) and self.tokens[index].type == "LT":
+            index = self.skip_template_at_pos(index)
+            if index is None:
+                return None
+
+        while index < len(self.tokens) and self.tokens[index].type == "SCOPE":
+            index += 1
+            if not self.is_declarator_name_token_at(index):
+                return None
+            index += 1
+            if index < len(self.tokens) and self.tokens[index].type == "LT":
+                index = self.skip_template_at_pos(index)
+                if index is None:
+                    return None
+
+        return index
 
     def skip_type_attribute_prefixes_at_pos(self, index):
         while (

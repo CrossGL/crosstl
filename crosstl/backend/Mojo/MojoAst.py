@@ -95,6 +95,20 @@ class ListLiteralNode(ASTNode):
         return f"ListLiteralNode(elements={self.elements})"
 
 
+class ListComprehensionNode(ASTNode):
+    """Node representing a Mojo list comprehension expression."""
+
+    def __init__(self, expression, clauses):
+        self.expression = expression
+        self.clauses = clauses
+
+    def __repr__(self):
+        return (
+            "ListComprehensionNode("
+            f"expression={self.expression}, clauses={self.clauses})"
+        )
+
+
 class SliceNode(ASTNode):
     """Node representing a Mojo slice index."""
 

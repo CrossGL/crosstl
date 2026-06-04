@@ -578,6 +578,36 @@ def test_rust_gpu_image_query_and_fetch_methods_codegen_from_upstream_compiletes
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_fetch_with_sample_index_codegen_from_upstream_release_pattern():
+    # Reduced from EmbarkStudios/rust-gpu v0.7 release notes for the Image API
+    # sample_with builder pattern:
+    # image.fetch_with(coord, sample_with::sample_index(idx)).
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::Image;
+    use spirv_std::image::sample_with;
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] ms_image: &Image!(2D, type=f32, sampled, multisampled),
+        pixel: IVec2,
+        sample_index: i32,
+        output: &mut Vec4,
+    ) {
+        let texel = ms_image.fetch_with(pixel, sample_with::sample_index(sample_index));
+        *output = texel;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "sampler2DMS ms_image @ set(0) @ binding(0)" in result
+    assert "texel = texelFetch(ms_image, pixel, sample_index);" in result
+    assert ".fetch_with(" not in result
+    assert "sample_with::sample_index" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_sample_with_and_depth_project_methods_codegen_from_upstream():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

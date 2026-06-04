@@ -773,6 +773,93 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_TEXTURE_LOD_OFFSET_ASSEMBLY = """
+; Reduced from glslangValidator output for textureLodOffset(colorTex, uv, 1.0, ivec2(1, 2)).
+; glslang emits OpImageSampleExplicitLod with the combined Lod|ConstOffset image operand mask.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %uv %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %color_tex "colorTex"
+OpName %uv "uv"
+OpName %out_color "outColor"
+OpDecorate %color_tex DescriptorSet 0
+OpDecorate %color_tex Binding 0
+OpDecorate %uv Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2float = OpTypeVector %float 2
+%v2int = OpTypeVector %int 2
+%v4float = OpTypeVector %float 4
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%ptr_input_v2float = OpTypePointer Input %v2float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%lod = OpConstant %float 1.0
+%int_1 = OpConstant %int 1
+%int_2 = OpConstant %int 2
+%offset = OpConstantComposite %v2int %int_1 %int_2
+%color_tex = OpVariable %ptr_sampled UniformConstant
+%uv = OpVariable %ptr_input_v2float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_tex = OpLoad %sampled %color_tex
+%loaded_uv = OpLoad %v2float %uv
+%sample = OpImageSampleExplicitLod %v4float %loaded_tex %loaded_uv Lod|ConstOffset %lod %offset
+OpStore %out_color %sample
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_GLSLANG_TEXEL_FETCH_OFFSET_ASSEMBLY = """
+; Reduced from glslangValidator output for texelFetchOffset(colorTex, pixel, 2, ivec2(1, 2)).
+; glslang emits OpImageFetch with the combined Lod|ConstOffset image operand mask.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %pixel %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %color_tex "colorTex"
+OpName %pixel "pixel"
+OpName %out_color "outColor"
+OpDecorate %color_tex DescriptorSet 0
+OpDecorate %color_tex Binding 0
+OpDecorate %pixel Flat
+OpDecorate %pixel Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2int = OpTypeVector %int 2
+%v4float = OpTypeVector %float 4
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%ptr_input_v2int = OpTypePointer Input %v2int
+%ptr_output_v4float = OpTypePointer Output %v4float
+%lod = OpConstant %int 2
+%int_1 = OpConstant %int 1
+%int_2 = OpConstant %int 2
+%offset = OpConstantComposite %v2int %int_1 %int_2
+%color_tex = OpVariable %ptr_sampled UniformConstant
+%pixel = OpVariable %ptr_input_v2int Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_tex = OpLoad %sampled %color_tex
+%image_only = OpImage %image %loaded_tex
+%loaded_pixel = OpLoad %v2int %pixel
+%fetch = OpImageFetch %v4float %image_only %loaded_pixel Lod|ConstOffset %lod %offset
+OpStore %out_color %fetch
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_VULKAN_SAMPLES_IMAGE_WRITE_ASSEMBLY = """
 ; Reduced from KhronosGroup/Vulkan-Samples@ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a
 ; shaders/timeline_semaphore/glsl/game_of_life_init.comp imageStore(Image, index, ...).
@@ -2117,6 +2204,38 @@ def test_glslang_dref_sample_preserves_compare_operand_codegen_reparse():
     assert "float depthOut @output @location(0);" in generated_code
     assert "depthOut = textureLod(shadowTex, coord, coord[2], 0.0);" in generated_code
     assert "depthOut = textureLod(shadowTex, coord, 0.0);" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_texture_lod_offset_preserves_const_offset_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_TEXTURE_LOD_OFFSET_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "float2 uv @input @location(0);" in generated_code
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert (
+        "outColor = textureLodOffset(colorTex, uv, 1.0, int2(1, 2));" in generated_code
+    )
+    assert "outColor = textureLod(colorTex, uv, 1.0);" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_texel_fetch_offset_preserves_const_offset_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_TEXEL_FETCH_OFFSET_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "int2 pixel @input @location(0) @flat;" in generated_code
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert (
+        "outColor = texelFetchOffset(colorTex, pixel, 2, int2(1, 2));" in generated_code
+    )
+    assert "outColor = texelFetch(colorTex, pixel, 2);" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
