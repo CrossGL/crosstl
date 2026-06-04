@@ -3215,6 +3215,8 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     assert "Wrote" in result.stdout
     assert payload["success"] is True
     assert payload["report"]["summary"]["artifactCount"] == 1
+    assert payload["report"]["summary"]["diagnosticsByCode"] == {}
+    assert payload["report"]["summary"]["missingCapabilityCounts"] == {}
     assert payload["report"]["generator"]["pipeline"] == "project-porting"
 
 
@@ -3245,6 +3247,8 @@ def test_project_cli_inspect_report_text_fails_on_error_diagnostics(tmp_path):
     assert result.returncode == 1
     assert "Status: failed" in result.stdout
     assert "Targets: not-a-backend" in result.stdout
+    assert "Diagnostic codes: project.config.unsupported-target=1" in result.stdout
+    assert "Missing capabilities: target.backend=1" in result.stdout
     assert "Validation diagnostics: 1 errors" in result.stdout
     assert "Validation artifacts: 0 ok, 0 failed" in result.stdout
     assert "project.config.unsupported-target" in result.stdout

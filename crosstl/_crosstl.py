@@ -295,6 +295,24 @@ def _run_validate_project(args):
     return 0 if payload["success"] else 1
 
 
+def _format_count_rollup(label, counts):
+    if not isinstance(counts, Mapping):
+        return None
+
+    entries = []
+    for name, count in counts.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            continue
+        entries.append((name, count))
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: (-item[1], item[0]))
+    return f"{label}: " + ", ".join(f"{name}={count}" for name, count in entries)
+
+
 def _format_project_report_inspection(payload):
     report = payload.get("report", {})
     summary = report.get("summary", {}) if isinstance(report, Mapping) else {}
@@ -328,13 +346,23 @@ def _format_project_report_inspection(payload):
             f"{diagnostic_counts.get('warning', 0)} warnings, "
             f"{diagnostic_counts.get('note', 0)} notes"
         ),
-        (
-            "Validation diagnostics: "
-            f"{validation_counts.get('error', 0)} errors, "
-            f"{validation_counts.get('warning', 0)} warnings, "
-            f"{validation_counts.get('note', 0)} notes"
-        ),
     ]
+    diagnostic_codes = _format_count_rollup(
+        "Diagnostic codes", summary.get("diagnosticsByCode")
+    )
+    if diagnostic_codes:
+        lines.append(diagnostic_codes)
+    missing_capabilities = _format_count_rollup(
+        "Missing capabilities", summary.get("missingCapabilityCounts")
+    )
+    if missing_capabilities:
+        lines.append(missing_capabilities)
+    lines.append(
+        "Validation diagnostics: "
+        f"{validation_counts.get('error', 0)} errors, "
+        f"{validation_counts.get('warning', 0)} warnings, "
+        f"{validation_counts.get('note', 0)} notes"
+    )
     if isinstance(validation_summary, Mapping):
         lines.append(
             "Validation artifacts: "

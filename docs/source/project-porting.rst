@@ -86,8 +86,9 @@ Inspect an existing report as a concise JSON or text summary:
      --format text
 
 Report inspection includes validation status, project counts, failed artifacts,
-diagnostics, external corpus rollups, and migration actions. It exits nonzero
-when validation finds report errors.
+diagnostic code and missing-capability rollups, diagnostics, external corpus
+rollups, and migration actions. It exits nonzero when validation finds report
+errors.
 
 Configuration
 -------------
