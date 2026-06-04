@@ -1649,6 +1649,31 @@ def test_codegen_preserves_uav_coherency_and_register_space():
     )
 
 
+def test_codegen_preserves_reordercoherent_uav_from_dxc_dxil_69():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/CodeGenDXIL/hlsl/attributes/reordercoherent_uav.hlsl
+    code = textwrap.dedent("""
+        reordercoherent RWTexture1D<float4> uav1 : register(u3);
+
+        [shader("raygeneration")]
+        void main()
+        {
+          reordercoherent RWTexture1D<float4> uav3 = uav1;
+          uav3[0] = float4(5.0, 0.0, 0.0, 1.0);
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "@ reordercoherent" in output
+    assert "@ register(u3)" in output
+    assert "image1D uav1;" in output
+    assert "image1D uav3 = uav1;" in output
+    assert "imageStore(uav3, 0, vec4(5.0, 0.0, 0.0, 1.0));" in output
+
+    parse_crossgl(output)
+
+
 def test_codegen_rasterizer_ordered_resources_roundtrip():
     code = textwrap.dedent("""
         RasterizerOrderedTexture2D<uint> pixelCounts : register(u0, space1);

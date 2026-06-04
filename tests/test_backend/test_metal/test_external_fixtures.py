@@ -30,6 +30,7 @@ METALPETAL_REPO = "https://github.com/MetalPetal/MetalPetal"
 METALPETAL_COMMIT = "f9b78897bd4214bb097f352a1bde0a4f4a1e2ddb"
 BLENDER_REPO = "https://github.com/blender/blender"
 BLENDER_COMMIT = "2d196d20b93a9f6e596e6d451c5e845d84f21c89"
+BLENDER_STRING_COMMIT = "e5fc656cdab0e682296f8dd024b942b548e788f4"
 BLENDER_TEXTURE_READ_COMMIT = "38657e6c5ccb9968bfcc55b4fd384ca528c71d10"
 METAL_RIPPLE_REPO = "https://github.com/swiftandcurious/MetalRipple"
 METAL_RIPPLE_COMMIT = "125274960b1bf0184b6570afa97f097ee3d2c6b1"
@@ -824,6 +825,39 @@ EXTERNAL_FIXTURES = [
                         outTexture.write(float4(float3(rgb), 1.0), gid);
                     }
                 }
+            }
+        """
+        ),
+    },
+    {
+        "name": "blender_msl_string_friend_operator",
+        "repo_url": BLENDER_REPO,
+        "commit": BLENDER_STRING_COMMIT,
+        "source_path": "source/blender/gpu/shaders/gpu_shader_msl_string.msl",
+        "roundtrip": True,
+        "contains": [
+            "struct string_t",
+            "uint hash;",
+            "uint as_uint(string_t str)",
+            "return str.hash;",
+        ],
+        "not_contains": ["friend", "operator=="],
+        "source": (
+            """
+            struct string_t {
+              uint hash;
+
+              string_t(uint hash_) : hash(hash_) {}
+
+              friend bool operator==(string_t a, string_t b)
+              {
+                return a.hash == b.hash;
+              }
+            };
+
+            uint as_uint(string_t str)
+            {
+              return str.hash;
             }
         """
         ),

@@ -4855,6 +4855,10 @@ class HipToCrossGLConverter:
         return name.rsplit("::", 1)[-1].split("<", 1)[0]
 
     def format_hip_fp16_intrinsic_call(self, function_name, args):
+        if function_name == "__half2float" and len(args) == 1:
+            return f"f32({args[0]})"
+        if function_name == "__float2half" and len(args) == 1:
+            return f"f16({args[0]})"
         if function_name == "__float2half2_rn" and len(args) == 1:
             return self.format_vector_constructor("vec2", [args[0], args[0]], "f16")
         if function_name == "__low2float" and len(args) == 1:

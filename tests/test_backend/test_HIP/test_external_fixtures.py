@@ -44,6 +44,7 @@ EXTERNAL_FIXTURE_SOURCES = {
     "hip": {
         "url": "https://github.com/ROCm/HIP",
         "commit": "0447ec8e079d9cd0a2bc966124977a0b92fac472",
+        "paths": ["docs/tools/example_codes/low_precision_float_fp16.hip"],
     },
     "hip_kittens": {
         "url": "https://github.com/HazyResearch/HipKittens",
@@ -626,6 +627,32 @@ def test_external_hip_kittens_fast_exp_vector_codegen_reparse():
     assert "return exp(x);" in crossgl
     assert "return vec2<f32>(exp(x.x), exp(x.y));" in crossgl
     assert "__expf" not in crossgl
+
+
+def test_external_hip_fp16_scalar_conversion_codegen_reparse():
+    source = """
+    __global__ void add_half_precision(__half* in1,
+                                       __half* in2,
+                                       float* out,
+                                       size_t size) {
+        int idx = threadIdx.x;
+        if(idx < size) {
+            float sum = __half2float(in1[idx] + in2[idx]);
+            out[idx] = sum;
+        }
+    }
+
+    void host(float in) {
+        __half value = __float2half(in);
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "var sum: f32 = f32((in1[idx] + in2[idx]));" in crossgl
+    assert "var value: f16 = f16(in_);" in crossgl
+    assert "__half2float" not in crossgl
+    assert "__float2half" not in crossgl
 
 
 def test_external_rocm_warp_size_reduction_popcount_codegen_reparse():

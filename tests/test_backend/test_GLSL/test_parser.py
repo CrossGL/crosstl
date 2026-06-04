@@ -251,6 +251,42 @@ def test_parse_local_struct_with_mixed_array_declarators_from_khronos_webgl():
     ]
 
 
+def test_parse_local_custom_type_array_declaration_from_glslang_struct_deref():
+    code = textwrap.dedent("""
+        #version 140
+
+        struct s0 {
+            int i;
+        };
+
+        struct s1 {
+            int i;
+            float f;
+            s0 s0_1;
+        };
+
+        s1 foo1;
+
+        void main()
+        {
+            s1[10] locals1Array;
+            locals1Array[6] = foo1;
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    main = next(function for function in ast.functions if function.name == "main")
+    locals_array = next(
+        stmt
+        for stmt in main.body
+        if isinstance(stmt, VariableNode) and stmt.name == "locals1Array"
+    )
+
+    assert locals_array.vtype == "s1"
+    assert locals_array.is_array is True
+    assert [size.value for size in locals_array.array_sizes] == ["10"]
+
+
 def test_parse_array_of_arrays_return_type_from_glslang_spv_aofa():
     code = textwrap.dedent("""
         #version 430

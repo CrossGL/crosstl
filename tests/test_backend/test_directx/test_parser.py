@@ -2462,6 +2462,29 @@ def test_parse_normalized_rwtexture_element_type_from_wickedengine_rtao():
     assert ast.global_variables[0].vtype == "RWTexture2D<unorm float>"
 
 
+def test_parse_reordercoherent_local_resource_from_dxc_dxil_69():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/CodeGenDXIL/hlsl/attributes/reordercoherent_uav.hlsl
+    ast = parse_code("""
+        RWTexture1D<float4> uav1 : register(u3);
+
+        [shader("raygeneration")]
+        void main()
+        {
+          reordercoherent RWTexture1D<float4> uav3 = uav1;
+          uav3[0] = float4(5.0, 0.0, 0.0, 1.0);
+        }
+    """)
+
+    local_resource = ast.functions[0].body[0]
+
+    assert local_resource.vtype == "RWTexture1D<float4>"
+    assert local_resource.name == "uav3"
+    assert local_resource.qualifiers == ["reordercoherent"]
+    assert local_resource.value == "uav1"
+    assert isinstance(ast.functions[0].body[1], AssignmentNode)
+
+
 def test_parse_struct_operator_methods_from_dxc_intrinsics_tests():
     code = textwrap.dedent("""
         struct Vector {
