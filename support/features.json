@@ -4401,7 +4401,7 @@
       "support": {
         "directx": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines"
@@ -4409,7 +4409,7 @@
         },
         "opengl": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines"
@@ -4417,7 +4417,7 @@
         },
         "metal": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines"
@@ -4425,7 +4425,7 @@
         },
         "vulkan": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines"
@@ -4433,7 +4433,7 @@
         },
         "cuda": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines"
@@ -4441,7 +4441,7 @@
         },
         "hip": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines"
@@ -4449,7 +4449,7 @@
         },
         "mojo": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines"
@@ -4457,7 +4457,7 @@
         },
         "rust": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines"
@@ -4465,7 +4465,7 @@
         },
         "slang": {
           "status": "partial",
-          "notes": "The project pipeline records define sets and named variant metadata, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, and passes defines to source frontends that expose preprocessor options. Named variant expansion through backend preprocessors is not implemented yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines"

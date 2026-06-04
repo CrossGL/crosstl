@@ -98,14 +98,18 @@ expansion through every native preprocessor remains a tracked project-porting
 capability, and reports emit structured warnings when variants are present but
 not yet expanded.
 
+Project reports include configured define and variant names and values. Review
+reports before sharing them outside the repository if those values include
+private build metadata.
+
 Report Shape
 ------------
 
 Project reports are JSON documents with:
 
 - ``project`` metadata: root, config path, source roots, include/exclude
-  patterns, targets, output directory, include directories, and define/variant
-  counts.
+  patterns, targets, output directory, include directories, define and variant
+  maps, and define/variant counts.
 - ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
   source backend and target backend.
 - ``units``: discovered translation units with repository-relative paths,

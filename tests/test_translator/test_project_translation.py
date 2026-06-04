@@ -209,6 +209,10 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     ]
     payload = scan.to_report(targets=config.targets).to_json()
     assert payload["diagnosticCounts"]["warning"] == 1
+    assert payload["project"]["defines"] == {"USE_FAST_PATH": "1"}
+    assert payload["project"]["defineCount"] == 1
+    assert payload["project"]["variants"] == {"debug": {"USE_FAST_PATH": "0"}}
+    assert payload["project"]["variantCount"] == 1
     assert {
         diagnostic["location"]["file"] for diagnostic in payload["diagnostics"]
     } == {"crosstl.toml"}

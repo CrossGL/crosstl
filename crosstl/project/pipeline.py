@@ -498,7 +498,12 @@ class ProjectPortabilityReport:
                 "targets": list(self.targets),
                 "outputDir": str(self.config.output_path),
                 "includeDirs": list(self.config.include_dirs),
+                "defines": dict(sorted(self.config.defines.items())),
                 "defineCount": len(self.config.defines),
+                "variants": {
+                    name: dict(sorted(defines.items()))
+                    for name, defines in sorted(self.config.variants.items())
+                },
                 "variantCount": len(self.config.variants),
             },
             "summary": {
