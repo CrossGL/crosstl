@@ -5037,74 +5037,83 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets"
           ]
         },
         "cuda": {
           "status": "supported",
-          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets"
           ]
         },
         "hip": {
           "status": "supported",
-          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets"
           ]
         },
         "mojo": {
           "status": "supported",
-          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets"
           ]
         },
         "slang": {
           "status": "supported",
-          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when translation units and target backends are present, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets"
           ]
         }
       }

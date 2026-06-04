@@ -2656,6 +2656,14 @@ def _migration_contract_reasons(
         return ["migration must be an object"]
 
     reasons = []
+    project = report.get("project")
+    project_targets = project.get("targets", []) if isinstance(project, Mapping) else []
+    project_targets_valid = isinstance(project_targets, list) and all(
+        _is_non_empty_string(target) for target in project_targets
+    )
+    declared_targets = (
+        set(_normalized_targets(project_targets)) if project_targets_valid else set()
+    )
     if migration.get("scope") != REPORT_MIGRATION_SCOPE:
         reasons.append(f"migration.scope must be {REPORT_MIGRATION_SCOPE}")
     reasons.extend(
@@ -2690,6 +2698,18 @@ def _migration_contract_reasons(
                     f"{prefix}.targets", action.get("targets")
                 )
             )
+            action_targets = action.get("targets")
+            if (
+                project_targets_valid
+                and isinstance(action_targets, list)
+                and all(_is_non_empty_string(target) for target in action_targets)
+            ):
+                for target in _normalized_targets(action_targets):
+                    if target not in declared_targets:
+                        reasons.append(
+                            f"{prefix}.targets must be listed in project.targets"
+                        )
+                        break
     return reasons
 
 
