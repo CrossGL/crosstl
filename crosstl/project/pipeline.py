@@ -89,6 +89,16 @@ def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
     return result
 
 
+def _normalized_targets(targets: Sequence[str]) -> list[str]:
+    discover_backend_plugins()
+    normalized_targets = []
+    for target in targets:
+        normalized = normalize_backend_name(target) or target.strip().lower()
+        if normalized not in normalized_targets:
+            normalized_targets.append(normalized)
+    return normalized_targets
+
+
 def _relpath(path: Path, root: Path) -> str:
     return path.resolve().relative_to(root.resolve()).as_posix()
 
@@ -213,13 +223,7 @@ class ProjectConfig:
     variants: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def normalized_targets(self) -> list[str]:
-        discover_backend_plugins()
-        targets = []
-        for target in self.targets:
-            normalized = normalize_backend_name(target) or target.strip().lower()
-            if normalized not in targets:
-                targets.append(normalized)
-        return targets
+        return _normalized_targets(self.targets)
 
     @property
     def output_path(self) -> Path:
@@ -366,7 +370,9 @@ class ProjectScan:
         self, targets: Sequence[str] | None = None
     ) -> ProjectPortabilityReport:
         report_targets = (
-            list(targets) if targets is not None else self.config.normalized_targets()
+            _normalized_targets(targets)
+            if targets is not None
+            else self.config.normalized_targets()
         )
         return ProjectPortabilityReport(
             config=self.config,
@@ -689,15 +695,11 @@ def translate_project(
             variants=config.variants,
         )
 
-    selected_targets = (
-        list(targets) if targets is not None else config.normalized_targets()
+    selected_targets = _normalized_targets(
+        targets if targets is not None else config.targets
     )
     if not selected_targets:
         selected_targets = ["cgl"]
-    selected_targets = [
-        normalize_backend_name(target) or target.strip().lower()
-        for target in selected_targets
-    ]
 
     scan = scan_project(config)
     diagnostics: list[ProjectDiagnostic] = list(scan.diagnostics)

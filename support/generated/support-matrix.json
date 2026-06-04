@@ -1216,7 +1216,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1225,7 +1225,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1234,7 +1234,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1243,7 +1243,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1252,7 +1252,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1261,7 +1261,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1270,7 +1270,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1279,7 +1279,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1288,7 +1288,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -6026,81 +6026,90 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "directx": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "hip": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "metal": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "mojo": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "opengl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "rust": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "slang": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         }
       }

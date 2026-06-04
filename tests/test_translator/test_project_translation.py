@@ -151,6 +151,18 @@ def test_scan_project_accepts_repository_relative_include_patterns(tmp_path):
     assert {diagnostic.code for diagnostic in scan.diagnostics} == set()
 
 
+def test_scan_report_normalizes_and_deduplicates_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    payload = scan_project(repo).to_report(targets=["OpenGL", "opengl"]).to_json()
+
+    assert payload["project"]["targets"] == ["opengl"]
+    assert payload["summary"]["targetCount"] == 1
+    assert payload["migration"]["actions"][0]["targets"] == ["opengl"]
+
+
 def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
@@ -377,6 +389,22 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
         "application build-system rewrites",
         "backend framework integration",
     ]
+
+
+def test_translate_project_normalizes_and_deduplicates_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["OpenGL", "opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["project"]["targets"] == ["opengl"]
+    assert payload["summary"]["targetCount"] == 1
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["artifacts"][0]["target"] == "opengl"
+    assert payload["artifacts"][0]["path"] == "out/opengl/simple.glsl"
+    assert (repo / "out" / "opengl" / "simple.glsl").exists()
 
 
 def test_scan_project_ignores_configured_output_dir(tmp_path):
