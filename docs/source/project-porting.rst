@@ -78,11 +78,13 @@ deduplicated, diagnostic or artifact targets are not declared by the report,
 artifact sources are not declared translation units, embedded validation records
 reference artifacts not declared by the report, validation records contain
 duplicate identities or inconsistent status fields, summarized embedded
-validation omits declared artifacts, translated outputs are missing, artifact
-paths resolve outside the repository, generated artifact
-hashes no longer match the files on disk, source files with recorded hashes are
-missing or changed, or opt-in toolchain smoke checks fail. Toolchain smoke
-checks only run for translated artifacts that still exist inside the repository.
+validation omits declared artifacts, external corpus entry presence, discovery,
+or source-backend fields do not match the project root and declared units,
+translated outputs are missing, artifact paths resolve outside the repository,
+generated artifact hashes no longer match the files on disk, source files with
+recorded hashes are missing or changed, or opt-in toolchain smoke checks fail.
+Toolchain smoke checks only run for translated artifacts that still exist inside
+the repository.
 
 Inspect an existing report as a concise JSON or text summary:
 
@@ -93,9 +95,9 @@ Inspect an existing report as a concise JSON or text summary:
 
 Report inspection includes validation status, project counts, project
 configuration counts, failed artifacts, diagnostic code and missing-capability
-rollups, diagnostics, diagnostic and failed-artifact truncation counts, external
-corpus rollups, and migration actions. It exits nonzero when validation finds
-report errors.
+rollups, source-map count rollups, diagnostics, diagnostic and failed-artifact
+truncation counts, external corpus rollups, and migration actions. It exits
+nonzero when validation finds report errors.
 
 Configuration
 -------------
@@ -195,6 +197,8 @@ Project reports are JSON documents with:
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, and translated/failed artifact outcome counts for manifest entries.
+  Validation checks entry presence against the project root and checks
+  discovered/source-backend fields against declared translation units.
 - ``diagnostics``: structured diagnostics using severity, code, message,
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract.

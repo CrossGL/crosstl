@@ -2941,6 +2941,70 @@ def test_validate_project_report_rejects_drive_relative_external_corpus_paths(
     )
 
 
+def test_validate_project_report_rejects_external_corpus_entry_state_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/simple",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    entry = payload["externalCorpus"]["entries"][0]
+    entry["present"] = False
+    entry["discovered"] = False
+    entry["sourceBackend"] = "directx"
+    payload["externalCorpus"]["summary"].update(
+        {
+            "presentCount": 0,
+            "missingCount": 1,
+            "discoveredUnitCount": 0,
+            "entriesBySourceBackend": {"directx": 1},
+        }
+    )
+    report_path = repo / "portability-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "externalCorpus.entries[0].present must match project.root" in (
+        diagnostic["message"]
+    )
+    assert "externalCorpus.entries[0].discovered must match units" in (
+        diagnostic["message"]
+    )
+    assert (
+        "externalCorpus.entries[0].sourceBackend must match units[0].sourceBackend"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_duplicate_external_corpus_entries(
     tmp_path,
 ):
@@ -5094,6 +5158,34 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
     assert result.returncode == 0
     assert "Project config: sourceOverrides=1, defines=1, variants=2" in result.stdout
     assert "MODE" not in result.stdout
+
+
+def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Source maps: 1 file-level, 0 fine-grained" in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_path):

@@ -127,6 +127,11 @@ def test_project_report_inspection_is_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_writes_json_summary"
         ) in backend_support["evidence"]
+        assert "source-map count rollups" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_source_map_counts"
+        ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_reports_truncated_sections"
@@ -150,6 +155,26 @@ def test_project_validation_hooks_document_migration_target_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_migration_actions_with_"
             "undeclared_targets"
+        ) in backend_support["evidence"]
+
+
+def test_project_external_corpus_coverage_documents_entry_consistency_checks():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.external_corpus_coverage"]
+
+    for backend_support in feature["support"].values():
+        assert "entry presence/discovery/source-backend consistency" in (
+            backend_support["notes"]
+        )
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_external_corpus_entry_"
+            "state_mismatches"
         ) in backend_support["evidence"]
 
 

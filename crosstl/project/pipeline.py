@@ -3045,6 +3045,8 @@ def _external_corpus_entry_contract_reasons(
     entry: Any,
     *,
     artifacts: Sequence[Mapping[str, Any]] | None = None,
+    root_path: Path | None = None,
+    declared_units_by_path: Mapping[str, UnitDeclaration] | None = None,
 ) -> list[str]:
     prefix = f"externalCorpus.entries[{index}]"
     if not isinstance(entry, Mapping):
@@ -3055,8 +3057,12 @@ def _external_corpus_entry_contract_reasons(
         if not _is_non_empty_string(entry.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
     path = entry.get("path")
-    if _is_non_empty_string(path) and not _is_repository_relative_report_path(path):
-        reasons.append(f"{prefix}.path must be repository-relative")
+    path_is_valid = False
+    if _is_non_empty_string(path):
+        if not _is_repository_relative_report_path(path):
+            reasons.append(f"{prefix}.path must be repository-relative")
+        else:
+            path_is_valid = True
     reasons.extend(
         _string_list_contract_reasons(f"{prefix}.targets", entry.get("targets"))
     )
@@ -3066,6 +3072,32 @@ def _external_corpus_entry_contract_reasons(
     for field_name in ("artifactCount", "translatedCount", "failedCount"):
         if not _is_non_negative_int(entry.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a non-negative integer")
+    if (
+        root_path is not None
+        and path_is_valid
+        and isinstance(entry.get("present"), bool)
+    ):
+        expected_present = (root_path / path).exists()
+        if entry.get("present") != expected_present:
+            reasons.append(f"{prefix}.present must match project.root")
+    if (
+        declared_units_by_path is not None
+        and path_is_valid
+        and isinstance(entry.get("discovered"), bool)
+    ):
+        expected_discovered = path in declared_units_by_path
+        if entry.get("discovered") != expected_discovered:
+            reasons.append(f"{prefix}.discovered must match units")
+    if declared_units_by_path is not None and path_is_valid:
+        declared_unit = declared_units_by_path.get(path)
+        source_backend = entry.get("sourceBackend")
+        if declared_unit is not None and _is_non_empty_string(source_backend):
+            unit_index, unit = declared_unit
+            if source_backend != unit.get("sourceBackend"):
+                reasons.append(
+                    f"{prefix}.sourceBackend must match "
+                    f"units[{unit_index}].sourceBackend"
+                )
     if artifacts is not None and not reasons:
         entry_artifacts = _external_corpus_entry_artifacts(entry, artifacts)
         expected_counts = {
@@ -3152,7 +3184,12 @@ def _external_corpus_summary_contract_reasons(
 
 
 def _external_corpus_contract_reasons(
-    report: Mapping[str, Any], artifacts: Any, *, require_external_corpus: bool
+    report: Mapping[str, Any],
+    artifacts: Any,
+    *,
+    require_external_corpus: bool,
+    root_path: Path | None = None,
+    declared_units_by_path: Mapping[str, UnitDeclaration] | None = None,
 ) -> list[str]:
     if "externalCorpus" not in report:
         return ["externalCorpus must be an object"] if require_external_corpus else []
@@ -3211,7 +3248,11 @@ def _external_corpus_contract_reasons(
         for index, entry in enumerate(entries):
             reasons.extend(
                 _external_corpus_entry_contract_reasons(
-                    index, entry, artifacts=artifact_records
+                    index,
+                    entry,
+                    artifacts=artifact_records,
+                    root_path=root_path,
+                    declared_units_by_path=declared_units_by_path,
                 )
             )
         reasons.extend(
@@ -3810,9 +3851,21 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         and isinstance(project, Mapping)
         and project.get("externalCorpusManifest") is not None
     )
+    external_corpus_root_path = (
+        root_path
+        if root_path is not None and root_path.is_absolute() and root_path.is_dir()
+        else None
+    )
+    external_corpus_units_by_path = _declared_units_by_path(
+        units, require_full_metadata=has_summary
+    )
     reasons.extend(
         _external_corpus_contract_reasons(
-            report, artifacts, require_external_corpus=require_external_corpus
+            report,
+            artifacts,
+            require_external_corpus=require_external_corpus,
+            root_path=external_corpus_root_path,
+            declared_units_by_path=external_corpus_units_by_path,
         )
     )
     if "diagnosticCounts" in report and isinstance(diagnostics, list):

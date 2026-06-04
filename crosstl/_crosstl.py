@@ -366,6 +366,24 @@ def _format_project_config_counts(project):
     return "Project config: " + ", ".join(entries)
 
 
+def _format_source_map_counts(summary):
+    if not isinstance(summary, Mapping):
+        return None
+
+    source_map_count = summary.get("sourceMapCount")
+    fine_grained_count = summary.get("fineGrainedSourceMapCount")
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in (source_map_count, fine_grained_count)
+    ):
+        return None
+    return (
+        "Source maps: "
+        f"{source_map_count} file-level, "
+        f"{fine_grained_count} fine-grained"
+    )
+
+
 def _format_project_report_inspection(payload):
     report = payload.get("report", {})
     summary = report.get("summary", {}) if isinstance(report, Mapping) else {}
@@ -403,6 +421,9 @@ def _format_project_report_inspection(payload):
     project_config_counts = _format_project_config_counts(project)
     if project_config_counts:
         lines.insert(3, project_config_counts)
+    source_maps = _format_source_map_counts(summary)
+    if source_maps:
+        lines.append(source_maps)
     diagnostic_codes = _format_count_rollup(
         "Diagnostic codes", summary.get("diagnosticsByCode")
     )
