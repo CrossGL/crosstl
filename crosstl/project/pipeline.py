@@ -962,7 +962,27 @@ def validate_project_report(
 ) -> dict[str, Any]:
     """Validate artifact existence and optional toolchain availability for a report."""
     path = Path(report_path)
-    report = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        diagnostic = _invalid_report_diagnostic(
+            path, [f"could not read JSON report: {exc}"]
+        )
+        return _validation_report_payload(
+            path,
+            [diagnostic.to_json()],
+            {"toolchains": [], "artifacts": []},
+        )
+
+    contract_diagnostics = _report_contract_diagnostics(path, report)
+    if contract_diagnostics:
+        diagnostics = [diagnostic.to_json() for diagnostic in contract_diagnostics]
+        return _validation_report_payload(
+            path,
+            diagnostics,
+            {"toolchains": [], "artifacts": []},
+        )
+
     root = Path(report["project"]["root"])
     targets = report["project"].get("targets", [])
     config = ProjectConfig(
@@ -982,18 +1002,7 @@ def validate_project_report(
     diagnostics = source_diagnostics + [
         diagnostic.to_json() for diagnostic in diagnostic_objects
     ]
-    return {
-        "schemaVersion": REPORT_SCHEMA_VERSION,
-        "kind": "crosstl-project-validation-report",
-        "sourceReport": str(path),
-        "generatedAt": int(time.time()),
-        "success": not any(
-            diagnostic.get("severity") == "error" for diagnostic in diagnostics
-        ),
-        "diagnosticCounts": _diagnostic_payload_counts(diagnostics),
-        "diagnostics": diagnostics,
-        "validation": validation,
-    }
+    return _validation_report_payload(path, diagnostics, validation)
 
 
 def _toolchain_run_diagnostics(
@@ -1019,6 +1028,56 @@ def _toolchain_run_diagnostics(
             )
         )
     return diagnostics
+
+
+def _validation_report_payload(
+    path: Path,
+    diagnostics: Sequence[Mapping[str, Any]],
+    validation: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": "crosstl-project-validation-report",
+        "sourceReport": str(path),
+        "generatedAt": int(time.time()),
+        "success": not any(
+            diagnostic.get("severity") == "error" for diagnostic in diagnostics
+        ),
+        "diagnosticCounts": _diagnostic_payload_counts(diagnostics),
+        "diagnostics": list(diagnostics),
+        "validation": dict(validation),
+    }
+
+
+def _invalid_report_diagnostic(path: Path, reasons: Sequence[str]) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity="error",
+        code="project.validate.invalid-report",
+        message="Invalid project portability report: " + "; ".join(reasons),
+        location=SourceLocation(file=str(path)),
+        missing_capabilities=["artifact.manifest"],
+    )
+
+
+def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnostic]:
+    if not isinstance(report, Mapping):
+        return [_invalid_report_diagnostic(path, ["expected a JSON object"])]
+
+    reasons = []
+    if report.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        reasons.append(f"expected schemaVersion {REPORT_SCHEMA_VERSION}")
+    if report.get("kind") != REPORT_KIND:
+        reasons.append(f"expected kind {REPORT_KIND}")
+
+    project = report.get("project")
+    if not isinstance(project, Mapping):
+        reasons.append("missing project object")
+    else:
+        root = project.get("root")
+        if not isinstance(root, str) or not root:
+            reasons.append("missing project.root")
+
+    return [_invalid_report_diagnostic(path, reasons)] if reasons else []
 
 
 def _run_toolchain_smoke(

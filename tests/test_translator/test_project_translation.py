@@ -568,6 +568,36 @@ def test_validate_project_report_preserves_source_diagnostics(tmp_path):
     assert payload["diagnostics"][0]["missingCapabilities"] == ["repo.scan"]
 
 
+def test_validate_project_report_returns_structured_invalid_report_diagnostics(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 99,
+                "kind": "not-a-project-report",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert diagnostic["location"]["file"] == str(report_path)
+    assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
+    assert "expected schemaVersion 1" in diagnostic["message"]
+    assert "expected kind crosstl-project-portability-report" in diagnostic["message"]
+    assert "missing project object" in diagnostic["message"]
+
+
 def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -839,6 +869,30 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     assert result.returncode == 1
     assert payload["success"] is False
     assert payload["diagnostics"][0]["code"] == "project.validate.failed-artifact"
+
+
+def test_project_cli_validate_project_reports_invalid_report_shape(tmp_path):
+    report_path = tmp_path / "invalid-report.json"
+    report_path.write_text(json.dumps({"kind": "not-a-report"}), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert payload["success"] is False
+    assert payload["diagnostics"][0]["code"] == "project.validate.invalid-report"
 
 
 def test_legacy_single_file_cli_still_works(tmp_path):

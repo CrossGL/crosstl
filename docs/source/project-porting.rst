@@ -114,8 +114,8 @@ Project reports are JSON documents with:
 - ``diagnostics``: structured diagnostics using severity, code, message,
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract.
-- ``validation``: failed source artifact checks, translated artifact existence
-  checks, optional external toolchain availability, and opt-in toolchain smoke
-  results.
+- ``validation``: report contract checks, failed source artifact checks,
+  translated artifact existence checks, optional external toolchain availability,
+  and opt-in toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation.
