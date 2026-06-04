@@ -2202,6 +2202,59 @@ def test_validate_project_report_rejects_malformed_external_corpus_records(tmp_p
     )
 
 
+def test_validate_project_report_rejects_external_corpus_entry_count_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/simple",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = translate_project(load_project_config(repo)).to_json()
+    payload["externalCorpus"]["entries"][0]["artifactCount"] = 2
+    payload["externalCorpus"]["entries"][0]["translatedCount"] = 0
+    payload["externalCorpus"]["entries"][0]["failedCount"] = 1
+    report_path = repo / "invalid-external-corpus-counts.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "externalCorpus.entries[0].artifactCount must match report.artifacts"
+    ) in diagnostic["message"]
+    assert (
+        "externalCorpus.entries[0].translatedCount must match report.artifacts"
+    ) in diagnostic["message"]
+    assert (
+        "externalCorpus.entries[0].failedCount must match report.artifacts"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -3761,6 +3814,54 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     assert payload["report"]["summary"]["diagnosticsByCode"] == {}
     assert payload["report"]["summary"]["missingCapabilityCounts"] == {}
     assert payload["report"]["generator"]["pipeline"] == "project-porting"
+
+
+def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+
+            [project.sources]
+            "*.cgl" = "cgl"
+
+            [project.defines]
+            MODE = "base"
+
+            [project.variants.debug]
+            MODE = "debug"
+
+            [project.variants.release]
+            MODE = "release"
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Project config: sourceOverrides=1, defines=1, variants=2" in result.stdout
+    assert "MODE" not in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_path):

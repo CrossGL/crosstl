@@ -348,6 +348,24 @@ def _format_artifact_rollup(label, counts):
     )
 
 
+def _format_project_config_counts(project):
+    if not isinstance(project, Mapping):
+        return None
+
+    entries = []
+    for label, field_name in (
+        ("sourceOverrides", "sourceOverrideCount"),
+        ("defines", "defineCount"),
+        ("variants", "variantCount"),
+    ):
+        count = project.get(field_name)
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+            entries.append(f"{label}={count}")
+    if not entries:
+        return None
+    return "Project config: " + ", ".join(entries)
+
+
 def _format_project_report_inspection(payload):
     report = payload.get("report", {})
     summary = report.get("summary", {}) if isinstance(report, Mapping) else {}
@@ -382,6 +400,9 @@ def _format_project_report_inspection(payload):
             f"{diagnostic_counts.get('note', 0)} notes"
         ),
     ]
+    project_config_counts = _format_project_config_counts(project)
+    if project_config_counts:
+        lines.insert(3, project_config_counts)
     diagnostic_codes = _format_count_rollup(
         "Diagnostic codes", summary.get("diagnosticsByCode")
     )

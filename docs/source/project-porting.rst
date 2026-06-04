@@ -87,10 +87,11 @@ Inspect an existing report as a concise JSON or text summary:
    python -m crosstl._crosstl inspect-report crosstl-out/portability-report.json \
      --format text
 
-Report inspection includes validation status, project counts, failed artifacts,
-diagnostic code and missing-capability rollups, diagnostics, diagnostic and
-failed-artifact truncation counts, external corpus rollups, and migration
-actions. It exits nonzero when validation finds report errors.
+Report inspection includes validation status, project counts, project
+configuration counts, failed artifacts, diagnostic code and missing-capability
+rollups, diagnostics, diagnostic and failed-artifact truncation counts, external
+corpus rollups, and migration actions. It exits nonzero when validation finds
+report errors.
 
 Configuration
 -------------
@@ -187,7 +188,7 @@ Project reports are JSON documents with:
   failed artifacts without writing files.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
-  rollups, and translated/failed artifact outcomes for manifest entries.
+  rollups, and translated/failed artifact outcome counts for manifest entries.
 - ``diagnostics``: structured diagnostics using severity, code, message,
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract.
@@ -198,13 +199,14 @@ Project reports are JSON documents with:
   generated hash checks, duplicate artifact identity checks, per-artifact
   source/generated hash status fields, aggregate validation artifact and
   hash-status summary counts, provenance checks, source-map record shape and
-  anchor consistency checks, external corpus record and summary checks, summary
-  consistency checks, migration action shape checks, preserved diagnostic shape
-  checks, validation result and toolchain run record shape checks, artifact
-  target and variant declaration checks, translated artifact existence checks,
-  escaped output directory and artifact-path checks, source artifact existence
-  and hash mismatch checks, generated artifact hash mismatch checks, optional
-  external toolchain availability, and opt-in toolchain smoke results.
+  anchor consistency checks, external corpus record, per-entry artifact count,
+  and summary checks, summary consistency checks, migration action shape checks,
+  preserved diagnostic shape checks, validation result and toolchain run record
+  shape checks, artifact target and variant declaration checks, translated
+  artifact existence checks, escaped output directory and artifact-path checks,
+  source artifact existence and hash mismatch checks, generated artifact hash
+  mismatch checks, optional external toolchain availability, and opt-in toolchain
+  smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. Each action has a documented kind, severity, message, and target
   list. Scan-only reports include supported requested targets when translation

@@ -510,6 +510,21 @@ def _external_corpus_artifacts(
     return corpus_artifacts
 
 
+def _external_corpus_entry_artifacts(
+    entry: Mapping[str, Any], artifacts: Sequence[Mapping[str, Any]]
+) -> list[Mapping[str, Any]]:
+    path = entry.get("path")
+    if not _is_non_empty_string(path):
+        return []
+    targets = {target for target in entry.get("targets", []) if isinstance(target, str)}
+    return [
+        artifact
+        for artifact in artifacts
+        if artifact.get("source") == path
+        and (not targets or artifact.get("target") in targets)
+    ]
+
+
 def _external_corpus_report(
     config: ProjectConfig,
     units: Sequence[ProjectTranslationUnit],
@@ -2713,7 +2728,12 @@ def _validation_contract_reasons(
     return reasons
 
 
-def _external_corpus_entry_contract_reasons(index: int, entry: Any) -> list[str]:
+def _external_corpus_entry_contract_reasons(
+    index: int,
+    entry: Any,
+    *,
+    artifacts: Sequence[Mapping[str, Any]] | None = None,
+) -> list[str]:
     prefix = f"externalCorpus.entries[{index}]"
     if not isinstance(entry, Mapping):
         return [f"{prefix} must be an object"]
@@ -2734,6 +2754,22 @@ def _external_corpus_entry_contract_reasons(index: int, entry: Any) -> list[str]
     for field_name in ("artifactCount", "translatedCount", "failedCount"):
         if not _is_non_negative_int(entry.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a non-negative integer")
+    if artifacts is not None and not reasons:
+        entry_artifacts = _external_corpus_entry_artifacts(entry, artifacts)
+        expected_counts = {
+            "artifactCount": len(entry_artifacts),
+            "translatedCount": sum(
+                1
+                for artifact in entry_artifacts
+                if artifact.get("status") == "translated"
+            ),
+            "failedCount": sum(
+                1 for artifact in entry_artifacts if artifact.get("status") == "failed"
+            ),
+        }
+        for field_name, expected in expected_counts.items():
+            if entry.get(field_name) != expected:
+                reasons.append(f"{prefix}.{field_name} must match report.artifacts")
     for field_name in ("repository", "commit", "sourceUrl"):
         if field_name in entry and not _is_non_empty_string(entry.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
@@ -2840,8 +2876,17 @@ def _external_corpus_contract_reasons(
         reasons.append("externalCorpus.entries must be a list")
         entries = []
     else:
+        artifact_records = (
+            _payload_artifact_records(artifacts)
+            if isinstance(artifacts, list)
+            else None
+        )
         for index, entry in enumerate(entries):
-            reasons.extend(_external_corpus_entry_contract_reasons(index, entry))
+            reasons.extend(
+                _external_corpus_entry_contract_reasons(
+                    index, entry, artifacts=artifact_records
+                )
+            )
     reasons.extend(
         _external_corpus_summary_contract_reasons(
             external_corpus.get("summary"), entries, artifacts
