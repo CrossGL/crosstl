@@ -920,7 +920,7 @@ def test_validate_project_report_rejects_malformed_unit_and_skipped_records(tmp_
                 ],
                 "skipped": [
                     {
-                        "path": "/tmp/outside.txt",
+                        "path": "C:/tmp/outside.txt",
                         "reason": "",
                         "sourceOverride": [],
                     },
