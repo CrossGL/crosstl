@@ -1452,8 +1452,13 @@ class MetalParser:
         return array_sizes
 
     def parse_struct(self, pre_alignas=None):
-        alignas_specs = pre_alignas or self.parse_alignas_specifiers()
+        alignas_specs = (
+            list(pre_alignas)
+            if pre_alignas is not None
+            else self.parse_alignas_specifiers()
+        )
         self.eat("STRUCT")
+        alignas_specs.extend(self.parse_alignas_specifiers())
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.known_types.add(name)

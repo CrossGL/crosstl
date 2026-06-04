@@ -1002,6 +1002,52 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_IMPLICIT_LOD_MIN_LOD_OFFSET_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#_a_id_image_operands_a_image_operands
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/main/include/spirv/unified1/spirv.core.grammar.json
+; Source example: KhronosGroup/SPIRV-Tools source/validate_image.cpp ValidateImageOperands
+; Reduced from OpImageSampleImplicitLod with the ConstOffset and MinLod image operands.
+OpCapability Shader
+OpCapability MinLod
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %uv %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %color_tex "colorTex"
+OpName %uv "uv"
+OpName %out_color "outColor"
+OpDecorate %color_tex DescriptorSet 0
+OpDecorate %color_tex Binding 0
+OpDecorate %uv Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2float = OpTypeVector %float 2
+%v2int = OpTypeVector %int 2
+%v4float = OpTypeVector %float 4
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%ptr_input_v2float = OpTypePointer Input %v2float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%min_lod = OpConstant %float 0.5
+%int_1 = OpConstant %int 1
+%int_2 = OpConstant %int 2
+%offset = OpConstantComposite %v2int %int_1 %int_2
+%color_tex = OpVariable %ptr_sampled UniformConstant
+%uv = OpVariable %ptr_input_v2float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_tex = OpLoad %sampled %color_tex
+%loaded_uv = OpLoad %v2float %uv
+%sample = OpImageSampleImplicitLod %v4float %loaded_tex %loaded_uv ConstOffset|MinLod %offset %min_lod
+OpStore %out_color %sample
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_VULKAN_SAMPLES_IMAGE_WRITE_ASSEMBLY = """
 ; Reduced from KhronosGroup/Vulkan-Samples@ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a
 ; shaders/timeline_semaphore/glsl/game_of_life_init.comp imageStore(Image, index, ...).
@@ -1562,6 +1608,27 @@ def test_spirv_tools_implicit_lod_bias_parse():
     assert isinstance(assignment.right.args[1], VariableNode)
     assert assignment.right.args[1].name == "uv"
     assert assignment.right.args[2] == "0.25"
+
+
+def test_spirv_implicit_lod_min_lod_offset_parse():
+    tokens = tokenize_code(SPIRV_SPEC_IMPLICIT_LOD_MIN_LOD_OFFSET_ASSEMBLY)
+    ast = parse_code(tokens)
+    assignment = ast.functions[0].body[0]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_constants["%min_lod"] == "0.5"
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.right, FunctionCallNode)
+    assert assignment.right.name == "spirvTextureOffsetMinLod"
+    assert len(assignment.right.args) == 4
+    assert isinstance(assignment.right.args[0], VariableNode)
+    assert assignment.right.args[0].name == "colorTex"
+    assert isinstance(assignment.right.args[1], VariableNode)
+    assert assignment.right.args[1].name == "uv"
+    assert isinstance(assignment.right.args[2], FunctionCallNode)
+    assert assignment.right.args[2].name == "ivec2"
+    assert assignment.right.args[2].args == ["1", "2"]
+    assert assignment.right.args[3] == "0.5"
 
 
 def test_spirv_assembly_storage_image_format_parse():

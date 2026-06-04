@@ -948,6 +948,27 @@ def test_parenthesized_where_clause_with_and_constraints_parsing():
     assert function.body
 
 
+def test_unparenthesized_where_clause_constraints_parsing_from_current_docs():
+    # Reduced from https://mojolang.org/docs/manual/metaprogramming/constraints/
+    # and https://mojolang.org/docs/reference/function-declarations/.
+    code = """
+    def pow2[n: Int]() -> Int where n >= 0:
+        return 1
+
+    def compare[T: AnyType](x: T, y: T) -> Int32 where conforms_to(T, Comparable):
+        return 0
+    """
+    ast = parse_code(tokenize_code(code))
+    pow2 = find_function(ast, "pow2")
+    compare = find_function(ast, "compare")
+
+    assert pow2.where_clause == "n >= 0"
+    assert "conforms_to" in compare.where_clause
+    assert "Comparable" in compare.where_clause
+    assert isinstance(pow2.body[0], ReturnNode)
+    assert isinstance(compare.body[0], ReturnNode)
+
+
 def test_function_effects_parse_from_modular_and_real_world_mojo():
     code = """
     def exported[M: Int]() abi("C"):

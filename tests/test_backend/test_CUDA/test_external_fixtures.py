@@ -982,6 +982,42 @@ def test_cuda_math_api_long_long_integer_intrinsics_codegen_reparse():
     assert "__ffsll" not in crossgl
 
 
+def test_cuda_math_api_funnelshift_integer_intrinsics_emit_diagnostics():
+    # Upstream source:
+    # NVIDIA CUDA Math API v13.2, section 13 Integer Intrinsics.
+    # URL:
+    # https://docs.nvidia.com/cuda/archive/13.2.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__INT.html
+    source = """
+    __device__ unsigned int funnel_intrinsics(unsigned int lo,
+                                              unsigned int hi,
+                                              unsigned int shift) {
+        unsigned int left = __funnelshift_l(lo, hi, shift);
+        unsigned int left_clamped = __funnelshift_lc(lo, hi, shift);
+        unsigned int right = __funnelshift_r(lo, hi, shift);
+        unsigned int right_clamped = ::__funnelshift_rc(lo, hi, shift);
+        return left + left_clamped + right + right_clamped;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].value.name == "__funnelshift_l"
+    assert body[1].value.name == "__funnelshift_lc"
+    assert body[2].value.name == "__funnelshift_r"
+    assert body[3].value.name == "::__funnelshift_rc"
+    assert_crossgl_reparse(crossgl)
+    for name in {
+        "__funnelshift_l",
+        "__funnelshift_lc",
+        "__funnelshift_r",
+        "__funnelshift_rc",
+    }:
+        assert f"cuda integer intrinsic {name}(lo, hi, shift)" in crossgl
+        assert f"= {name}(lo, hi, shift);" not in crossgl
+
+
 def test_nvidia_hpcg_cuda_kernels_brev_hash_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/nvidia-hpcg
