@@ -655,6 +655,62 @@ def test_translate_project_applies_include_dirs_and_defines(tmp_path):
     assert "project_color" in output.read_text(encoding="utf-8")
 
 
+def test_translate_project_filters_invalid_include_dirs_before_frontend(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    outside_dir = tmp_path / "outside-includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    (shader_dir / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            include_dirs = ["includes", "missing-includes", "../outside-includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    captured_include_paths = []
+
+    def write_shader(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, defines
+        captured_include_paths.append(list(include_paths or ()))
+        Path(save_shader).write_text("// translated\n", encoding="utf-8")
+        return "// translated\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_shader)
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert captured_include_paths == [[str(include_dir.resolve())]]
+    assert payload["project"]["includeDirs"] == [
+        "includes",
+        "missing-includes",
+        "../outside-includes",
+    ]
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.config.include-dir-outside-project": 1,
+        "project.config.missing-include-dir": 1,
+    }
+
+
 def test_translate_project_expands_named_variants_with_merged_defines(
     tmp_path, monkeypatch
 ):

@@ -1054,7 +1054,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -1063,7 +1063,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -1072,7 +1072,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -1081,7 +1081,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -1090,7 +1090,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -1099,7 +1099,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -1108,7 +1108,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -1117,7 +1117,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -1126,7 +1126,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -5947,99 +5947,108 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "directx": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "hip": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "metal": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "mojo": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "opengl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "rust": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "slang": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         }
       }

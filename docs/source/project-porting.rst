@@ -131,9 +131,10 @@ Include directories, defines, and named
 variants are recorded in project reports. Missing include directories are
 reported as configuration diagnostics. Include directories that resolve outside
 the repository are reported as non-blocking configuration diagnostics so reports
-retain portability and provenance context. Include directories and defines are
-passed to source frontends that expose preprocessor options. CLI include and
-define overrides are merged with this configuration before scan or translation.
+retain portability and provenance context. Existing include directories that
+remain inside the repository, plus configured defines, are passed to source
+frontends that expose preprocessor options. CLI include and define overrides are
+merged with this configuration before scan or translation.
 ``output_dir`` must resolve inside the repository root; paths that escape the
 repository are reported as configuration diagnostics and artifacts are not
 written. When named variants are configured, project translation emits one

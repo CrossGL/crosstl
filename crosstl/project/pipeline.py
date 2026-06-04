@@ -618,6 +618,19 @@ def _resolved_include_dirs(config: ProjectConfig) -> list[str]:
     return include_dirs
 
 
+def _frontend_include_dirs(config: ProjectConfig) -> list[str]:
+    include_dirs = []
+    for include_dir in config.include_dirs:
+        absolute_dir = _resolved_include_dir(config, include_dir)
+        if (
+            _is_relative_to(absolute_dir, config.root)
+            and absolute_dir.exists()
+            and absolute_dir.is_dir()
+        ):
+            include_dirs.append(str(absolute_dir))
+    return include_dirs
+
+
 def _resolved_source_root(config: ProjectConfig, source_root: str) -> Path:
     path = Path(source_root)
     if not path.is_absolute():
@@ -1398,7 +1411,7 @@ def translate_project(
     diagnostics: list[ProjectDiagnostic] = list(scan.diagnostics)
     diagnostics.extend(_target_diagnostics(config, selected_targets))
     artifacts: list[dict[str, Any]] = []
-    include_paths = _resolved_include_dirs(config)
+    include_paths = _frontend_include_dirs(config)
     output_dir_blocked = _has_error_diagnostic(
         diagnostics, OUTPUT_DIR_OUTSIDE_PROJECT_CODE
     )
