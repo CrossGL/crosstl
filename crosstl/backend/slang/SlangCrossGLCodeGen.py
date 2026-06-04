@@ -94,6 +94,12 @@ class SlangToCrossGLConverter:
         "RWTextureCube",
         "RWTextureCubeArray",
     }
+    BUFFER_RESOURCE_TYPES = {
+        "StructuredBuffer",
+        "RWStructuredBuffer",
+        "ByteAddressBuffer",
+        "RWByteAddressBuffer",
+    }
     GET_DIMENSIONS_TEXTURE_DIMENSIONS = {
         "Texture1D": 1,
         "Texture1DArray": 2,
@@ -1364,6 +1370,12 @@ class SlangToCrossGLConverter:
         base_type = str(type_name).strip().split("<", 1)[0].strip()
         return base_type in self.STORAGE_IMAGE_RESOURCE_TYPES
 
+    def is_buffer_resource_type(self, type_name):
+        if not type_name:
+            return False
+        base_type = str(type_name).strip().split("<", 1)[0].strip()
+        return base_type in self.BUFFER_RESOURCE_TYPES
+
     def expression_type(self, expr):
         if isinstance(expr, VariableNode):
             if expr.vtype:
@@ -1431,6 +1443,10 @@ class SlangToCrossGLConverter:
             resource_type = self.storage_image_resource_expression_type(stmt.object)
             storage_image = resource_type is not None
         if resource_type is None:
+            if self.is_buffer_resource_expression(stmt.object):
+                return self.generate_buffer_get_dimensions_statement(
+                    stmt, indent, is_main
+                )
             return None
 
         resource_base = self.resource_type_base(resource_type)
@@ -1480,6 +1496,18 @@ class SlangToCrossGLConverter:
             lines.append(f"{indent_text}{layout['samples_target']} = {value};\n")
 
         return "".join(lines)
+
+    def generate_buffer_get_dimensions_statement(self, stmt, indent=0, is_main=False):
+        rendered_args = [
+            self.generate_expression(arg, is_main) for arg in stmt.args or []
+        ]
+        if not rendered_args:
+            return None
+
+        obj = self.generate_expression(stmt.object, is_main)
+        indent_text = "    " * indent
+        args = ", ".join([obj, *rendered_args])
+        return f"{indent_text}buffer_dimensions({args});\n"
 
     def get_dimensions_layout(self, resource_base, obj, rendered_args, storage_image):
         args_count = len(rendered_args)
@@ -1783,6 +1811,9 @@ class SlangToCrossGLConverter:
     def is_storage_image_resource_expression(self, expr):
         return self.storage_image_resource_expression_type(expr) is not None
 
+    def is_buffer_resource_expression(self, expr):
+        return self.buffer_resource_expression_type(expr) is not None
+
     def storage_image_resource_expression_type(self, expr):
         name = self.expression_base_name(expr)
         if name is not None:
@@ -1802,6 +1833,12 @@ class SlangToCrossGLConverter:
                     return scope[name]
         type_name = self.expression_type(expr)
         if self.is_sampleable_resource_type(type_name):
+            return type_name
+        return None
+
+    def buffer_resource_expression_type(self, expr):
+        type_name = self.expression_type(expr)
+        if self.is_buffer_resource_type(type_name):
             return type_name
         return None
 

@@ -16,6 +16,7 @@ from crosstl.backend.Mojo.MojoAst import (
     FunctionNode,
     IfNode,
     ImportNode,
+    ListComprehensionNode,
     ListLiteralNode,
     MemberAccessNode,
     MethodCallNode,
@@ -1730,6 +1731,33 @@ def test_list_literal_argument_parse_from_modular_reduction_example():
     assert isinstance(call.args[2], ListLiteralNode)
     assert call.args[2].elements
     assert isinstance(call.args[2].elements[0], FunctionCallNode)
+
+
+def test_list_comprehension_parse_from_current_mojo_docs():
+    code = """
+    def main():
+        var squares = [x * x for x in range(5) if x % 2 == 0]
+        var products = [(x, y) for x in range(3) for y in range(2) if x != y]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    squares = function.body[0].initial_value
+    products = function.body[1].initial_value
+
+    assert isinstance(squares, ListComprehensionNode)
+    assert isinstance(squares.expression, BinaryOpNode)
+    assert [(clause["kind"]) for clause in squares.clauses] == ["for", "if"]
+    assert squares.clauses[0]["pattern"] == "x"
+    assert isinstance(squares.clauses[0]["iterable"], FunctionCallNode)
+    assert isinstance(squares.clauses[1]["condition"], BinaryOpNode)
+
+    assert isinstance(products, ListComprehensionNode)
+    assert isinstance(products.expression, TupleNode)
+    assert [(clause["kind"]) for clause in products.clauses] == [
+        "for",
+        "for",
+        "if",
+    ]
 
 
 def test_dotted_type_annotation_parse_from_modular_tiled_matmul_example():

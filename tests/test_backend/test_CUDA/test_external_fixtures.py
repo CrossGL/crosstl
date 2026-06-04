@@ -40,6 +40,7 @@ EXTERNAL_SAMPLES = [
             "cudax/test/stf/examples/05-stencil.cu",
             "cub/examples/block/example_block_reduce_dyn_smem.cu",
             "cub/cub/device/dispatch/kernels/kernel_transform.cuh",
+            "libcudacxx/include/cuda/__bit/bit_reverse.h",
             "libcudacxx/include/cuda/std/__variant/comparison.h",
             "thrust/examples/cuda/async_reduce.cu",
         ],
@@ -776,6 +777,24 @@ def test_nvidia_hpcg_cuda_kernels_brev_hash_codegen_reparse():
     assert "var i_rand: u32 = reverseBits(i);" in crossgl
     assert "var j_rand: u32 = reverseBits(j);" in crossgl
     assert "__brev" not in crossgl
+
+
+def test_external_cccl_bit_reverse_brevll_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 5a9ea633bfe63f113f4e99ecd505985ec2c38206
+    # path: libcudacxx/include/cuda/__bit/bit_reverse.h
+    source = """
+    __device__ unsigned long long bit_reverse_device(unsigned long long value) {
+        return ::__brevll(value);
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "return reverseBits(value);" in crossgl
+    assert "__brevll" not in crossgl
 
 
 def test_cuda_samples_reduction_reduce_add_sync_codegen_reparse():

@@ -78,6 +78,7 @@ class RustToCrossGLConverter:
     RESOURCE_METHOD_PREFIXES = ("sample", "texture_", "image_", "buffer_")
     RESOURCE_METHOD_NAMES = {
         "fetch",
+        "fetch_with",
         "query_levels",
         "query_samples",
         "query_size",
@@ -3857,6 +3858,15 @@ class RustToCrossGLConverter:
         if sample_with_call is not None:
             return sample_with_call
 
+        fetch_with_call = self.format_rust_gpu_fetch_with_method_call(
+            method_name,
+            obj,
+            args,
+            mapped_resource_type,
+        )
+        if fetch_with_call is not None:
+            return fetch_with_call
+
         mapped = self.function_map.get(method_name)
         if mapped is None:
             mapped = self.map_rust_gpu_resource_method(
@@ -3894,6 +3904,24 @@ class RustToCrossGLConverter:
         call_args = [obj] + args[:-1] + operand_args
         return f"{intrinsic}({', '.join(call_args)})"
 
+    def format_rust_gpu_fetch_with_method_call(
+        self,
+        method_name,
+        obj,
+        args,
+        mapped_resource_type,
+    ):
+        if method_name != "fetch_with" or len(args) != 2:
+            return None
+        if not mapped_resource_type.startswith("sampler"):
+            return None
+
+        parsed_operand = self.parse_rust_gpu_sample_index_operand(args[-1])
+        if parsed_operand is None:
+            return None
+
+        return f"texelFetch({', '.join([obj, args[0], parsed_operand])})"
+
     def parse_rust_gpu_sample_with_operand(self, operand):
         parsed = self.parse_generated_call_expression(operand.strip())
         if parsed is None:
@@ -3911,6 +3939,19 @@ class RustToCrossGLConverter:
             return None
 
         return operand_name, args
+
+    def parse_rust_gpu_sample_index_operand(self, operand):
+        parsed = self.parse_generated_call_expression(operand.strip())
+        if parsed is None:
+            return None
+
+        function_name, args = parsed
+        function_name, _ = self.split_function_type_arguments(function_name)
+        operand_name = function_name.rsplit("::", 1)[-1]
+        if operand_name != "sample_index" or len(args) != 1:
+            return None
+
+        return args[0]
 
     def rust_gpu_sample_with_intrinsic(self, base_intrinsic, operand_name):
         if operand_name == "bias":

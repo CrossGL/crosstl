@@ -702,20 +702,69 @@ class HipToCrossGLConverter:
         self.identifier_name_scopes[-1][name] = output_name
         return output_name
 
-    def output_identifier_name(self, name):
-        if not self.is_simple_identifier(name):
+    def register_variable_declaration_name(self, name):
+        if self.is_simple_identifier(name):
+            return self.register_identifier_name(name)
+
+        output_name = self.sanitize_qualified_variable_name(name)
+        if output_name is None:
             return name
+
+        if not self.identifier_name_scopes:
+            self.identifier_name_scopes.append({})
+        self.identifier_name_scopes[-1][name] = output_name
+        return output_name
+
+    def output_identifier_name(self, name):
         if self.suppress_identifier_name_rewrite != 0:
             return name
         for scope in reversed(self.identifier_name_scopes):
             if name in scope:
                 return scope[name]
+        if not self.is_simple_identifier(name):
+            return name
         return name
 
     def sanitize_identifier_name(self, name):
         if name in self.CROSSGL_RESERVED_IDENTIFIERS:
             return f"{name}_"
         return name
+
+    def sanitize_qualified_variable_name(self, name):
+        if not isinstance(name, str) or "::" not in name:
+            return None
+
+        stripped = self.strip_cpp_template_arguments(name)
+        chars = []
+        previous_separator = False
+        for char in stripped:
+            if char.isalnum() or char == "_":
+                chars.append(char)
+                previous_separator = False
+            elif chars and not previous_separator:
+                chars.append("_")
+                previous_separator = True
+
+        output_name = "".join(chars)
+        if not output_name:
+            return None
+        if output_name[0].isdigit():
+            output_name = f"_{output_name}"
+        return self.sanitize_identifier_name(output_name)
+
+    def strip_cpp_template_arguments(self, text):
+        stripped = []
+        depth = 0
+        for char in text:
+            if char == "<":
+                depth += 1
+                continue
+            if char == ">" and depth > 0:
+                depth -= 1
+                continue
+            if depth == 0:
+                stripped.append(char)
+        return "".join(stripped)
 
     def visit_lvalue_expression(self, node):
         self.suppress_device_property_member_access += 1
@@ -4248,11 +4297,12 @@ class HipToCrossGLConverter:
         self.emit("};")
 
     def visit_VariableNode(self, node):
-        output_name = self.register_identifier_name(node.name)
+        raw_name = node.name
+        output_name = self.register_variable_declaration_name(raw_name)
         cooperative_group = self.cooperative_group_declaration_metadata(node)
         if cooperative_group is not None:
             group_kind = cooperative_group["kind"]
-            self.register_cooperative_group_name(node.name, cooperative_group)
+            self.register_cooperative_group_name(raw_name, cooperative_group)
             if group_kind == "thread_block":
                 self.emit(
                     f"// cooperative_groups thread_block {output_name} maps to the current workgroup"
@@ -4273,13 +4323,16 @@ class HipToCrossGLConverter:
             return
 
         var_type = self.convert_hip_variable_type_to_crossgl(
-            getattr(node, "vtype", "int"), node.name
+            getattr(node, "vtype", "int"), raw_name
         )
         qualifiers = set(getattr(node, "qualifiers", []) or [])
 
         self.register_packed_argument_list(node)
-        self.register_unique_ptr_name(node.name, getattr(node, "vtype", "int"))
-        self.register_variable_type(node.name, var_type)
+        self.register_unique_ptr_name(raw_name, getattr(node, "vtype", "int"))
+        self.register_variable_type(raw_name, var_type)
+        if output_name != raw_name:
+            self.register_unique_ptr_name(output_name, getattr(node, "vtype", "int"))
+            self.register_variable_type(output_name, var_type)
         if "__shared__" in qualifiers:
             if getattr(node, "is_dynamic_shared_memory", False):
                 self.emit(

@@ -604,6 +604,22 @@ class TestHipCodeGen:
         assert "std::is_same_v<T, float2> || std::is_same_v<T, double2>" in result
         assert "sink(vec);" in result
 
+    def test_public_rocm_rocprofiler_template_static_member_definition_conversion(self):
+        """Covers rocm-examples rocprofiler_utils.hpp static member definitions."""
+        code = """
+        template<typename T>
+        std::mutex safe_printer_impl<T>::print_mutex_{};
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "var safe_printer_impl_print_mutex_: std::mutex = {};" in result
+        assert "safe_printer_impl<T>::print_mutex_" not in result
+
     def test_hip_fp16_half2_types_and_intrinsics_convert_to_crossgl(self):
         code = """
         __device__ half2 fp16_ops(half2 a, half2 b, float x) {
