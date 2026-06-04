@@ -711,6 +711,48 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_ARRAY_LENGTH_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source version: SPIR-V 1.6 Revision 7, unified spec.
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
+; Source path: test/val/val_memory_test.cpp
+; Reduced from ValidateMemory::ArrayLenIndexCorrectWith2Members and adapted to
+; a storage-buffer fragment fixture so generated CrossGL can store the result.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %count_out
+OpExecutionMode %main OriginUpperLeft
+OpName %StorageBuffer "StorageBuffer"
+OpName %storage "storage"
+OpName %count_out "countOut"
+OpMemberName %StorageBuffer 0 "header"
+OpMemberName %StorageBuffer 1 "payload"
+OpDecorate %runtimearr_uint ArrayStride 4
+OpDecorate %StorageBuffer Block
+OpDecorate %storage DescriptorSet 0
+OpDecorate %storage Binding 0
+OpDecorate %count_out Location 0
+OpMemberDecorate %StorageBuffer 0 Offset 0
+OpMemberDecorate %StorageBuffer 1 Offset 4
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%runtimearr_uint = OpTypeRuntimeArray %uint
+%StorageBuffer = OpTypeStruct %uint %runtimearr_uint
+%ptr_storage = OpTypePointer StorageBuffer %StorageBuffer
+%ptr_output_uint = OpTypePointer Output %uint
+%storage = OpVariable %ptr_storage StorageBuffer
+%count_out = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%length = OpArrayLength %uint %storage 1
+OpStore %count_out %length
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SPEC_CONSTANT_ASSEMBLY = """
 ; Reduced from common Vulkan specialization constant assembly output.
 OpCapability Shader
@@ -1304,6 +1346,36 @@ def test_spirv_assembly_runtime_array_buffer_block_parse():
     assert layout.struct_fields == [("uint", "header"), ("uint", "payload[]")]
     assert layout.qualifiers == [("set", "0"), ("binding", "4")]
     assert layout.spirv_storage_class == "Uniform"
+
+
+def test_spirv_tools_array_length_parse():
+    tokens = tokenize_code(SPIRV_TOOLS_ARRAY_LENGTH_ASSEMBLY)
+    ast = parse_code(tokens)
+    storage_layout = ast.global_variables[0]
+    output_layout = ast.global_variables[1]
+    assignment = ast.functions[0].body[0]
+
+    assert ast.spirv_assembly is True
+    assert storage_layout.layout_type == "BUFFER"
+    assert storage_layout.block_name == "StorageBuffer"
+    assert storage_layout.variable_name == "storage"
+    assert storage_layout.struct_fields == [("uint", "header"), ("uint", "payload[]")]
+    assert storage_layout.qualifiers == [("set", "0"), ("binding", "0")]
+    assert storage_layout.spirv_storage_class == "StorageBuffer"
+    assert output_layout.layout_type == "OUT"
+    assert output_layout.data_type == "uint"
+    assert output_layout.variable_name == "countOut"
+    assert ast.spirv_types["%runtimearr_uint"]["kind"] == "runtime_array"
+
+    assert ast.spirv_constant_types == {}
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.left, VariableNode)
+    assert assignment.left.name == "countOut"
+    assert isinstance(assignment.right, FunctionCallNode)
+    assert assignment.right.name == "spirvArrayLength"
+    assert isinstance(assignment.right.args[0], VariableNode)
+    assert assignment.right.args[0].name == "storage"
+    assert assignment.right.args[1] == "1"
 
 
 def test_spirv_assembly_specialization_constants_parse():

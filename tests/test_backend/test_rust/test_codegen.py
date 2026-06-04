@@ -610,6 +610,35 @@ def test_rust_gpu_image_query_and_fetch_methods_codegen_from_upstream_compiletes
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_vector_splat_codegen_from_image_components_compiletest():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/image/components.rs.
+    code = """
+    use glam::Vec4;
+    use spirv_std::spirv;
+    use spirv_std::Image;
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] image1: &Image!(2D, type=f32, sampled, components=1),
+        output: &mut Vec4,
+    ) {
+        let coords = glam::IVec2::new(0, 1);
+        let t1: f32 = image1.fetch(coords);
+        *output = Vec4::splat(t1);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "sampler2D image1 @ set(0) @ binding(0)" in result
+    assert "float t1 = texelFetch(image1, coords);" in result
+    assert "output = vec4(t1);" in result
+    assert "::splat" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_extra_image_macro_dimensions_codegen_from_upstream():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

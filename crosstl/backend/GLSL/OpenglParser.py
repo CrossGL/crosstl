@@ -1288,6 +1288,30 @@ class GLSLParser:
 
         return self.token_at(index)[0] == "EQUALS"
 
+    def is_for_init_declaration_start(self):
+        index = self.skip_newline_index(self.index)
+
+        while True:
+            token_type, token_value = self.token_at(index)
+            if token_type in QUALIFIER_TOKENS or (
+                token_type == "IDENTIFIER"
+                and token_value in IDENTIFIER_QUALIFIERS | CONTEXTUAL_QUALIFIERS
+            ):
+                index = self.skip_newline_index(index + 1)
+                continue
+            break
+
+        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
+            return False
+        index = self.skip_type_template_suffix_index(index + 1)
+        index = self.skip_array_suffixes_index(index)
+
+        if self.token_at(index)[0] not in NAME_TOKENS:
+            return False
+        index = self.skip_array_suffixes_index(index + 1)
+
+        return self.token_at(index)[0] in {"EQUALS", "COMMA", "SEMICOLON"}
+
     def is_local_function_prototype_start(self):
         index = self.skip_newline_index(self.index)
 
@@ -1543,14 +1567,19 @@ class GLSLParser:
 
         init = None
         if self.current_token[0] != "SEMICOLON":
-            if (
-                self.current_token[0] in QUALIFIER_TOKENS
-                or self.current_token[0] in TYPE_TOKENS
-            ):
+            if self.is_for_init_declaration_start():
                 qualifiers = self.parse_qualifiers()
                 type_name = self.parse_type()
+                self.skip_newlines()
+                type_array_sizes = []
+                if self.current_token[0] == "LBRACKET":
+                    type_array_sizes = self.parse_array_suffixes()
+                    self.skip_newlines()
                 init_decls = self.parse_variable_declarations(
-                    type_name, qualifiers=qualifiers, consume_semicolon=False
+                    type_name,
+                    qualifiers=qualifiers,
+                    consume_semicolon=False,
+                    type_array_sizes=type_array_sizes,
                 )
                 if len(init_decls) == 1:
                     init = init_decls[0]

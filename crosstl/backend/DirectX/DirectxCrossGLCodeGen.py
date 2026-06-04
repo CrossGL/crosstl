@@ -2639,6 +2639,144 @@ class HLSLToCrossGLConverter:
             return "uint"
         return mapped_type
 
+    def generate_sizeof_expression(self, args):
+        if len(args) != 1:
+            return None
+
+        size = self.sizeof_operand(args[0])
+        if size is None:
+            return None
+        return str(size)
+
+    def sizeof_operand(self, operand):
+        if isinstance(operand, ArrayAccessNode):
+            element_size = self.sizeof_operand(operand.array)
+            element_count = self.sizeof_array_element_count(operand.index)
+            if element_size is None or element_count is None:
+                return None
+            return element_size * element_count
+
+        if isinstance(operand, CastNode):
+            return self.sizeof_type_name(operand.target_type)
+
+        if isinstance(operand, VectorConstructorNode):
+            return self.sizeof_type_name(operand.type_name)
+
+        raw_type = self.expression_raw_type(operand)
+        if raw_type is not None:
+            size = self.sizeof_type_name(raw_type)
+            if size is not None:
+                return size
+
+        if isinstance(operand, str):
+            return self.sizeof_type_name(operand)
+
+        return None
+
+    def sizeof_array_element_count(self, expr):
+        if isinstance(expr, int) and not isinstance(expr, bool):
+            return expr
+        return None
+
+    def sizeof_type_name(self, type_name):
+        if not type_name:
+            return None
+
+        type_name = self.canonical_composite_type(
+            self.strip_sizeof_type_qualifiers(str(type_name).strip())
+        )
+
+        if "<" in type_name and type_name.endswith(">"):
+            base, generic_args = type_name.split("<", 1)
+            args = self.split_generic_arguments(generic_args[:-1].strip())
+            if base == "vector" and args:
+                components = (
+                    self.parse_template_dimension(args[1]) if len(args) > 1 else 4
+                )
+                scalar_size = self.sizeof_scalar_type(args[0])
+                if scalar_size is None or components is None:
+                    return None
+                return scalar_size * components
+            if base == "matrix" and args:
+                rows = self.parse_template_dimension(args[1]) if len(args) > 1 else 4
+                cols = self.parse_template_dimension(args[2]) if len(args) > 2 else 4
+                scalar_size = self.sizeof_scalar_type(args[0])
+                if scalar_size is None or rows is None or cols is None:
+                    return None
+                return scalar_size * rows * cols
+            return None
+
+        matrix_match = re.fullmatch(
+            r"(float|half|double|min16float|min10float|float16_t|int|uint|bool|"
+            r"min16int|min12int|int16_t|min16uint|uint16_t|int64_t|uint64_t)"
+            r"([1-4])x([1-4])",
+            type_name,
+        )
+        if matrix_match:
+            scalar_type, rows_text, cols_text = matrix_match.groups()
+            scalar_size = self.sizeof_scalar_type(scalar_type)
+            if scalar_size is None:
+                return None
+            return scalar_size * int(rows_text) * int(cols_text)
+
+        vector_match = re.fullmatch(
+            r"(float|half|double|min16float|min10float|float16_t|int|uint|bool|"
+            r"min16int|min12int|int16_t|min16uint|uint16_t|int64_t|uint64_t)"
+            r"([1-4])",
+            type_name,
+        )
+        if vector_match:
+            scalar_type, width_text = vector_match.groups()
+            scalar_size = self.sizeof_scalar_type(scalar_type)
+            if scalar_size is None:
+                return None
+            return scalar_size * int(width_text)
+
+        scalar_size = self.sizeof_scalar_type(type_name)
+        if scalar_size is not None:
+            return scalar_size
+
+        return None
+
+    def strip_sizeof_type_qualifiers(self, type_name):
+        qualifiers = {
+            "const",
+            "row_major",
+            "column_major",
+            "precise",
+            "snorm",
+            "unorm",
+        }
+        parts = str(type_name).split()
+        while parts and parts[0].lower() in qualifiers:
+            parts.pop(0)
+        return " ".join(parts)
+
+    def sizeof_scalar_type(self, type_name):
+        scalar_sizes = {
+            "bool": 4,
+            "int": 4,
+            "uint": 4,
+            "dword": 4,
+            "float": 4,
+            "float32_t": 4,
+            "int32_t": 4,
+            "uint32_t": 4,
+            "half": 2,
+            "min16float": 2,
+            "min10float": 2,
+            "float16_t": 2,
+            "min16int": 2,
+            "min12int": 2,
+            "int16_t": 2,
+            "min16uint": 2,
+            "uint16_t": 2,
+            "double": 8,
+            "int64_t": 8,
+            "uint64_t": 8,
+        }
+        return scalar_sizes.get(self.canonical_composite_type(str(type_name).strip()))
+
     def format_float(self, value: float) -> str:
         text = format(value, ".10f")
         text = text.rstrip("0").rstrip(".")
@@ -2843,6 +2981,10 @@ class HLSLToCrossGLConverter:
                 if isinstance(expr.name, str)
                 else self.generate_expression(expr.name, is_main)
             )
+            if func_name == "sizeof":
+                sizeof_value = self.generate_sizeof_expression(expr.args)
+                if sizeof_value is not None:
+                    return sizeof_value
             if func_name == "CheckAccessFullyMapped":
                 return (
                     "/* unsupported DirectX tiled-resource status check: "

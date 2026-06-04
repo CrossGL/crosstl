@@ -713,6 +713,48 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_ARRAY_LENGTH_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source version: SPIR-V 1.6 Revision 7, unified spec.
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
+; Source path: test/val/val_memory_test.cpp
+; Reduced from ValidateMemory::ArrayLenIndexCorrectWith2Members and adapted to
+; a storage-buffer fragment fixture so generated CrossGL can store the result.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %count_out
+OpExecutionMode %main OriginUpperLeft
+OpName %StorageBuffer "StorageBuffer"
+OpName %storage "storage"
+OpName %count_out "countOut"
+OpMemberName %StorageBuffer 0 "header"
+OpMemberName %StorageBuffer 1 "payload"
+OpDecorate %runtimearr_uint ArrayStride 4
+OpDecorate %StorageBuffer Block
+OpDecorate %storage DescriptorSet 0
+OpDecorate %storage Binding 0
+OpDecorate %count_out Location 0
+OpMemberDecorate %StorageBuffer 0 Offset 0
+OpMemberDecorate %StorageBuffer 1 Offset 4
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%runtimearr_uint = OpTypeRuntimeArray %uint
+%StorageBuffer = OpTypeStruct %uint %runtimearr_uint
+%ptr_storage = OpTypePointer StorageBuffer %StorageBuffer
+%ptr_output_uint = OpTypePointer Output %uint
+%storage = OpVariable %ptr_storage StorageBuffer
+%count_out = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%length = OpArrayLength %uint %storage 1
+OpStore %count_out %length
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SPEC_CONSTANT_ASSEMBLY = """
 ; Reduced from common Vulkan specialization constant assembly output.
 OpCapability Shader
@@ -2519,6 +2561,25 @@ def test_spirv_assembly_runtime_array_buffer_block_codegen():
         in generated_code
     )
     assert "%storage" not in generated_code
+
+
+def test_spirv_tools_array_length_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_ARRAY_LENGTH_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "struct StorageBuffer" in generated_code
+    assert "uint payload[];" in generated_code
+    assert (
+        "RWStructuredBuffer<StorageBuffer> storage @set(0) @binding(0);"
+        in generated_code
+    )
+    assert "uint countOut @output @location(0);" in generated_code
+    assert "countOut = spirvArrayLength(storage, 1);" in generated_code
+    assert "countOut = length;" not in generated_code
+    assert "OpArrayLength" not in generated_code
+    assert "Unhandled statement type" not in generated_code
 
 
 def test_spirv_assembly_specialization_constants_codegen():

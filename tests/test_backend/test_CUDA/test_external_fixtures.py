@@ -787,6 +787,49 @@ def test_cuda_math_api_fast_single_precision_intrinsics_codegen_reparse():
     assert "__expf" not in crossgl
 
 
+def test_cuda_math_api_rounding_single_precision_intrinsics_codegen_reparse():
+    # Upstream source:
+    # NVIDIA CUDA Math API Reference Manual v13.1, section 7
+    # Single Precision Intrinsics.
+    # URL:
+    # https://docs.nvidia.com/cuda/archive/13.1.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__SINGLE.html
+    source = """
+    __device__ float rounded_intrinsics(float x, float y, float z) {
+        float ops = __fadd_rn(x, y) + __fsub_rz(x, y) + __fmul_ru(x, y);
+        float ratios = __fdiv_rd(x, y) + __frcp_rn(y);
+        float roots = __fsqrt_rn(x) + __frsqrt_rn(y);
+        float fused = __fmaf_rn(x, y, z) + __fmaf_ieee_rz(x, y, z);
+        float base10 = __exp10f(x);
+        float standard_fma = fmaf(x, y, z);
+        return ops + ratios + roots + fused + base10 + standard_fma;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "var ops: f32 = (((x + y) + (x - y)) + (x * y));" in crossgl
+    assert "var ratios: f32 = ((x / y) + (1.0f / y));" in crossgl
+    assert "var roots: f32 = (sqrt(x) + inversesqrt(y));" in crossgl
+    assert "var fused: f32 = (fma(x, y, z) + fma(x, y, z));" in crossgl
+    assert "var base10: f32 = pow(10.0f, x);" in crossgl
+    assert "var standard_fma: f32 = fma(x, y, z);" in crossgl
+    for raw_name in {
+        "__fadd_rn",
+        "__fsub_rz",
+        "__fmul_ru",
+        "__fdiv_rd",
+        "__frcp_rn",
+        "__fsqrt_rn",
+        "__frsqrt_rn",
+        "__fmaf_rn",
+        "__fmaf_ieee_rz",
+        "__exp10f",
+        "fmaf",
+    }:
+        assert raw_name not in crossgl
+
+
 def test_external_raja_global_qualified_cuda_shuffle_codegen_reparse():
     source = """
     __device__ int shfl_sync(int var, int srcLane) {

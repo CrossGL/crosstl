@@ -6,6 +6,7 @@ import pytest
 from crosstl.backend.GLSL.OpenglAst import (
     BinaryOpNode,
     DoWhileNode,
+    ForNode,
     InitializerListNode,
     ReturnNode,
     StructNode,
@@ -407,6 +408,37 @@ def test_parse_single_statement_control_bodies():
         """)
 
     parse_ok(code, "compute")
+
+
+def test_parse_for_init_custom_struct_declaration_from_glsl_460_grammar():
+    # Reduced from Khronos GLSL 4.60.8 grammar:
+    # iteration_statement -> FOR (... for_init_statement ...)
+    # for_init_statement -> declaration_statement.
+    code = textwrap.dedent("""
+        #version 460
+
+        struct Cursor {
+            int value;
+        };
+
+        void main()
+        {
+            for (Cursor cursor = Cursor(0); cursor.value < 2; cursor.value++)
+            {
+                cursor.value += 1;
+            }
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+    main = next(function for function in ast.functions if function.name == "main")
+    loop = next(stmt for stmt in main.body if isinstance(stmt, ForNode))
+
+    assert loop.init.vtype == "Cursor"
+    assert loop.init.name == "cursor"
+    assert loop.init.value.name.name == "Cursor"
+    assert loop.condition.op == "<"
+    assert loop.update.op == "++"
 
 
 def test_parse_do_while_single_statement_from_glsl_spec_grammar():

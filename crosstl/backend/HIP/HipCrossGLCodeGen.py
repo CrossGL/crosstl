@@ -4696,6 +4696,10 @@ class HipToCrossGLConverter:
         if integer_intrinsic is not None:
             return integer_intrinsic
 
+        sync_vote_intrinsic = self.format_hip_sync_vote_intrinsic_call(func_name, args)
+        if sync_vote_intrinsic is not None:
+            return sync_vote_intrinsic
+
         resource_call = self.format_hip_resource_call(func_name, args, raw_args)
         if resource_call is not None:
             return resource_call
@@ -4992,6 +4996,23 @@ class HipToCrossGLConverter:
         if function_name == "__ffs" and len(args) == 1:
             return f"(findLSB({args[0]}) + 1)"
         return None
+
+    def format_hip_sync_vote_intrinsic_call(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
+        if function_name not in {
+            "__syncthreads_count",
+            "__syncthreads_and",
+            "__syncthreads_or",
+        }:
+            return None
+
+        args_text = ", ".join(args)
+        return (
+            f"(/* HIP block-wide sync vote {function_name} predicate: {args_text} "
+            "not directly supported in CrossGL */ 0)"
+        )
 
     def format_vector_component_access(self, expression, component):
         text = str(expression).strip()

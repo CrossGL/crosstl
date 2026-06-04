@@ -4242,6 +4242,12 @@ class CudaToCrossGLConverter:
 
         fast_math_intrinsics = {
             "__cosf": ("cos", 1),
+            "__exp10f": ("pow", 1),
+            "__frsqrt_rn": ("inversesqrt", 1),
+            "__fsqrt_rd": ("sqrt", 1),
+            "__fsqrt_rn": ("sqrt", 1),
+            "__fsqrt_ru": ("sqrt", 1),
+            "__fsqrt_rz": ("sqrt", 1),
             "__expf": ("exp", 1),
             "__log2f": ("log2", 1),
             "__logf": ("log", 1),
@@ -4254,12 +4260,53 @@ class CudaToCrossGLConverter:
         if mapped_intrinsic is not None:
             mapped_name, arity = mapped_intrinsic
             if len(args) == arity:
+                if function_name == "__exp10f":
+                    return f"{mapped_name}(10.0f, {args[0]})"
                 return f"{mapped_name}({', '.join(args)})"
 
         if function_name == "__saturatef" and len(args) == 1:
             return f"clamp({args[0]}, 0.0f, 1.0f)"
-        if function_name == "__fdividef" and len(args) == 2:
+        if (
+            function_name
+            in {"__fdividef", "__fdiv_rd", "__fdiv_rn", "__fdiv_ru", "__fdiv_rz"}
+            and len(args) == 2
+        ):
             return f"({args[0]} / {args[1]})"
+        if (
+            function_name in {"__fadd_rd", "__fadd_rn", "__fadd_ru", "__fadd_rz"}
+            and len(args) == 2
+        ):
+            return f"({args[0]} + {args[1]})"
+        if (
+            function_name in {"__fsub_rd", "__fsub_rn", "__fsub_ru", "__fsub_rz"}
+            and len(args) == 2
+        ):
+            return f"({args[0]} - {args[1]})"
+        if (
+            function_name in {"__fmul_rd", "__fmul_rn", "__fmul_ru", "__fmul_rz"}
+            and len(args) == 2
+        ):
+            return f"({args[0]} * {args[1]})"
+        if (
+            function_name in {"__frcp_rd", "__frcp_rn", "__frcp_ru", "__frcp_rz"}
+            and len(args) == 1
+        ):
+            return f"(1.0f / {args[0]})"
+        if (
+            function_name
+            in {
+                "__fmaf_rd",
+                "__fmaf_rn",
+                "__fmaf_ru",
+                "__fmaf_rz",
+                "__fmaf_ieee_rd",
+                "__fmaf_ieee_rn",
+                "__fmaf_ieee_ru",
+                "__fmaf_ieee_rz",
+            }
+            and len(args) == 3
+        ):
+            return f"fma({args[0]}, {args[1]}, {args[2]})"
 
         return None
 
@@ -5475,6 +5522,7 @@ class CudaToCrossGLConverter:
             "roundf": "round",
             "truncf": "trunc",
             "atan2f": "atan2",
+            "fmaf": "fma",
             "fmodf": "mod",
             "fminf": "min",
             "fmaxf": "max",
