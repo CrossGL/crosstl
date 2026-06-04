@@ -758,6 +758,44 @@ def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
     assert "artifacts[0].status must be translated or failed" in (diagnostic["message"])
 
 
+def test_validate_project_report_rejects_artifacts_with_undeclared_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "undeclared-artifact-target-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "metal",
+                        "path": "out/metal/simple.metal",
+                        "status": "translated",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].target must be listed in project.targets" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
