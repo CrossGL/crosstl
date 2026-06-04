@@ -286,6 +286,7 @@ class MetalParser:
         }
         self.local_variable_scopes = []
         self.pending_block_scope_names = []
+        self.known_variable_templates = set()
 
     def skip_comments(self):
         while self.pos < len(self.tokens) and self.current_token[0] in [
@@ -556,6 +557,11 @@ class MetalParser:
                 return struct
 
             if not self.is_function_definition():
+                variable_template_name = self.template_variable_declaration_name_at(
+                    self.pos
+                )
+                if variable_template_name:
+                    self.known_variable_templates.add(variable_template_name)
                 self.skip_template_declaration()
                 return None
 
@@ -624,6 +630,36 @@ class MetalParser:
         if len(tokens) >= 2 and tokens[-1][0] == "IDENTIFIER":
             return ("value", tokens[-1][1])
         return None
+
+    def template_variable_declaration_name_at(self, idx):
+        idx = self.skip_leading_attribute_tokens_at(idx)
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
+        if idx >= len(self.tokens) or self.tokens[idx][0] not in TYPE_TOKENS:
+            return None
+
+        idx += 1
+        idx = self.skip_scoped_type_suffix_at(idx)
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_template_argument_list_at(idx)
+
+        while idx < len(self.tokens):
+            if self.is_qualifier_token_at(idx):
+                idx += 1
+                continue
+            if self.tokens[idx][0] in {"MULTIPLY", "BITWISE_AND"}:
+                idx += 1
+                continue
+            break
+
+        idx = self.skip_leading_attribute_tokens_at(idx)
+        if idx >= len(self.tokens) or not self.is_name_token_at(idx):
+            return None
+
+        name = self.tokens[idx][1]
+        if idx + 1 < len(self.tokens) and self.tokens[idx + 1][0] == "LPAREN":
+            return None
+        return name
 
     def skip_template_declaration(self):
         paren_depth = 0
@@ -2819,7 +2855,10 @@ class MetalParser:
         if not isinstance(node, (VariableNode, MemberAccessNode)):
             return False
         name = node.name if isinstance(node, VariableNode) else node.member
-        if not self.is_scoped_variable_template_name(name):
+        if not (
+            self.is_scoped_variable_template_name(name)
+            or name in self.known_variable_templates
+        ):
             return False
         return self.template_argument_list_followed_by_call(
             follow_token_types=TEMPLATE_VARIABLE_SUFFIX_FOLLOW_TOKENS,

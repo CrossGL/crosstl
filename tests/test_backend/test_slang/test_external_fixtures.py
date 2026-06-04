@@ -20,6 +20,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
     },
+    "shader-slang/slang-layout-2026-06-04": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
+    },
     "shader-slang/slang-gfx-tools-2026": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "c6f104ca76a54ca1565dac54363ea763dd906de6",
@@ -491,6 +495,38 @@ EXTERNAL_FIXTURES = [
             "levels = uint(textureQueryLevels(tex));",
         ],
         "not_contains": ["tex.GetDimensions"],
+    },
+    {
+        "id": "slang_spirv_matrix_layout_modifier_members",
+        "repo": "shader-slang/slang-layout-2026-06-04",
+        "path": "tests/spirv/optypematrix-layout-modifier.slang",
+        "source": (
+            """
+            struct MatrixData
+            {
+                row_major float4x4 m1;
+                column_major float2x4 m2;
+            };
+
+            RWStructuredBuffer<float> outputBuffer;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void computeMain()
+            {
+                outputBuffer[0] = MatrixData().m1[0][0];
+                outputBuffer[1] = MatrixData().m2[1][3];
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct MatrixData {",
+            "mat4 m1;",
+            "float2x4 m2;",
+            "outputBuffer[0] = MatrixData().m1[0][0];",
+        ],
+        "not_contains": ["row_major", "column_major"],
     },
     {
         "id": "slang_hlsl_intrinsic_mul_matrix_vector",

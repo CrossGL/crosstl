@@ -238,6 +238,17 @@ class VulkanParser:
         "SMulExtended": "spirvSMulExtended",
         "UMulExtended": "spirvUMulExtended",
     }
+    SPIRV_ATOMIC_RMW_FUNCTIONS = {
+        "OpAtomicIAdd": "atomicAdd",
+        "OpAtomicSMin": "atomicMin",
+        "OpAtomicUMin": "atomicMin",
+        "OpAtomicSMax": "atomicMax",
+        "OpAtomicUMax": "atomicMax",
+        "OpAtomicAnd": "atomicAnd",
+        "OpAtomicOr": "atomicOr",
+        "OpAtomicXor": "atomicXor",
+        "OpAtomicExchange": "atomicExchange",
+    }
     CROSSGL_RESERVED_IDENTIFIERS = {
         "as",
         "async",
@@ -1539,6 +1550,20 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode in self.SPIRV_ATOMIC_RMW_FUNCTIONS:
+                if len(operands) >= 5:
+                    expressions[result_id] = self.spirv_assembly_atomic_expression(
+                        opcode,
+                        operands[1],
+                        operands[4],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
             if result_id and opcode == "OpDot" and len(operands) >= 3:
                 expressions[result_id] = FunctionCallNode(
                     "dot",
@@ -2573,6 +2598,36 @@ class VulkanParser:
             instruction, "instruction"
         )
         return f"spirv_{sanitized_set}_{sanitized_instruction}"
+
+    def spirv_assembly_atomic_expression(
+        self,
+        opcode,
+        pointer_operand,
+        value_operand,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        return FunctionCallNode(
+            self.SPIRV_ATOMIC_RMW_FUNCTIONS[opcode],
+            [
+                self.spirv_assembly_operand_expression(
+                    pointer_operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                ),
+                self.spirv_assembly_operand_expression(
+                    value_operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                ),
+            ],
+        )
 
     def spirv_assembly_vector_shuffle_expression(
         self,

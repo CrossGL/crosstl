@@ -2769,6 +2769,24 @@ def test_parse_struct_operator_methods_from_dxc_intrinsics_tests():
     assert struct.methods[0].return_type == "Vector"
 
 
+def test_parse_struct_bitfield_members_from_dxc_swizzle_fixture():
+    ast = parse_code("""
+        struct MyStruct
+        {
+            uint v0: 5;
+            uint v1: 15;
+            uint v2: 12;
+        };
+    """)
+
+    struct = ast.structs[0]
+
+    assert [member.name for member in struct.members] == ["v0", "v1", "v2"]
+    assert [member.vtype for member in struct.members] == ["uint", "uint", "uint"]
+    assert [member.bit_width for member in struct.members] == [5, 15, 12]
+    assert [member.semantic for member in struct.members] == [None, None, None]
+
+
 def test_parse_min_precision_scalar_constructor_from_dxc_tests():
     ast = parse_code("""
         int main(min16int a : A) : SV_Target {
