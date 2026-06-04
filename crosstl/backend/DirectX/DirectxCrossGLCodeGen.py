@@ -381,15 +381,18 @@ class HLSLToCrossGLConverter:
         vector_aliases = {
             "min16float": "f16vec",
             "min10float": "f16vec",
+            "float16_t": "f16vec",
             "min16int": "i16vec",
             "min12int": "i16vec",
+            "int16_t": "i16vec",
             "min16uint": "u16vec",
+            "uint16_t": "u16vec",
         }
         for hlsl_prefix, crossgl_prefix in vector_aliases.items():
             for width in range(2, 5):
                 type_map[f"{hlsl_prefix}{width}"] = f"{crossgl_prefix}{width}"
 
-        for hlsl_prefix in ("min16float", "min10float"):
+        for hlsl_prefix in ("min16float", "min10float", "float16_t"):
             for columns in range(2, 5):
                 for rows in range(2, 5):
                     suffix = str(columns) if columns == rows else f"{columns}x{rows}"

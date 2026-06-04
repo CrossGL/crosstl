@@ -378,7 +378,34 @@ EXTERNAL_FIXTURES = [
             "type uint32_t3 = uvec3;",
             "type uint16_t3 = u16vec3;",
             "@ numthreads(1, 1, 1)",
-            "uint16_t3 dims = uint16_t3(gl_WorkGroupSize());",
+            "u16vec3 dims = uint16_t3(gl_WorkGroupSize());",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_native_16bit_vector_aliases",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/intrinsics.asuint16.hlsl",
+        code=textwrap.dedent("""
+            void main() {
+              uint16_t4 result4;
+              int16_t4 d;
+              uint16_t4 e;
+              float16_t4 f;
+              float16_t2x3 floatMat;
+
+              result4 = asuint16(d);
+              result4 = asuint16(e);
+              result4 = asuint16(f);
+            }
+        """).strip(),
+        contains=(
+            "u16vec4 result4;",
+            "i16vec4 d;",
+            "u16vec4 e;",
+            "f16vec4 f;",
+            "f16mat2x3 floatMat;",
+            "result4 = asuint16(d);",
         ),
     ),
     ExternalFixture(

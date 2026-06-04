@@ -1905,9 +1905,10 @@ class MojoParser:
         if self.current_token[0] == "RBRACKET":
             self.eat("RBRACKET")
             return ArrayAccessNode(array, TupleNode([]))
+
         self.expression_layout_depth += 1
         try:
-            indices = [self.parse_expression()]
+            indices = [self.parse_index_component()]
         finally:
             self.expression_layout_depth -= 1
         self.skip_layout_tokens()
@@ -1918,13 +1919,43 @@ class MojoParser:
                 break
             self.expression_layout_depth += 1
             try:
-                indices.append(self.parse_expression())
+                indices.append(self.parse_index_component())
             finally:
                 self.expression_layout_depth -= 1
             self.skip_layout_tokens()
         self.eat("RBRACKET")
         index = indices[0] if len(indices) == 1 else TupleNode(indices)
         return ArrayAccessNode(array, index)
+
+    def parse_index_component(self):
+        if self.current_token[0] == "COLON":
+            return self.parse_slice_index(None)
+
+        value = self.parse_expression()
+        self.skip_expression_layout()
+        if self.current_token[0] == "COLON":
+            return self.parse_slice_index(value)
+        return value
+
+    def parse_slice_index(self, start):
+        self.eat("COLON")
+        self.skip_expression_layout()
+        stop = None
+        if self.current_token[0] not in {"COLON", "COMMA", "RBRACKET"}:
+            stop = self.parse_expression()
+            self.skip_expression_layout()
+
+        step = None
+        has_step = False
+        if self.current_token[0] == "COLON":
+            has_step = True
+            self.eat("COLON")
+            self.skip_expression_layout()
+            if self.current_token[0] not in {"COMMA", "RBRACKET"}:
+                step = self.parse_expression()
+                self.skip_expression_layout()
+
+        return SliceNode(start, stop, step, has_step=has_step)
 
     def is_generic_constructor_suffix(self, node):
         if not isinstance(node, VariableNode) or self.current_token[0] != "LBRACKET":

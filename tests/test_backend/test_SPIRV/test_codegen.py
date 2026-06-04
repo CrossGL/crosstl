@@ -1210,6 +1210,46 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_DERIVATIVE_OPS_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/spv.computeShaderDerivatives.comp.out
+; Reduced from scalar DPdx/DPdyFine/FwidthCoarse derivative stores.
+OpCapability Shader
+OpCapability DerivativeControl
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %dx_out %dy_out %width_out
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %dx_out "dxOut"
+OpName %dy_out "dyOut"
+OpName %width_out "widthOut"
+OpDecorate %input_value Location 0
+OpDecorate %dx_out Location 0
+OpDecorate %dy_out Location 1
+OpDecorate %width_out Location 2
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_float = OpTypePointer Output %float
+%input_value = OpVariable %ptr_input_float Input
+%dx_out = OpVariable %ptr_output_float Output
+%dy_out = OpVariable %ptr_output_float Output
+%width_out = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %input_value
+%dx = OpDPdx %float %loaded
+OpStore %dx_out %dx
+%dy_fine = OpDPdyFine %float %loaded
+OpStore %dy_out %dy_fine
+%width_coarse = OpFwidthCoarse %float %loaded
+OpStore %width_out %width_coarse
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_LOCAL_SIZE_ID_ASSEMBLY = """
 ; Reduced from specialization-driven compute local sizes.
 OpCapability Shader
@@ -1981,6 +2021,22 @@ def test_glslang_std450_interpolation_extinst_codegen():
     assert "spirv_GLSL_std_450_InterpolateAtCentroid" not in generated_code
     assert "spirv_GLSL_std_450_InterpolateAtSample" not in generated_code
     assert "spirv_GLSL_std_450_InterpolateAtOffset" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_derivative_ops_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_DERIVATIVE_OPS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float inputValue @input @location(0);" in generated_code
+    assert "dxOut = dFdx(inputValue);" in generated_code
+    assert "dyOut = dFdyFine(inputValue);" in generated_code
+    assert "widthOut = fwidthCoarse(inputValue);" in generated_code
+    assert "dxOut = dx;" not in generated_code
+    assert "dyOut = dy_fine;" not in generated_code
+    assert "widthOut = width_coarse;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

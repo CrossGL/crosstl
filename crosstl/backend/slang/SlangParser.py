@@ -122,6 +122,9 @@ class SlangParser:
         "ASSIGN_SHIFT_LEFT",
         "ASSIGN_SHIFT_RIGHT",
     )
+    EXPRESSION_TYPE_OPERAND_TOKENS = (
+        DECLARATION_TYPE_TOKENS | RESOURCE_TYPE_TOKENS | {"GENERIC", "VOID"}
+    )
 
     def __init__(self, tokens):
         self.tokens = tokens
@@ -2223,27 +2226,15 @@ class SlangParser:
         return CastNode(target_type, self.parse_unary())
 
     def parse_primary(self):
-        if self.current_token[0] in [
-            "IDENTIFIER",
-            "INT",
-            "FLOAT",
-            "FVECTOR",
-            "MATRIX",
-            "UINT",
-            "BOOL",
-            "GENERIC",
-        ]:
-            if self.current_token[0] in [
-                "INT",
-                "FLOAT",
-                "FVECTOR",
-                "MATRIX",
-                "UINT",
-                "BOOL",
-                "GENERIC",
-            ]:
+        if (
+            self.current_token[0]
+            in {"IDENTIFIER"} | self.EXPRESSION_TYPE_OPERAND_TOKENS
+        ):
+            if self.current_token[0] in self.EXPRESSION_TYPE_OPERAND_TOKENS:
                 type_name = self.current_token[1]
                 self.eat(self.current_token[0])
+                if self.current_token[0] == "LESS_THAN":
+                    type_name += self.parse_generic_type_suffix()
                 if self.current_token[0] == "LBRACKET":
                     type_name += self.parse_type_array_suffixes()
                 if self.current_token[0] == "IDENTIFIER":
@@ -2269,6 +2260,7 @@ class SlangParser:
                     )
                 elif self.current_token[0] == "DOT":
                     return self.parse_postfix_suffixes(VariableNode("", type_name))
+                return self.parse_postfix_suffixes(VariableNode("", type_name))
             return self.parse_function_call_or_identifier()
 
         if self.current_token[0] == "LBRAKET":

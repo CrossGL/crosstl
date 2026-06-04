@@ -344,6 +344,24 @@ def test_empty_index_access_codegen_from_layout_tensor_iterator_docs():
     assert "var tile = iter[];" in generated_code
 
 
+def test_slice_index_access_codegen_from_modular_stdlib_slice_tests():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # mojo/stdlib/test/builtin/test_slice.mojo test_sliceable/test_slice_stringable.
+    code = """
+    def main():
+        var new_slice = sliceable[1:"hello":4.0]
+        var reverse = s[2::-1]
+        var open_slice = s[::]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert 'var new_slice = sliceable[1:"hello":4.0];' in generated_code
+    assert "var reverse = s[2::(-1)];" in generated_code
+    assert "var open_slice = s[::];" in generated_code
+
+
 def test_try_except_codegen_from_layout_tensor_gpu_docs():
     code = """
     def main():

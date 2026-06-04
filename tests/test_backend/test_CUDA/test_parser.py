@@ -17,6 +17,7 @@ from crosstl.backend.CUDA.CudaAst import (
     IfNode,
     InitializerListNode,
     KernelLaunchNode,
+    KernelNode,
     MemberAccessNode,
     NewNode,
     PreprocessorNode,
@@ -2099,6 +2100,34 @@ class TestCudaParser:
         assert body[2].value.name == "ct::zeros<ct::tile<float, ct::shape<16, 16>>>"
         assert isinstance(body[3], AssignmentNode)
         assert body[3].left == "acc"
+
+    def test_public_cuda_samples_tile_global_kernel_parsing(self):
+        code = """
+        template <int NUM_CTAS>
+        __tile_global__ void matmul_naive(float* C,
+                                          const __half* A,
+                                          int M,
+                                          int K) {
+            auto a_span = ct::tensor_span{A, ct::extents{M, K}};
+            auto [pid_m, pid_n, dummy] = ct::bid();
+            C[pid_m] = 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.kernels) == 1
+        assert ast.functions == []
+
+        kernel = ast.kernels[0]
+        assert isinstance(kernel, KernelNode)
+        assert kernel.name == "matmul_naive"
+        assert kernel.qualifiers == ["__tile_global__"]
+        assert kernel.params[1].vtype == "const __half *"
+        assert kernel.body[0].value.name == "ct::tensor_span"
+        assert kernel.body[1].name == "[pid_m, pid_n, dummy]"
 
     def test_unique_ptr_host_allocation_parsing(self):
         code = """
