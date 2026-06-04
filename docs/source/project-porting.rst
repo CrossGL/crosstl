@@ -71,16 +71,17 @@ Validate artifacts referenced by a report:
    python -m crosstl._crosstl validate-project crosstl-out/portability-report.json
 
 Validation exits nonzero when the report metadata is malformed, artifact
-records, source-map records, or preserved diagnostics are malformed, artifact
-source paths are not repository-relative, project target lists are not
-normalized and deduplicated, diagnostic or artifact targets are not declared by
-the report, artifact sources are not declared translation units, embedded
-validation records reference artifacts not declared by the report, validation
-records contain duplicate identities, translated outputs are missing, artifact
-paths resolve outside the repository, generated artifact hashes no longer match
-the files on disk, source files with recorded hashes are missing or changed, or
-opt-in toolchain smoke checks fail. Toolchain smoke checks only run for
-translated artifacts that still exist inside the repository.
+records, source-map records, or preserved diagnostics are malformed, source-map
+spans are internally inconsistent, artifact source paths are not
+repository-relative, project target lists are not normalized and deduplicated,
+diagnostic or artifact targets are not declared by the report, artifact sources
+are not declared translation units, embedded validation records reference
+artifacts not declared by the report, validation records contain duplicate
+identities, translated outputs are missing, artifact paths resolve outside the
+repository, generated artifact hashes no longer match the files on disk, source
+files with recorded hashes are missing or changed, or opt-in toolchain smoke
+checks fail. Toolchain smoke checks only run for translated artifacts that still
+exist inside the repository.
 
 Inspect an existing report as a concise JSON or text summary:
 
@@ -203,9 +204,10 @@ Project reports are JSON documents with:
   checks, source and
   generated hash checks, duplicate artifact identity checks, per-artifact
   source/generated hash status fields, aggregate validation artifact and
-  hash-status summary counts, provenance checks, source-map record shape and
-  anchor consistency checks, external corpus record, per-entry artifact count,
-  and summary checks, summary consistency checks, migration action shape checks,
+  hash-status summary counts, provenance checks, source-map record shape, span
+  consistency, and anchor consistency checks, external corpus record, per-entry
+  artifact count, and summary checks, summary consistency checks, migration
+  action shape checks,
   preserved diagnostic shape and target declaration checks, validation artifact
   and toolchain run record shape and duplicate identity checks, artifact source,
   source-backend, target, and variant declaration checks, translated artifact

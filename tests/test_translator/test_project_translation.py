@@ -2633,6 +2633,47 @@ def test_validate_project_report_rejects_inconsistent_source_map_anchors(tmp_pat
     ) in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_inconsistent_source_map_spans(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    source_map = payload["artifacts"][0]["sourceMap"]
+    source_map["source"]["endLine"] = 0
+    source_map["source"]["endOffset"] -= 1
+    source_map["generated"]["endLine"] = source_map["generated"]["line"]
+    source_map["generated"]["endColumn"] = 0
+    source_map["mappings"][0]["source"] = dict(source_map["source"])
+    source_map["mappings"][0]["generated"] = dict(source_map["generated"])
+    report_path = repo / "out" / "portability-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].sourceMap.source.endOffset must equal "
+        "artifacts[0].sourceMap.source.offset plus length"
+    ) in diagnostic["message"]
+    assert (
+        "artifacts[0].sourceMap.source.endLine must be after or equal to "
+        "artifacts[0].sourceMap.source.line"
+    ) in diagnostic["message"]
+    assert (
+        "artifacts[0].sourceMap.generated.endColumn must be greater than or equal to "
+        "artifacts[0].sourceMap.generated.column when endLine equals line"
+    ) in diagnostic["message"]
+    assert (
+        "artifacts[0].sourceMap.mappings[0].source.endOffset must equal "
+        "artifacts[0].sourceMap.mappings[0].source.offset plus length"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
