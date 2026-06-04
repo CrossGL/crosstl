@@ -190,6 +190,7 @@ def _is_repository_relative_glob(pattern: str) -> bool:
     return (
         not Path(pattern).is_absolute()
         and not PureWindowsPath(pattern).is_absolute()
+        and not PureWindowsPath(pattern).drive
         and ".." not in parts
     )
 
@@ -200,6 +201,7 @@ def _is_repository_relative_report_path(path: str) -> bool:
     return (
         not Path(path).is_absolute()
         and not PureWindowsPath(path).is_absolute()
+        and not PureWindowsPath(path).drive
         and ".." not in parts
     )
 

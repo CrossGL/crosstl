@@ -258,6 +258,31 @@ def test_scan_project_reports_include_patterns_outside_project(tmp_path):
     )
 
 
+def test_scan_project_reports_drive_relative_include_patterns(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["C:tmp/*.cgl"]
+            exclude = []
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(load_project_config(repo)).to_report().to_json()
+
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 1,
+        "error": 1,
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.include-pattern-outside-project"
+    assert "C:tmp/*.cgl" in diagnostic["message"]
+    assert diagnostic["missingCapabilities"] == ["repo.scan"]
+
+
 def test_scan_report_normalizes_and_deduplicates_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -613,6 +638,34 @@ def test_scan_project_reports_source_override_patterns_outside_project(tmp_path)
         diagnostic["missingCapabilities"] == ["source.override"]
         for diagnostic in payload["diagnostics"]
     )
+
+
+def test_scan_project_reports_drive_relative_source_override_patterns(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project.sources]
+            "C:tmp/*.shader" = "cgl"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(load_project_config(repo)).to_report().to_json()
+
+    assert [unit["path"] for unit in payload["units"]] == ["simple.cgl"]
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 1,
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.config.source-override-pattern-outside-project"
+    )
+    assert "C:tmp/*.shader" in diagnostic["message"]
+    assert diagnostic["missingCapabilities"] == ["source.override"]
 
 
 def test_translate_project_applies_include_dirs_and_defines(tmp_path):
@@ -1744,6 +1797,52 @@ def test_validate_project_report_rejects_duplicate_unit_and_skipped_paths(tmp_pa
     assert "skipped[0].path duplicates units[0].path" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_drive_relative_unit_and_skipped_paths(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "drive-relative-scan-record-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "units": [
+                    {
+                        "id": "C:tmp/simple.cgl",
+                        "path": "C:tmp/simple.cgl",
+                        "sourceBackend": "cgl",
+                        "extension": ".cgl",
+                    }
+                ],
+                "skipped": [
+                    {
+                        "path": "C:tmp/ignored.shader",
+                        "reason": "unsupported-extension",
+                    }
+                ],
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].path must be repository-relative" in diagnostic["message"]
+    assert "skipped[0].path must be repository-relative" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_malformed_generator_and_validation_records(
     tmp_path,
 ):
@@ -2596,6 +2695,68 @@ def test_validate_project_report_rejects_malformed_external_corpus_records(tmp_p
     )
 
 
+def test_validate_project_report_rejects_drive_relative_external_corpus_paths(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "drive-relative-external-corpus-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "externalCorpusManifest": "corpus.json",
+                },
+                "artifacts": [],
+                "externalCorpus": {
+                    "schemaVersion": 1,
+                    "manifest": "corpus.json",
+                    "status": "ok",
+                    "entries": [
+                        {
+                            "id": "repo/simple",
+                            "path": "C:tmp/simple.glsl",
+                            "sourceBackend": "opengl",
+                            "targets": ["opengl"],
+                            "present": False,
+                            "discovered": False,
+                            "artifactCount": 0,
+                            "translatedCount": 0,
+                            "failedCount": 0,
+                        }
+                    ],
+                    "summary": {
+                        "entryCount": 1,
+                        "presentCount": 0,
+                        "missingCount": 1,
+                        "discoveredUnitCount": 0,
+                        "undiscoveredPresentCount": 0,
+                        "entriesBySourceBackend": {"opengl": 1},
+                        "entriesByTarget": {"opengl": 1},
+                        "artifactsByTarget": {},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "externalCorpus.entries[0].path must be repository-relative" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_mismatched_external_corpus_manifest(
     tmp_path,
 ):
@@ -2878,6 +3039,43 @@ def test_validate_project_report_rejects_artifacts_with_escaped_output_paths(tmp
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "artifacts[0].path must be repository-relative" in diagnostic["message"]
     assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
+
+
+def test_validate_project_report_rejects_artifacts_with_drive_relative_paths(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "drive-relative-artifact-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "C:tmp/simple.cgl",
+                        "target": "opengl",
+                        "path": "C:tmp/simple.glsl",
+                        "status": "translated",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].source must be repository-relative" in diagnostic["message"]
+    assert "artifacts[0].path must be repository-relative" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_duplicate_artifact_identities(tmp_path):
