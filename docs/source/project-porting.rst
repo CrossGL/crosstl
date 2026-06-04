@@ -208,7 +208,7 @@ Project reports are JSON documents with:
   hash-status summary counts, provenance checks, source-map record shape, span
   consistency, and anchor consistency checks, external corpus record, per-entry
   artifact count, and summary checks, summary consistency checks, migration
-  action shape checks,
+  action shape and target declaration checks,
   preserved diagnostic shape, span consistency, and target declaration checks,
   validation toolchain status consistency checks, validation artifact and
   toolchain run record shape and duplicate identity checks, validation artifact
