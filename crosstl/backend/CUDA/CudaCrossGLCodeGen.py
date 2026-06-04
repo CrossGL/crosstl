@@ -4274,6 +4274,8 @@ class CudaToCrossGLConverter:
             return f"({left} * {right})"
         if function_name == "__umul24" and len(args) == 2:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
+        if function_name == "__dp4a" and len(args) == 3:
+            return f"(dot4I8Packed({args[0]}, {args[1]}) + {args[2]})"
         if function_name in {"__ffs", "__ffsll"} and len(args) == 1:
             return f"(findLSB({args[0]}) + 1)"
         if function_name in {"__clz", "__clzll"} and len(args) == 1:

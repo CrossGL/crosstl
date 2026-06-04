@@ -1019,6 +1019,47 @@ def test_async_nested_function_parse_from_modular_builtin_kernels():
     assert isinstance(try_statement.except_body[0], AssignmentNode)
 
 
+def test_await_expressions_parse_from_modular_runtime_async_tests():
+    # Reduced from https://github.com/modular/modular.git commit
+    # daa47bb846cc213723a54c51844ea4e923eb5e13,
+    # mojo/stdlib/test/runtime/test_asyncrt.mojo test_runtime_task and
+    # test_runtime_taskgroup await return expressions.
+    code = """
+    def runtime_task():
+        @parameter
+        async def add_two(a: Int, b: Int) -> Int:
+            return await create_task(add[1](a)) + await create_task(add[2](b))
+
+        async def run_as_group() -> Int:
+            var t0 = create_task(return_value[1]())
+            var t1 = create_task(return_value[2]())
+            return await t0 + await t1
+    """
+    ast = parse_code(tokenize_code(code))
+    runtime_task = find_function(ast, "runtime_task")
+    add_two = runtime_task.body[0]
+    run_as_group = runtime_task.body[1]
+    add_return = add_two.body[0]
+    group_return = run_as_group.body[2]
+
+    assert getattr(add_two, "is_async", False)
+    assert getattr(run_as_group, "is_async", False)
+    assert isinstance(add_return, ReturnNode)
+    assert isinstance(add_return.value, BinaryOpNode)
+    assert isinstance(add_return.value.left, UnaryOpNode)
+    assert isinstance(add_return.value.right, UnaryOpNode)
+    assert add_return.value.left.op == "await"
+    assert add_return.value.right.op == "await"
+    assert isinstance(add_return.value.left.operand, FunctionCallNode)
+    assert add_return.value.left.operand.name == "create_task"
+    assert isinstance(group_return.value.left, UnaryOpNode)
+    assert isinstance(group_return.value.right, UnaryOpNode)
+    assert group_return.value.left.op == "await"
+    assert group_return.value.right.op == "await"
+    assert isinstance(group_return.value.left.operand, VariableNode)
+    assert group_return.value.left.operand.name == "t0"
+
+
 def test_else_if_parsing():
     code = """
     fn fragment_main(input: PSInput) -> PSOutput:

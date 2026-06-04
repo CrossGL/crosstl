@@ -312,6 +312,33 @@ def test_async_function_codegen_from_modular_builtin_kernels_reparses_crossgl():
     ]
 
 
+def test_await_expression_codegen_from_modular_runtime_async_tests():
+    # Reduced from https://github.com/modular/modular.git commit
+    # daa47bb846cc213723a54c51844ea4e923eb5e13,
+    # mojo/stdlib/test/runtime/test_asyncrt.mojo test_runtime_task and
+    # test_runtime_taskgroup await return expressions.
+    code = """
+    def runtime_task():
+        @parameter
+        async def add_two(a: Int, b: Int) -> Int:
+            return await create_task(add[1](a)) + await create_task(add[2](b))
+
+        async def run_as_group() -> Int:
+            var t0 = create_task(return_value[1]())
+            var t1 = create_task(return_value[2]())
+            return await t0 + await t1
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int add_two(int a, int b) @ parameter" in generated_code
+    assert "int run_as_group()" in generated_code
+    assert "return (create_task(add[1](a)) + create_task(add[2](b)));" in generated_code
+    assert "return (t0 + t1);" in generated_code
+    assert "await" not in generated_code
+    assert "Unhandled expression" not in generated_code
+
+
 def test_function_capture_list_codegen_from_modular_packing_kernel():
     # Reduced from https://github.com/modular/modular.git commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,

@@ -811,6 +811,8 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_nested_expression(expr.operand)
             op = expr.op if hasattr(expr, "op") else "+"
+            if op == "await":
+                return operand
             return f"({op}{operand})"
         elif isinstance(expr, CastNode):
             target_type = self.map_type(expr.target_type)

@@ -770,7 +770,7 @@ class SlangToCrossGLConverter:
 
     def generate_parameter(self, param):
         parameter = (
-            f"{self.map_type(param.vtype)} {self.format_identifier(param.name)}"
+            f"{self.map_parameter_type(param.vtype)} {self.format_identifier(param.name)}"
             f"{self.format_array_suffixes(param)}"
         )
         semantic = self.map_semantic(param.semantic)
@@ -1261,6 +1261,10 @@ class SlangToCrossGLConverter:
             )
             return f"{mapped_type}{pointer_suffix}"
         return slang_type
+
+    def map_parameter_type(self, slang_type):
+        """Map Slang parameter wrapper types to CrossGL value/resource types."""
+        return self.map_type(self.unwrap_resource_container_type(slang_type))
 
     def collect_sampleable_resource_types(self, ast):
         resources = {}
