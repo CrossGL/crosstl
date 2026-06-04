@@ -25,6 +25,7 @@ REPORT_KIND = "crosstl-project-portability-report"
 REPORT_SCHEMA_VERSION = 1
 DEFAULT_CONFIG_NAME = "crosstl.toml"
 DEFAULT_OUTPUT_DIR = "crosstl-out"
+OUTPUT_DIR_OUTSIDE_PROJECT_CODE = "project.config.output-dir-outside-project"
 INTERNAL_EXCLUDE_PATTERNS = (DEFAULT_CONFIG_NAME,)
 DEFAULT_EXCLUDE_PATTERNS = (
     ".git/**",
@@ -324,6 +325,19 @@ class ProjectDiagnostic:
 def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     diagnostics: list[ProjectDiagnostic] = []
     location = _config_location(config)
+    if not _is_relative_to(config.output_path, config.root):
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code=OUTPUT_DIR_OUTSIDE_PROJECT_CODE,
+                message=(
+                    f"Configured output directory '{config.output_dir}' resolves "
+                    f"outside the repository: {config.output_path.resolve()}"
+                ),
+                location=location,
+                missing_capabilities=["artifact.manifest"],
+            )
+        )
     if config.variants:
         diagnostics.append(
             ProjectDiagnostic(
@@ -751,6 +765,13 @@ def _runtime_migration_actions(
     ]
 
 
+def _has_error_diagnostic(diagnostics: Sequence[ProjectDiagnostic], code: str) -> bool:
+    return any(
+        diagnostic.severity == "error" and diagnostic.code == code
+        for diagnostic in diagnostics
+    )
+
+
 def translate_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -790,6 +811,9 @@ def translate_project(
     diagnostics: list[ProjectDiagnostic] = list(scan.diagnostics)
     artifacts: list[dict[str, Any]] = []
     include_paths = _resolved_include_dirs(config)
+    output_dir_blocked = _has_error_diagnostic(
+        diagnostics, OUTPUT_DIR_OUTSIDE_PROJECT_CODE
+    )
 
     for unit in scan.units:
         for target in selected_targets:
@@ -811,6 +835,14 @@ def translate_project(
                     ),
                 },
             }
+            if output_dir_blocked:
+                artifact["status"] = "failed"
+                artifact["error"] = (
+                    "Configured output directory resolves outside the repository; "
+                    "artifact was not written."
+                )
+                artifacts.append(artifact)
+                continue
             try:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 translate(

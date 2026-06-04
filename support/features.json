@@ -4205,92 +4205,101 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
           ]
         },
         "cuda": {
           "status": "supported",
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
           ]
         },
         "hip": {
           "status": "supported",
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
           ]
         },
         "mojo": {
           "status": "supported",
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
           ]
         },
         "slang": {
           "status": "supported",
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
           ]
         }
       }
@@ -4472,92 +4481,101 @@
       "support": {
         "directx": {
           "status": "partial",
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "opengl": {
           "status": "partial",
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "metal": {
           "status": "partial",
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "vulkan": {
           "status": "partial",
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "cuda": {
           "status": "partial",
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "hip": {
           "status": "partial",
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "mojo": {
           "status": "partial",
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "rust": {
           "status": "partial",
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "slang": {
           "status": "partial",
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         }
       }
@@ -4677,74 +4695,83 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "cuda": {
           "status": "supported",
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "hip": {
           "status": "supported",
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "mojo": {
           "status": "supported",
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         },
         "slang": {
           "status": "supported",
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, and basic pipeline provenance.",
+          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
           ]
         }
       }

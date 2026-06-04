@@ -91,10 +91,12 @@ assigned to a registered source backend; invalid override backend names are
 reported as configuration diagnostics. Include directories, defines, and
 variants are recorded in project reports. Missing include directories are
 reported as configuration diagnostics. Include directories and defines are passed
-to source frontends that expose preprocessor options. Named variant expansion
-through every native preprocessor remains a tracked project-porting capability,
-and reports emit structured warnings when variants are present but not yet
-expanded.
+to source frontends that expose preprocessor options. ``output_dir`` must
+resolve inside the repository root; paths that escape the repository are reported
+as configuration diagnostics and artifacts are not written. Named variant
+expansion through every native preprocessor remains a tracked project-porting
+capability, and reports emit structured warnings when variants are present but
+not yet expanded.
 
 Report Shape
 ------------
@@ -110,7 +112,8 @@ Project reports are JSON documents with:
   source backend names, and source overrides.
 - ``artifacts``: attempted outputs with source path, source backend, target,
   output path, status, source hash, pipeline provenance, and file-granularity
-  source-map anchors for successful translations.
+  source-map anchors for successful translations. Invalid project output
+  directories are recorded as failed artifacts without writing files.
 - ``diagnostics``: structured diagnostics using severity, code, message,
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract.

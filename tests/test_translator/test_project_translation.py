@@ -488,6 +488,67 @@ def test_scan_project_ignores_configured_output_dir(tmp_path):
     assert [unit.relative_path for unit in scan.units] == ["shaders/simple.cgl"]
 
 
+def test_scan_project_reports_output_dir_outside_project(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            output_dir = "../outside"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report().to_json()
+
+    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.output-dir-outside-project"
+    assert diagnostic["location"]["file"] == "crosstl.toml"
+    assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
+    assert "../outside" in diagnostic["message"]
+
+
+def test_translate_project_rejects_output_dir_outside_project_without_writing(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "../outside"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert outside.exists() is False
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.output-dir-outside-project"
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["source"] == "simple.cgl"
+    assert artifact["target"] == "opengl"
+    assert Path(artifact["path"]).resolve() == (outside / "opengl" / "simple.glsl")
+    assert artifact["error"] == (
+        "Configured output directory resolves outside the repository; "
+        "artifact was not written."
+    )
+
+
 def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -820,6 +881,39 @@ def test_project_cli_translate_project_fails_on_error_diagnostics(tmp_path):
     assert payload["summary"]["diagnosticCounts"]["error"] == 1
     assert payload["diagnostics"][0]["code"] == (
         "project.config.source-root-outside-project"
+    )
+
+
+def test_project_cli_translate_project_rejects_output_dir_outside_project(tmp_path):
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--target",
+            "opengl",
+            "--output-dir",
+            "../outside",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert outside.exists() is False
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.config.output-dir-outside-project"
     )
 
 
