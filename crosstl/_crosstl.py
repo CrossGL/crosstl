@@ -195,6 +195,18 @@ def _parse_project_define_overrides(values):
     return defines
 
 
+def _parse_project_source_overrides(values):
+    overrides = {}
+    for value in values or []:
+        pattern, separator, backend = value.partition("=")
+        pattern = pattern.strip()
+        backend = backend.strip()
+        if not pattern or not separator or not backend:
+            raise ValueError("--source-override entries must use PATTERN=BACKEND")
+        overrides[pattern] = backend
+    return overrides
+
+
 def _load_project_config_from_args(args):
     from .project import load_project_config
 
@@ -203,12 +215,20 @@ def _load_project_config_from_args(args):
         getattr(args, "include_dir", None) or ()
     )
     define_overrides = _parse_project_define_overrides(getattr(args, "define", None))
-    if include_dirs == tuple(config.include_dirs) and not define_overrides:
+    source_overrides = _parse_project_source_overrides(
+        getattr(args, "source_override", None)
+    )
+    if (
+        include_dirs == tuple(config.include_dirs)
+        and not define_overrides
+        and not source_overrides
+    ):
         return config
     return replace(
         config,
         include_dirs=include_dirs,
         defines={**dict(config.defines), **define_overrides},
+        source_overrides={**dict(config.source_overrides), **source_overrides},
     )
 
 
@@ -222,6 +242,11 @@ def _add_project_override_args(parser):
         "--define",
         action="append",
         help="Project preprocessor define override as NAME or NAME=VALUE; repeatable",
+    )
+    parser.add_argument(
+        "--source-override",
+        action="append",
+        help="Project source backend override as PATTERN=BACKEND; repeatable",
     )
 
 

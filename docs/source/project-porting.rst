@@ -54,9 +54,11 @@ Project translation exits nonzero when the report contains failed artifacts or
 error diagnostics.
 
 Project scan, report, and translation commands also accept repeatable
-``--include-dir`` and ``--define`` overrides. CLI defines use ``NAME`` or
-``NAME=VALUE`` syntax and override matching names loaded from ``crosstl.toml``.
-These overrides are recorded in the emitted project report.
+``--include-dir``, ``--define``, and ``--source-override`` overrides. CLI
+defines use ``NAME`` or ``NAME=VALUE`` syntax and override matching names loaded
+from ``crosstl.toml``. CLI source overrides use ``PATTERN=BACKEND`` syntax and
+override matching source patterns loaded from ``crosstl.toml``. These overrides
+are recorded in the emitted project report.
 
 Unsupported target backend names are reported as configuration diagnostics in
 scan, report, and translation output. Translation still records per-artifact
@@ -109,8 +111,9 @@ repository-relative; absolute patterns or patterns containing parent-directory
 segments are reported as configuration diagnostics and skipped. Source overrides
 allow extensionless or non-standard files to be assigned to a registered source
 backend. Override patterns are also considered during default discovery, so
-override-only files do not require broad include globs. Invalid override backend
-names are reported as configuration diagnostics.
+override-only files do not require broad include globs. CLI source overrides are
+merged with this configuration before scan or translation. Invalid override
+backend names are reported as configuration diagnostics.
 Include directories, defines, and named
 variants are recorded in project reports. Missing include directories are
 reported as configuration diagnostics. Include directories that resolve outside
@@ -145,8 +148,9 @@ Report Shape
 Project reports are JSON documents with:
 
 - ``project`` metadata: root, config path, source roots, include/exclude
-  patterns, targets, output directory, include directories, define and variant
-  maps, and define/variant counts.
+  patterns, targets, output directory, source override map, include
+  directories, define and variant maps, and source override/define/variant
+  counts.
 - ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
   source backend and target backend.
 - ``units``: discovered translation units with repository-relative paths,

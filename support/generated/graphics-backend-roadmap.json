@@ -87,7 +87,7 @@
       "category": "project",
       "feature": "Source provenance and source-map bridge",
       "feature_id": "project.source_provenance",
-      "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+      "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
       "status": "partial"
     },
     {
@@ -96,7 +96,7 @@
       "category": "project",
       "feature": "Source provenance and source-map bridge",
       "feature_id": "project.source_provenance",
-      "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+      "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
       "status": "partial"
     },
     {
@@ -105,7 +105,7 @@
       "category": "project",
       "feature": "Source provenance and source-map bridge",
       "feature_id": "project.source_provenance",
-      "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+      "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
       "status": "partial"
     },
     {
@@ -1782,9 +1782,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "metal": {
@@ -1799,9 +1800,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "opengl": {
@@ -1816,9 +1818,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         }
       }
@@ -2126,9 +2129,12 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
           ],
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "status": "partial"
         },
         "metal": {
@@ -2137,9 +2143,12 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
           ],
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "status": "partial"
         },
         "opengl": {
@@ -2148,9 +2157,12 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides"
           ],
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "status": "partial"
         }
       }

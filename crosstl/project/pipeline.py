@@ -862,6 +862,8 @@ class ProjectPortabilityReport:
                 "excludePatterns": list(self.config.exclude_patterns),
                 "targets": list(self.targets),
                 "outputDir": str(self.config.output_path),
+                "sourceOverrides": dict(sorted(self.config.source_overrides.items())),
+                "sourceOverrideCount": len(self.config.source_overrides),
                 "includeDirs": list(self.config.include_dirs),
                 "defines": dict(sorted(self.config.defines.items())),
                 "defineCount": len(self.config.defines),
@@ -1755,6 +1757,30 @@ def _project_metadata_contract_reasons(
             reasons.append("project.defineCount must be a non-negative integer")
         elif defines_is_mapping and define_count != len(defines):
             reasons.append("project.defineCount must match project.defines")
+
+    source_overrides = project.get("sourceOverrides")
+    source_overrides_is_mapping = isinstance(source_overrides, Mapping)
+    if _optional_project_field(
+        project, "sourceOverrides", required=require_full_metadata
+    ):
+        reasons.extend(
+            _string_mapping_contract_reasons(
+                "project.sourceOverrides", source_overrides
+            )
+        )
+
+    if _optional_project_field(
+        project, "sourceOverrideCount", required=require_full_metadata
+    ):
+        source_override_count = project.get("sourceOverrideCount")
+        if not _is_non_negative_int(source_override_count):
+            reasons.append("project.sourceOverrideCount must be a non-negative integer")
+        elif source_overrides_is_mapping and source_override_count != len(
+            source_overrides
+        ):
+            reasons.append(
+                "project.sourceOverrideCount must match project.sourceOverrides"
+            )
 
     variants = project.get("variants")
     variants_is_mapping = isinstance(variants, Mapping)

@@ -304,6 +304,8 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     assert scan.diagnostics == []
     payload = scan.to_report(targets=config.targets).to_json()
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["project"]["sourceOverrides"] == {"gpu/*.shader": "cgl"}
+    assert payload["project"]["sourceOverrideCount"] == 1
     assert payload["project"]["defines"] == {"USE_FAST_PATH": "1"}
     assert payload["project"]["defineCount"] == 1
     assert payload["project"]["variants"] == {"debug": {"USE_FAST_PATH": "0"}}
@@ -1110,6 +1112,8 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
                     "includeDirs": "include",
                     "defines": {"USE_FAST_PATH": 1},
                     "defineCount": 2,
+                    "sourceOverrides": {"gpu/*.shader": 1},
+                    "sourceOverrideCount": 2,
                     "variants": {"debug": "not a define map", "": {"MODE": 1}},
                     "variantCount": "1",
                 },
@@ -1136,6 +1140,11 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     assert "project.includeDirs must be a list of strings" in diagnostic["message"]
     assert "project.defines values must be strings" in diagnostic["message"]
     assert "project.defineCount must match project.defines" in diagnostic["message"]
+    assert "project.sourceOverrides values must be strings" in (diagnostic["message"])
+    assert (
+        "project.sourceOverrideCount must match project.sourceOverrides"
+        in diagnostic["message"]
+    )
     assert "project.variants keys must be non-empty strings" in diagnostic["message"]
     assert "project.variants.debug must be an object" in diagnostic["message"]
     assert "project.variants. values must be strings" in diagnostic["message"]
@@ -2336,6 +2345,43 @@ def test_project_cli_translate_project_applies_include_dir_and_define_overrides(
     assert "project_color" in output.read_text(encoding="utf-8")
 
 
+def test_project_cli_translate_project_applies_source_backend_overrides(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--target",
+            "opengl",
+            "--output-dir",
+            "translated",
+            "--source-override",
+            "gpu/*.shader=cgl",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    output = repo / "translated" / "opengl" / "gpu" / "kernel.glsl"
+
+    assert output.exists()
+    assert payload["project"]["sourceOverrides"] == {"gpu/*.shader": "cgl"}
+    assert payload["project"]["sourceOverrideCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["units"][0]["sourceOverride"] == "cgl"
+    assert payload["artifacts"][0]["sourceBackend"] == "cgl"
+
+
 def test_project_cli_scan_rejects_empty_define_override(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -2358,6 +2404,30 @@ def test_project_cli_scan_rejects_empty_define_override(tmp_path):
 
     assert result.returncode == 1
     assert "Error: --define entries must use NAME or NAME=VALUE" in result.stdout
+
+
+def test_project_cli_scan_rejects_malformed_source_backend_override(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--source-override",
+            "gpu/*.shader=",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Error: --source-override entries must use PATTERN=BACKEND" in result.stdout
 
 
 def test_project_cli_translate_project_fails_on_error_diagnostics(tmp_path):
