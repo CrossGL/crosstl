@@ -1986,6 +1986,42 @@ def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
     assert "artifacts[0].status must be translated or failed" in (diagnostic["message"])
 
 
+def test_validate_project_report_rejects_duplicate_artifact_identities(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "duplicate-artifact-report.json"
+    artifact = {
+        "source": "simple.cgl",
+        "target": "opengl",
+        "path": "out/opengl/simple.glsl",
+        "status": "failed",
+        "error": "translation failed",
+    }
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [artifact, dict(artifact)],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[1] duplicates artifacts[0] identity" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_malformed_source_maps(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

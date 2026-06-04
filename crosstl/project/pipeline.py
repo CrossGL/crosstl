@@ -3124,6 +3124,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             _is_non_empty_string(name) for name in project_variants
         )
         declared_variants = set(project_variants) if project_variants_valid else set()
+        artifact_identities: dict[tuple[str, str, str, str | None], int] = {}
         for index, artifact in enumerate(artifacts):
             if not isinstance(artifact, Mapping):
                 reasons.append(f"artifacts[{index}] must be an object")
@@ -3158,6 +3159,28 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 ):
                     reasons.append(
                         f"artifacts[{index}].variant must be listed in project.variants"
+                    )
+            source = artifact.get("source")
+            artifact_path = artifact.get("path")
+            if (
+                _is_non_empty_string(source)
+                and _is_non_empty_string(target)
+                and _is_non_empty_string(artifact_path)
+                and ("variant" not in artifact or _is_non_empty_string(variant))
+            ):
+                identity = (
+                    source,
+                    _normalized_targets([target])[0],
+                    artifact_path,
+                    variant if "variant" in artifact else None,
+                )
+                previous_index = artifact_identities.get(identity)
+                if previous_index is None:
+                    artifact_identities[identity] = index
+                else:
+                    reasons.append(
+                        f"artifacts[{index}] duplicates artifacts[{previous_index}] "
+                        "identity"
                     )
             require_artifact_hashes = has_summary and status == "translated"
             reasons.extend(
