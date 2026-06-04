@@ -676,6 +676,12 @@ class CudaParser:
         if self.is_implicit_int_type_at_index(index, saw_integral_sign):
             type_token = "INT"
             type_value = "int"
+        elif self.is_decltype_type_start_at_index(index):
+            type_token = "IDENTIFIER"
+            type_value = "decltype"
+            index = self.skip_decltype_type_at_index(index)
+            if index is None:
+                return None
         elif self.tokens[index][0] in self.ELABORATED_TYPE_TOKENS:
             type_token = self.tokens[index][0]
             type_value = self.tokens[index][1]
@@ -723,6 +729,7 @@ class CudaParser:
             type_token != "IDENTIFIER"
             or has_qualified_suffix
             or type_value == "auto"
+            or type_value == "decltype"
             or self.is_identifier_type_name(type_value)
             or type_token in self.ELABORATED_TYPE_TOKENS
             or saw_type_qualifier
@@ -2140,6 +2147,8 @@ class CudaParser:
 
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
+        elif self.is_decltype_type_start():
+            type_parts.append(self.parse_decltype_type_name())
         elif self.current_token[0] in self.ELABORATED_TYPE_TOKENS:
             type_parts.append(self.parse_elaborated_type_name())
         elif self.is_global_qualified_name_start_at_index(self.current_index):
@@ -2181,6 +2190,8 @@ class CudaParser:
 
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
+        elif self.is_decltype_type_start():
+            type_parts.append(self.parse_decltype_type_name())
         elif self.current_token[0] in self.ELABORATED_TYPE_TOKENS:
             type_parts.append(self.parse_elaborated_type_name())
         elif self.is_global_qualified_name_start_at_index(self.current_index):
@@ -2203,6 +2214,64 @@ class CudaParser:
 
     def is_implicit_int_current_type(self, saw_integral_sign):
         return self.is_implicit_int_type_at_index(self.current_index, saw_integral_sign)
+
+    def is_decltype_type_start(self):
+        return self.is_decltype_type_start_at_index(self.current_index)
+
+    def is_decltype_type_start_at_index(self, index):
+        return (
+            index + 1 < len(self.tokens)
+            and self.tokens[index][0] == "IDENTIFIER"
+            and self.tokens[index][1] == "decltype"
+            and self.tokens[index + 1][0] == "LPAREN"
+        )
+
+    def skip_decltype_type_at_index(self, index):
+        if not self.is_decltype_type_start_at_index(index):
+            return None
+
+        index += 1
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            elif token_type == "EOF":
+                return None
+            index += 1
+
+        return None
+
+    def parse_decltype_type_name(self):
+        self.eat("IDENTIFIER")
+        self.eat("LPAREN")
+        parts = []
+        depth = 1
+
+        while depth > 0:
+            token_type, token_value = self.current_token
+            if token_type == "EOF":
+                raise SyntaxError("Unterminated decltype type")
+            if token_type == "LPAREN":
+                depth += 1
+                parts.append(token_value)
+                self.eat("LPAREN")
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RPAREN")
+                    break
+                parts.append(token_value)
+                self.eat("RPAREN")
+            else:
+                parts.append(token_value)
+                self.eat(token_type)
+
+        return f"decltype({self.format_template_parts(parts)})"
 
     def parse_postfix_type_qualifiers(self, type_parts):
         while self.current_token[0] in self.POSTFIX_TYPE_QUALIFIER_TOKENS:

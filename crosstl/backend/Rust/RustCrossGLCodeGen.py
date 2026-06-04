@@ -360,6 +360,7 @@ class RustToCrossGLConverter:
             "no_perspective": "noperspective",
             "centroid": "centroid",
             "sample": "sample",
+            "invariant": "invariant",
         }
         self.spirv_stage_map = {
             "vertex": "vertex",

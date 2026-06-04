@@ -1120,6 +1120,24 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode in {"OpImageGather", "OpImageDrefGather"}:
+                if len(operands) >= 4:
+                    expressions[result_id] = (
+                        self.spirv_assembly_image_gather_expression(
+                            opcode,
+                            operands[1],
+                            operands[2],
+                            operands[3],
+                            operands[4:],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
             if result_id and opcode == "OpImageFetch" and len(operands) >= 3:
                 expressions[result_id] = self.spirv_assembly_image_fetch_expression(
                     operands[1],
@@ -1849,6 +1867,56 @@ class VulkanParser:
         function_name = "textureProj" if "Proj" in opcode else "texture"
         return FunctionCallNode(function_name, base_args)
 
+    def spirv_assembly_image_gather_expression(
+        self,
+        opcode,
+        image_operand,
+        coordinate_operand,
+        gather_operand,
+        image_operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        image = self.spirv_assembly_operand_expression(
+            image_operand, expressions, names, decorations, constants
+        )
+        coordinate = self.spirv_assembly_operand_expression(
+            coordinate_operand, expressions, names, decorations, constants
+        )
+        gathered = self.spirv_assembly_operand_expression(
+            gather_operand, expressions, names, decorations, constants
+        )
+        parsed_operands = self.spirv_assembly_image_operands(
+            image_operands, expressions, names, decorations, constants
+        )
+        offset = self.spirv_assembly_image_offset_operand(parsed_operands)
+        offsets = self.spirv_assembly_image_const_offsets_operand(parsed_operands)
+
+        if opcode == "OpImageDrefGather":
+            base_args = [image, coordinate, gathered]
+            if offsets is not None:
+                return FunctionCallNode(
+                    "textureGatherCompareOffsets", [*base_args, offsets]
+                )
+            if offset is not None:
+                return FunctionCallNode(
+                    "textureGatherCompareOffset", [*base_args, offset]
+                )
+            return FunctionCallNode("textureGatherCompare", base_args)
+
+        base_args = [image, coordinate]
+        if offsets is not None:
+            return FunctionCallNode(
+                "textureGatherOffsets", [*base_args, offsets, gathered]
+            )
+        if offset is not None:
+            return FunctionCallNode(
+                "textureGatherOffset", [*base_args, offset, gathered]
+            )
+        return FunctionCallNode("textureGather", [*base_args, gathered])
+
     def spirv_assembly_image_fetch_expression(
         self,
         image_operand,
@@ -1906,6 +1974,12 @@ class VulkanParser:
             values = parsed_operands.get(operand_name)
             if values:
                 return values[0]
+        return None
+
+    def spirv_assembly_image_const_offsets_operand(self, parsed_operands):
+        values = parsed_operands.get("ConstOffsets")
+        if values:
+            return values[0]
         return None
 
     def spirv_assembly_bitcast_expression(
@@ -2039,6 +2113,7 @@ class VulkanParser:
         operand_counts = {
             "Bias": 1,
             "ConstOffset": 1,
+            "ConstOffsets": 1,
             "Grad": 2,
             "Lod": 1,
             "Offset": 1,

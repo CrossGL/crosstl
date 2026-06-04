@@ -551,6 +551,15 @@ class MetalParser:
                     break
                 parameter_tokens.append(token)
                 self.eat("GREATER_THAN")
+            elif token[0] == "SHIFT_RIGHT" and depth >= 2:
+                closers_to_keep = min(2, depth - 1)
+                parameter_tokens.extend(
+                    ("GREATER_THAN", ">") for _ in range(closers_to_keep)
+                )
+                depth -= 2
+                self.eat("SHIFT_RIGHT")
+                if depth == 0:
+                    break
             elif token[0] == "COMMA" and depth == 1:
                 parsed = self.parse_template_parameter_tokens(parameter_tokens)
                 if parsed is not None:
@@ -687,16 +696,7 @@ class MetalParser:
         idx = self.skip_scoped_type_suffix_at(idx)
 
         if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
-            depth = 0
-            while idx < len(self.tokens):
-                if self.tokens[idx][0] == "LESS_THAN":
-                    depth += 1
-                elif self.tokens[idx][0] == "GREATER_THAN":
-                    depth -= 1
-                    if depth == 0:
-                        idx += 1
-                        break
-                idx += 1
+            idx = self.skip_template_argument_list_at(idx)
 
         while idx < len(self.tokens) and self.tokens[idx][0] in [
             "MULTIPLY",
@@ -756,6 +756,10 @@ class MetalParser:
             token_type = self.tokens[idx][0]
             if token_type == "LESS_THAN":
                 depth += 1
+            elif token_type == "SHIFT_RIGHT" and depth >= 2:
+                depth -= 2
+                if depth == 0:
+                    return idx + 1
             elif token_type == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
@@ -1197,6 +1201,12 @@ class MetalParser:
                         break
                     inner.append(self.current_token[1])
                     self.eat("GREATER_THAN")
+                elif self.current_token[0] == "SHIFT_RIGHT" and depth >= 2:
+                    inner.extend(">" for _ in range(min(2, depth - 1)))
+                    depth -= 2
+                    self.eat("SHIFT_RIGHT")
+                    if depth == 0:
+                        break
                 else:
                     inner.append(self.current_token[1])
                     self.eat(self.current_token[0])
@@ -1754,6 +1764,15 @@ class MetalParser:
                 depth += 1
             elif token_type == close_token:
                 depth -= 1
+                if depth == 0:
+                    return idx + 1
+            elif (
+                open_token == "LESS_THAN"
+                and close_token == "GREATER_THAN"
+                and token_type == "SHIFT_RIGHT"
+                and depth >= 2
+            ):
+                depth -= 2
                 if depth == 0:
                     return idx + 1
             idx += 1
@@ -2667,6 +2686,15 @@ class MetalParser:
                 return False
             if token_type == "LESS_THAN":
                 depth += 1
+            elif token_type == "SHIFT_RIGHT" and depth >= 2:
+                depth -= 2
+                if depth == 0:
+                    if require_type_like_argument and not saw_type_like:
+                        return False
+                    return (
+                        idx + 1 < len(self.tokens)
+                        and self.tokens[idx + 1][0] in follow_token_types
+                    )
             elif token_type == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
@@ -2711,6 +2739,12 @@ class MetalParser:
                     break
                 parts.append(self.current_token[1])
                 self.eat("GREATER_THAN")
+            elif self.current_token[0] == "SHIFT_RIGHT" and depth >= 2:
+                parts.extend(">" for _ in range(min(2, depth - 1)))
+                depth -= 2
+                self.eat("SHIFT_RIGHT")
+                if depth == 0:
+                    break
             else:
                 parts.append(self.current_token[1])
                 self.eat(self.current_token[0])

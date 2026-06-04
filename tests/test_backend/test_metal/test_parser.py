@@ -1355,6 +1355,48 @@ def test_parse_explicit_template_specialization_from_blender_texture_read():
     assert ast.functions[1].generics == []
 
 
+def test_parse_nested_template_closers_from_spirv_cross_descriptor_array():
+    # Reduced from:
+    # Repo: https://github.com/KhronosGroup/SPIRV-Cross
+    # Commit: 146679ff8255a6068518685599d7fb8761d1b570
+    # Path: reference/shaders-msl/frag/runtime_array_as_argument_buffer.msl3.argument-tier-1.rich-descriptor.frag
+    code = """
+    void implicit_texture(thread uint& inputId,
+                          const spvDescriptorArray<texture2d<float>> textures,
+                          const spvDescriptorArray<sampler> smp) {
+        return;
+    }
+    """
+    ast = parse_ok(code)
+    params = ast.functions[0].params
+
+    assert params[0].vtype == "uint&"
+    assert params[0].qualifiers == ["thread"]
+    assert params[1].vtype == "spvDescriptorArray<texture2d<float>>"
+    assert params[1].qualifiers == ["const"]
+    assert params[2].vtype == "spvDescriptorArray<sampler>"
+    assert params[2].qualifiers == ["const"]
+
+
+def test_parse_nested_template_closers_in_struct_specialization_from_spirv_cross():
+    # Reduced from:
+    # Repo: https://github.com/KhronosGroup/SPIRV-Cross
+    # Commit: 146679ff8255a6068518685599d7fb8761d1b570
+    # Path: reference/shaders-msl/asm/comp/quantize.asm.comp
+    code = """
+    template<uint N>
+    struct SpvHalfTypeSelector<vec<float, N>> {
+        using H = vec<half, N>;
+    };
+    """
+    ast = parse_ok(code)
+    struct = ast.structs[0]
+
+    assert struct.name == "SpvHalfTypeSelector<vec<float,N>>"
+    assert struct.template_parameters == [("value", "N")]
+    assert struct.members == []
+
+
 def test_parse_template_struct_from_mlx_arg_reduce():
     code = """
     template <typename U>

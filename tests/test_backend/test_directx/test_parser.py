@@ -307,6 +307,37 @@ def test_parse_class_qualified_method_definition_from_sdk_samples():
     assert [param.name for param in method.params] == ["normal"]
 
 
+def test_parse_const_qualified_member_functions_from_hlsl_specs():
+    # Source: https://microsoft.github.io/hlsl-specs/proposals/0007-const-member-functions/
+    ast = parse_code(textwrap.dedent("""
+            struct Hat {
+                int getFeathers() const;
+                int Feathers;
+            };
+
+            struct Pupper {
+                void Wag() const { }
+            };
+
+            int Hat::getFeathers() const {
+                return Feathers;
+            }
+            """))
+
+    structs_by_name = {struct.name: struct for struct in ast.structs}
+    hat_method = structs_by_name["Hat"].methods[0]
+    wag_method = structs_by_name["Pupper"].methods[0]
+    definition = ast.functions[0]
+
+    assert hat_method.name == "getFeathers"
+    assert hat_method.is_prototype is True
+    assert hat_method.qualifiers == ["const"]
+    assert wag_method.name == "Wag"
+    assert wag_method.qualifiers == ["const"]
+    assert definition.name == "Hat::getFeathers"
+    assert definition.qualifiers == ["const"]
+
+
 def test_parse_struct_base_lists_from_dxc_rewriter():
     ast = parse_code(textwrap.dedent("""
             interface my_interface {
