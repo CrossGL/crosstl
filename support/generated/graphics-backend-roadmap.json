@@ -1774,27 +1774,30 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
           ],
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
           "status": "supported"
         },
         "metal": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
           ],
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
           "status": "supported"
         },
         "opengl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir"
           ],
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, and keeps generated output under a separate directory.",
+          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, and keeps generated output under a separate directory.",
           "status": "supported"
         }
       }

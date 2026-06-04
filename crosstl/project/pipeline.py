@@ -105,6 +105,16 @@ def _path_matches(path: str, patterns: Sequence[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
 
+def _internal_exclude_patterns(config: ProjectConfig) -> tuple[str, ...]:
+    patterns = list(INTERNAL_EXCLUDE_PATTERNS)
+    output_path = config.output_path
+    if _is_relative_to(output_path, config.root):
+        output_relative = _relpath(output_path, config.root)
+        if output_relative and output_relative != ".":
+            patterns.extend((output_relative, f"{output_relative}/**"))
+    return tuple(patterns)
+
+
 def _source_hash(path: Path) -> dict[str, str]:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return {"algorithm": "sha256", "value": digest}
@@ -542,6 +552,7 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
     skipped: list[dict[str, Any]] = []
     diagnostics: list[ProjectDiagnostic] = _configuration_diagnostics(config)
     diagnostics.extend(_source_root_diagnostics(config))
+    internal_exclude_patterns = _internal_exclude_patterns(config)
 
     for path in _iter_scan_candidates(config):
         try:
@@ -550,7 +561,7 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
             continue
         if _path_matches(relative_path, config.exclude_patterns):
             continue
-        if _path_matches(relative_path, INTERNAL_EXCLUDE_PATTERNS):
+        if _path_matches(relative_path, internal_exclude_patterns):
             continue
 
         override = _override_for_path(relative_path, config)

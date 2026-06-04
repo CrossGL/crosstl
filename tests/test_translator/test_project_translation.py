@@ -379,6 +379,31 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     ]
 
 
+def test_scan_project_ignores_configured_output_dir(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    config = load_project_config(repo)
+    report = translate_project(config)
+    output = repo / "translated" / "opengl" / "shaders" / "simple.glsl"
+    assert output.exists()
+    assert report.to_json()["summary"]["translatedCount"] == 1
+
+    scan = scan_project(config)
+
+    assert [unit.relative_path for unit in scan.units] == ["shaders/simple.cgl"]
+
+
 def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
