@@ -842,6 +842,58 @@ def test_validate_project_report_rejects_invalid_project_metadata(tmp_path):
     assert "project.outputDir must be a string" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-project-config-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "config": [],
+                    "sourceRoots": "shaders",
+                    "includePatterns": ["*.cgl", 1],
+                    "excludePatterns": [False],
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "includeDirs": "include",
+                    "defines": {"USE_FAST_PATH": 1},
+                    "defineCount": 2,
+                    "variants": {"debug": "not a define map"},
+                    "variantCount": "1",
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.config must be a string or null" in diagnostic["message"]
+    assert "project.sourceRoots must be a list of strings" in diagnostic["message"]
+    assert "project.includePatterns must be a list of strings" in (
+        diagnostic["message"]
+    )
+    assert "project.excludePatterns must be a list of strings" in (
+        diagnostic["message"]
+    )
+    assert "project.includeDirs must be a list of strings" in diagnostic["message"]
+    assert "project.defines values must be strings" in diagnostic["message"]
+    assert "project.defineCount must match project.defines" in diagnostic["message"]
+    assert "project.variants.debug must be an object" in diagnostic["message"]
+    assert "project.variantCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

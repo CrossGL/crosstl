@@ -1339,6 +1339,90 @@ def _string_list_contract_reasons(prefix: str, value: Any) -> list[str]:
     return []
 
 
+def _config_string_list_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        return [f"{prefix} must be a list of strings"]
+    return []
+
+
+def _string_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    if any(not isinstance(item, str) for item in value.values()):
+        return [f"{prefix} values must be strings"]
+    return []
+
+
+def _variant_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    for variant_name, defines in value.items():
+        variant_prefix = f"{prefix}.{variant_name}"
+        if not isinstance(defines, Mapping):
+            reasons.append(f"{variant_prefix} must be an object")
+            continue
+        if any(not isinstance(item, str) for item in defines.values()):
+            reasons.append(f"{variant_prefix} values must be strings")
+    return reasons
+
+
+def _optional_project_field(
+    project: Mapping[str, Any], key: str, *, required: bool
+) -> bool:
+    return required or key in project
+
+
+def _project_metadata_contract_reasons(
+    project: Mapping[str, Any], *, require_full_metadata: bool
+) -> list[str]:
+    reasons = []
+    if _optional_project_field(project, "config", required=require_full_metadata):
+        config_path = project.get("config")
+        if config_path is not None and not isinstance(config_path, str):
+            reasons.append("project.config must be a string or null")
+
+    for field_name in (
+        "sourceRoots",
+        "includePatterns",
+        "excludePatterns",
+        "includeDirs",
+    ):
+        if _optional_project_field(project, field_name, required=require_full_metadata):
+            reasons.extend(
+                _config_string_list_contract_reasons(
+                    f"project.{field_name}", project.get(field_name)
+                )
+            )
+
+    defines = project.get("defines")
+    defines_is_mapping = isinstance(defines, Mapping)
+    if _optional_project_field(project, "defines", required=require_full_metadata):
+        reasons.extend(_string_mapping_contract_reasons("project.defines", defines))
+
+    if _optional_project_field(project, "defineCount", required=require_full_metadata):
+        define_count = project.get("defineCount")
+        if not _is_non_negative_int(define_count):
+            reasons.append("project.defineCount must be a non-negative integer")
+        elif defines_is_mapping and define_count != len(defines):
+            reasons.append("project.defineCount must match project.defines")
+
+    variants = project.get("variants")
+    variants_is_mapping = isinstance(variants, Mapping)
+    if _optional_project_field(project, "variants", required=require_full_metadata):
+        reasons.extend(_variant_mapping_contract_reasons("project.variants", variants))
+
+    if _optional_project_field(project, "variantCount", required=require_full_metadata):
+        variant_count = project.get("variantCount")
+        if not _is_non_negative_int(variant_count):
+            reasons.append("project.variantCount must be a non-negative integer")
+        elif variants_is_mapping and variant_count != len(variants):
+            reasons.append("project.variantCount must match project.variants")
+
+    return reasons
+
+
 def _migration_contract_reasons(
     report: Mapping[str, Any], *, require_migration: bool
 ) -> list[str]:
@@ -1608,6 +1692,11 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         output_dir = project.get("outputDir", DEFAULT_OUTPUT_DIR)
         if not _is_non_empty_string(output_dir):
             reasons.append("project.outputDir must be a string")
+        reasons.extend(
+            _project_metadata_contract_reasons(
+                project, require_full_metadata=has_summary
+            )
+        )
 
     units = report.get("units", [])
     if has_summary and "units" not in report:
