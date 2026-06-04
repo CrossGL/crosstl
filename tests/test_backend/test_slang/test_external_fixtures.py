@@ -391,6 +391,38 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["tex.GatherRed"],
     },
     {
+        "id": "slang_texture2d_getdimensions_querysize_lod_from_spirv_generated",
+        "repo": "shader-slang/slang-generated-2026",
+        "path": (
+            "docs/generated/tests/target-pipelines/spirv/"
+            "texture2d-getdimensions-querysize-lod.slang"
+        ),
+        "source": (
+            """
+            Texture2D<float4> tex;
+            RWStructuredBuffer<uint> outBuf;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void main(uint3 tid : SV_DispatchThreadID)
+            {
+                uint w, h, levels;
+                tex.GetDimensions(0, w, h, levels);
+                outBuf[tid.x] = w + h + levels;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "sampler2D tex;",
+            "ivec2 _cgl_getDimensionsSize0 = textureSize(tex, 0);",
+            "w = uint(_cgl_getDimensionsSize0.x);",
+            "h = uint(_cgl_getDimensionsSize0.y);",
+            "levels = uint(textureQueryLevels(tex));",
+        ],
+        "not_contains": ["tex.GetDimensions"],
+    },
+    {
         "id": "slang_hlsl_intrinsic_mul_matrix_vector",
         "repo": "shader-slang/slang-generated-2026",
         "path": (

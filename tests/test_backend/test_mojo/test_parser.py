@@ -1687,6 +1687,33 @@ def test_function_capturing_raises_effects_parse_from_modular_reduction_example(
     assert function.body[0].name == "kernel_launch_sum"
 
 
+def test_function_capture_list_parse_from_modular_packing_kernel():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/kernels/src/linalg/packing.mojo
+    # _pack_matmul_b_shape_func_impl.dispatch_on_kernel_type.
+    code = """
+    def build_shape_func(b_input: TileTensor):
+        var tile_n_k = IndexList[2]()
+
+        @always_inline
+        def dispatch_on_kernel_type[kernel_type: Bool]() {mut tile_n_k, b_input}:
+            tile_n_k = _get_tile_n_k[b_input.dtype](b_input)
+
+        dispatch_get_kernel_type(dispatch_on_kernel_type)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "build_shape_func")
+    nested = function.body[1]
+
+    assert isinstance(nested, FunctionNode)
+    assert nested.name == "dispatch_on_kernel_type"
+    assert [attr.name for attr in nested.attributes] == ["always_inline"]
+    assert nested.params == []
+    assert isinstance(nested.body[0], AssignmentNode)
+    assert nested.body[0].left.name == "tile_n_k"
+
+
 def test_list_literal_argument_parse_from_modular_reduction_example():
     code = """
     def main():

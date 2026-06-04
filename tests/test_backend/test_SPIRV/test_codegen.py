@@ -733,6 +733,46 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_DREF_SAMPLE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/web.texture.frag.out
+; Reduced from OpImageSampleDrefExplicitLod %float %57 %58 %66 Lod|ConstOffset %61 %65.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %shadow_tex %coord %depth_out
+OpExecutionMode %main OriginUpperLeft
+OpName %shadow_tex "shadowTex"
+OpName %coord "coord"
+OpName %depth_out "depthOut"
+OpDecorate %shadow_tex DescriptorSet 0
+OpDecorate %shadow_tex Binding 0
+OpDecorate %coord Location 0
+OpDecorate %depth_out Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v3float = OpTypeVector %float 3
+%image = OpTypeImage %float 2D 1 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%ptr_shadow = OpTypePointer UniformConstant %sampled
+%ptr_input_v3float = OpTypePointer Input %v3float
+%ptr_output_float = OpTypePointer Output %float
+%lod = OpConstant %float 0.0
+%shadow_tex = OpVariable %ptr_shadow UniformConstant
+%coord = OpVariable %ptr_input_v3float Input
+%depth_out = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_shadow = OpLoad %sampled %shadow_tex
+%loaded_coord = OpLoad %v3float %coord
+%depth = OpCompositeExtract %float %loaded_coord 2
+%sample = OpImageSampleDrefExplicitLod %float %loaded_shadow %loaded_coord %depth Lod %lod
+OpStore %depth_out %sample
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_VULKAN_SAMPLES_IMAGE_WRITE_ASSEMBLY = """
 ; Reduced from KhronosGroup/Vulkan-Samples@ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a
 ; shaders/timeline_semaphore/glsl/game_of_life_init.comp imageStore(Image, index, ...).
@@ -2064,6 +2104,19 @@ def test_spirv_tools_image_read_sample_operand_codegen_reparse():
     assert "float4 color @output @location(0);" in generated_code
     assert "color = imageLoad(var_image, uint2(1, 2), 2);" in generated_code
     assert "imageLoad(var_image, uint2(1, 2));" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_dref_sample_preserves_compare_operand_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_DREF_SAMPLE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "sampler2DShadow shadowTex @set(0) @binding(0);" in generated_code
+    assert "float depthOut @output @location(0);" in generated_code
+    assert "depthOut = textureLod(shadowTex, coord, coord[2], 0.0);" in generated_code
+    assert "depthOut = textureLod(shadowTex, coord, 0.0);" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

@@ -613,6 +613,35 @@ def test_parse_defaulted_function_constant_preserves_attribute():
     assert constant.right == "true"
 
 
+def test_parse_mlx_steel_const_function_constant_macro_qualifier():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: e9e20fa69184bd38cc0ca12bd9a854c059e59588
+    # Path: mlx/backend/metal/kernels/fft.h
+    code = """
+    #include <metal_common>
+    #include "mlx/backend/metal/kernels/steel/defines.h"
+    using namespace metal;
+
+    STEEL_CONST bool inv_ [[function_constant(0)]];
+    STEEL_CONST int elems_per_thread_ [[function_constant(2)]];
+    """
+    ast = parse_ok(code)
+    inv, elems_per_thread = ast.global_variables
+
+    assert inv.name == "inv_"
+    assert inv.vtype == "bool"
+    assert inv.qualifiers == ["constant"]
+    assert inv.attributes[0].name == "function_constant"
+    assert inv.attributes[0].args == ["0"]
+
+    assert elems_per_thread.name == "elems_per_thread_"
+    assert elems_per_thread.vtype == "int"
+    assert elems_per_thread.qualifiers == ["constant"]
+    assert elems_per_thread.attributes[0].name == "function_constant"
+    assert elems_per_thread.attributes[0].args == ["2"]
+
+
 def test_parse_fragment_early_tests_attribute():
     code = """
     #include <metal_stdlib>

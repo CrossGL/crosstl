@@ -4180,6 +4180,8 @@ class CudaToCrossGLConverter:
             return self.format_vector_constructor("vec2", [args[0], args[0]], "f16")
         if function_name == "__low2float" and len(args) == 1:
             return f"f32({self.format_vector_component_access(args[0], 'x')})"
+        if function_name == "__high2float" and len(args) == 1:
+            return f"f32({self.format_vector_component_access(args[0], 'y')})"
         if function_name == "__hadd2" and len(args) == 2:
             return f"({args[0]} + {args[1]})"
         if function_name == "__hmul2" and len(args) == 2:
@@ -4202,6 +4204,8 @@ class CudaToCrossGLConverter:
             return f"(findLSB({args[0]}) + 1)"
         if function_name == "__clz" and len(args) == 1:
             return f"countLeadingZeros({args[0]})"
+        if function_name == "__brev" and len(args) == 1:
+            return f"reverseBits({args[0]})"
         return None
 
     def format_cuda_signed_24_bit_operand(self, arg):

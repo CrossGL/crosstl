@@ -17,6 +17,7 @@ EXTERNAL_SAMPLES = [
         "commit": "b7c5481c556c3fe98db060207ecaa41a4b9a9abc",
         "paths": [
             "cpp/0_Introduction/simpleAtomicIntrinsics/simpleAtomicIntrinsics_kernel.cuh",
+            "cpp/0_Introduction/fp16ScalarProduct/fp16ScalarProduct.cu",
             "cpp/0_Introduction/mergeSort/mergeSort.cu",
             "cpp/0_Introduction/simpleSurfaceWrite/simpleSurfaceWrite.cu",
             "cpp/0_Introduction/simpleTexture3D/simpleTexture3D_kernel.cu",
@@ -58,6 +59,11 @@ EXTERNAL_SAMPLES = [
             "MathDx/cuFFTDx/02_simple_fft_block/simple_fft_block.cu",
             "cuTENSOR/reduction.cu",
         ],
+    },
+    {
+        "repo": "https://github.com/NVIDIA/nvidia-hpcg",
+        "commit": "7dd63cd06c0620dddd5702ad7b4fca376c19813e",
+        "paths": ["src/CudaKernels.cu"],
     },
     {
         "repo": "https://github.com/Madreag/turbo3-cuda",
@@ -121,6 +127,28 @@ def test_cuda_samples_simple_vote_intrinsics_warp_vote_codegen_reparse():
     assert "cuda warp intrinsic __all_sync(mask, input[tx])" in crossgl
     assert "__any_sync(mask, input[tx]);" not in crossgl
     assert "__all_sync(mask, input[tx]);" not in crossgl
+
+
+def test_cuda_samples_fp16_scalar_product_high2float_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/0_Introduction/fp16ScalarProduct/fp16ScalarProduct.cu
+    source = """
+    __global__ void scalarProductKernel_intrinsics(half2 const *const a,
+                                                   half2 const *const b,
+                                                   float *const results) {
+        half2 result = a[threadIdx.x];
+        float f_result = __low2float(result) + __high2float(result);
+        results[blockIdx.x] = f_result;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "var f_result: f32 = (f32(result.x) + f32(result.y));" in crossgl
+    assert "__high2float" not in crossgl
 
 
 def test_cuda_samples_monte_carlo_reserved_in_parameter_codegen_reparse():
@@ -716,6 +744,38 @@ def test_cuda_samples_merge_sort_clz_codegen_reparse():
     assert_crossgl_reparse(crossgl)
     assert "return (1U << (W - countLeadingZeros((x - 1))));" in crossgl
     assert "__clz" not in crossgl
+
+
+def test_nvidia_hpcg_cuda_kernels_brev_hash_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/nvidia-hpcg
+    # commit: 7dd63cd06c0620dddd5702ad7b4fca376c19813e
+    # path: src/CudaKernels.cu
+    source = """
+    __global__ void color_kernel(unsigned int *out,
+                                 int *color,
+                                 int next_color) {
+        unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (color[i] != -1) {
+            return;
+        }
+
+        unsigned int i_rand = __brev(i) /* hash function*/;
+        unsigned int j = i + 1;
+        unsigned int j_rand = __brev(j) /* hash function*/;
+
+        if (i_rand <= j_rand) {
+            out[threadIdx.x] = j_rand;
+        }
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "var i_rand: u32 = reverseBits(i);" in crossgl
+    assert "var j_rand: u32 = reverseBits(j);" in crossgl
+    assert "__brev" not in crossgl
 
 
 def test_cuda_samples_reduction_reduce_add_sync_codegen_reparse():

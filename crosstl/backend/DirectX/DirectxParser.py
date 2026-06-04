@@ -1546,6 +1546,10 @@ class HLSLParser:
             self.parse_preprocessor_directive()
             return None
 
+        if self.current_token_is_keyword("USING", "using"):
+            self.parse_using_directive()
+            return None
+
         if self.looks_like_declaration():
             qualifiers = self.parse_qualifiers()
             var = self.parse_variable_declaration(

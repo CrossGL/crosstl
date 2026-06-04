@@ -94,6 +94,43 @@ class SlangToCrossGLConverter:
         "RWTextureCube",
         "RWTextureCubeArray",
     }
+    GET_DIMENSIONS_TEXTURE_DIMENSIONS = {
+        "Texture1D": 1,
+        "Texture1DArray": 2,
+        "Texture2D": 2,
+        "Texture2DArray": 3,
+        "Texture3D": 3,
+        "TextureCube": 2,
+        "TextureCubeArray": 3,
+        "Sampler1D": 1,
+        "Sampler1DArray": 2,
+        "Sampler2D": 2,
+        "Sampler2DArray": 3,
+        "Sampler3D": 3,
+        "SamplerCube": 2,
+        "SamplerCubeArray": 3,
+        "Sampler2DShadow": 2,
+        "Sampler2DArrayShadow": 3,
+        "SamplerCubeShadow": 2,
+        "SamplerCubeArrayShadow": 3,
+    }
+    GET_DIMENSIONS_IMAGE_DIMENSIONS = {
+        "RWTexture1D": 1,
+        "RWTexture1DArray": 2,
+        "RWTexture2D": 2,
+        "RWTexture2DArray": 3,
+        "RWTexture3D": 3,
+        "RWTextureCube": 2,
+        "RWTextureCubeArray": 3,
+    }
+    GET_DIMENSIONS_MULTISAMPLE_DIMENSIONS = {
+        "Texture2DMS": 2,
+        "Texture2DMSArray": 3,
+        "Sampler2DMS": 2,
+        "Sampler2DMSArray": 3,
+        "RWTexture2DMS": 2,
+        "RWTexture2DMSArray": 3,
+    }
     CROSSGL_RESERVED_IDENTIFIERS = {
         "as",
         "async",
@@ -270,6 +307,7 @@ class SlangToCrossGLConverter:
         self.identifier_rename_scopes = [{}]
         self.identifier_used_name_scopes = [set()]
         self.struct_member_name_maps = {}
+        self.generated_temp_index = 0
 
         self.semantic_map = {
             # Vertex inputs position
@@ -384,6 +422,7 @@ class SlangToCrossGLConverter:
         self.struct_member_name_maps = self.collect_struct_member_name_maps(ast)
         self.identifier_rename_scopes = [{}]
         self.identifier_used_name_scopes = [set()]
+        self.generated_temp_index = 0
         self.register_global_identifier_renames(ast)
         self.variable_type_scopes = [self.collect_global_variable_types(ast)]
         self.sampleable_resource_scopes = [set(resource_types)]
@@ -736,6 +775,12 @@ class SlangToCrossGLConverter:
     def generate_function_body(self, body, indent=0, is_main=False):
         code = ""
         for stmt in body:
+            expanded_statement = self.generate_resource_get_dimensions_statement(
+                stmt, indent, is_main
+            )
+            if expanded_statement is not None:
+                code += expanded_statement
+                continue
             code += "    " * indent
             if isinstance(stmt, VariableNode):
                 self.register_variable_type(stmt)
@@ -1374,6 +1419,169 @@ class SlangToCrossGLConverter:
         args = [self.generate_expression(arg, is_main) for arg in expr.args or []]
         return f"imageLoad({', '.join([obj] + args)})"
 
+    def generate_resource_get_dimensions_statement(self, stmt, indent=0, is_main=False):
+        if not isinstance(stmt, MethodCallNode):
+            return None
+        if self.method_base_name(stmt.method) != "GetDimensions":
+            return None
+
+        resource_type = self.sampleable_resource_expression_type(stmt.object)
+        storage_image = False
+        if resource_type is None:
+            resource_type = self.storage_image_resource_expression_type(stmt.object)
+            storage_image = resource_type is not None
+        if resource_type is None:
+            return None
+
+        resource_base = self.resource_type_base(resource_type)
+        if not resource_base:
+            return None
+
+        obj = self.generate_expression(stmt.object, is_main)
+        rendered_args = [
+            self.generate_expression(arg, is_main) for arg in stmt.args or []
+        ]
+        layout = self.get_dimensions_layout(
+            resource_base, obj, rendered_args, storage_image
+        )
+        if layout is None:
+            return None
+
+        indent_text = "    " * indent
+        lines = []
+        temp_type = self.get_dimensions_size_temp_type(layout["dimensions"])
+        temp_name = self.next_generated_temp_name("cgl_getDimensionsSize", temp_type)
+        lines.append(
+            f"{indent_text}{self.map_type(temp_type)} {temp_name} = "
+            f"{layout['size_expr']};\n"
+        )
+
+        for target, suffix, arg_index in zip(
+            layout["dimension_targets"],
+            self.dimension_component_suffixes(layout["dimensions"]),
+            layout["dimension_indices"],
+        ):
+            value = self.cast_get_dimensions_value(
+                f"{temp_name}{suffix}", stmt.args[arg_index]
+            )
+            lines.append(f"{indent_text}{target} = {value};\n")
+
+        if layout.get("levels_target") is not None:
+            value = self.cast_get_dimensions_value(
+                f"textureQueryLevels({obj})", stmt.args[layout["levels_index"]]
+            )
+            lines.append(f"{indent_text}{layout['levels_target']} = {value};\n")
+
+        if layout.get("samples_target") is not None:
+            sample_query = "imageSamples" if storage_image else "textureSamples"
+            value = self.cast_get_dimensions_value(
+                f"{sample_query}({obj})", stmt.args[layout["samples_index"]]
+            )
+            lines.append(f"{indent_text}{layout['samples_target']} = {value};\n")
+
+        return "".join(lines)
+
+    def get_dimensions_layout(self, resource_base, obj, rendered_args, storage_image):
+        args_count = len(rendered_args)
+        if args_count == 0:
+            return None
+
+        dimensions = self.GET_DIMENSIONS_MULTISAMPLE_DIMENSIONS.get(resource_base)
+        if dimensions is not None:
+            if args_count not in {dimensions, dimensions + 1}:
+                return None
+            size_function = "imageSize" if storage_image else "textureSize"
+            return {
+                "dimensions": dimensions,
+                "size_expr": f"{size_function}({obj})",
+                "dimension_targets": rendered_args[:dimensions],
+                "dimension_indices": list(range(dimensions)),
+                "samples_target": (
+                    rendered_args[dimensions] if args_count == dimensions + 1 else None
+                ),
+                "samples_index": dimensions if args_count == dimensions + 1 else None,
+            }
+
+        if storage_image:
+            dimensions = self.GET_DIMENSIONS_IMAGE_DIMENSIONS.get(resource_base)
+            if dimensions is None or args_count != dimensions:
+                return None
+            return {
+                "dimensions": dimensions,
+                "size_expr": f"imageSize({obj})",
+                "dimension_targets": rendered_args,
+                "dimension_indices": list(range(dimensions)),
+            }
+
+        dimensions = self.GET_DIMENSIONS_TEXTURE_DIMENSIONS.get(resource_base)
+        if dimensions is None:
+            return None
+
+        lod = "0"
+        out_start = 0
+        levels_index = None
+        if args_count == dimensions:
+            pass
+        elif args_count == dimensions + 1:
+            levels_index = dimensions
+        elif args_count == dimensions + 2:
+            lod = rendered_args[0]
+            out_start = 1
+            levels_index = dimensions + 1
+        else:
+            return None
+
+        dimension_targets = rendered_args[out_start : out_start + dimensions]
+        if len(dimension_targets) != dimensions:
+            return None
+        return {
+            "dimensions": dimensions,
+            "size_expr": f"textureSize({obj}, {lod})",
+            "dimension_targets": dimension_targets,
+            "dimension_indices": list(range(out_start, out_start + dimensions)),
+            "levels_target": (
+                rendered_args[levels_index] if levels_index is not None else None
+            ),
+            "levels_index": levels_index,
+        }
+
+    def get_dimensions_size_temp_type(self, dimensions):
+        if dimensions == 1:
+            return "int"
+        return f"int{dimensions}"
+
+    def dimension_component_suffixes(self, dimensions):
+        if dimensions == 1:
+            return [""]
+        return [f".{component}" for component in ("x", "y", "z")[:dimensions]]
+
+    def cast_get_dimensions_value(self, value, target_arg):
+        if self.get_dimensions_target_scalar_type(target_arg) == "uint":
+            return f"uint({value})"
+        return value
+
+    def get_dimensions_target_scalar_type(self, target_arg):
+        target_type = self.expression_type(target_arg)
+        if not target_type:
+            return None
+        target_base = self.resource_type_base(target_type)
+        if target_base in {"int", "uint"}:
+            return target_base
+        return None
+
+    def next_generated_temp_name(self, base_name, vtype):
+        while True:
+            raw_name = f"_{base_name}{self.generated_temp_index}"
+            self.generated_temp_index += 1
+            safe_name = self.sanitize_crossgl_identifier(
+                raw_name, self.identifier_used_name_scopes[-1]
+            )
+            if safe_name not in self.identifier_used_name_scopes[-1]:
+                self.identifier_rename_scopes[-1][raw_name] = safe_name
+                self.identifier_used_name_scopes[-1].add(safe_name)
+                self.variable_type_scopes[-1][raw_name] = vtype
+                return safe_name
+
     def generate_texture_method_call(self, expr, obj, is_main=False):
         if (
             expr.method not in self.SAMPLE_METHOD_MAP
@@ -1573,12 +1781,18 @@ class SlangToCrossGLConverter:
         return self.sampleable_resource_expression_type(expr) is not None
 
     def is_storage_image_resource_expression(self, expr):
+        return self.storage_image_resource_expression_type(expr) is not None
+
+    def storage_image_resource_expression_type(self, expr):
         name = self.expression_base_name(expr)
-        if name is not None and any(
-            name in scope for scope in reversed(self.storage_image_resource_scopes)
-        ):
-            return True
-        return self.is_storage_image_resource_type(self.expression_type(expr))
+        if name is not None:
+            for scope in reversed(self.storage_image_resource_type_scopes):
+                if name in scope:
+                    return scope[name]
+        type_name = self.expression_type(expr)
+        if self.is_storage_image_resource_type(type_name):
+            return type_name
+        return None
 
     def sampleable_resource_expression_type(self, expr):
         name = self.expression_base_name(expr)
@@ -1590,6 +1804,14 @@ class SlangToCrossGLConverter:
         if self.is_sampleable_resource_type(type_name):
             return type_name
         return None
+
+    def resource_type_base(self, type_name):
+        if not type_name:
+            return None
+        return str(type_name).strip().split("<", 1)[0].strip()
+
+    def method_base_name(self, method_name):
+        return str(method_name).split("<", 1)[0]
 
     def expression_base_name(self, expr):
         if isinstance(expr, str):

@@ -1661,6 +1661,35 @@ def test_codegen_defaulted_function_constant_preserves_attribute():
     assert "if (useFastPath)" in result
 
 
+def test_codegen_mlx_steel_const_function_constants_from_fft():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: e9e20fa69184bd38cc0ca12bd9a854c059e59588
+    # Path: mlx/backend/metal/kernels/fft.h
+    code = """
+    #include <metal_common>
+    #include "mlx/backend/metal/kernels/steel/defines.h"
+    using namespace metal;
+
+    STEEL_CONST bool inv_ [[function_constant(0)]];
+    STEEL_CONST int elems_per_thread_ [[function_constant(2)]];
+
+    float2 apply_fft_flag(float2 value) {
+        if (inv_) {
+            value.y = -value.y;
+        }
+        return value * float(elems_per_thread_);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "constant bool inv_ @function_constant(0);" in crossgl
+    assert "constant int elems_per_thread_ @function_constant(2);" in crossgl
+    assert "value.y = (-value.y);" in crossgl
+    assert "STEEL_CONST" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_sanitizes_crossgl_keyword_identifiers_from_real_msl():
     code = """
     #include <metal_stdlib>

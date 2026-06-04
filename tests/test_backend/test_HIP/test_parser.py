@@ -875,6 +875,31 @@ class TestHipParser:
         assert call.name.member == "operator()<float, float>"
         assert call.args == ["TensorLayout::NCHW"]
 
+    def test_public_rocm_hiptensor_variable_template_condition_parse(self):
+        # Upstream: ROCm/rocm-examples@cf369da, Common/hiptensor_utils.hpp.
+        code = """
+        template<typename T>
+        void hiptensor_print_array_elements(T* vec)
+        {
+            if constexpr(std::is_same_v<T, float2> || std::is_same_v<T, double2>)
+            {
+                sink(vec);
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        branch = function.body[0]
+        condition = branch.condition
+
+        assert isinstance(branch, IfNode)
+        assert isinstance(condition, BinaryOpNode)
+        assert condition.op == "||"
+        assert condition.left == "std::is_same_v<T, float2>"
+        assert condition.right == "std::is_same_v<T, double2>"
+        assert isinstance(branch.if_body[0], FunctionCallNode)
+
     def test_public_rocm_hip_doc_constexpr_qualified_size_t_global(self):
         code = """
         constexpr std::size_t const_array_size = 32;

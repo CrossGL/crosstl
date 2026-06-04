@@ -578,6 +578,35 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "mlx_fft_steel_const_function_constants",
+        "repo_url": MLX_REPO,
+        "commit": MLX_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/fft.h",
+        "roundtrip": True,
+        "contains": [
+            "constant bool inv_ @function_constant(0);",
+            "constant int elems_per_thread_ @function_constant(2);",
+        ],
+        "not_contains": ["STEEL_CONST"],
+        "source": (
+            """
+            #include <metal_common>
+            #include "mlx/backend/metal/kernels/steel/defines.h"
+            using namespace metal;
+
+            STEEL_CONST bool inv_ [[function_constant(0)]];
+            STEEL_CONST int elems_per_thread_ [[function_constant(2)]];
+
+            float2 apply_fft_flag(float2 value) {
+                if (inv_) {
+                    value.y = -value.y;
+                }
+                return value * float(elems_per_thread_);
+            }
+        """
+        ),
+    },
+    {
         "name": "mlx_fp_quantized_if_constexpr_dequantize_scale",
         "repo_url": MLX_REPO,
         "commit": MLX_FP_QUANTIZED_COMMIT,
