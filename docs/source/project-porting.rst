@@ -77,11 +77,11 @@ are not repository-relative, project target lists are not normalized and
 deduplicated, diagnostic or artifact targets are not declared by the report,
 artifact sources are not declared translation units, embedded validation records
 reference artifacts not declared by the report, validation records contain
-duplicate identities, translated outputs are missing, artifact paths resolve
-outside the repository, generated artifact hashes no longer match the files on
-disk, source files with recorded hashes are missing or changed, or opt-in
-toolchain smoke checks fail. Toolchain smoke checks only run for translated
-artifacts that still exist inside the repository.
+duplicate identities or inconsistent status fields, translated outputs are
+missing, artifact paths resolve outside the repository, generated artifact
+hashes no longer match the files on disk, source files with recorded hashes are
+missing or changed, or opt-in toolchain smoke checks fail. Toolchain smoke
+checks only run for translated artifacts that still exist inside the repository.
 
 Inspect an existing report as a concise JSON or text summary:
 
@@ -209,11 +209,12 @@ Project reports are JSON documents with:
   artifact count, and summary checks, summary consistency checks, migration
   action shape checks,
   preserved diagnostic shape, span consistency, and target declaration checks,
-  validation artifact and toolchain run record shape and duplicate identity
-  checks, artifact source, source-backend, target, and variant declaration
-  checks, translated artifact existence checks, escaped output directory and
-  artifact-path checks, source artifact existence and hash mismatch checks,
-  generated artifact hash mismatch checks, optional external toolchain
+  validation toolchain status consistency checks, validation artifact and
+  toolchain run record shape and duplicate identity checks, validation artifact
+  status consistency checks, artifact source, source-backend, target, and variant
+  declaration checks, translated artifact existence checks, escaped output
+  directory and artifact-path checks, source artifact existence and hash mismatch
+  checks, generated artifact hash mismatch checks, optional external toolchain
   availability, and opt-in toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. Each action has a documented kind, severity, message, and target

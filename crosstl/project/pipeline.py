@@ -2536,6 +2536,8 @@ def _tool_status_contract_reasons(
         return [f"{prefix} must be an object"]
 
     reasons = []
+    status = toolchain.get("status")
+    status_is_valid = status in {"available", "unavailable", "not-configured"}
     target = toolchain.get("target")
     if not _is_non_empty_string(target):
         reasons.append(f"{prefix}.target must be a string")
@@ -2543,29 +2545,60 @@ def _tool_status_contract_reasons(
         normalized_target = _normalized_targets([target])[0]
         if normalized_target not in declared_targets:
             reasons.append(f"{prefix}.target must be listed in project.targets")
-    if toolchain.get("status") not in {"available", "unavailable", "not-configured"}:
+    if not status_is_valid:
         reasons.append(
             f"{prefix}.status must be available, unavailable, or not-configured"
         )
     tools = toolchain.get("tools")
+    tools_are_valid = True
     if not isinstance(tools, list):
         reasons.append(f"{prefix}.tools must be a list")
+        tools_are_valid = False
     else:
         for tool_index, tool in enumerate(tools):
             tool_prefix = f"{prefix}.tools[{tool_index}]"
             if not isinstance(tool, Mapping):
                 reasons.append(f"{tool_prefix} must be an object")
+                tools_are_valid = False
                 continue
             if not _is_non_empty_string(tool.get("name")):
                 reasons.append(f"{tool_prefix}.name must be a string")
+                tools_are_valid = False
             path = tool.get("path")
             if path is not None and not _is_non_empty_string(path):
                 reasons.append(f"{tool_prefix}.path must be a string or null")
+                tools_are_valid = False
             if not isinstance(tool.get("available"), bool):
                 reasons.append(f"{tool_prefix}.available must be a boolean")
+                tools_are_valid = False
+    if status_is_valid and tools_are_valid:
+        expected_status = (
+            "not-configured"
+            if not tools
+            else (
+                "available"
+                if all(tool["available"] for tool in tools)
+                else "unavailable"
+            )
+        )
+        if status != expected_status:
+            reasons.append(f"{prefix}.status must match tools availability")
     if "message" in toolchain and not _is_non_empty_string(toolchain.get("message")):
         reasons.append(f"{prefix}.message must be a string")
     return reasons
+
+
+def _validation_artifact_status_matches_record(artifact: Mapping[str, Any]) -> bool:
+    if artifact.get("status") != "ok":
+        return True
+    if artifact.get("exists") is not True:
+        return False
+    source_hash_status = artifact.get("sourceHashStatus", "not-recorded")
+    generated_hash_status = artifact.get("generatedHashStatus", "not-recorded")
+    return source_hash_status in {
+        "ok",
+        "not-recorded",
+    } and generated_hash_status in {"ok", "not-recorded"}
 
 
 def _validation_artifact_contract_reasons(
@@ -2591,7 +2624,9 @@ def _validation_artifact_contract_reasons(
             reasons.append(f"{prefix}.target must be listed in project.targets")
     if not isinstance(artifact.get("exists"), bool):
         reasons.append(f"{prefix}.exists must be a boolean")
-    if artifact.get("status") not in {"ok", "failed"}:
+    status = artifact.get("status")
+    status_is_valid = status in {"ok", "failed"}
+    if not status_is_valid:
         reasons.append(f"{prefix}.status must be ok or failed")
     variant = artifact.get("variant")
     if "variant" in artifact:
@@ -2624,6 +2659,20 @@ def _validation_artifact_contract_reasons(
             f"{prefix}.generatedHashStatus must be one of "
             f"{', '.join(sorted(GENERATED_HASH_VALIDATION_STATUSES))}"
         )
+    if (
+        status_is_valid
+        and isinstance(artifact.get("exists"), bool)
+        and (
+            "sourceHashStatus" not in artifact
+            or source_hash_status in SOURCE_HASH_VALIDATION_STATUSES
+        )
+        and (
+            "generatedHashStatus" not in artifact
+            or generated_hash_status in GENERATED_HASH_VALIDATION_STATUSES
+        )
+        and not _validation_artifact_status_matches_record(artifact)
+    ):
+        reasons.append(f"{prefix}.status must match exists and hash statuses")
     return reasons
 
 
