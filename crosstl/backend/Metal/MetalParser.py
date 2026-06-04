@@ -329,10 +329,18 @@ class MetalParser:
                 struct = self.parse_struct()
                 if struct is not None:
                     structs.append(struct)
+            elif self.current_token[0] == "CLASS":
+                class_node = self.parse_class()
+                if class_node is not None:
+                    structs.append(class_node)
             elif self.current_token[0] == "ALIGNAS":
                 alignas_specs = self.parse_alignas_specifiers()
-                if self.current_token[0] == "STRUCT":
-                    struct = self.parse_struct(alignas_specs)
+                if self.current_token[0] in {"STRUCT", "CLASS"}:
+                    struct = (
+                        self.parse_struct(alignas_specs)
+                        if self.current_token[0] == "STRUCT"
+                        else self.parse_class(alignas_specs)
+                    )
                     if struct is not None:
                         structs.append(struct)
                 else:
@@ -505,8 +513,12 @@ class MetalParser:
         self.known_types.update(added_type_names)
 
         try:
-            if self.current_token[0] == "STRUCT":
-                struct = self.parse_struct()
+            if self.current_token[0] in {"STRUCT", "CLASS"}:
+                struct = (
+                    self.parse_struct()
+                    if self.current_token[0] == "STRUCT"
+                    else self.parse_class()
+                )
                 if struct is not None:
                     struct.generics = [
                         name for _kind, name in template_parameters if name
@@ -1484,6 +1496,40 @@ class MetalParser:
         struct_node.base_types = base_types
         return struct_node
 
+    def parse_class(self, pre_alignas=None):
+        alignas_specs = (
+            list(pre_alignas)
+            if pre_alignas is not None
+            else self.parse_alignas_specifiers()
+        )
+        self.eat("CLASS")
+        alignas_specs.extend(self.parse_alignas_specifiers())
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.known_types.add(name)
+        if self.current_token[0] == "LESS_THAN":
+            template_args = self.parse_template_argument_suffix()
+            name = f"{name}<{self.format_generic_type_tokens(template_args)}>"
+            self.known_types.add(name)
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return None
+        base_types = []
+        if self.current_token[0] == "COLON":
+            base_types = self.parse_struct_base_clause()
+        self.eat("LBRACE")
+
+        members = self.parse_struct_members()
+
+        self.eat("RBRACE")
+        self.eat("SEMICOLON")
+
+        class_node = StructNode(name, members)
+        class_node.alignas = alignas_specs
+        class_node.base_types = base_types
+        class_node.aggregate_kind = "class"
+        return class_node
+
     def parse_struct_base_clause(self):
         self.eat("COLON")
         bases = []
@@ -1545,6 +1591,9 @@ class MetalParser:
     def parse_struct_members(self):
         members = []
         while self.current_token[0] != "RBRACE":
+            if self.is_access_specifier_label():
+                self.parse_access_specifier_label()
+                continue
             if self.current_token == ("IDENTIFIER", "friend"):
                 self.skip_struct_method()
                 continue
@@ -1591,6 +1640,17 @@ class MetalParser:
             var_node.default_value = default_value
             members.append(var_node)
         return members
+
+    def is_access_specifier_label(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in {"public", "private", "protected"}
+            and self.peek(1)[0] == "COLON"
+        )
+
+    def parse_access_specifier_label(self):
+        self.eat("IDENTIFIER")
+        self.eat("COLON")
 
     def skip_struct_method(self):
         while self.current_token[0] not in {"LBRACE", "SEMICOLON", "EOF"}:

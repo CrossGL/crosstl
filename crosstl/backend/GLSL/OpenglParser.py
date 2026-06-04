@@ -1066,6 +1066,7 @@ class GLSLParser:
             )
             for member_node in member_nodes:
                 member_node.interface_block = block_name
+                member_node.interface_member_layout = member_layout
                 members.append(member_node)
 
         self.eat("RBRACE")

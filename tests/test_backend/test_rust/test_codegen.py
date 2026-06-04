@@ -1056,16 +1056,19 @@ def test_rust_gpu_vector_associated_constants_codegen_from_upstream_compiletests
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
     # tests/compiletests/ui/spirv-attr/matrix-type.rs,
     # tests/compiletests/ui/arch/subgroup/subgroup_composite.rs,
-    # and tests/difftests/tests/lang/core/ops/vector_ops/vector_ops-rust/src/lib.rs.
+    # tests/difftests/tests/lang/core/ops/vector_ops/vector_ops-rust/src/lib.rs,
+    # plus glam's documented signed-vector NEG_ONE/NEG_* constants.
     code = """
-    use glam::{UVec3, Vec2, Vec3, Vec4};
+    use glam::{IVec4, UVec3, Vec2, Vec3, Vec4};
 
     fn vector_constants() -> Vec4 {
         let uv: UVec3 = UVec3::ZERO;
         let zero = Vec2::ZERO.x;
         let one = Vec3::ONE.x;
         let axes = Vec4::X + Vec4::Y;
-        Vec4::new(zero + one, axes.x, axes.y, uv.x as f32)
+        let down = Vec3::NEG_Y;
+        let neg_one = IVec4::NEG_ONE;
+        Vec4::new(zero + one, axes.x + down.y, axes.y, uv.x as f32 + neg_one.w as f32)
     }
     """
 
@@ -1077,9 +1080,16 @@ def test_rust_gpu_vector_associated_constants_codegen_from_upstream_compiletests
     assert (
         "let axes = (vec4(1.0, 0.0, 0.0, 0.0) + " "vec4(0.0, 1.0, 0.0, 0.0));"
     ) in result
-    assert "return vec4((zero + one), axes.x, axes.y, (float)uv.x);" in result
+    assert "let down = vec3(0.0, -1.0, 0.0);" in result
+    assert "let neg_one = ivec4(-1, -1, -1, -1);" in result
+    assert (
+        "return vec4((zero + one), (axes.x + down.y), axes.y, "
+        "((float)uv.x + (float)neg_one.w));"
+    ) in result
     assert "::ZERO" not in result
     assert "::ONE" not in result
+    assert "::NEG_ONE" not in result
+    assert "::NEG_Y" not in result
     assert "Vec4::X" not in result
     assert "Vec4::Y" not in result
     crosstl.translator.parse(result)

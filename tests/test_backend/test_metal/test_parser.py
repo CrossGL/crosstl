@@ -869,6 +869,52 @@ def test_parse_scoped_enum_with_underlying_type_from_metal4_basics():
     assert enum.members == [("Lambert", None), ("TrowbridgeReitz", None)]
 
 
+def test_parse_class_helper_with_access_labels_from_public_metal_shader():
+    # Reduced from:
+    # Repo: https://github.com/lambdaclass/lambdaworks
+    # Commit: 3c8d8f65546cde6e847dd29b2ef6aefc38c0895a
+    # Path: crates/math/src/gpu/metal/shaders/field/mersenne31.h.metal
+    code = """
+    #include <metal_stdlib>
+
+    class FpMersenne31 {
+    public:
+        FpMersenne31() = default;
+        constexpr FpMersenne31(uint32_t v) : inner(v) {}
+
+        constexpr explicit operator uint32_t() const { return inner; }
+
+        static FpMersenne31 zero() { return FpMersenne31(0); }
+
+        FpMersenne31 operator+(const FpMersenne31 rhs) const {
+            return FpMersenne31(inner + rhs.inner);
+        }
+
+    private:
+        uint32_t inner;
+
+        static uint32_t weak_reduce(uint32_t n) {
+            return n;
+        }
+    };
+
+    kernel void use_field(device uint32_t* out [[buffer(0)]]) {
+        FpMersenne31 value;
+        out[0] = uint32_t(0);
+    }
+    """
+    ast = parse_ok(code)
+    class_node = ast.structs[0]
+
+    assert class_node.name == "FpMersenne31"
+    assert getattr(class_node, "aggregate_kind", None) == "class"
+    assert [(member.vtype, member.name) for member in class_node.members] == [
+        ("uint32_t", "inner")
+    ]
+    assert ast.functions[0].params[0].vtype == "uint32_t*"
+    assert ast.functions[0].body[0].vtype == "FpMersenne31"
+
+
 def test_parse_unscoped_enum_with_underlying_type_from_metal_splatter():
     code = """
     enum BufferIndex: int32_t

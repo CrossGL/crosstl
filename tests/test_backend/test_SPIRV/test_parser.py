@@ -1278,6 +1278,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_VOID_FUNCTION_CALL_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
+; Source tool: glslangValidator -V -H, reduced from a fragment shader where
+; main calls void helper() before storing an output color.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %main "main"
+OpName %helper "helper("
+OpName %out_color "outColor"
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%one = OpConstant %float 1.0
+%white = OpConstantComposite %v4float %one %one %one %one
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%main_label = OpLabel
+%call = OpFunctionCall %void %helper
+OpStore %out_color %white
+OpReturn
+OpFunctionEnd
+%helper = OpFunction %void None %fn
+%helper_label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
@@ -1773,6 +1806,20 @@ def test_spirv_spec_fragment_termination_parse():
         DiscardNode,
     ]
     assert isinstance(body[3], ReturnNode)
+
+
+def test_spirv_glslang_void_function_call_parse():
+    tokens = tokenize_code(SPIRV_GLSLANG_VOID_FUNCTION_CALL_ASSEMBLY)
+    ast = parse_code(tokens)
+    main = ast.functions[0]
+
+    assert ast.spirv_assembly is True
+    assert [function.name for function in ast.functions] == ["main", "helper"]
+    assert isinstance(main.body[0], FunctionCallNode)
+    assert main.body[0].name == "helper"
+    assert main.body[0].args == []
+    assert isinstance(main.body[1], AssignmentNode)
+    assert isinstance(main.body[2], ReturnNode)
 
 
 def test_spirv_assembly_function_only_module_is_preserved():

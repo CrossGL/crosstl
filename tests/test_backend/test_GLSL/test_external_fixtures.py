@@ -263,6 +263,33 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/330.frag.
+    # Reduced from GL_ARB_enhanced_layouts interface-block member location coverage.
+    ExternalFixture(
+        name="glslang-330-frag-interface-block-member-location",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/330.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 330 compatibility
+            #extension GL_ARB_separate_shader_objects : enable
+            #extension GL_ARB_enhanced_layouts : enable
+
+            layout(location = 28) in InBlock {
+                float f1;
+                layout(location = 25) float f2;
+                vec4 f3;
+            } ininst;
+
+            layout(location = 0) out vec4 outVar;
+
+            void main()
+            {
+                outVar = vec4(ininst.f2) + ininst.f3;
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="glslang-120-vert-invariant-builtin-list",
         repo="https://github.com/KhronosGroup/glslang",
@@ -854,6 +881,24 @@ def test_parse_glslang_precise_contextual_identifier_fixture():
     assert main.body[0].member == "precise"
 
 
+def test_parse_glslang_interface_block_member_location_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-330-frag-interface-block-member-location"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    block = next(struct for struct in ast.structs if struct.name == "InBlock")
+    instance = next(var for var in ast.io_variables if var.name == "ininst")
+    member = next(var for var in block.members if var.name == "f2")
+
+    assert block.interface_layout == {"location": "28"}
+    assert block.interface_qualifiers == ["in"]
+    assert instance.layout == {"location": "28"}
+    assert member.layout == {"location": "25"}
+
+
 def test_parse_glslang_invariant_builtin_list_fixture():
     fixture = next(
         item
@@ -1175,6 +1220,24 @@ def test_codegen_glslang_precise_contextual_identifier_fixture_snippet():
     assert crossgl.count("int precise;") == 2
     assert "KeyMem.precise;" in crossgl
     assert "@precise" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_interface_block_member_location_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-330-frag-interface-block-member-location"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert (
+        "@glsl_interface_block(in) @location(28) @glsl_interface_instance(ininst)"
+        in crossgl
+    )
+    assert "float f2 @location(25);" in crossgl
+    assert "float f2;" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

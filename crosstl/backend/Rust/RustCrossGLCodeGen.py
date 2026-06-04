@@ -4369,13 +4369,27 @@ class RustToCrossGLConverter:
             return [zero] * count
         if constant_name == "ONE":
             return [one] * count
+        if constant_name == "NEG_ONE":
+            negative_one = self.vector_negative_one_literal(mapped_type)
+            if negative_one is None:
+                return None
+            return [negative_one] * count
 
-        axis_index = self.VECTOR_AXIS_CONSTANT_INDICES.get(constant_name)
+        axis_constant_name = constant_name
+        axis_value = one
+        if constant_name.startswith("NEG_"):
+            negative_one = self.vector_negative_one_literal(mapped_type)
+            if negative_one is None:
+                return None
+            axis_constant_name = constant_name[4:]
+            axis_value = negative_one
+
+        axis_index = self.VECTOR_AXIS_CONSTANT_INDICES.get(axis_constant_name)
         if axis_index is None or axis_index >= count:
             return None
 
         components = [zero] * count
-        components[axis_index] = one
+        components[axis_index] = axis_value
         return components
 
     def vector_zero_one_literals(self, mapped_type):
@@ -4384,6 +4398,13 @@ class RustToCrossGLConverter:
         if mapped_type.startswith("vec"):
             return "0.0", "1.0"
         return "0", "1"
+
+    def vector_negative_one_literal(self, mapped_type):
+        if mapped_type.startswith("vec"):
+            return "-1.0"
+        if mapped_type.startswith("ivec"):
+            return "-1"
+        return None
 
     def generate_try_ternary_expression(self, expression, indent, loop_contexts=None):
         indent_str = "    " * indent

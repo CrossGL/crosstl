@@ -852,6 +852,41 @@ def test_codegen_template_struct_base_clause_from_mlx_type_traits():
     assert "metal::bool_constant" not in crossgl
 
 
+def test_codegen_class_helper_data_member_from_public_metal_shader():
+    # Reduced from:
+    # Repo: https://github.com/imxieyi/SmallPT-Metal
+    # Commit: 3cdd2f1272c891e9f98fe5cda1e785f085ab2dd8
+    # Path: SmallPT/loki_header.metal
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    class Loki {
+    private:
+        thread float seed;
+        unsigned TausStep(const unsigned z, const int s1, const int s2,
+                          const int s3, const unsigned M);
+
+    public:
+        thread Loki(const unsigned seed1, const unsigned seed2 = 1);
+        thread float rand();
+    };
+
+    float read_seed(thread Loki& rng) {
+        return rng.seed;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "struct Loki" in crossgl
+    assert "thread float seed;" in crossgl
+    assert "TausStep" not in crossgl
+    assert "thread Loki(" not in crossgl
+    assert "float rand(" not in crossgl
+    assert "float read_seed(thread Loki& rng)" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_ternary_expression():
     code = """
     void main() {

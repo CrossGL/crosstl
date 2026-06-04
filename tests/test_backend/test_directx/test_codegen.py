@@ -690,6 +690,32 @@ def test_codegen_derivative_intrinsics_from_microsoft_docs_reparse():
     parse_crossgl(crossgl)
 
 
+def test_codegen_bitcast_intrinsics_from_microsoft_docs_reparse():
+    # Source: Microsoft Learn asfloat/asint/asuint docs.
+    # URLs:
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-asfloat
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-asint
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-asuint
+    crossgl = generate_crossgl("""
+        float4 main(uint4 packed : TEXCOORD0, float4 value : TEXCOORD1, int4 signedPacked : TEXCOORD2) : SV_Target0 {
+            float4 unpacked = asfloat(packed);
+            float4 signedUnpacked = asfloat(signedPacked);
+            int4 signedBits = asint(value);
+            uint4 unsignedBits = asuint(value);
+            return unpacked + signedUnpacked + uintBitsToFloat(unsignedBits) + intBitsToFloat(signedBits);
+        }
+    """)
+
+    assert "vec4 unpacked = uintBitsToFloat(packed);" in crossgl
+    assert "vec4 signedUnpacked = intBitsToFloat(signedPacked);" in crossgl
+    assert "ivec4 signedBits = floatBitsToInt(value);" in crossgl
+    assert "uvec4 unsignedBits = floatBitsToUint(value);" in crossgl
+    assert "asfloat" not in crossgl
+    assert "asint" not in crossgl
+    assert "asuint" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_sampler_state_initializer_block_imports_to_crossgl():
     crossgl = generate_crossgl(SAMPLER_STATE_BLOCK_HLSL)
 

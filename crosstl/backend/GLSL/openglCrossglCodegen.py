@@ -856,8 +856,8 @@ class GLSLToCrossGLConverter:
 
         return f" {' '.join(attributes)}" if attributes else ""
 
-    def variable_layout_attribute_suffix(self, var):
-        layout = getattr(var, "layout", None) or {}
+    def layout_attribute_suffix(self, layout):
+        layout = layout or {}
         attributes = []
         for name in self.LAYOUT_ATTRIBUTE_NAMES:
             value = layout.get(name)
@@ -867,6 +867,16 @@ class GLSLToCrossGLConverter:
             if name in layout and layout.get(name) is None:
                 attributes.append(f"@{name}")
         return f" {' '.join(attributes)}" if attributes else ""
+
+    def variable_layout_attribute_suffix(self, var):
+        return self.layout_attribute_suffix(getattr(var, "layout", None))
+
+    def interface_member_layout_attribute_suffix(self, var):
+        if hasattr(var, "interface_member_layout"):
+            return self.layout_attribute_suffix(
+                getattr(var, "interface_member_layout", None)
+            )
+        return self.variable_layout_attribute_suffix(var)
 
     def storage_qualifier_attributes(self, var):
         qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
@@ -1573,6 +1583,7 @@ class GLSLToCrossGLConverter:
                     qualifier_prefix = self.interface_member_qualifier_prefix(field)
                     if qualifier_prefix:
                         qualifier_prefix += " "
+                    semantic += self.interface_member_layout_attribute_suffix(field)
                     semantic += self.variable_qualifier_attribute_suffix(field)
             result += (
                 self.indent()
