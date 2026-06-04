@@ -1149,6 +1149,12 @@ class SlangToCrossGLConverter:
             if texture_call is not None:
                 return texture_call
 
+            buffer_call = self.generate_structured_buffer_method_call(
+                expr, obj, is_main
+            )
+            if buffer_call is not None:
+                return buffer_call
+
             args = [self.generate_expression(arg, is_main) for arg in expr.args]
             args = ", ".join(args)
             return f"{obj}.{expr.method}({args})"
@@ -1447,6 +1453,20 @@ class SlangToCrossGLConverter:
             return None
         args = [self.generate_expression(arg, is_main) for arg in expr.args or []]
         return f"imageLoad({', '.join([obj] + args)})"
+
+    def generate_structured_buffer_method_call(self, expr, obj, is_main=False):
+        if self.method_base_name(expr.method) != "Load":
+            return None
+        resource_type = self.buffer_resource_expression_type(expr.object)
+        if self.resource_type_base(resource_type) not in {
+            "StructuredBuffer",
+            "RWStructuredBuffer",
+        }:
+            return None
+        if len(expr.args or []) != 1:
+            return None
+        index = self.generate_expression(expr.args[0], is_main)
+        return f"{obj}[{index}]"
 
     def generate_resource_get_dimensions_statement(self, stmt, indent=0, is_main=False):
         if not isinstance(stmt, MethodCallNode):

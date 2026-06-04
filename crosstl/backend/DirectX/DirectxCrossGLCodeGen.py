@@ -1435,6 +1435,38 @@ class HLSLToCrossGLConverter:
             base = base.split("<", 1)[0]
         return base
 
+    def numeric_type_family(self, type_name):
+        base = self.raw_type_base(type_name)
+        if not base:
+            return None
+        if base.startswith(("uint", "min16uint")):
+            return "uint"
+        if base.startswith(("int", "min16int", "min12int")):
+            return "int"
+        if base.startswith(("float", "half", "min16float", "min10float")):
+            return "float"
+        return None
+
+    def bitcast_intrinsic_expression(self, func_name, original_args, rendered_args):
+        if len(original_args) != 1 or func_name not in {"asfloat", "asint", "asuint"}:
+            return None
+
+        source_family = self.numeric_type_family(
+            self.expression_raw_type(original_args[0])
+        )
+        if func_name == "asfloat":
+            if source_family == "uint":
+                return f"uintBitsToFloat({rendered_args[0]})"
+            if source_family == "int":
+                return f"intBitsToFloat({rendered_args[0]})"
+            if source_family == "float":
+                return rendered_args[0]
+        elif func_name == "asint" and source_family == "float":
+            return f"floatBitsToInt({rendered_args[0]})"
+        elif func_name == "asuint" and source_family == "float":
+            return f"floatBitsToUint({rendered_args[0]})"
+        return None
+
     def is_rasterizer_ordered_resource_type(self, type_name):
         return self.raw_type_base(type_name).startswith("RasterizerOrdered")
 
@@ -3019,6 +3051,11 @@ class HLSLToCrossGLConverter:
                 rendered_args = [
                     self.generate_expression(arg, is_main) for arg in expr.args
                 ]
+            bitcast_call = self.bitcast_intrinsic_expression(
+                func_name, expr.args, rendered_args
+            )
+            if bitcast_call is not None:
+                return bitcast_call
             args = ", ".join(rendered_args)
             if func_name == "mul" and len(expr.args) == 2:
                 left = self.maybe_parenthesize(expr.args[0], rendered_args[0])

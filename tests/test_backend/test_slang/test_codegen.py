@@ -1523,6 +1523,35 @@ def test_texture_load_offset_method_call_codegen():
     assert "albedo.Load" not in generated_code
 
 
+def test_structured_buffer_load_method_codegen_from_core_module_docs():
+    # Source: shader-slang/slang stdlib docs for StructuredBuffer<T,L>.Load
+    # and RWStructuredBuffer<T,L>.Load define the single-index Load overload.
+    code = """
+    StructuredBuffer<float> values;
+    RWStructuredBuffer<float> output;
+
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 tid : SV_DispatchThreadID) {
+        uint i = tid.x;
+        float a = values.Load(i);
+        float b = output.Load(i);
+        output[i] = a + b;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "StructuredBuffer<float> values;" in generated_code
+    assert "RWStructuredBuffer<float> output;" in generated_code
+    assert "float a = values[i];" in generated_code
+    assert "float b = output[i];" in generated_code
+    assert "output[i] = a + b;" in generated_code
+    assert ".Load(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_buffer_getdimensions_statement_codegen_from_core_module_docs():
     code = """
     StructuredBuffer<float4> lookupTable;

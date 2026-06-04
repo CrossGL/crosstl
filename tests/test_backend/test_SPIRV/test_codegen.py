@@ -437,6 +437,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_VOID_FUNCTION_CALL_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
+; Source tool: glslangValidator -V -H, reduced from a fragment shader where
+; main calls void helper() before storing an output color.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %main "main"
+OpName %helper "helper("
+OpName %out_color "outColor"
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%one = OpConstant %float 1.0
+%white = OpConstantComposite %v4float %one %one %one %one
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%main_label = OpLabel
+%call = OpFunctionCall %void %helper
+OpStore %out_color %white
+OpReturn
+OpFunctionEnd
+%helper = OpFunction %void None %fn
+%helper_label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_OPSELECT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -2556,6 +2589,21 @@ def test_spirv_spec_fragment_termination_codegen_reparse():
     assert "OpKill" not in generated_code
     assert "OpTerminateInvocation" not in generated_code
     assert "OpDemoteToHelperInvocation" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_glslang_void_function_call_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_VOID_FUNCTION_CALL_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "helper();" in generated_code
+    assert "outColor = float4(1.0, 1.0, 1.0, 1.0);" in generated_code
+    assert "void helper()" in generated_code
+    assert "OpFunctionCall" not in generated_code
+    assert "call;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

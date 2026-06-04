@@ -1667,7 +1667,7 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpFunctionCall" and len(operands) >= 2:
-                expressions[result_id] = FunctionCallNode(
+                call = FunctionCallNode(
                     self.spirv_assembly_value_name(
                         operands[1], names, decorations, prefix="function"
                     ),
@@ -1682,6 +1682,10 @@ class VulkanParser:
                         for operand in operands[2:]
                     ],
                 )
+                if self.spirv_type_name(operands[0], types) == "void":
+                    statements.append(call)
+                else:
+                    expressions[result_id] = call
                 expression_type_ids[result_id] = operands[0]
                 continue
 
