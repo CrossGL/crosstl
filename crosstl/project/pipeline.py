@@ -3055,6 +3055,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
     if not isinstance(project, Mapping):
         reasons.append("missing project object")
     else:
+        root_path = None
         root = project.get("root")
         if not _is_non_empty_string(root):
             reasons.append("missing project.root")
@@ -3074,6 +3075,12 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         output_dir = project.get("outputDir", DEFAULT_OUTPUT_DIR)
         if not _is_non_empty_string(output_dir):
             reasons.append("project.outputDir must be a string")
+        elif root_path is not None and root_path.is_absolute() and root_path.is_dir():
+            output_path = Path(output_dir)
+            if not output_path.is_absolute():
+                output_path = root_path / output_path
+            if not _is_relative_to(output_path, root_path):
+                reasons.append("project.outputDir must resolve inside project.root")
         reasons.extend(
             _project_metadata_contract_reasons(
                 project, require_full_metadata=has_summary

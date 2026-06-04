@@ -809,6 +809,7 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["generator"]["pipeline"] == "project-porting"
     assert isinstance(payload["generator"]["packageVersion"], str)
     assert payload["generator"]["packageVersion"]
+    assert payload["project"]["outputDir"] == str((repo / "translated").resolve())
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
@@ -1392,6 +1393,46 @@ def test_validate_project_report_rejects_invalid_project_metadata(tmp_path):
     assert "project.root must be an absolute path" in diagnostic["message"]
     assert "project.targets must be a list of backend names" in diagnostic["message"]
     assert "project.outputDir must be a string" in diagnostic["message"]
+
+
+@pytest.mark.parametrize("output_dir_kind", ("relative", "absolute"))
+def test_validate_project_report_rejects_output_dir_outside_project(
+    tmp_path, output_dir_kind
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    output_dir = (
+        "../outside"
+        if output_dir_kind == "relative"
+        else str((tmp_path / "outside").resolve())
+    )
+    report_path = repo / "escaped-output-dir-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": output_dir,
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.outputDir must resolve inside project.root" in (
+        diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_path):

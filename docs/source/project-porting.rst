@@ -199,9 +199,9 @@ Project reports are JSON documents with:
   consistency checks, migration action shape checks, preserved diagnostic shape
   checks, validation result and toolchain run record shape checks, artifact
   target and variant declaration checks, translated artifact existence checks,
-  escaped artifact-path checks, source artifact existence and hash mismatch
-  checks, generated artifact hash mismatch checks, optional external toolchain
-  availability, and opt-in toolchain smoke results.
+  escaped output directory and artifact-path checks, source artifact existence
+  and hash mismatch checks, generated artifact hash mismatch checks, optional
+  external toolchain availability, and opt-in toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. Each action has a documented kind, severity, message, and target
   list. Scan-only reports include supported requested targets when translation
