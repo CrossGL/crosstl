@@ -1536,6 +1536,42 @@ class VulkanParser:
                 )
                 continue
 
+            if opcode == "OpControlBarrier" and len(operands) >= 3:
+                statements.append(
+                    FunctionCallNode(
+                        "spirvControlBarrier",
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[:3]
+                        ],
+                    )
+                )
+                continue
+
+            if opcode == "OpMemoryBarrier" and len(operands) >= 2:
+                statements.append(
+                    FunctionCallNode(
+                        "spirvMemoryBarrier",
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[:2]
+                        ],
+                    )
+                )
+                continue
+
             if opcode == "OpStore" and len(operands) >= 2:
                 statements.append(
                     AssignmentNode(

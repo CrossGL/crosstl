@@ -4192,6 +4192,10 @@ class CudaToCrossGLConverter:
         if isinstance(function_name, str) and function_name.startswith("::"):
             function_name = function_name[2:]
 
+        if function_name == "__mul24" and len(args) == 2:
+            left = self.format_cuda_signed_24_bit_operand(args[0])
+            right = self.format_cuda_signed_24_bit_operand(args[1])
+            return f"({left} * {right})"
         if function_name == "__umul24" and len(args) == 2:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
         if function_name == "__ffs" and len(args) == 1:
@@ -4199,6 +4203,9 @@ class CudaToCrossGLConverter:
         if function_name == "__clz" and len(args) == 1:
             return f"countLeadingZeros({args[0]})"
         return None
+
+    def format_cuda_signed_24_bit_operand(self, arg):
+        return f"(({arg} << 8) >> 8)"
 
     def format_vector_component_access(self, expression, component):
         text = str(expression).strip()

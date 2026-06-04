@@ -714,6 +714,28 @@ def test_modular_mandelbrot_nested_parameter_kernel_codegen():
     assert "Unhandled statement type: FunctionNode" not in generated_code
 
 
+def test_keyword_style_runtime_assert_codegen_from_modular_packing_kernel():
+    # Reduced from modular/modular commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/kernels/src/linalg/packing.mojo PackMatrixCols.run.
+    code = """
+    def run(pack_tile_dim: IndexList[2]):
+        assert (
+            pack_tile_dim[1] % Self.column_inner_size == 0
+        ), "Unimplemented tile pattern."
+        assert False, "unreachable"
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "assert(((pack_tile_dim[1] % Self.column_inner_size) == 0), "
+        '"Unimplemented tile pattern.");'
+    ) in generated_code
+    assert 'assert(false, "unreachable");' in generated_code
+    assert "comptime" not in generated_code
+
+
 def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
     code = """
     def matmul_idiomatic_tiled[

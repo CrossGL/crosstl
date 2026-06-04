@@ -529,6 +529,31 @@ def test_cuda_samples_simple_surface_write_texture_object_codegen_reparse():
     assert "tex2D<float>" not in crossgl
 
 
+def test_cuda_samples_scalar_prod_mul24_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/2_Concepts_and_Techniques/scalarProd/scalarProd_kernel.cuh
+    source = """
+    #define IMUL(a, b) __mul24(a, b)
+
+    __global__ void scalarProdGPU(float *d_C, int elementN) {
+        int vectorBase = IMUL(blockIdx.x, elementN);
+        int vectorEnd = vectorBase + elementN;
+        d_C[threadIdx.x] = vectorEnd;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert (
+        "var vectorBase: i32 = "
+        "(((gl_WorkGroupID.x << 8) >> 8) * ((elementN << 8) >> 8));"
+    ) in crossgl
+    assert "__mul24" not in crossgl
+
+
 def test_cuda_samples_simple_texture3d_umul24_codegen_reparse():
     source = """
     typedef unsigned int uint;

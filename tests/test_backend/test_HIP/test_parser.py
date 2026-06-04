@@ -796,6 +796,85 @@ class TestHipParser:
         assert run_call.name.object == "runner"
         assert run_call.name.member == "run"
 
+    def test_public_rocm_hipblaslt_and_math_union_declarations_parse(self):
+        # Upstream: ROCm/rocm-examples@cf369da, Common/hipblaslt_utils.hpp
+        # and HIP-Doc/Reference/HIP-Math-API/math/main.hip.
+        code = """
+        union compute_type_interface
+        {
+            float   f32;
+            double  f64;
+            int32_t i32;
+        };
+
+        int64_t ulp_diff(float a, float b)
+        {
+            union
+            {
+                float f;
+                int32_t i;
+            } ua{a}, ub{b};
+
+            if (ua.i < 0) {
+                ua.i = ub.i;
+            }
+            return ua.i;
+        }
+        """
+        ast = self.parse_code(code)
+
+        named_union = ast.statements[0]
+        function = ast.statements[1]
+        anonymous_union, ua, ub, branch, returned = function.body
+
+        assert isinstance(named_union, StructNode)
+        assert named_union.name == "compute_type_interface"
+        assert getattr(named_union, "is_union", False) is True
+        assert [(member.vtype, member.name) for member in named_union.members] == [
+            ("float", "f32"),
+            ("double", "f64"),
+            ("int32_t", "i32"),
+        ]
+
+        assert isinstance(anonymous_union, StructNode)
+        assert anonymous_union.name is None
+        assert getattr(anonymous_union, "is_union", False) is True
+        assert isinstance(ua, VariableNode)
+        assert ua.vtype == "union <anonymous>"
+        assert ua.name == "ua"
+        assert ua.value.elements == ["a"]
+        assert isinstance(ub, VariableNode)
+        assert ub.vtype == "union <anonymous>"
+        assert ub.name == "ub"
+        assert ub.value.elements == ["b"]
+        assert isinstance(branch, IfNode)
+        assert returned.value.member == "i"
+
+    def test_public_rocm_hipdnn_dependent_member_template_call_parse(self):
+        # Upstream: ROCm/rocm-examples@cf369da, Common/hipdnn_utils.hpp.
+        code = """
+        template <typename F>
+        bool run(F&& f)
+        {
+            bool allPassed = true;
+            allPassed &= f.template operator()<float, float>(TensorLayout::NCHW);
+            return allPassed;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        assignment = function.body[1]
+        call = assignment.right
+
+        assert isinstance(assignment, AssignmentNode)
+        assert assignment.operator == "&="
+        assert isinstance(call, FunctionCallNode)
+        assert isinstance(call.name, MemberAccessNode)
+        assert call.name.object == "f"
+        assert call.name.member == "operator()<float, float>"
+        assert call.args == ["TensorLayout::NCHW"]
+
     def test_public_rocm_hip_doc_constexpr_qualified_size_t_global(self):
         code = """
         constexpr std::size_t const_array_size = 32;

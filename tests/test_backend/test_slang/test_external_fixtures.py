@@ -361,6 +361,36 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["tex.SampleLevel"],
     },
     {
+        "id": "slang_texture2darray_gatherred_from_core_module",
+        "repo": "shader-slang/slang-generated-2026",
+        "path": (
+            "docs/generated/tests/cross-cutting/core-module/"
+            "texture2darray-gatherred.slang"
+        ),
+        "source": (
+            """
+            Texture2DArray<float4> tex;
+            SamplerState samp;
+            RWStructuredBuffer<float4> outBuf;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void main(uint3 tid : SV_DispatchThreadID)
+            {
+                outBuf[tid.x] =
+                    tex.GatherRed(samp, float3(0.5, 0.5, 0.0));
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "sampler2DArray tex;",
+            "sampler samp;",
+            "textureGather(tex, samp, vec3(0.5, 0.5, 0.0), 0)",
+        ],
+        "not_contains": ["tex.GatherRed"],
+    },
+    {
         "id": "slang_hlsl_intrinsic_mul_matrix_vector",
         "repo": "shader-slang/slang-generated-2026",
         "path": (

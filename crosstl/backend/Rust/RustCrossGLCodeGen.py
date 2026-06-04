@@ -76,6 +76,15 @@ class RustToCrossGLConverter:
         "mul_add": "fma",
     }
     RESOURCE_METHOD_PREFIXES = ("sample", "texture_", "image_", "buffer_")
+    RESOURCE_METHOD_NAMES = {
+        "fetch",
+        "query_levels",
+        "query_samples",
+        "query_size",
+        "query_size_lod",
+        "read",
+        "write",
+    }
     RESOURCE_TYPE_PREFIXES = (
         "sampler",
         "image",
@@ -3808,30 +3817,69 @@ class RustToCrossGLConverter:
     def format_resource_method_call(self, method_name, obj, args, receiver_type=None):
         if not self.is_resource_method_name(method_name):
             return None
-        if not self.is_resource_method_receiver(obj, receiver_type):
+
+        mapped_resource_type = self.map_resource_method_receiver_type(
+            obj,
+            receiver_type,
+        )
+        if mapped_resource_type is None:
             return None
 
         mapped = self.function_map.get(method_name)
+        if mapped is None:
+            mapped = self.map_rust_gpu_resource_method(
+                method_name,
+                mapped_resource_type,
+            )
         if mapped is None:
             return None
 
         return f"{mapped}({', '.join([obj] + args)})"
 
     def is_resource_method_name(self, method_name):
-        return isinstance(method_name, str) and method_name.startswith(
-            self.RESOURCE_METHOD_PREFIXES
+        return isinstance(method_name, str) and (
+            method_name.startswith(self.RESOURCE_METHOD_PREFIXES)
+            or method_name in self.RESOURCE_METHOD_NAMES
         )
 
     def is_resource_method_receiver(self, obj, receiver_type=None):
+        return self.map_resource_method_receiver_type(obj, receiver_type) is not None
+
+    def map_resource_method_receiver_type(self, obj, receiver_type=None):
         if receiver_type is None:
             receiver_type = self.lookup_value_type(obj)
         if receiver_type is None:
-            return False
+            return None
 
         mapped_type = self.map_resource_receiver_type(receiver_type)
-        return isinstance(mapped_type, str) and mapped_type.startswith(
+        if isinstance(mapped_type, str) and mapped_type.startswith(
             self.RESOURCE_TYPE_PREFIXES
-        )
+        ):
+            return mapped_type
+        return None
+
+    def map_rust_gpu_resource_method(self, method_name, mapped_resource_type):
+        if method_name == "read":
+            return "imageLoad"
+        if method_name == "write":
+            return "imageStore"
+        if method_name == "fetch":
+            if mapped_resource_type.startswith("sampler"):
+                return "texelFetch"
+            return "imageLoad"
+        if method_name in {"query_size", "query_size_lod"}:
+            if mapped_resource_type.startswith("sampler"):
+                return "textureSize"
+            return "imageSize"
+        if method_name == "query_levels":
+            if mapped_resource_type.startswith("sampler"):
+                return "textureQueryLevels"
+            return None
+        if method_name == "query_samples":
+            if mapped_resource_type.startswith("sampler"):
+                return "textureSamples"
+            return "imageSamples"
+        return None
 
     def map_resource_receiver_type(self, receiver_type, seen=None):
         mapped_type = self.map_type(receiver_type)

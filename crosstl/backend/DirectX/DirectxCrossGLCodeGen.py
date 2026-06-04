@@ -374,6 +374,7 @@ class HLSLToCrossGLConverter:
         self.current_identifier_renames = {}
         self.struct_member_types = {}
         self.suppress_storage_image_index_lowering = False
+        self.function_identifier_renames = {}
 
     @staticmethod
     def minimum_precision_type_map():
@@ -1078,6 +1079,29 @@ class HLSLToCrossGLConverter:
                 candidate = f"{candidate}_"
             renames[name] = candidate
         return renames
+
+    def collect_function_identifier_renames(self, functions):
+        declared_names = {
+            func.name
+            for func in functions or []
+            if isinstance(getattr(func, "name", None), str)
+        }
+        used_names = set(declared_names)
+        renames = {}
+        for name in sorted(declared_names):
+            if not name.isidentifier() or name not in self.crossgl_reserved_identifiers:
+                continue
+            candidate = f"{name}_"
+            while candidate in used_names or candidate in renames.values():
+                candidate = f"{candidate}_"
+            renames[name] = candidate
+            used_names.add(candidate)
+        return renames
+
+    def render_function_identifier(self, name):
+        if not isinstance(name, str):
+            return name
+        return self.function_identifier_renames.get(name, name)
 
     def format_array_suffixes(self, node, is_main=False):
         sizes = getattr(node, "array_sizes", None)
@@ -2090,6 +2114,9 @@ class HLSLToCrossGLConverter:
         self.global_resource_array_dims = {}
         self.current_variable_types = {}
         self.current_resource_array_dims = {}
+        self.function_identifier_renames = self.collect_function_identifier_renames(
+            ast.functions
+        )
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []
@@ -2242,7 +2269,7 @@ class HLSLToCrossGLConverter:
         )
         semantic = self.map_semantic(func.semantic)
         semantic = f" {semantic}" if semantic else ""
-        function_name = self.render_identifier(entry_name or func.name)
+        function_name = self.render_function_identifier(entry_name or func.name)
         code += (
             f"{self.map_type(func.return_type)} "
             f"{function_name}({params}){semantic} {{\n"
@@ -2809,7 +2836,7 @@ class HLSLToCrossGLConverter:
                 return "clamp(0.0, 0.0, 1.0)"
             func_name = self.function_map.get(func_name, func_name)
             func_name = self.interlocked_map.get(func_name, func_name)
-            func_name = self.render_identifier(func_name)
+            func_name = self.render_function_identifier(func_name)
             return f"{func_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object, is_main)
