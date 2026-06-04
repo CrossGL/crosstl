@@ -1400,6 +1400,23 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode == "OpVectorInsertDynamic" and len(operands) >= 4:
+                expressions[result_id] = (
+                    self.spirv_assembly_vector_insert_dynamic_expression(
+                        operands[0],
+                        operands[1],
+                        operands[2],
+                        operands[3],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                        types,
+                    )
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             if result_id and opcode == "OpCompositeInsert" and len(operands) >= 3:
                 expressions[result_id] = (
                     self.spirv_assembly_composite_insert_expression(
@@ -2191,6 +2208,59 @@ class VulkanParser:
         return FunctionCallNode(
             "spirvCompositeInsert",
             [composite, inserted, *index_operands],
+        )
+
+    def spirv_assembly_vector_insert_dynamic_expression(
+        self,
+        result_type_id,
+        vector_operand,
+        component_operand,
+        index_operand,
+        expressions,
+        names,
+        decorations,
+        constants,
+        types,
+    ):
+        vector = self.spirv_assembly_operand_expression(
+            vector_operand, expressions, names, decorations, constants
+        )
+        component = self.spirv_assembly_operand_expression(
+            component_operand, expressions, names, decorations, constants
+        )
+        dynamic_index = self.spirv_assembly_operand_expression(
+            index_operand, expressions, names, decorations, constants
+        )
+        result_type_name = self.spirv_type_name(result_type_id, types)
+        result_component_count = self.spirv_vector_component_count(
+            result_type_id, types
+        )
+        component_index = self.spirv_integer_constant_operand(index_operand, constants)
+
+        if (
+            component_index is not None
+            and result_component_count is not None
+            and 0 <= component_index < result_component_count
+        ):
+            return FunctionCallNode(
+                result_type_name or result_type_id,
+                [
+                    (
+                        component
+                        if component_position == component_index
+                        else self.spirv_composite_component_expression(
+                            vector,
+                            component_position,
+                            result_component_count,
+                            result_type_name,
+                        )
+                    )
+                    for component_position in range(result_component_count)
+                ],
+            )
+
+        return FunctionCallNode(
+            "spirvVectorInsertDynamic", [vector, component, dynamic_index]
         )
 
     def spirv_composite_component_expression(

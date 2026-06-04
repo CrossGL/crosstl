@@ -13,6 +13,7 @@ class MojoParser:
     ATTRIBUTE_START_TOKENS = {"ATTRIBUTE", "AT"}
     FUNCTION_TOKENS = {"FN", "DEF"}
     TYPE_START_TOKENS = {"IDENTIFIER", "INT", "FLOAT", "BOOL", "STRING"}
+    FUNCTION_TYPE_TOKENS = {"FN", "DEF"}
     PARAMETER_CONVENTION_TOKENS = {"VAR"}
     PARAMETER_CONVENTION_IDENTIFIERS = {
         "borrowed",
@@ -2143,6 +2144,9 @@ class MojoParser:
         return False
 
     def parse_type(self):
+        if self.current_token[0] in self.FUNCTION_TYPE_TOKENS:
+            return self.parse_function_type()
+
         if self.current_token[0] not in self.TYPE_START_TOKENS:
             raise SyntaxError(f"Expected type name, got {self.current_token[0]}")
 
@@ -2163,8 +2167,45 @@ class MojoParser:
                 type_name += self.parse_parenthesized_type_suffix()
         if type_name.split("[", 1)[0] in self.REFERENCE_TYPE_PREFIXES:
             self.skip_layout_tokens()
-            if self.current_token[0] in self.TYPE_START_TOKENS:
+            if (
+                self.current_token[0]
+                in self.TYPE_START_TOKENS | self.FUNCTION_TYPE_TOKENS
+            ):
                 type_name += f" {self.parse_type()}"
+        return type_name
+
+    def parse_function_type(self):
+        type_name = self.current_token[1]
+        self.eat(self.current_token[0])
+
+        if self.current_token[0] == "LBRACKET":
+            type_name += self.parse_generic_type_suffix()
+        self.skip_layout_tokens()
+
+        if self.current_token[0] == "LPAREN":
+            type_name += self.parse_parenthesized_type_suffix()
+        self.skip_layout_tokens()
+
+        while (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in self.FUNCTION_EFFECT_IDENTIFIERS
+        ):
+            type_name += f" {self.current_token[1]}"
+            self.eat("IDENTIFIER")
+            self.skip_layout_tokens()
+            if self.current_token[0] == "LBRACKET":
+                type_name += self.parse_generic_type_suffix()
+            elif self.current_token[0] == "LPAREN":
+                type_name += self.parse_parenthesized_type_suffix()
+            elif self.current_token[0] == "LBRACE":
+                type_name += self.parse_braced_type_suffix()
+            self.skip_layout_tokens()
+
+        if self.current_token[0] == "MINUS" and self.peek_token()[0] == "GREATER_THAN":
+            self.eat("MINUS")
+            self.eat("GREATER_THAN")
+            type_name += f" -> {self.parse_type()}"
+
         return type_name
 
     def skip_bracketed_suffix(self):
@@ -2232,6 +2273,37 @@ class MojoParser:
                 self.eat("COMMA")
                 self.skip_layout_tokens()
                 if self.current_token[0] != "RPAREN":
+                    suffix += ", "
+            elif token_type in {"NEWLINE", "INDENT", "DEDENT"}:
+                self.eat(token_type)
+            else:
+                suffix += token_value
+                self.eat(token_type)
+
+        return suffix
+
+    def parse_braced_type_suffix(self):
+        suffix = "{"
+        depth = 1
+        self.eat("LBRACE")
+
+        while depth > 0:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated braced type suffix")
+
+            token_type, token_value = self.current_token
+            if token_type == "LBRACE":
+                suffix += "{"
+                depth += 1
+                self.eat("LBRACE")
+            elif token_type == "RBRACE":
+                suffix += "}"
+                depth -= 1
+                self.eat("RBRACE")
+            elif token_type == "COMMA":
+                self.eat("COMMA")
+                self.skip_layout_tokens()
+                if self.current_token[0] != "RBRACE":
                     suffix += ", "
             elif token_type in {"NEWLINE", "INDENT", "DEDENT"}:
                 self.eat(token_type)

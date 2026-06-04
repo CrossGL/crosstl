@@ -1593,10 +1593,7 @@ class GLSLParser:
 
     def parse_do_while_loop(self):
         self.eat("DO")
-        self.skip_newlines()
-        self.eat("LBRACE")
-        body = self.parse_block()
-        self.eat("RBRACE")
+        body = self.parse_statement_or_block()
         self.skip_newlines()
         self.eat("WHILE")
         self.eat("LPAREN")

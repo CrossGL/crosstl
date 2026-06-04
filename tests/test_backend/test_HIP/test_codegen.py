@@ -1961,6 +1961,42 @@ class TestHipCodeGen:
         )
         assert "// Arguments: data, 2.0f" in result
 
+    def test_public_rocm_reduction_hip_kernel_name_direct_launch_conversion(self):
+        code = """
+        template<typename T, typename F>
+        void launch(T* front,
+                    T* back,
+                    F kernel_op,
+                    T zero_elem,
+                    std::size_t curr,
+                    std::size_t factor) {
+            HIP_KERNEL_NAME(
+                kernel<T, F>)<<<dim3(new_size(factor, curr)),
+                                dim3(block_size),
+                                factor * sizeof(T),
+                                hipStreamDefault>>>(front,
+                                                    back,
+                                                    kernel_op,
+                                                    zero_elem,
+                                                    curr);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// Kernel launch: kernel<T, F><<<vec3<u32>(new_size(factor, curr)), "
+            "vec3<u32>(block_size), (factor * sizeof(T)), hipStreamDefault>>>()"
+            in result
+        )
+        assert "// Arguments: front, back, kernel_op, zero_elem, curr" in result
+        assert "HIP_KERNEL_NAME" not in result
+
     def test_braced_dim3_kernel_launch_conversion(self):
         code = """
         __global__ void kernel() {

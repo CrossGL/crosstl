@@ -2713,7 +2713,7 @@ class SlangParser:
 
             if self.current_token[0] == "LBRACKET":
                 self.eat("LBRACKET")
-                index = self.parse_expression()
+                index = self.parse_subscript_index()
                 self.eat("RBRACKET")
                 node = ArrayAccessNode(node, index)
                 continue
@@ -2727,6 +2727,19 @@ class SlangParser:
                 return UnaryOpNode("POST_DECREMENT", self.valid_postfix_update(node))
 
             return node
+
+    def parse_subscript_index(self):
+        if self.current_token[0] == "RBRACKET":
+            return None
+
+        indices = [self.parse_expression()]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            indices.append(self.parse_expression())
+
+        if len(indices) == 1:
+            return indices[0]
+        return ParenthesizedCommaNode(indices)
 
     def valid_postfix_update(self, node):
         if isinstance(node, (VariableNode, MemberAccessNode, ArrayAccessNode)):

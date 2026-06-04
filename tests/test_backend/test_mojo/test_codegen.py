@@ -133,6 +133,29 @@ def test_bracketed_ref_parameter_convention_codegen_from_modular_amd_helpers():
     assert "ref[Self.tensor_origin]" not in generated_code
 
 
+def test_function_type_parameter_codegen_from_modular_gpu_reduction():
+    # Reduced from https://github.com/modular/modular.git commit
+    # daa47bb846cc213723a54c51844ea4e923eb5e13,
+    # mojo/stdlib/std/algorithm/backend/gpu/reduction.mojo small_reduce_kernel.
+    code = """
+    def reduce_adapter(
+        input_fn: def[dtype: DType, width: Int, rank: Int](
+            IndexList[rank]
+        ) capturing[_] -> SIMD[dtype, width],
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "void reduce_adapter(def[dtype:DType, width:Int, rank:Int]"
+        "(IndexList[rank]) capturing[_] -> SIMD[dtype, width] input_fn)"
+        in generated_code
+    )
+    assert "Unhandled expression" not in generated_code
+
+
 def test_variadic_and_reference_parameter_codegen_from_current_docs():
     code = """
     struct GenericArray[ElementType: Copyable & ImplicitlyDestructible]:

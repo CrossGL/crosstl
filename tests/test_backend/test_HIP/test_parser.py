@@ -1468,6 +1468,39 @@ class TestHipParser:
         assert launch.stream is None
         assert launch.args == ["data", "2.0f"]
 
+    def test_public_rocm_reduction_hip_kernel_name_direct_launch_parsing(self):
+        # Upstream: ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
+        # Tutorials/reduction/include/Reduction/v1.hpp.
+        code = """
+        template<typename T, typename F>
+        void launch(T* front,
+                    T* back,
+                    F kernel_op,
+                    T zero_elem,
+                    std::size_t curr,
+                    std::size_t factor) {
+            HIP_KERNEL_NAME(
+                kernel<T, F>)<<<dim3(new_size(factor, curr)),
+                                dim3(block_size),
+                                factor * sizeof(T),
+                                hipStreamDefault>>>(front,
+                                                    back,
+                                                    kernel_op,
+                                                    zero_elem,
+                                                    curr);
+        }
+        """
+        ast = self.parse_code(code)
+
+        launch = ast.statements[0].body[0]
+        assert isinstance(launch, KernelLaunchNode)
+        assert launch.kernel_name == "kernel<T, F>"
+        assert isinstance(launch.blocks, FunctionCallNode)
+        assert launch.blocks.name == "dim3"
+        assert isinstance(launch.shared_mem, BinaryOpNode)
+        assert launch.stream == "hipStreamDefault"
+        assert launch.args == ["front", "back", "kernel_op", "zero_elem", "curr"]
+
     def test_braced_dim3_kernel_launch_parsing(self):
         code = """
         __global__ void kernel() {

@@ -1245,6 +1245,47 @@ def test_struct_call_and_subscript_operator_methods_parse():
     assert methods[1].params[0].name == "index"
 
 
+def test_multi_index_subscript_expressions_from_official_operator_sample_parse():
+    code = """
+    int test(S value, int x, int y)
+    {
+        value[] = 0;
+        value[x] = 1;
+        value[x, y] = value[1, 0];
+        return value[x, y];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "test").body
+
+    empty_subscript = body[0].left
+    single_subscript = body[1].left
+    multi_assignment = body[2]
+    return_subscript = body[3].value
+
+    assert isinstance(empty_subscript, ArrayAccessNode)
+    assert empty_subscript.index is None
+
+    assert isinstance(single_subscript, ArrayAccessNode)
+    assert single_subscript.index.name == "x"
+
+    assert isinstance(multi_assignment.left, ArrayAccessNode)
+    assert isinstance(multi_assignment.left.index, ParenthesizedCommaNode)
+    assert [expr.name for expr in multi_assignment.left.index.expressions] == [
+        "x",
+        "y",
+    ]
+
+    assert isinstance(multi_assignment.right, ArrayAccessNode)
+    assert isinstance(multi_assignment.right.index, ParenthesizedCommaNode)
+    assert multi_assignment.right.index.expressions == ["1", "0"]
+
+    assert isinstance(return_subscript, ArrayAccessNode)
+    assert isinstance(return_subscript.index, ParenthesizedCommaNode)
+
+
 def test_func_extension_apply_declaration_parse():
     code = """
     float cube(float x) { return x * x * x; }

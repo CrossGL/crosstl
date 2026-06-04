@@ -321,6 +321,47 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_VECTOR_INSERT_DYNAMIC_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
+; Reduced from the core OpVectorInsertDynamic instruction definition.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_vec %insert_value %index %out_vec
+OpExecutionMode %main OriginUpperLeft
+OpName %input_vec "inputVec"
+OpName %insert_value "insertValue"
+OpName %index "index"
+OpName %out_vec "outVec"
+OpDecorate %input_vec Location 0
+OpDecorate %insert_value Location 1
+OpDecorate %index Flat
+OpDecorate %index Location 2
+OpDecorate %out_vec Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%uint = OpTypeInt 32 0
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_input_float = OpTypePointer Input %float
+%ptr_input_uint = OpTypePointer Input %uint
+%ptr_output_v4float = OpTypePointer Output %v4float
+%input_vec = OpVariable %ptr_input_v4float Input
+%insert_value = OpVariable %ptr_input_float Input
+%index = OpVariable %ptr_input_uint Input
+%out_vec = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_vec = OpLoad %v4float %input_vec
+%loaded_value = OpLoad %float %insert_value
+%loaded_index = OpLoad %uint %index
+%inserted = OpVectorInsertDynamic %v4float %loaded_vec %loaded_value %loaded_index
+OpStore %out_vec %inserted
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_OPSELECT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -2249,6 +2290,25 @@ def test_spirv_spec_vector_extract_dynamic_codegen_reparse():
     assert "outValue = inputVec[index];" in generated_code
     assert "outValue = component;" not in generated_code
     assert "OpVectorExtractDynamic" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_spec_vector_insert_dynamic_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SPEC_VECTOR_INSERT_DYNAMIC_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 inputVec @input @location(0);" in generated_code
+    assert "float insertValue @input @location(1);" in generated_code
+    assert "uint index @input @location(2) @flat;" in generated_code
+    assert "float4 outVec @output @location(0);" in generated_code
+    assert (
+        "outVec = spirvVectorInsertDynamic(inputVec, insertValue, index);"
+        in generated_code
+    )
+    assert "outVec = inserted;" not in generated_code
+    assert "OpVectorInsertDynamic" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

@@ -147,6 +147,43 @@ def test_bracketed_ref_parameter_convention_parse_from_modular_amd_helpers():
     ]
 
 
+def test_function_type_parameter_parsing_from_modular_gpu_reduction():
+    # Reduced from https://github.com/modular/modular.git commit
+    # daa47bb846cc213723a54c51844ea4e923eb5e13,
+    # mojo/stdlib/std/algorithm/backend/gpu/reduction.mojo small_reduce_kernel.
+    code = """
+    def reduce_adapter(
+        input_fn: def[dtype: DType, width: Int, rank: Int](
+            IndexList[rank]
+        ) capturing[_] -> SIMD[dtype, width],
+        output_fn: def[dtype: DType, width: SIMDSize, rank: Int](
+            IndexList[rank], StaticTuple[SIMD[dtype, width], num_reductions]
+        ) capturing[_] -> None,
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "reduce_adapter")
+
+    assert [(param.name, param.vtype) for param in function.params] == [
+        (
+            "input_fn",
+            (
+                "def[dtype:DType, width:Int, rank:Int](IndexList[rank]) "
+                "capturing[_] -> SIMD[dtype, width]"
+            ),
+        ),
+        (
+            "output_fn",
+            (
+                "def[dtype:DType, width:SIMDSize, rank:Int]"
+                "(IndexList[rank], StaticTuple[SIMD[dtype, width], "
+                "num_reductions]) capturing[_] -> None"
+            ),
+        ),
+    ]
+
+
 def test_variadic_and_deinit_parameters_parse_from_current_docs():
     code = """
     struct GenericArray[ElementType: Copyable & ImplicitlyDestructible]:

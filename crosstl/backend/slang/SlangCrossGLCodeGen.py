@@ -1159,7 +1159,7 @@ class SlangToCrossGLConverter:
             return f"{obj}.{self.format_member_access_name(expr)}"
         elif isinstance(expr, ArrayAccessNode):
             array = self.generate_expression(expr.array, is_main)
-            index = self.generate_expression(expr.index, is_main)
+            index = self.generate_subscript_index(expr.index, is_main)
             return f"{array}[{index}]"
         elif isinstance(expr, TernaryOpNode):
             condition = self.generate_expression(expr.condition, is_main)
@@ -1189,6 +1189,15 @@ class SlangToCrossGLConverter:
             return f"({expressions})"
         else:
             return str(expr)
+
+    def generate_subscript_index(self, index, is_main=False):
+        if index is None:
+            return ""
+        if isinstance(index, ParenthesizedCommaNode):
+            return ", ".join(
+                self.generate_expression(item, is_main) for item in index.expressions
+            )
+        return self.generate_expression(index, is_main)
 
     def normalize_numeric_literal(self, value):
         if not isinstance(value, str):
