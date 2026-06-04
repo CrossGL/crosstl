@@ -106,17 +106,20 @@ allow extensionless or non-standard files to be assigned to a registered source
 backend. Override patterns are also considered during default discovery, so
 override-only files do not require broad include globs. Invalid override backend
 names are reported as configuration diagnostics.
-Include directories, defines, and
+Include directories, defines, and named
 variants are recorded in project reports. Missing include directories are
 reported as configuration diagnostics. Include directories that resolve outside
 the repository are reported as non-blocking configuration diagnostics so reports
 retain portability and provenance context. Include directories and defines are
 passed to source frontends that expose preprocessor options. ``output_dir`` must
 resolve inside the repository root; paths that escape the repository are reported
-as configuration diagnostics and artifacts are not written. Named variant
-expansion through every native preprocessor remains a tracked project-porting
-capability, and reports emit structured warnings when variants are present but
-not yet expanded.
+as configuration diagnostics and artifacts are not written. When named variants
+are configured, project translation emits one artifact attempt per variant and
+passes base defines merged with the variant's define overrides to the source
+frontend. Variant artifacts are written under a variant path segment inside each
+target output directory, and the original variant name is recorded on the
+artifact and validation records. Native preprocessor behavior remains
+backend-dependent.
 
 ``external_corpus_manifest`` points at an optional repository-relative JSON
 manifest of pinned upstream shader or GPU-source reductions. Project reports use
@@ -143,9 +146,10 @@ Project reports are JSON documents with:
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, and source overrides.
 - ``artifacts``: attempted outputs with source path, source backend, target,
-  output path, status, source hash, pipeline provenance, and file-granularity
-  source-map anchors for successful translations. Invalid project output
-  directories are recorded as failed artifacts without writing files.
+  optional variant name, output path, status, source hash, pipeline provenance,
+  and file-granularity source-map anchors for successful translations. Invalid
+  project output directories are recorded as failed artifacts without writing
+  files.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, and translated/failed artifact outcomes for manifest entries.
@@ -158,9 +162,10 @@ Project reports are JSON documents with:
   provenance checks, source-map record shape and anchor consistency checks,
   external corpus record and summary checks, summary consistency checks,
   migration action shape checks, preserved diagnostic shape checks, validation
-  result record shape checks, artifact target declaration checks, translated
-  artifact existence checks, escaped artifact-path checks, optional external
-  toolchain availability, and opt-in toolchain smoke results.
+  result and toolchain run record shape checks, artifact target and variant
+  declaration checks, translated artifact existence checks, escaped
+  artifact-path checks, optional external toolchain availability, and opt-in
+  toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. Each action has a documented kind, severity, message, and target
   list; the current project pipeline emits ``manual-runtime-integration`` for

@@ -64,6 +64,9 @@ TOOLCHAIN_BY_BACKEND = {
 CROSSL_TARGETS = {"cgl", "crossgl"}
 SHA256_HEX_LENGTH = 64
 LOWERCASE_HEX_DIGITS = frozenset("0123456789abcdef")
+VARIANT_OUTPUT_SAFE_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+)
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -172,6 +175,19 @@ def _internal_exclude_patterns(config: ProjectConfig) -> tuple[str, ...]:
 def _source_hash(path: Path) -> dict[str, str]:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return {"algorithm": "sha256", "value": digest}
+
+
+def _variant_output_segment(variant: str) -> str:
+    safe = "".join(
+        character if character in VARIANT_OUTPUT_SAFE_CHARS else "_"
+        for character in variant.strip()
+    ).strip("._-")
+    if not safe:
+        safe = "variant"
+    if safe == variant and safe not in {".", ".."}:
+        return safe
+    digest = hashlib.sha256(variant.encode("utf-8")).hexdigest()[:8]
+    return f"{safe[:48]}-{digest}"
 
 
 def _file_span(path: Path, report_path: str) -> SourceLocation:
@@ -586,19 +602,6 @@ def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]
                 ),
                 location=location,
                 missing_capabilities=["artifact.manifest"],
-            )
-        )
-    if config.variants:
-        diagnostics.append(
-            ProjectDiagnostic(
-                severity="warning",
-                code="project.config.variants-not-applied",
-                message=(
-                    "Project named variants are recorded in the report but variant "
-                    "expansion through backend preprocessors is not implemented yet."
-                ),
-                location=location,
-                missing_capabilities=["macro.variants"],
             )
         )
     if config.external_corpus_manifest:
@@ -1090,7 +1093,10 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
 
 
 def _artifact_path(
-    config: ProjectConfig, unit: ProjectTranslationUnit, target: str
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None = None,
 ) -> Path:
     extension = (
         ".cgl"
@@ -1098,7 +1104,21 @@ def _artifact_path(
         else get_backend_extension(target) or ".out"
     )
     relative = Path(unit.relative_path)
-    return config.output_path / target / relative.with_suffix(extension)
+    base = config.output_path / target
+    if variant is not None:
+        base = base / _variant_output_segment(variant)
+    return base / relative.with_suffix(extension)
+
+
+def _variant_jobs(
+    config: ProjectConfig,
+) -> list[tuple[str | None, dict[str, str]]]:
+    if not config.variants:
+        return [(None, dict(config.defines))]
+    return [
+        (name, {**config.defines, **dict(defines)})
+        for name, defines in sorted(config.variants.items())
+    ]
 
 
 def _artifact_source_map(
@@ -1197,64 +1217,69 @@ def translate_project(
         diagnostics, OUTPUT_DIR_OUTSIDE_PROJECT_CODE
     )
 
+    variant_jobs = _variant_jobs(config)
+
     for unit in scan.units:
         for target in selected_targets:
-            output_path = _artifact_path(config, unit, target)
-            artifact = {
-                "source": unit.relative_path,
-                "sourceBackend": unit.source_backend,
-                "target": target,
-                "path": _artifact_report_path(output_path, config),
-                "status": "translated",
-                "sourceHash": _source_hash(unit.path),
-                "provenance": {
-                    "pipeline": "single-file-translate",
-                    "intermediate": (
-                        "crossgl"
-                        if unit.source_backend not in {"cgl", "crossgl"}
-                        and target not in {"cgl", "crossgl"}
-                        else None
-                    ),
-                },
-            }
-            if output_dir_blocked:
-                artifact["status"] = "failed"
-                artifact["error"] = (
-                    "Configured output directory resolves outside the repository; "
-                    "artifact was not written."
-                )
-                artifacts.append(artifact)
-                continue
-            try:
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                translate(
-                    str(unit.path),
-                    backend=target,
-                    save_shader=str(output_path),
-                    format_output=format_output,
-                    source_backend=unit.source_backend,
-                    include_paths=include_paths,
-                    defines=config.defines,
-                )
-                artifact["sourceMap"] = _artifact_source_map(
-                    config, unit, target, output_path
-                )
-            except Exception as exc:  # noqa: BLE001
-                # Project translation reports per-artifact failures so one bad
-                # unit does not hide the rest of the repository's migration state.
-                artifact["status"] = "failed"
-                artifact["error"] = str(exc)
-                diagnostics.append(
-                    ProjectDiagnostic(
-                        severity="error",
-                        code="project.translate.failed",
-                        message=str(exc),
-                        location=SourceLocation(file=unit.relative_path),
-                        target=target,
-                        missing_capabilities=["batch.translation"],
+            for variant, defines in variant_jobs:
+                output_path = _artifact_path(config, unit, target, variant)
+                artifact = {
+                    "source": unit.relative_path,
+                    "sourceBackend": unit.source_backend,
+                    "target": target,
+                    "path": _artifact_report_path(output_path, config),
+                    "status": "translated",
+                    "sourceHash": _source_hash(unit.path),
+                    "provenance": {
+                        "pipeline": "single-file-translate",
+                        "intermediate": (
+                            "crossgl"
+                            if unit.source_backend not in {"cgl", "crossgl"}
+                            and target not in {"cgl", "crossgl"}
+                            else None
+                        ),
+                    },
+                }
+                if variant is not None:
+                    artifact["variant"] = variant
+                if output_dir_blocked:
+                    artifact["status"] = "failed"
+                    artifact["error"] = (
+                        "Configured output directory resolves outside the repository; "
+                        "artifact was not written."
                     )
-                )
-            artifacts.append(artifact)
+                    artifacts.append(artifact)
+                    continue
+                try:
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    translate(
+                        str(unit.path),
+                        backend=target,
+                        save_shader=str(output_path),
+                        format_output=format_output,
+                        source_backend=unit.source_backend,
+                        include_paths=include_paths,
+                        defines=defines,
+                    )
+                    artifact["sourceMap"] = _artifact_source_map(
+                        config, unit, target, output_path
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    # Project translation reports per-artifact failures so one bad
+                    # unit does not hide the rest of the repository's migration state.
+                    artifact["status"] = "failed"
+                    artifact["error"] = str(exc)
+                    diagnostics.append(
+                        ProjectDiagnostic(
+                            severity="error",
+                            code="project.translate.failed",
+                            message=str(exc),
+                            location=SourceLocation(file=unit.relative_path),
+                            target=target,
+                            missing_capabilities=["batch.translation"],
+                        )
+                    )
+                artifacts.append(artifact)
 
     validation = (
         _validate_artifacts(artifacts, selected_targets, config)
@@ -1325,21 +1350,22 @@ def _validate_artifacts(
                 )
             )
         exists = artifact_path.exists() if artifact_inside_project else False
-        artifact_checks.append(
-            {
-                "source": artifact["source"],
-                "target": artifact["target"],
-                "path": artifact["path"],
-                "exists": exists,
-                "status": (
-                    "ok"
-                    if artifact_inside_project
-                    and exists
-                    and artifact.get("status") == "translated"
-                    else "failed"
-                ),
-            }
-        )
+        artifact_check = {
+            "source": artifact["source"],
+            "target": artifact["target"],
+            "path": artifact["path"],
+            "exists": exists,
+            "status": (
+                "ok"
+                if artifact_inside_project
+                and exists
+                and artifact.get("status") == "translated"
+                else "failed"
+            ),
+        }
+        if artifact.get("variant") is not None:
+            artifact_check["variant"] = artifact["variant"]
+        artifact_checks.append(artifact_check)
         if (
             artifact_inside_project
             and not exists
@@ -1680,6 +1706,8 @@ def _variant_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     reasons = []
     for variant_name, defines in value.items():
         variant_prefix = f"{prefix}.{variant_name}"
+        if not _is_non_empty_string(variant_name):
+            reasons.append(f"{prefix} keys must be non-empty strings")
         if not isinstance(defines, Mapping):
             reasons.append(f"{variant_prefix} must be an object")
             continue
@@ -1816,6 +1844,8 @@ def _validation_artifact_contract_reasons(index: int, artifact: Any) -> list[str
         reasons.append(f"{prefix}.exists must be a boolean")
     if artifact.get("status") not in {"ok", "failed"}:
         reasons.append(f"{prefix}.status must be ok or failed")
+    if "variant" in artifact and not _is_non_empty_string(artifact.get("variant")):
+        reasons.append(f"{prefix}.variant must be a string")
     return reasons
 
 
@@ -1828,6 +1858,8 @@ def _toolchain_run_contract_reasons(index: int, run: Any) -> list[str]:
     for field_name in ("source", "target", "path"):
         if not _is_non_empty_string(run.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
+    if "variant" in run and not _is_non_empty_string(run.get("variant")):
+        reasons.append(f"{prefix}.variant must be a string")
 
     command = run.get("command")
     if not isinstance(command, list) or any(
@@ -2389,6 +2421,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             if project_targets_valid
             else set()
         )
+        project_variants = (
+            project.get("variants", {}) if isinstance(project, Mapping) else {}
+        )
+        project_variants_valid = isinstance(project_variants, Mapping) and all(
+            _is_non_empty_string(name) for name in project_variants
+        )
+        declared_variants = set(project_variants) if project_variants_valid else set()
         for index, artifact in enumerate(artifacts):
             if not isinstance(artifact, Mapping):
                 reasons.append(f"artifacts[{index}] must be an object")
@@ -2412,6 +2451,18 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"artifacts[{index}].status must be translated or failed"
                 )
+            variant = artifact.get("variant")
+            if "variant" in artifact:
+                if not _is_non_empty_string(variant):
+                    reasons.append(f"artifacts[{index}].variant must be a string")
+                elif (
+                    has_summary
+                    and project_variants_valid
+                    and (variant not in declared_variants)
+                ):
+                    reasons.append(
+                        f"artifacts[{index}].variant must be listed in project.variants"
+                    )
             reasons.extend(_source_hash_contract_reasons(index, artifact))
             reasons.extend(_provenance_contract_reasons(index, artifact))
             reasons.extend(_source_map_contract_reasons(index, artifact))
@@ -2522,16 +2573,17 @@ def _run_toolchain_smoke(
             text=True,
             check=False,
         )
-        runs.append(
-            {
-                "source": str(artifact.get("source", "")),
-                "target": target,
-                "path": str(artifact["path"]),
-                "command": command,
-                "returncode": completed.returncode,
-                "status": "ok" if completed.returncode == 0 else "failed",
-                "stdout": completed.stdout[-4000:],
-                "stderr": completed.stderr[-4000:],
-            }
-        )
+        run = {
+            "source": str(artifact.get("source", "")),
+            "target": target,
+            "path": str(artifact["path"]),
+            "command": command,
+            "returncode": completed.returncode,
+            "status": "ok" if completed.returncode == 0 else "failed",
+            "stdout": completed.stdout[-4000:],
+            "stderr": completed.stderr[-4000:],
+        }
+        if artifact.get("variant") is not None:
+            run["variant"] = artifact["variant"]
+        runs.append(run)
     return runs

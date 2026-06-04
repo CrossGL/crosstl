@@ -301,20 +301,13 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     assert [(unit.relative_path, unit.source_backend) for unit in scan.units] == [
         ("gpu/kernel.shader", "cgl")
     ]
-    diagnostics = {diagnostic.code: diagnostic for diagnostic in scan.diagnostics}
-    assert set(diagnostics) == {"project.config.variants-not-applied"}
-    assert diagnostics["project.config.variants-not-applied"].missing_capabilities == [
-        "macro.variants"
-    ]
+    assert scan.diagnostics == []
     payload = scan.to_report(targets=config.targets).to_json()
-    assert payload["diagnosticCounts"]["warning"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
     assert payload["project"]["defines"] == {"USE_FAST_PATH": "1"}
     assert payload["project"]["defineCount"] == 1
     assert payload["project"]["variants"] == {"debug": {"USE_FAST_PATH": "0"}}
     assert payload["project"]["variantCount"] == 1
-    assert {
-        diagnostic["location"]["file"] for diagnostic in payload["diagnostics"]
-    } == {"crosstl.toml"}
 
 
 def test_scan_project_reports_missing_include_dirs_without_hiding_units(tmp_path):
@@ -549,6 +542,128 @@ def test_translate_project_applies_include_dirs_and_defines(tmp_path):
     assert payload["diagnosticCounts"]["error"] == 0
     assert payload["diagnosticCounts"]["warning"] == 0
     assert "project_color" in output.read_text(encoding="utf-8")
+
+
+def test_translate_project_expands_named_variants_with_merged_defines(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "translated"
+
+            [project.defines]
+            MODE = "base"
+            USE_FAST_PATH = "1"
+
+            [project.variants.debug]
+            MODE = "debug"
+
+            [project.variants.release]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_defines(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, include_paths
+        text = json.dumps({"defines": dict(defines or {})}, sort_keys=True)
+        Path(save_shader).write_text(text, encoding="utf-8")
+        return text
+
+    monkeypatch.setattr(project_pipeline, "translate", write_defines)
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert [artifact["variant"] for artifact in payload["artifacts"]] == [
+        "debug",
+        "release",
+    ]
+    assert [artifact["path"] for artifact in payload["artifacts"]] == [
+        "translated/opengl/debug/simple.glsl",
+        "translated/opengl/release/simple.glsl",
+    ]
+    assert validation["validation"]["artifacts"] == [
+        {
+            "source": "simple.cgl",
+            "target": "opengl",
+            "path": "translated/opengl/debug/simple.glsl",
+            "exists": True,
+            "status": "ok",
+            "variant": "debug",
+        },
+        {
+            "source": "simple.cgl",
+            "target": "opengl",
+            "path": "translated/opengl/release/simple.glsl",
+            "exists": True,
+            "status": "ok",
+            "variant": "release",
+        },
+    ]
+    assert json.loads(
+        (repo / "translated" / "opengl" / "debug" / "simple.glsl").read_text(
+            encoding="utf-8"
+        )
+    )["defines"] == {"MODE": "debug", "USE_FAST_PATH": "1"}
+    assert json.loads(
+        (repo / "translated" / "opengl" / "release" / "simple.glsl").read_text(
+            encoding="utf-8"
+        )
+    )["defines"] == {"MODE": "base", "USE_FAST_PATH": "1"}
+
+
+def test_validate_project_report_rejects_artifacts_with_undeclared_variants(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.variants.debug]
+            MODE = "debug"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    payload["artifacts"][0]["variant"] = "profile"
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].variant must be listed in project.variants" in (
+        diagnostic["message"]
+    )
 
 
 def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_path):
@@ -995,7 +1110,7 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
                     "includeDirs": "include",
                     "defines": {"USE_FAST_PATH": 1},
                     "defineCount": 2,
-                    "variants": {"debug": "not a define map"},
+                    "variants": {"debug": "not a define map", "": {"MODE": 1}},
                     "variantCount": "1",
                 },
                 "artifacts": [],
@@ -1021,7 +1136,9 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     assert "project.includeDirs must be a list of strings" in diagnostic["message"]
     assert "project.defines values must be strings" in diagnostic["message"]
     assert "project.defineCount must match project.defines" in diagnostic["message"]
+    assert "project.variants keys must be non-empty strings" in diagnostic["message"]
     assert "project.variants.debug must be an object" in diagnostic["message"]
+    assert "project.variants. values must be strings" in diagnostic["message"]
     assert "project.variantCount must be a non-negative integer" in (
         diagnostic["message"]
     )
@@ -1128,6 +1245,7 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
                             "path": "",
                             "exists": "yes",
                             "status": "missing",
+                            "variant": "",
                         },
                         "not an artifact check",
                     ],
@@ -1136,6 +1254,7 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
                             "source": "",
                             "target": "",
                             "path": "",
+                            "variant": "",
                             "command": ["glslangValidator", ""],
                             "returncode": True,
                             "status": "ok",
@@ -1196,6 +1315,7 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
     assert "validation.artifacts[0].status must be ok or failed" in (
         diagnostic["message"]
     )
+    assert "validation.artifacts[0].variant must be a string" in (diagnostic["message"])
     assert "validation.artifacts[1] must be an object" in diagnostic["message"]
     assert "validation.toolchainRuns[0].source must be a string" in (
         diagnostic["message"]
@@ -1204,6 +1324,9 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
         diagnostic["message"]
     )
     assert "validation.toolchainRuns[0].path must be a string" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].variant must be a string" in (
         diagnostic["message"]
     )
     assert "validation.toolchainRuns[0].command must be a list of strings" in (
@@ -1535,6 +1658,7 @@ def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
                         "target": "opengl",
                         "path": "out/opengl/simple.glsl",
                         "status": "translated",
+                        "variant": "",
                         "sourceHash": {
                             "algorithm": "md5",
                             "value": "A" * 64,
@@ -1557,6 +1681,7 @@ def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "artifacts[0].sourceBackend must be a string" in diagnostic["message"]
+    assert "artifacts[0].variant must be a string" in diagnostic["message"]
     assert "artifacts[0].sourceHash.algorithm must be sha256" in (diagnostic["message"])
     assert (
         "artifacts[0].sourceHash.value must be a lowercase 64-character hex digest"
