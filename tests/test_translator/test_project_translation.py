@@ -2447,6 +2447,72 @@ def test_validate_project_report_rejects_validation_records_with_undeclared_arti
     )
 
 
+def test_validate_project_report_rejects_validation_records_with_escaped_paths(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "escaped-validation-path-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "validation": {
+                    "toolchains": [],
+                    "artifacts": [
+                        {
+                            "source": "../outside/simple.cgl",
+                            "target": "opengl",
+                            "path": "C:tmp/simple.glsl",
+                            "exists": True,
+                            "status": "ok",
+                        }
+                    ],
+                    "toolchainRuns": [
+                        {
+                            "source": "C:tmp/simple.cgl",
+                            "target": "opengl",
+                            "path": "../outside/simple.glsl",
+                            "command": ["glslangValidator"],
+                            "returncode": 0,
+                            "status": "ok",
+                            "stdout": "",
+                            "stderr": "",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "validation.artifacts[0].source must be repository-relative" in (
+        diagnostic["message"]
+    )
+    assert "validation.artifacts[0].path must be repository-relative" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].source must be repository-relative" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].path must be repository-relative" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_duplicate_validation_record_identities(
     tmp_path,
 ):

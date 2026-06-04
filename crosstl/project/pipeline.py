@@ -2693,6 +2693,12 @@ def _validation_artifact_contract_reasons(
     for field_name in ("source", "target", "path"):
         if not _is_non_empty_string(artifact.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
+    source = artifact.get("source")
+    if _is_non_empty_string(source) and not _is_repository_relative_report_path(source):
+        reasons.append(f"{prefix}.source must be repository-relative")
+    path = artifact.get("path")
+    if _is_non_empty_string(path) and not _is_repository_relative_report_path(path):
+        reasons.append(f"{prefix}.path must be repository-relative")
     target = artifact.get("target")
     if _is_non_empty_string(target) and declared_targets is not None:
         normalized_target = _normalized_targets([target])[0]
@@ -2808,6 +2814,12 @@ def _toolchain_run_contract_reasons(
     for field_name in ("source", "target", "path"):
         if not _is_non_empty_string(run.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
+    source = run.get("source")
+    if _is_non_empty_string(source) and not _is_repository_relative_report_path(source):
+        reasons.append(f"{prefix}.source must be repository-relative")
+    path = run.get("path")
+    if _is_non_empty_string(path) and not _is_repository_relative_report_path(path):
+        reasons.append(f"{prefix}.path must be repository-relative")
     target = run.get("target")
     if _is_non_empty_string(target) and declared_targets is not None:
         normalized_target = _normalized_targets([target])[0]
