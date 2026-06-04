@@ -2213,6 +2213,27 @@ def _string_list_contract_reasons(prefix: str, value: Any) -> list[str]:
     return []
 
 
+def _diagnostic_location_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    if not _is_non_empty_string(value.get("file")):
+        reasons.append(f"{prefix}.file must be a string")
+    for field_name in (
+        "line",
+        "column",
+        "offset",
+        "length",
+        "endLine",
+        "endColumn",
+        "endOffset",
+    ):
+        if not _is_non_negative_int(value.get(field_name)):
+            reasons.append(f"{prefix}.{field_name} must be a non-negative integer")
+    return reasons
+
+
 def _repository_path_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not _is_non_empty_string(value):
         return [f"{prefix} must be a string"]
@@ -3330,11 +3351,11 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     reasons.append(
                         f"diagnostics[{index}].{field_name} must be a string"
                     )
-            location = diagnostic.get("location")
-            if not isinstance(location, Mapping):
-                reasons.append(f"diagnostics[{index}].location must be an object")
-            elif not _is_non_empty_string(location.get("file")):
-                reasons.append(f"diagnostics[{index}].location.file must be a string")
+            reasons.extend(
+                _diagnostic_location_contract_reasons(
+                    f"diagnostics[{index}].location", diagnostic.get("location")
+                )
+            )
             if "target" in diagnostic and not _is_non_empty_string(
                 diagnostic.get("target")
             ):

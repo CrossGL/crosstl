@@ -65,6 +65,19 @@ def _generated_hash_status_counts(**overrides):
     return counts
 
 
+def _diagnostic_location(file):
+    return {
+        "file": file,
+        "line": 1,
+        "column": 1,
+        "offset": 0,
+        "length": 0,
+        "endLine": 1,
+        "endColumn": 1,
+        "endOffset": 0,
+    }
+
+
 def test_support_external_corpus_manifest_documents_pinned_reductions():
     manifest = json.loads(
         (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
@@ -2775,7 +2788,16 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
                         "severity": "fatal",
                         "code": "",
                         "message": "bad diagnostic",
-                        "location": {},
+                        "location": {
+                            "file": "",
+                            "line": "1",
+                            "column": False,
+                            "offset": -1,
+                            "length": [],
+                            "endLine": None,
+                            "endColumn": {},
+                            "endOffset": "0",
+                        },
                         "target": "",
                         "missingCapabilities": "repo.scan",
                     }
@@ -2796,6 +2818,27 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
     )
     assert "diagnostics[0].code must be a string" in diagnostic["message"]
     assert "diagnostics[0].location.file must be a string" in diagnostic["message"]
+    assert "diagnostics[0].location.line must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "diagnostics[0].location.column must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "diagnostics[0].location.offset must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "diagnostics[0].location.length must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "diagnostics[0].location.endLine must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "diagnostics[0].location.endColumn must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "diagnostics[0].location.endOffset must be a non-negative integer" in (
+        diagnostic["message"]
+    )
     assert "diagnostics[0].target must be a string" in diagnostic["message"]
     assert "diagnostics[0].missingCapabilities must be a list of strings" in (
         diagnostic["message"]
@@ -3623,7 +3666,7 @@ def test_inspect_project_report_records_truncation_metadata(tmp_path):
                         "severity": "error",
                         "code": f"project.test.diagnostic-{index}",
                         "message": "Synthetic diagnostic",
-                        "location": {"file": f"shader-{index}.cgl"},
+                        "location": _diagnostic_location(f"shader-{index}.cgl"),
                     }
                     for index in range(4)
                 ],
@@ -3856,7 +3899,7 @@ def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
                         "severity": "error",
                         "code": f"project.test.diagnostic-{index}",
                         "message": "Synthetic diagnostic",
-                        "location": {"file": f"shader-{index}.cgl"},
+                        "location": _diagnostic_location(f"shader-{index}.cgl"),
                     }
                     for index in range(21)
                 ],
