@@ -536,6 +536,28 @@ def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
     ) in crossgl
 
 
+def test_external_rocm_histogram_ffs_codegen_reparse():
+    source = """
+    __global__ void histogram(unsigned int* bins,
+                              int tid,
+                              int block_size) {
+        const int b_bits_length = __ffs(block_size) - 3;
+        const int sh_thread_id
+            = (tid & (1 << b_bits_length) - 1) << 2
+              | (tid >> b_bits_length);
+        bins[threadIdx.x] = sh_thread_id;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    b_bits_length = ast.statements[0].body[0]
+
+    assert isinstance(b_bits_length.value.left, FunctionCallNode)
+    assert b_bits_length.value.left.name == "__ffs"
+    assert "var b_bits_length: i32 = ((findLSB(block_size) + 1) - 3);" in crossgl
+    assert "__ffs" not in crossgl
+
+
 def test_external_rocm_image_convolution_continue_codegen_reparse():
     source = """
     __global__ void conv2d(uint8_t *image,

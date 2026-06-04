@@ -374,29 +374,9 @@ class GLSLParser:
                 layouts.append({"layout": layout, "qualifiers": qualifiers})
                 continue
 
-            if (
-                qualifiers
-                and self.current_token[0] == "IDENTIFIER"
-                and self.peek(1)[0] == "SEMICOLON"
-            ):
-                name = self.current_token[1]
-                self.eat("IDENTIFIER")
-                self.eat("SEMICOLON")
-                global_variables.append(
-                    VariableNode("", name, qualifiers=qualifiers, layout=layout)
-                )
-                continue
-
-            if (
-                layout is not None
-                and self.current_token[0] == "IDENTIFIER"
-                and self.peek(1)[0] == "SEMICOLON"
-            ):
-                name = self.current_token[1]
-                self.eat("IDENTIFIER")
-                self.eat("SEMICOLON")
-                global_variables.append(
-                    VariableNode("", name, qualifiers=qualifiers, layout=layout)
+            if self.is_qualifier_only_declaration_start(qualifiers, layout):
+                global_variables.extend(
+                    self.parse_qualifier_only_declarations(qualifiers, layout)
                 )
                 continue
 
@@ -1314,6 +1294,44 @@ class GLSLParser:
         index = self.skip_balanced_suffix(index, "LPAREN", "RPAREN")
         index = self.skip_newline_index(index)
         return self.token_at(index)[0] == "SEMICOLON"
+
+    def is_qualifier_only_declaration_start(self, qualifiers, layout):
+        if not qualifiers and layout is None:
+            return False
+
+        index = self.skip_newline_index(self.index)
+        if self.token_at(index)[0] not in NAME_TOKENS:
+            return False
+        index = self.skip_newline_index(index + 1)
+
+        while self.token_at(index)[0] == "COMMA":
+            index = self.skip_newline_index(index + 1)
+            if self.token_at(index)[0] not in NAME_TOKENS:
+                return False
+            index = self.skip_newline_index(index + 1)
+
+        return self.token_at(index)[0] == "SEMICOLON"
+
+    def parse_qualifier_only_declarations(self, qualifiers, layout):
+        variables = []
+        lowered = {q.lower() for q in qualifiers or []}
+
+        while True:
+            self.skip_newlines()
+            name = self.parse_identifier_name("qualifier-only declaration name")
+            var = VariableNode(
+                "", name, qualifiers=list(qualifiers or []), layout=layout
+            )
+            self.apply_variable_io_type(var, lowered)
+            variables.append(var)
+
+            self.skip_newlines()
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+
+        self.eat("SEMICOLON")
+        return variables
 
     def skip_local_function_prototype(self):
         self.parse_qualifiers()

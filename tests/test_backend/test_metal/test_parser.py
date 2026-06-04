@@ -1576,6 +1576,35 @@ def test_parse_struct_forward_declaration_from_mlx_complex_header():
     assert ast.functions[0].params[0].vtype == "complex64_t&"
 
 
+def test_parse_template_struct_base_clause_from_mlx_type_traits():
+    code = """
+    namespace metal {
+    template <typename T>
+    struct is_empty : metal::bool_constant<__is_empty(T)> {};
+
+    template <typename... Ts>
+    struct make_void {
+      typedef void type;
+    };
+
+    template <class T>
+    struct is_static : metal::bool_constant<is_empty<remove_cv_t<T>>::value> {};
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [struct.name for struct in ast.structs] == [
+        "is_empty",
+        "make_void",
+        "is_static",
+    ]
+    assert ast.structs[0].base_types == ["metal::bool_constant<__is_empty(T)>"]
+    assert ast.structs[1].members == []
+    assert ast.structs[2].base_types == [
+        "metal::bool_constant<is_empty<remove_cv_t<T>>::value>"
+    ]
+
+
 def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
     code = """
     #define instantiate_metal_math_funcs(itype, otype, ctype, mfast) \\

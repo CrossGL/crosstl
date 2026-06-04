@@ -157,6 +157,27 @@ EXTERNAL_FIXTURES = [
         """).strip(),
     ),
     ExternalFixture(
+        name="glslang-120-vert-invariant-builtin-list",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/120.vert",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #version 120
+
+            attribute vec4 attv4;
+            invariant varying vec2 centTexCoord;
+            invariant gl_Position, gl_PointSize;
+
+            void main()
+            {
+                centTexCoord = attv4.xy;
+                gl_Position = attv4;
+                gl_PointSize = 1.0;
+            }
+        """).strip(),
+    ),
+    ExternalFixture(
         name="learnopengl-deferred-shading-fragment",
         repo="https://github.com/JoeyDeVries/LearnOpenGL",
         commit="a545a703f95893258d16dbe32f5ccbb6400fd213",
@@ -638,6 +659,28 @@ def test_parse_glslang_patch_contextual_identifier_fixture():
     assert patch.value.value == "3.1"
 
 
+def test_parse_glslang_invariant_builtin_list_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-120-vert-invariant-builtin-list"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    redeclarations = [
+        var
+        for var in ast.global_variables
+        if var.name in {"gl_Position", "gl_PointSize"}
+    ]
+
+    assert [var.name for var in redeclarations] == ["gl_Position", "gl_PointSize"]
+    assert [var.vtype for var in redeclarations] == ["", ""]
+    assert [var.qualifiers for var in redeclarations] == [
+        ["invariant"],
+        ["invariant"],
+    ]
+
+
 def test_parse_godot_particles_precision_ubo_hash_fixture():
     fixture = next(
         item
@@ -858,6 +901,20 @@ def test_codegen_glslang_patch_contextual_identifier_fixture_snippet():
 
     assert "float patch = 3.1;" in crossgl
     assert "vec4(patch)" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_invariant_builtin_list_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-120-vert-invariant-builtin-list"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "gl_Position @invariant;" in crossgl
+    assert "gl_PointSize @invariant;" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

@@ -751,6 +751,19 @@ def test_codegen_range_for_loop_from_mlx_random():
     assert "value += r;" in crossgl
 
 
+def test_codegen_template_struct_base_clause_from_mlx_type_traits():
+    code = """
+    namespace metal {
+    template <typename T>
+    struct is_empty : metal::bool_constant<__is_empty(T)> {};
+    }
+    """
+    crossgl = convert(code)
+
+    assert "struct is_empty {" in crossgl
+    assert "metal::bool_constant" not in crossgl
+
+
 def test_codegen_ternary_expression():
     code = """
     void main() {

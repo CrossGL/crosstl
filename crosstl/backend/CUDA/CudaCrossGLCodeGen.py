@@ -4182,8 +4182,13 @@ class CudaToCrossGLConverter:
         return None
 
     def format_cuda_integer_intrinsic_call(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
         if function_name == "__umul24" and len(args) == 2:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
+        if function_name == "__ffs" and len(args) == 1:
+            return f"(findLSB({args[0]}) + 1)"
         return None
 
     def format_vector_component_access(self, expression, component):

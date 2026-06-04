@@ -1180,6 +1180,23 @@ def test_codegen_enum_and_typedef():
     parse_crossgl(output)
 
 
+def test_codegen_anonymous_struct_array_typedef_from_dxc_codegen_debug_tests():
+    hlsl = textwrap.dedent("""
+        typedef struct { int a[4]; float2 b[2]; } type[3];
+
+        int main() : OUT {
+            type var = (type)0;
+            return var[0].a[0];
+        }
+    """)
+
+    output = generate_crossgl(hlsl)
+
+    assert "type type = AnonymousStruct_type[3];" in output
+    assert "struct AnonymousStruct_type" in output
+    parse_crossgl(output)
+
+
 def test_codegen_directx_samples_alias_and_scoped_types_parse_crossgl():
     hlsl = textwrap.dedent("""
         typedef BuiltInTriangleIntersectionAttributes MyAttributes;
