@@ -2169,6 +2169,22 @@ def _payload_artifact_records(artifacts: Sequence[Any]) -> list[Mapping[str, Any
     return [artifact for artifact in artifacts if isinstance(artifact, Mapping)]
 
 
+def _declared_unit_paths(units: Any, *, require_full_metadata: bool) -> set[str] | None:
+    if not require_full_metadata or not isinstance(units, list):
+        return None
+    paths = set()
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            return None
+        path = unit.get("path")
+        if not _is_non_empty_string(path) or not _is_repository_relative_report_path(
+            path
+        ):
+            return None
+        paths.add(path)
+    return paths
+
+
 ArtifactIdentity = Tuple[str, str, str, Optional[str]]
 
 
@@ -3294,6 +3310,9 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
     if not isinstance(artifacts, list):
         reasons.append("artifacts must be a list")
     else:
+        declared_unit_paths = _declared_unit_paths(
+            units, require_full_metadata=has_summary
+        )
         project_targets = (
             project.get("targets", []) if isinstance(project, Mapping) else []
         )
@@ -3325,6 +3344,12 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 source
             ):
                 reasons.append(f"artifacts[{index}].source must be repository-relative")
+            elif (
+                declared_unit_paths is not None
+                and _is_non_empty_string(source)
+                and source not in declared_unit_paths
+            ):
+                reasons.append(f"artifacts[{index}].source must be listed in units")
             if "sourceBackend" in artifact and not _is_non_empty_string(
                 artifact.get("sourceBackend")
             ):
