@@ -3222,6 +3222,69 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     assert payload["report"]["generator"]["pipeline"] == "project-porting"
 
 
+def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/simple",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    },
+                    {
+                        "id": "repo/missing",
+                        "path": "missing.hlsl",
+                        "sourceBackend": "directx",
+                        "targets": ["cgl", "opengl"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo))
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "External corpus: ok; 2 entries, 1 present, 1 missing" in result.stdout
+    assert "External corpus sources: cgl=1, directx=1" in result.stdout
+    assert "External corpus targets: cgl=2, opengl=1" in result.stdout
+    assert (
+        "External corpus artifacts: cgl=1 artifact (1 translated, 0 failed)"
+    ) in result.stdout
+
+
 def test_project_cli_inspect_report_text_fails_on_error_diagnostics(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

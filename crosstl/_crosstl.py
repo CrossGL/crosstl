@@ -313,6 +313,39 @@ def _format_count_rollup(label, counts):
     return f"{label}: " + ", ".join(f"{name}={count}" for name, count in entries)
 
 
+def _format_artifact_rollup(label, counts):
+    if not isinstance(counts, Mapping):
+        return None
+
+    entries = []
+    for target, row in counts.items():
+        if not isinstance(target, str) or not target.strip():
+            continue
+        if not isinstance(row, Mapping):
+            continue
+        artifact_count = row.get("artifactCount")
+        translated_count = row.get("translatedCount")
+        failed_count = row.get("failedCount")
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (artifact_count, translated_count, failed_count)
+        ):
+            continue
+        entries.append((target, artifact_count, translated_count, failed_count))
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: (-item[1], item[0]))
+    return f"{label}: " + ", ".join(
+        (
+            f"{target}={artifact_count} "
+            f"{'artifact' if artifact_count == 1 else 'artifacts'} "
+            f"({translated_count} translated, {failed_count} failed)"
+        )
+        for target, artifact_count, translated_count, failed_count in entries
+    )
+
+
 def _format_project_report_inspection(payload):
     report = payload.get("report", {})
     summary = report.get("summary", {}) if isinstance(report, Mapping) else {}
@@ -381,6 +414,24 @@ def _format_project_report_inspection(payload):
                 f"{external_summary.get('presentCount', 0)} present, "
                 f"{external_summary.get('missingCount', 0)} missing"
             )
+            corpus_sources = _format_count_rollup(
+                "External corpus sources",
+                external_summary.get("entriesBySourceBackend"),
+            )
+            if corpus_sources:
+                lines.append(corpus_sources)
+            corpus_targets = _format_count_rollup(
+                "External corpus targets",
+                external_summary.get("entriesByTarget"),
+            )
+            if corpus_targets:
+                lines.append(corpus_targets)
+            corpus_artifacts = _format_artifact_rollup(
+                "External corpus artifacts",
+                external_summary.get("artifactsByTarget"),
+            )
+            if corpus_artifacts:
+                lines.append(corpus_artifacts)
 
     failed_artifacts = payload.get("failedArtifacts", [])
     if failed_artifacts:
