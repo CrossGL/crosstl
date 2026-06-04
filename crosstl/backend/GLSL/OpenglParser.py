@@ -1295,6 +1295,19 @@ class GLSLParser:
         index = self.skip_newline_index(index)
         return self.token_at(index)[0] == "SEMICOLON"
 
+    def is_custom_type_declaration_start(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+
+        index = self.skip_newline_index(self.index + 1)
+        if self.token_at(index)[0] == "IDENTIFIER":
+            return True
+        if self.token_at(index)[0] != "LBRACKET":
+            return False
+
+        index = self.skip_array_suffixes_index(index)
+        return self.token_at(index)[0] in NAME_TOKENS
+
     def is_qualifier_only_declaration_start(self, qualifiers, layout):
         if not qualifiers and layout is None:
             return False
@@ -1419,7 +1432,7 @@ class GLSLParser:
             type_name = self.parse_type()
             self.skip_newlines()
             return self.parse_variable_declarations(type_name, qualifiers=qualifiers)
-        if self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "IDENTIFIER":
+        if self.is_custom_type_declaration_start():
             type_name = self.parse_type()
             self.skip_newlines()
             return self.parse_variable_declarations(type_name, qualifiers=[])

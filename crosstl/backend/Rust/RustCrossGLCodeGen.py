@@ -300,6 +300,17 @@ class RustToCrossGLConverter:
             "vertex": "vertex",
             "fragment": "fragment",
             "compute": "compute",
+            "geometry": "geometry",
+            "tessellation_control": "tessellation_control",
+            "tessellation_evaluation": "tessellation_evaluation",
+            "task_ext": "task",
+            "mesh_ext": "mesh",
+            "ray_generation": "ray_generation",
+            "intersection": "intersection",
+            "closest_hit": "ray_closest_hit",
+            "miss": "miss",
+            "any_hit": "ray_any_hit",
+            "callable": "callable",
         }
 
         self.function_map = {

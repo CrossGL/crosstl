@@ -1146,6 +1146,8 @@ class HLSLToCrossGLConverter:
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         if "globallycoherent" in qualifiers:
             lines += "    " * indent + "@ globallycoherent\n"
+        if "reordercoherent" in qualifiers:
+            lines += "    " * indent + "@ reordercoherent\n"
         return lines
 
     def format_storage_qualifier_prefix(self, node, allowed_qualifiers):

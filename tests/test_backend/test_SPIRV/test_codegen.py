@@ -1250,6 +1250,35 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_CROSS_ISNAN_ISINF_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
+; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
+; Source path: shaders/asm/comp/logical.asm.comp
+; Reduced from OpIsInf/OpIsNan predicate stores in main.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %nan_out "nanOut"
+OpName %inf_out "infOut"
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%bool = OpTypeBool
+%ptr_function_bool = OpTypePointer Function %bool
+%input_value = OpConstant %float 1.0
+%main = OpFunction %void None %fn
+%label = OpLabel
+%nan_out = OpVariable %ptr_function_bool Function
+%inf_out = OpVariable %ptr_function_bool Function
+%is_nan = OpIsNan %bool %input_value
+%is_inf = OpIsInf %bool %input_value
+OpStore %nan_out %is_nan
+OpStore %inf_out %is_inf
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_LOCAL_SIZE_ID_ASSEMBLY = """
 ; Reduced from specialization-driven compute local sizes.
 OpCapability Shader
@@ -2037,6 +2066,19 @@ def test_glslang_derivative_ops_codegen_reparse():
     assert "dxOut = dx;" not in generated_code
     assert "dyOut = dy_fine;" not in generated_code
     assert "widthOut = width_coarse;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_cross_isnan_isinf_codegen_reparse():
+    tokens = tokenize_code(SPIRV_CROSS_ISNAN_ISINF_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "nanOut = isnan(1.0);" in generated_code
+    assert "infOut = isinf(1.0);" in generated_code
+    assert "nanOut = is_nan;" not in generated_code
+    assert "infOut = is_inf;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

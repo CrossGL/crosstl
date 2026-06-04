@@ -217,6 +217,10 @@ class VulkanParser:
         "DPdyFine": "dFdyFine",
         "FwidthFine": "fwidthFine",
     }
+    SPIRV_UNARY_FUNCTIONS = {
+        "IsInf": "isinf",
+        "IsNan": "isnan",
+    }
     CROSSGL_RESERVED_IDENTIFIERS = {
         "as",
         "async",
@@ -1404,6 +1408,26 @@ class VulkanParser:
             ):
                 expressions[result_id] = FunctionCallNode(
                     self.SPIRV_DERIVATIVE_FUNCTIONS[operation],
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if (
+                result_id
+                and operation in self.SPIRV_UNARY_FUNCTIONS
+                and len(operands) >= 2
+            ):
+                expressions[result_id] = FunctionCallNode(
+                    self.SPIRV_UNARY_FUNCTIONS[operation],
                     [
                         self.spirv_assembly_operand_expression(
                             operands[1],

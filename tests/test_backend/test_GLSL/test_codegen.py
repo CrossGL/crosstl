@@ -881,6 +881,40 @@ def test_codegen_local_struct_with_mixed_array_declarators_from_khronos_webgl():
     parse_crossgl(crossgl)
 
 
+def test_codegen_local_custom_type_array_declaration_from_glslang_struct_deref():
+    code = textwrap.dedent("""
+        #version 140
+
+        uniform sampler2D samp2D;
+        in vec2 coord;
+
+        struct s0 {
+            int i;
+        };
+
+        struct s1 {
+            int i;
+            float f;
+            s0 s0_1;
+        };
+
+        s1 foo1;
+
+        void main()
+        {
+            s1[10] locals1Array;
+            locals1Array[6] = foo1;
+            gl_FragColor = vec4(locals1Array[6].f) * texture(samp2D, coord);
+        }
+        """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "s1 locals1Array[10];" in crossgl
+    assert "locals1Array[6] = foo1;" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_push_constant_interface_block_preserves_attribute():
     code = textwrap.dedent("""
         #version 450

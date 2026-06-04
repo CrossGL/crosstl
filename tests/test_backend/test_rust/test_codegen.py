@@ -640,6 +640,30 @@ def test_rust_gpu_all_builtins_compiletest_semantic_aliases_codegen():
     assert result.count("uint viewport_index @ gl_ViewportIndex") == 2
 
 
+def test_rust_gpu_tessellation_control_stage_codegen_from_upstream_compiletest():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/spirv-attr/all-builtins.rs tessellation_control entry.
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(tessellation_control)]
+    pub fn main(
+        #[spirv(invocation_id)] invocation_id: u32,
+        #[spirv(patch_vertices)] patch_vertices: u32,
+        #[spirv(tess_level_inner)] tess_level_inner: &mut [f32; 2],
+        #[spirv(tess_level_outer)] tess_level_outer: &mut [f32; 4],
+    ) {}
+    """
+
+    result = parse_and_generate(code)
+
+    assert "tessellation_control {" in result
+    assert "void main(" in result
+    assert "void tessellation_control(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_vulkan_shader_examples_multiview_view_index_semantic_codegen():
     # Reduced from Rust-GPU/VulkanShaderExamples commit
     # b29a37eb46802b5ea6882af4808d6887fc184581,
