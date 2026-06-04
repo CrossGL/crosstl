@@ -12,6 +12,15 @@ APPLE_MSL_SPEC_URL = (
     "https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf"
 )
 APPLE_MSL_SPEC_VERSION = "2025-10-23"
+APPLE_REALITYKIT_DOC_URL = (
+    "https://developer.apple.com/documentation/realitykit/"
+    "custommaterial/surfaceshader/init(named:in:constantvalues:)"
+)
+APPLE_REALITYKIT_GEOMETRY_DOC_URL = (
+    "https://developer.apple.com/documentation/realitykit/"
+    "custommaterial/geometrymodifier/init(named:in:constantvalues:)"
+)
+APPLE_REALITYKIT_DOC_VERSION = "Apple Developer Documentation, accessed 2026-06-04"
 FILAMENT_REPO = "https://github.com/google/filament"
 FILAMENT_COMMIT = "48881c840bca50da515f0df82b61c9a5b996b19a"
 MOLTENVK_REPO = "https://github.com/KhronosGroup/MoltenVK"
@@ -173,6 +182,55 @@ EXTERNAL_FIXTURES = [
 
             float halton(unsigned int i, unsigned int d) {
                 return (float)primes[d];
+            }
+        """
+        ),
+    },
+    {
+        "name": "apple_realitykit_stitchable_scoped_parameter_types",
+        "repo_url": APPLE_REALITYKIT_DOC_URL,
+        "commit": APPLE_REALITYKIT_DOC_VERSION,
+        "source_path": (
+            "CustomMaterial.SurfaceShader init(named:in:constantValues:) and "
+            f"{APPLE_REALITYKIT_GEOMETRY_DOC_URL}"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "void surfaceShader(surface_parameters params) @stitchable",
+            "void geometryModifier(geometry_parameters params) @stitchable",
+        ],
+        "not_contains": [
+            "realitykit::surface_parameters",
+            "realitykit::geometry_parameters",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            #include <RealityKit/RealityKit.h>
+            using namespace metal;
+
+            constant bool kEnableBasicLighting [[function_constant(0)]];
+            constant bool kEnableVertexAnimation [[function_constant(1)]];
+
+            [[stitchable]]
+            void surfaceShader(realitykit::surface_parameters params) {
+                float3 baseColor = float3(1, 0, 0);
+                if (kEnableBasicLighting) {
+                    float3 lighting = params.geometry().normal()
+                        * params.geometry().view_direction() * baseColor;
+                    params.surface().set_emissive_color(half3(lighting));
+                } else {
+                    params.surface().set_emissive_color(half3(baseColor));
+                }
+            }
+
+            [[stitchable]]
+            void geometryModifier(realitykit::geometry_parameters params) {
+                if (kEnableVertexAnimation) {
+                    float currentTime = params.uniforms().time() * 0.5;
+                    params.geometry().set_model_position_offset(
+                        sin(currentTime) * 0.1 * params.geometry().normal());
+                }
             }
         """
         ),

@@ -1222,6 +1222,30 @@ def test_parse_template_function_prefix_from_raytracing_sample():
     assert function.params[0].array_sizes == [3]
 
 
+def test_parse_template_specialized_struct_declarations_from_dxc_sfinae():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/SemaHLSL/template-implicit-this-sfinae.hlsl
+    ast = parse_code("""
+    template <typename T>
+    struct is_arithmetic {
+        static const bool value = false;
+    };
+
+    template <> struct is_arithmetic<float> {
+        static const bool value = true;
+    };
+    """)
+
+    assert [struct.name for struct in ast.structs] == [
+        "is_arithmetic",
+        "is_arithmetic",
+    ]
+    assert ast.structs[0].members[0].name == "value"
+    assert ast.structs[0].members[0].value is False
+    assert ast.structs[1].members[0].name == "value"
+    assert ast.structs[1].members[0].value is True
+
+
 def test_skip_top_level_raw_text_from_public_raytracing_samples():
     ast = parse_code("""
     ToDo fix or remove

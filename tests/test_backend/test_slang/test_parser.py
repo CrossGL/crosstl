@@ -2255,6 +2255,27 @@ def test_local_and_parameter_generic_resource_type_parsing():
     ]
 
 
+def test_parameter_attribute_parsing_from_cuda_format_docs():
+    # Source: shader-slang/slang docs/cuda-target.md at
+    # 11e97e77155f454c67dc66daf25c75386d13c378 documents
+    # attribute metadata on variables, parameters, and fields.
+    code = """
+    float2 getValue([format("rg16f")] RWTexture2D<float2> t)
+    {
+        return t[int2(0, 0)];
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "getValue")
+
+    assert function.params[0].vtype == "RWTexture2D<float2>"
+    assert function.params[0].name == "t"
+    assert function.params[0].attributes == [
+        {"name": "format", "arguments": ['"rg16f"']}
+    ]
+
+
 def test_texture_method_call_parsing():
     code = """
     Texture2D<float4> albedo;

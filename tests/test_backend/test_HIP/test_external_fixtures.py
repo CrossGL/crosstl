@@ -23,6 +23,7 @@ EXTERNAL_FIXTURE_SOURCES = {
             "HIP-Basic/dynamic_shared/main.hip",
             "HIP-Basic/texture_management/main.hip",
             "HIP-Basic/warp_shuffle/main.hip",
+            "HIP-Doc/Reference/HIP-Complex-Math-API/complex_math/main.hip",
             "HIP-Doc/Tutorials/graph_api/src/filtering.hip",
             "HIP-Doc/Tutorials/Programming-Patterns/image_convolution/main.hip",
             "HIP-Doc/Programming-Guide/HIP-C++-Language-Extensions/warp_size_reduction/popcount.hpp",
@@ -593,6 +594,60 @@ def test_external_rocm_histogram_ffs_codegen_reparse():
     assert b_bits_length.value.left.name == "__ffs"
     assert "var b_bits_length: i32 = ((findLSB(block_size) + 1) - 3);" in crossgl
     assert "__ffs" not in crossgl
+
+
+def test_external_rocm_hip_complex_math_codegen_reparse():
+    # Upstream: ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
+    # HIP-Doc/Reference/HIP-Complex-Math-API/complex_math/main.hip.
+    source = """
+    __device__ hipFloatComplex accumulateDFT(float sample,
+                                            hipFloatComplex sum,
+                                            int k,
+                                            int n,
+                                            int N) {
+        float angle = -2.0f * M_PI * k * n / N;
+        hipFloatComplex w = make_hipFloatComplex(cosf(angle), sinf(angle));
+        hipFloatComplex x = make_hipFloatComplex(sample, 0.0f);
+        return hipCaddf(sum, hipCmulf(x, w));
+    }
+
+    __device__ float complexResidual(hipFloatComplex gpu_output,
+                                     hipFloatComplex cpu_output) {
+        return (hipCrealf(gpu_output) - hipCrealf(cpu_output))
+             + (hipCimagf(gpu_output) - hipCimagf(cpu_output));
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    w_value = ast.statements[0].body[1].value
+    return_value = ast.statements[0].body[3].value
+
+    assert isinstance(w_value, FunctionCallNode)
+    assert w_value.name == "make_hipFloatComplex"
+    assert isinstance(return_value, FunctionCallNode)
+    assert return_value.name == "hipCaddf"
+    assert return_value.args[1].name == "hipCmulf"
+    assert (
+        "vec2<f32> accumulateDFT(f32 sample, vec2<f32> sum, " "i32 k, i32 n, i32 N)"
+    ) in crossgl
+    assert "var w: vec2<f32> = vec2<f32>(cos(angle), sin(angle));" in crossgl
+    assert (
+        "return (sum + vec2<f32>(((x.x * w.x) - (x.y * w.y)), "
+        "((x.x * w.y) + (x.y * w.x))));"
+    ) in crossgl
+    assert "f32 complexResidual(vec2<f32> gpu_output, vec2<f32> cpu_output)" in crossgl
+    assert (
+        "return ((gpu_output.x - cpu_output.x) + " "(gpu_output.y - cpu_output.y));"
+    ) in crossgl
+    for raw_name in (
+        "hipFloatComplex",
+        "make_hipFloatComplex",
+        "hipCaddf",
+        "hipCmulf",
+        "hipCrealf",
+        "hipCimagf",
+    ):
+        assert raw_name not in crossgl
 
 
 def test_external_rocm_image_convolution_continue_codegen_reparse():

@@ -118,6 +118,8 @@ class GLSLToCrossGLConverter:
         "depth_greater",
         "depth_less",
         "depth_unchanged",
+        "origin_upper_left",
+        "pixel_center_integer",
         *BLEND_SUPPORT_LAYOUT_ATTRIBUTE_NAMES,
     )
     NON_STRUCT_STAGE_TYPES = {

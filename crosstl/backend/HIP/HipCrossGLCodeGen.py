@@ -4688,6 +4688,10 @@ class HipToCrossGLConverter:
         if fp16_intrinsic is not None:
             return fp16_intrinsic
 
+        complex_intrinsic = self.format_hip_complex_intrinsic_call(func_name, args)
+        if complex_intrinsic is not None:
+            return complex_intrinsic
+
         integer_intrinsic = self.format_hip_integer_intrinsic_call(func_name, args)
         if integer_intrinsic is not None:
             return integer_intrinsic
@@ -4937,6 +4941,49 @@ class HipToCrossGLConverter:
         if function_name == "__hfma2" and len(args) == 3:
             return f"fma({args[0]}, {args[1]}, {args[2]})"
         return None
+
+    def format_hip_complex_intrinsic_call(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
+        if function_name in {"make_hipComplex", "make_hipFloatComplex"}:
+            if len(args) == 2:
+                return self.format_vector_constructor("vec2", args, "f32")
+            return None
+        if function_name == "make_hipDoubleComplex":
+            if len(args) == 2:
+                return self.format_vector_constructor("vec2", args, "f64")
+            return None
+
+        if function_name in {"hipCrealf", "hipCreal"} and len(args) == 1:
+            return self.format_vector_component_access(args[0], "x")
+        if function_name in {"hipCimagf", "hipCimag"} and len(args) == 1:
+            return self.format_vector_component_access(args[0], "y")
+
+        if function_name in {"hipCaddf", "hipCadd"} and len(args) == 2:
+            return f"({args[0]} + {args[1]})"
+        if function_name in {"hipCsubf", "hipCsub"} and len(args) == 2:
+            return f"({args[0]} - {args[1]})"
+        if function_name == "hipCmulf" and len(args) == 2:
+            return self.format_hip_complex_multiply(args[0], args[1], "f32")
+        if function_name == "hipCmul" and len(args) == 2:
+            return self.format_hip_complex_multiply(args[0], args[1], "f64")
+
+        return None
+
+    def format_hip_complex_multiply(self, left, right, scalar_type):
+        left_real = self.format_vector_component_access(left, "x")
+        left_imag = self.format_vector_component_access(left, "y")
+        right_real = self.format_vector_component_access(right, "x")
+        right_imag = self.format_vector_component_access(right, "y")
+        return self.format_vector_constructor(
+            "vec2",
+            [
+                f"(({left_real} * {right_real}) - ({left_imag} * {right_imag}))",
+                f"(({left_real} * {right_imag}) + ({left_imag} * {right_real}))",
+            ],
+            scalar_type,
+        )
 
     def format_hip_integer_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):
@@ -5968,6 +6015,9 @@ class HipToCrossGLConverter:
             "half": "f16",
             "__half": "f16",
             "__half2": "vec2<f16>",
+            "hipComplex": "vec2<f32>",
+            "hipFloatComplex": "vec2<f32>",
+            "hipDoubleComplex": "vec2<f64>",
             "float": "f32",
             "double": "f64",
             "size_t": "u32",

@@ -4728,6 +4728,34 @@ def test_codegen_interlocked_typed_buffer_resource_array_roundtrip():
     assert "atomicMax(signedValues" not in regenerated_hlsl
 
 
+def test_codegen_template_specialized_struct_declarations_reparse_crossgl():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/SemaHLSL/template-implicit-this-sfinae.hlsl
+    code = textwrap.dedent("""
+        template <typename T>
+        struct TemplateValue {
+            T value;
+        };
+
+        template <> struct TemplateValue<float> {
+            float value;
+        };
+
+        TemplateValue<float> selected;
+
+        float main() : SV_Target0 {
+            return selected.value;
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert output.count("struct TemplateValue") == 2
+    assert "TemplateValue selected;" in output
+    assert "TemplateValue<float>" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_upstream_declarations_defaults_and_for_update_sequences():
     code = textwrap.dedent("""
         cbuffer CSConstants : register(b0) {

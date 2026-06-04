@@ -411,9 +411,11 @@ class HLSLParser:
 
     def parse_template_declaration_prefix(self):
         self.eat("IDENTIFIER")
+        self.skip_template_argument_list()
+
+    def skip_template_argument_list(self):
         self.eat("LESS_THAN")
         depth = 1
-
         while depth > 0 and self.current_token[0] != "EOF":
             token_type = self.current_token[0]
             if token_type == "LESS_THAN":
@@ -425,7 +427,7 @@ class HLSLParser:
                     return
             self.eat(token_type)
 
-        raise SyntaxError("Unterminated template declaration prefix")
+        raise SyntaxError("Unterminated template argument list")
 
     def eat_keyword(self, token_type, value):
         if self.current_token[0] == token_type:
@@ -859,6 +861,8 @@ class HLSLParser:
         name = None
         if self.is_identifier_token(self.current_token[0]):
             name = self.parse_identifier()
+            if self.current_token[0] == "LESS_THAN":
+                self.skip_template_argument_list()
 
         semantic = None
         base_classes = []
