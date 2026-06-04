@@ -661,6 +661,35 @@ def test_codegen_bit_scan_intrinsics_from_microsoft_docs_reparse():
     parse_crossgl(crossgl)
 
 
+def test_codegen_derivative_intrinsics_from_microsoft_docs_reparse():
+    # Source: Microsoft Learn ddx/ddy docs and DirectX-Specs SM 6.6 derivatives.
+    # URLs:
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-ddx
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-ddy
+    # https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_Derivatives.html
+    crossgl = generate_crossgl("""
+        float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
+            float fineX = ddx_fine(uv.x);
+            float coarseX = ddx_coarse(uv.x);
+            float coarseY = ddy_coarse(uv.y);
+            float fineY = ddy_fine(uv.y);
+            return float4(ddx(uv.x) + coarseX, ddy(uv.y) + fineY, fwidth(fineX), coarseY);
+        }
+    """)
+
+    assert "float fineX = dFdxFine(uv.x);" in crossgl
+    assert "float coarseX = dFdxCoarse(uv.x);" in crossgl
+    assert "float coarseY = dFdyCoarse(uv.y);" in crossgl
+    assert "float fineY = dFdyFine(uv.y);" in crossgl
+    assert (
+        "return vec4(dFdx(uv.x) + coarseX, dFdy(uv.y) + fineY, "
+        "fwidth(fineX), coarseY);"
+    ) in crossgl
+    assert "ddx" not in crossgl
+    assert "ddy" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_sampler_state_initializer_block_imports_to_crossgl():
     crossgl = generate_crossgl(SAMPLER_STATE_BLOCK_HLSL)
 

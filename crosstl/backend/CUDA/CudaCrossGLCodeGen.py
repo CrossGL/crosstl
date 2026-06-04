@@ -4254,7 +4254,21 @@ class CudaToCrossGLConverter:
             return f"countLeadingZeros({args[0]})"
         if function_name in {"__brev", "__brevll"} and len(args) == 1:
             return f"reverseBits({args[0]})"
+        if function_name in {
+            "__funnelshift_l",
+            "__funnelshift_lc",
+            "__funnelshift_r",
+            "__funnelshift_rc",
+        }:
+            return self.format_cuda_integer_intrinsic_diagnostic(function_name, args)
         return None
+
+    def format_cuda_integer_intrinsic_diagnostic(self, function_name, args):
+        args_text = ", ".join(args)
+        return (
+            f"(/* cuda integer intrinsic {function_name}({args_text}) "
+            "not directly supported in CrossGL */ 0)"
+        )
 
     def format_cuda_float_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):

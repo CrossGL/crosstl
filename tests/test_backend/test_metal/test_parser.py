@@ -1056,6 +1056,23 @@ def test_parse_alignas_and_static_assert():
     parse_ok(code)
 
 
+def test_parse_alignas_after_struct_keyword_from_apple_msl_spec():
+    # Provenance: Apple Metal Shading Language Specification section 2.5
+    # permits alignas on structure declarations.
+    code = """
+    struct alignas(16) UniformBlock {
+        float4 color;
+    };
+    """
+    ast = parse_ok(code)
+    struct = ast.structs[0]
+
+    assert struct.name == "UniformBlock"
+    assert struct.alignas == ["16"]
+    assert struct.members[0].name == "color"
+    assert struct.members[0].vtype == "float4"
+
+
 def test_parse_using_alias():
     code = """
     using Index = uint;

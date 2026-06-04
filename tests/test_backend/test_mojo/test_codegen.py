@@ -1445,12 +1445,16 @@ def test_where_clause_constraints_are_accepted_and_not_emitted_codegen():
         and BN == 32
     ):
         return 1
+
+    def pow2[n: Int]() -> Int where n >= 0:
+        return 1
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
     assert "int constrained()" in generated_code
+    assert "int pow2()" in generated_code
     assert "return 1;" in generated_code
     assert "where" not in generated_code
 

@@ -2001,6 +2001,17 @@ class VulkanParser:
             base_args.append(dref)
         offset = self.spirv_assembly_image_offset_operand(parsed_operands)
         bias = self.spirv_assembly_image_bias_operand(parsed_operands)
+        min_lod = self.spirv_assembly_image_min_lod_operand(parsed_operands)
+
+        if min_lod is not None:
+            return self.spirv_assembly_image_min_lod_sample_expression(
+                opcode,
+                base_args,
+                parsed_operands,
+                offset,
+                bias,
+                min_lod,
+            )
 
         if "Grad" in parsed_operands and len(parsed_operands["Grad"]) >= 2:
             if "Proj" in opcode:
@@ -2043,6 +2054,39 @@ class VulkanParser:
         if bias is not None:
             args.append(bias)
         return FunctionCallNode(function_name, args)
+
+    def spirv_assembly_image_min_lod_sample_expression(
+        self,
+        opcode,
+        base_args,
+        parsed_operands,
+        offset,
+        bias,
+        min_lod,
+    ):
+        function_parts = ["spirvTexture"]
+        if "Proj" in opcode:
+            function_parts.append("Proj")
+        if "Grad" in parsed_operands and len(parsed_operands["Grad"]) >= 2:
+            function_parts.append("Grad")
+        elif "Lod" in parsed_operands and parsed_operands["Lod"]:
+            function_parts.append("Lod")
+        if offset is not None:
+            function_parts.append("Offset")
+        function_parts.append("MinLod")
+
+        args = list(base_args)
+        if "Grad" in parsed_operands and len(parsed_operands["Grad"]) >= 2:
+            args.extend(parsed_operands["Grad"][:2])
+        elif "Lod" in parsed_operands and parsed_operands["Lod"]:
+            args.append(parsed_operands["Lod"][0])
+        if offset is not None:
+            args.append(offset)
+        args.append(min_lod)
+        if bias is not None:
+            args.append(bias)
+
+        return FunctionCallNode("".join(function_parts), args)
 
     def spirv_assembly_image_gather_expression(
         self,
@@ -2155,6 +2199,12 @@ class VulkanParser:
 
     def spirv_assembly_image_bias_operand(self, parsed_operands):
         values = parsed_operands.get("Bias")
+        if values:
+            return values[0]
+        return None
+
+    def spirv_assembly_image_min_lod_operand(self, parsed_operands):
+        values = parsed_operands.get("MinLod")
         if values:
             return values[0]
         return None
@@ -2385,6 +2435,11 @@ class VulkanParser:
             "ConstOffsets": 1,
             "Grad": 2,
             "Lod": 1,
+            "MakeTexelAvailable": 1,
+            "MakeTexelAvailableKHR": 1,
+            "MakeTexelVisible": 1,
+            "MakeTexelVisibleKHR": 1,
+            "MinLod": 1,
             "Offset": 1,
             "Sample": 1,
         }

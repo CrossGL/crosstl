@@ -604,6 +604,29 @@ def test_external_rocm_histogram_ffs_codegen_reparse():
     assert "__ffs" not in crossgl
 
 
+def test_external_rocm_hip_tests_clz_intrinsics_codegen_reparse():
+    source = """
+    __global__ void clz_kernel(unsigned int* out,
+                               unsigned int x,
+                               unsigned long long int y) {
+        out[0] = __clz(x);
+        out[1] = __clzll(y);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert isinstance(body[0].right, FunctionCallNode)
+    assert body[0].right.name == "__clz"
+    assert isinstance(body[1].right, FunctionCallNode)
+    assert body[1].right.name == "__clzll"
+    assert "out[0] = countLeadingZeros(x);" in crossgl
+    assert "out[1] = countLeadingZeros(y);" in crossgl
+    assert "__clz" not in crossgl
+    assert "__clzll" not in crossgl
+
+
 def test_external_rocm_hip_complex_math_codegen_reparse():
     # Upstream: ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
     # HIP-Doc/Reference/HIP-Complex-Math-API/complex_math/main.hip.

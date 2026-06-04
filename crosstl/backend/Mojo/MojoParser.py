@@ -734,7 +734,7 @@ class MojoParser:
         self.skip_layout_tokens()
 
         if self.current_token[0] != "LPAREN":
-            raise SyntaxError("Expected parenthesized Mojo where clause")
+            return self.parse_unparenthesized_where_clause()
 
         parts = []
         depth = 0
@@ -758,6 +758,36 @@ class MojoParser:
             if depth == 0:
                 break
 
+        return " ".join(parts)
+
+    def parse_unparenthesized_where_clause(self):
+        parts = []
+        depth = 0
+
+        while True:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated Mojo where clause")
+
+            token_type, token_value = self.current_token
+            if token_type in {"NEWLINE", "INDENT", "DEDENT"}:
+                self.eat(token_type)
+                continue
+
+            if token_type == "COLON" and depth == 0:
+                break
+
+            if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
+                depth += 1
+            elif token_type in {"RPAREN", "RBRACKET", "RBRACE"}:
+                if depth == 0:
+                    break
+                depth -= 1
+
+            parts.append(str(token_value))
+            self.eat(token_type)
+
+        if not parts:
+            raise SyntaxError("Expected Mojo where clause constraint")
         return " ".join(parts)
 
     def parse_parameters(self):
