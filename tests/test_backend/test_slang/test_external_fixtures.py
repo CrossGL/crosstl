@@ -24,6 +24,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
     },
+    "shader-slang/slang-subscript-2026-06-04": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
+    },
     "shader-slang/slang-gfx-tools-2026": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "c6f104ca76a54ca1565dac54363ea763dd906de6",
@@ -527,6 +531,44 @@ EXTERNAL_FIXTURES = [
             "outputBuffer[0] = MatrixData().m1[0][0];",
         ],
         "not_contains": ["row_major", "column_major"],
+    },
+    {
+        "id": "slang_generated_subscript_get_accessor",
+        "repo": "shader-slang/slang-subscript-2026-06-04",
+        "path": (
+            "docs/generated/tests/conformance/declarations/"
+            "subscript-get-functional.slang"
+        ),
+        "source": (
+            """
+            struct MyVec
+            {
+                float x, y;
+                __subscript(int index) -> float
+                {
+                    get { return index == 0 ? x : y; }
+                }
+            }
+
+            void main()
+            {
+                MyVec v;
+                v.x = 5.0;
+                v.y = 9.0;
+                printf("%g\\n%g\\n", v[0], v[1]);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct MyVec {",
+            "float x;",
+            "float y;",
+            "v.x = 5.0;",
+            "v.y = 9.0;",
+            'printf("%g\\n%g\\n", v[0], v[1]);',
+        ],
+        "not_contains": ["__subscript", "operator[]", "FunctionNode("],
     },
     {
         "id": "slang_hlsl_intrinsic_mul_matrix_vector",

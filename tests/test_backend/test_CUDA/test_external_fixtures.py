@@ -1199,6 +1199,34 @@ def test_nvidia_hpcg_cuda_kernels_brev_hash_codegen_reparse():
     assert "__brev" not in crossgl
 
 
+def test_nvidia_hpcg_cuda_kernels_ldcs_cached_load_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/nvidia-hpcg
+    # commit: 7dd63cd06c0620dddd5702ad7b4fca376c19813e
+    # path: src/CudaKernels.cu
+    source = """
+    __global__ void lower_symmetric_cached_loads(int *ell_columns,
+                                                 double *ell_values,
+                                                 int *out) {
+        int i = threadIdx.x;
+        int col = __ldcs(&ell_columns[i]);
+        double val = __ldcs(&ell_values[i]);
+        out[i] = col + (int)val;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.kernels[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[1].value.name == "__ldcs"
+    assert body[2].value.name == "__ldcs"
+    assert_crossgl_reparse(crossgl)
+    assert "var col: i32 = ell_columns[i];" in crossgl
+    assert "var val: f64 = ell_values[i];" in crossgl
+    assert "__ldcs" not in crossgl
+
+
 def test_external_cccl_bit_reverse_brevll_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cccl

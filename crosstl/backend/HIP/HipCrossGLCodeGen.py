@@ -4677,28 +4677,16 @@ class HipToCrossGLConverter:
         if unique_ptr_init is not None:
             return unique_ptr_init
 
+        hip_intrinsic = self.format_hip_intrinsic_call(func_name, args)
+        if hip_intrinsic is not None:
+            return hip_intrinsic
+
         if self.is_user_defined_function(func_name):
             return f"{func_name}({args_str})"
 
         runtime_expression = self.format_hip_runtime_expression_call(node, args)
         if runtime_expression is not None:
             return runtime_expression
-
-        fp16_intrinsic = self.format_hip_fp16_intrinsic_call(func_name, args)
-        if fp16_intrinsic is not None:
-            return fp16_intrinsic
-
-        complex_intrinsic = self.format_hip_complex_intrinsic_call(func_name, args)
-        if complex_intrinsic is not None:
-            return complex_intrinsic
-
-        integer_intrinsic = self.format_hip_integer_intrinsic_call(func_name, args)
-        if integer_intrinsic is not None:
-            return integer_intrinsic
-
-        sync_vote_intrinsic = self.format_hip_sync_vote_intrinsic_call(func_name, args)
-        if sync_vote_intrinsic is not None:
-            return sync_vote_intrinsic
 
         resource_call = self.format_hip_resource_call(func_name, args, raw_args)
         if resource_call is not None:
@@ -4711,6 +4699,27 @@ class HipToCrossGLConverter:
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_hip_intrinsic_call(self, function_name, args):
+        fp16_intrinsic = self.format_hip_fp16_intrinsic_call(function_name, args)
+        if fp16_intrinsic is not None:
+            return fp16_intrinsic
+
+        complex_intrinsic = self.format_hip_complex_intrinsic_call(function_name, args)
+        if complex_intrinsic is not None:
+            return complex_intrinsic
+
+        integer_intrinsic = self.format_hip_integer_intrinsic_call(function_name, args)
+        if integer_intrinsic is not None:
+            return integer_intrinsic
+
+        sync_vote_intrinsic = self.format_hip_sync_vote_intrinsic_call(
+            function_name, args
+        )
+        if sync_vote_intrinsic is not None:
+            return sync_vote_intrinsic
+
+        return None
 
     def format_hip_warp_intrinsic_call(self, function_name, args):
         if function_name in {"__activemask", "__ballot_sync"}:
@@ -5019,6 +5028,8 @@ class HipToCrossGLConverter:
             return f"({left} * {right})"
         if function_name == "__umul24" and len(args) == 2:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
+        if function_name == "__byte_perm" and len(args) == 3:
+            return self.format_hip_byte_perm(args[0], args[1], args[2])
         if function_name == "__ffs" and len(args) == 1:
             return f"(findLSB({args[0]}) + 1)"
         if function_name in {"__clz", "__clzll"} and len(args) == 1:
@@ -5048,6 +5059,65 @@ class HipToCrossGLConverter:
 
     def format_hip_signed_24_bit_operand(self, arg):
         return f"(({arg} << 8) >> 8)"
+
+    def format_hip_byte_perm(self, left, right, selector):
+        selector_value = self.parse_hip_integer_literal(selector)
+        if selector_value is not None:
+            return self.format_hip_static_byte_perm(left, right, selector_value)
+
+        terms = []
+        for result_index in range(4):
+            selected = self.format_hip_dynamic_byte_perm_byte(
+                left, right, selector, result_index
+            )
+            if result_index:
+                selected = f"({selected} << {result_index * 8})"
+            terms.append(selected)
+        return f"({' | '.join(terms)})"
+
+    def format_hip_static_byte_perm(self, left, right, selector_value):
+        terms = []
+        for result_index in range(4):
+            source_index = (selector_value >> (result_index * 4)) & 0xF
+            byte = self.format_hip_byte_source(left, right, source_index)
+            if byte == "0":
+                continue
+            if result_index:
+                byte = f"({byte} << {result_index * 8})"
+            terms.append(byte)
+        return f"({' | '.join(terms)})" if terms else "0"
+
+    def format_hip_dynamic_byte_perm_byte(self, left, right, selector, result_index):
+        selector_nibble = (
+            f"(({selector} >> {result_index * 4}) & 0xf)"
+            if result_index
+            else f"({selector} & 0xf)"
+        )
+        fallback = "0"
+        for source_index in reversed(range(8)):
+            byte = self.format_hip_byte_source(left, right, source_index)
+            fallback = f"(({selector_nibble} == {source_index}) ? {byte} : {fallback})"
+        return fallback
+
+    def format_hip_byte_source(self, left, right, source_index):
+        if source_index < 0 or source_index > 7:
+            return "0"
+        source = left if source_index < 4 else right
+        shift = (source_index % 4) * 8
+        if shift:
+            return f"(({source} >> {shift}) & 0xffu)"
+        return f"({source} & 0xffu)"
+
+    def parse_hip_integer_literal(self, value):
+        text = self.strip_wrapping_parentheses(str(value).strip()).replace("'", "")
+        if not text:
+            return None
+        while text and text[-1].lower() in {"u", "l"}:
+            text = text[:-1]
+        try:
+            return int(text, 0)
+        except ValueError:
+            return None
 
     def format_hip_sync_vote_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):

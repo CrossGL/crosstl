@@ -177,6 +177,7 @@ VULKAN_MEMORY_MODEL_QUALIFIERS = {
     "queuefamilycoherent",
     "shadercallcoherent",
     "nonprivate",
+    "nontemporal",
 }
 
 IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS

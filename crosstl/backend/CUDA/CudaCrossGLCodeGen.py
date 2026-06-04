@@ -4074,6 +4074,12 @@ class CudaToCrossGLConverter:
         if self.is_user_defined_function(raw_name):
             return f"{raw_name}({args_str})"
 
+        load_cache_intrinsic = self.format_cuda_load_cache_intrinsic_call(
+            raw_name, node.args, args
+        )
+        if load_cache_intrinsic is not None:
+            return load_cache_intrinsic
+
         time_function = self.format_cuda_time_function_call(raw_name, args)
         if time_function is not None:
             return time_function
@@ -4126,6 +4132,35 @@ class CudaToCrossGLConverter:
         args_text = ", ".join(args)
         return (
             f"(/* cuda time function {function_name}({args_text}) "
+            "not directly supported in CrossGL */ 0)"
+        )
+
+    def format_cuda_load_cache_intrinsic_call(
+        self, function_name, raw_args, formatted_args
+    ):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
+        if function_name not in {
+            "__ldca",
+            "__ldcg",
+            "__ldcs",
+            "__ldcv",
+            "__ldg",
+            "__ldlu",
+        }:
+            return None
+
+        if (
+            len(raw_args) == 1
+            and isinstance(raw_args[0], UnaryOpNode)
+            and raw_args[0].op == "&"
+        ):
+            return self.visit(raw_args[0].operand)
+
+        args_text = ", ".join(formatted_args)
+        return (
+            f"(/* cuda load cache intrinsic {function_name}({args_text}) "
             "not directly supported in CrossGL */ 0)"
         )
 

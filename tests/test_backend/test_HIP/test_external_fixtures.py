@@ -962,3 +962,28 @@ def test_external_rocm_hip_tests_popc_intrinsics_codegen_reparse():
     assert "c[i] = bitCount(d[i]);" in crossgl
     assert "__popc" not in crossgl
     assert "__popcll" not in crossgl
+
+
+def test_external_rocm_hip_tests_byte_perm_intrinsic_codegen_reparse():
+    # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/math/integer_intrinsics.cc.
+    source = """
+    __global__ void __byte_perm(
+        unsigned int* y,
+        unsigned int x1,
+        unsigned int x2,
+        unsigned int s) {
+        y[0] = __byte_perm(x1, x2, s);
+        y[1] = __byte_perm(x1, x2, 0x0123);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    first_assignment = ast.statements[0].body[0]
+
+    assert first_assignment.right.name == "__byte_perm"
+    assert "y[0] = " in crossgl
+    assert "((s & 0xf) == 0)" in crossgl
+    assert "((s >> 12) & 0xf)" in crossgl
+    assert "y[1] = (((x1 >> 24) & 0xffu)" in crossgl
+    assert "= __byte_perm(" not in crossgl

@@ -89,6 +89,7 @@ class GLSLToCrossGLConverter:
         "queuefamilycoherent": "queuefamilycoherent",
         "shadercallcoherent": "shadercallcoherent",
         "nonprivate": "nonprivate",
+        "nontemporal": "nontemporal",
     }
     VARIABLE_QUALIFIER_ATTRIBUTES = {
         "invariant": "invariant",
@@ -909,12 +910,13 @@ class GLSLToCrossGLConverter:
         layout = {str(key).lower() for key in getattr(var, "layout", None) or {}}
         return "buffer" in self._qualifier_set(var) and "buffer_reference" in layout
 
-    def variable_qualifier_attribute_suffix(self, var):
+    def variable_qualifier_attribute_suffix(self, var, excluded_qualifiers=None):
+        excluded_qualifiers = excluded_qualifiers or set()
         qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
         attributes = [
             f"@{attribute}"
             for qualifier, attribute in self.VARIABLE_QUALIFIER_ATTRIBUTES.items()
-            if qualifier in qualifiers
+            if qualifier in qualifiers and qualifier not in excluded_qualifiers
         ]
         return f" {' '.join(attributes)}" if attributes else ""
 
@@ -2408,7 +2410,14 @@ class GLSLToCrossGLConverter:
         attributes = (
             self.variable_layout_attribute_suffix(node)
             + self.image_resource_attribute_suffix(node)
-            + self.variable_qualifier_attribute_suffix(node)
+            + self.variable_qualifier_attribute_suffix(
+                node,
+                excluded_qualifiers=(
+                    set(self.VULKAN_MEMORY_MODEL_QUALIFIER_ATTRIBUTES)
+                    if self._is_resource_type(var_type)
+                    else set()
+                ),
+            )
         )
         declarator = (
             f"{var_name}{array_suffix}{attributes}"

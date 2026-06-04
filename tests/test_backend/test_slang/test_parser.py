@@ -1264,6 +1264,36 @@ def test_struct_call_and_subscript_operator_methods_parse():
     assert methods[1].params[0].name == "index"
 
 
+def test_struct_subscript_accessor_from_generated_conformance_sample_parse():
+    # Source: shader-slang/slang@564ac9f050d6569efd773e2f74e7d067a4e54baa
+    # docs/generated/tests/conformance/declarations/subscript-get-functional.slang
+    code = """
+    struct MyVec
+    {
+        float x, y;
+        __subscript(int index) -> float
+        {
+            get { return index == 0 ? x : y; }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    method = ast.structs[0].methods[0]
+
+    assert method.name == "operator[]"
+    assert method.slang_name == "__subscript"
+    assert method.return_type == "float"
+    assert method.params[0].vtype == "int"
+    assert method.params[0].name == "index"
+    assert method.is_subscript is True
+    assert list(method.property_accessors) == ["get"]
+    assert method.body == method.property_accessors["get"]
+    assert isinstance(method.body[0], ReturnNode)
+    assert isinstance(method.body[0].value, TernaryOpNode)
+
+
 def test_multi_index_subscript_expressions_from_official_operator_sample_parse():
     code = """
     int test(S value, int x, int y)
