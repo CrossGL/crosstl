@@ -3056,7 +3056,8 @@ def _external_corpus_contract_reasons(
             reasons.append(
                 "externalCorpus.manifest must match project.externalCorpusManifest"
             )
-    if external_corpus.get("status") not in {
+    status = external_corpus.get("status")
+    if status not in {
         "ok",
         "missing",
         "invalid",
@@ -3076,6 +3077,8 @@ def _external_corpus_contract_reasons(
         reasons.append("externalCorpus.entries must be a list")
         entries = []
     else:
+        if status in {"missing", "invalid", "outside-project"} and entries:
+            reasons.append("externalCorpus.entries must be empty when status is not ok")
         artifact_records = (
             _payload_artifact_records(artifacts)
             if isinstance(artifacts, list)
