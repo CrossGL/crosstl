@@ -53,6 +53,10 @@ Translate every discovered unit to one or more targets:
 Project translation exits nonzero when the report contains failed artifacts or
 error diagnostics.
 
+Unsupported target backend names are reported as configuration diagnostics in
+scan, report, and translation output. Translation still records per-artifact
+failures for any artifact attempt that cannot be generated.
+
 Validate artifacts referenced by a report:
 
 .. code-block:: bash

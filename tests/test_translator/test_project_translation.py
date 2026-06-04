@@ -163,6 +163,22 @@ def test_scan_report_normalizes_and_deduplicates_targets(tmp_path):
     assert payload["migration"]["actions"][0]["targets"] == ["opengl"]
 
 
+def test_scan_report_records_unsupported_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    payload = scan_project(repo).to_report(targets=["not-a-backend"]).to_json()
+
+    assert payload["project"]["targets"] == ["not-a-backend"]
+    assert payload["summary"]["diagnosticCounts"]["error"] == 1
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.unsupported-target"
+    assert diagnostic["target"] == "not-a-backend"
+    assert diagnostic["missingCapabilities"] == ["target.backend"]
+    assert "Supported targets:" in diagnostic["message"]
+
+
 def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
@@ -1106,16 +1122,23 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
             "failedCount": 0,
         },
     }
-    assert payload["diagnosticCounts"]["error"] == 1
-    diagnostic = next(
+    assert payload["diagnosticCounts"]["error"] == 2
+    target_diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.config.unsupported-target"
+    )
+    assert target_diagnostic["severity"] == "error"
+    assert target_diagnostic["target"] == "not-a-backend"
+    assert target_diagnostic["missingCapabilities"] == ["target.backend"]
+    translate_diagnostic = next(
         diagnostic
         for diagnostic in payload["diagnostics"]
         if diagnostic["code"] == "project.translate.failed"
     )
-    assert diagnostic["severity"] == "error"
-    assert diagnostic["code"] == "project.translate.failed"
-    assert diagnostic["target"] == "not-a-backend"
-    assert diagnostic["location"]["file"] == "simple.cgl"
+    assert translate_diagnostic["severity"] == "error"
+    assert translate_diagnostic["target"] == "not-a-backend"
+    assert translate_diagnostic["location"]["file"] == "simple.cgl"
     failed_artifact = next(
         artifact for artifact in payload["artifacts"] if artifact["status"] == "failed"
     )
@@ -1232,6 +1255,35 @@ def test_project_cli_scan_fails_on_error_diagnostics(tmp_path):
     assert payload["diagnostics"][0]["code"] == (
         "project.config.source-root-outside-project"
     )
+
+
+def test_project_cli_scan_reports_unsupported_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--target",
+            "not-a-backend",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert payload["summary"]["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == "project.config.unsupported-target"
+    assert payload["diagnostics"][0]["target"] == "not-a-backend"
+    assert payload["diagnostics"][0]["missingCapabilities"] == ["target.backend"]
 
 
 def test_project_cli_report_writes_output_and_fails_on_error_diagnostics(tmp_path):

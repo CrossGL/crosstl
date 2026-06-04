@@ -15,6 +15,7 @@ from typing import Any, Mapping, Sequence
 
 from crosstl._crosstl import translate
 from crosstl.translator.codegen import (
+    backend_names,
     get_backend_extension,
     normalize_backend_name,
 )
@@ -50,6 +51,8 @@ TOOLCHAIN_BY_BACKEND = {
     "slang": ("slangc",),
     "vulkan": ("spirv-val", "spirv-as"),
 }
+
+CROSSL_TARGETS = {"cgl", "crossgl"}
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -98,6 +101,11 @@ def _normalized_targets(targets: Sequence[str]) -> list[str]:
         if normalized not in normalized_targets:
             normalized_targets.append(normalized)
     return normalized_targets
+
+
+def _supported_target_names() -> list[str]:
+    discover_backend_plugins()
+    return sorted(set(backend_names()) | CROSSL_TARGETS)
 
 
 def _relpath(path: Path, root: Path) -> str:
@@ -420,6 +428,31 @@ def _include_dir_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     return diagnostics
 
 
+def _target_diagnostics(
+    config: ProjectConfig, targets: Sequence[str]
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    supported_targets = _supported_target_names()
+    supported = set(supported_targets)
+    for target in targets:
+        if target in supported:
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.config.unsupported-target",
+                message=(
+                    f"Target backend '{target}' is not supported. Supported "
+                    f"targets: {', '.join(supported_targets)}"
+                ),
+                location=_config_location(config),
+                target=target,
+                missing_capabilities=["target.backend"],
+            )
+        )
+    return diagnostics
+
+
 @dataclass(frozen=True)
 class ProjectTranslationUnit:
     """A discovered source file that can be translated as one unit."""
@@ -459,13 +492,15 @@ class ProjectScan:
             if targets is not None
             else self.config.normalized_targets()
         )
+        diagnostics = list(self.diagnostics)
+        diagnostics.extend(_target_diagnostics(self.config, report_targets))
         return ProjectPortabilityReport(
             config=self.config,
             targets=report_targets,
             units=self.units,
             skipped=self.skipped,
             artifacts=[],
-            diagnostics=self.diagnostics,
+            diagnostics=diagnostics,
             validation={"toolchains": [], "artifacts": []},
             migration_actions=_runtime_migration_actions(self.units, report_targets),
         )
@@ -830,6 +865,7 @@ def translate_project(
 
     scan = scan_project(config)
     diagnostics: list[ProjectDiagnostic] = list(scan.diagnostics)
+    diagnostics.extend(_target_diagnostics(config, selected_targets))
     artifacts: list[dict[str, Any]] = []
     include_paths = _resolved_include_dirs(config)
     output_dir_blocked = _has_error_diagnostic(
