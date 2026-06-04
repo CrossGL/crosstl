@@ -1728,6 +1728,9 @@ class SlangParser:
 
         while self.current_token[0] != "RPAREN":
             struct_def = ""
+            attributes = []
+            while self.current_token[0] == "LBRACKET":
+                attributes.extend(self.parse_attribute_list())
             qualifiers = self.parse_parameter_qualifiers()
             vtype = self.parse_type_name(allow_array_suffix=True)
             vtype += self.parse_pointer_suffix()
@@ -1754,6 +1757,7 @@ class SlangParser:
                     vtype + struct_def,
                     name,
                     qualifiers=qualifiers,
+                    attributes=attributes,
                     semantic=semantic,
                     array_sizes=array_sizes,
                     value=default_value,

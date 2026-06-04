@@ -754,6 +754,39 @@ def test_external_turbo3_fast_exp_softmax_codegen_reparse():
     assert "__expf" not in crossgl
 
 
+def test_cuda_math_api_fast_single_precision_intrinsics_codegen_reparse():
+    # Upstream source:
+    # NVIDIA CUDA Math API Reference Manual v13.1, section 7
+    # Single Precision Intrinsics.
+    # URL:
+    # https://docs.nvidia.com/cuda/archive/13.1.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__SINGLE.html
+    source = """
+    __device__ float fast_intrinsics(float x, float y) {
+        float trig = __sinf(x) + ::__cosf(x) + __tanf(x);
+        float logs = __logf(y) + __log2f(y);
+        float powered = __powf(x, y);
+        float shaped = __tanhf(x) + ::__expf(y);
+        return trig + logs + powered + shaped;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "var trig: f32 = ((sin(x) + cos(x)) + tan(x));" in crossgl
+    assert "var logs: f32 = (log(y) + log2(y));" in crossgl
+    assert "var powered: f32 = pow(x, y);" in crossgl
+    assert "var shaped: f32 = (tanh(x) + exp(y));" in crossgl
+    assert "__sinf" not in crossgl
+    assert "__cosf" not in crossgl
+    assert "__tanf" not in crossgl
+    assert "__logf" not in crossgl
+    assert "__log2f" not in crossgl
+    assert "__powf" not in crossgl
+    assert "__tanhf" not in crossgl
+    assert "__expf" not in crossgl
+
+
 def test_external_raja_global_qualified_cuda_shuffle_codegen_reparse():
     source = """
     __device__ int shfl_sync(int var, int srcLane) {

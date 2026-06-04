@@ -4240,6 +4240,22 @@ class CudaToCrossGLConverter:
         if isinstance(function_name, str) and function_name.startswith("::"):
             function_name = function_name[2:]
 
+        fast_math_intrinsics = {
+            "__cosf": ("cos", 1),
+            "__expf": ("exp", 1),
+            "__log2f": ("log2", 1),
+            "__logf": ("log", 1),
+            "__powf": ("pow", 2),
+            "__sinf": ("sin", 1),
+            "__tanf": ("tan", 1),
+            "__tanhf": ("tanh", 1),
+        }
+        mapped_intrinsic = fast_math_intrinsics.get(function_name)
+        if mapped_intrinsic is not None:
+            mapped_name, arity = mapped_intrinsic
+            if len(args) == arity:
+                return f"{mapped_name}({', '.join(args)})"
+
         if function_name == "__saturatef" and len(args) == 1:
             return f"clamp({args[0]}, 0.0f, 1.0f)"
         if function_name == "__fdividef" and len(args) == 2:

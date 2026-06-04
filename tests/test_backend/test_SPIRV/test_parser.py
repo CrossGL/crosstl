@@ -1100,6 +1100,34 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_CONSTANT_NULL_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
+; Reduced from the core OpConstantNull instruction definition.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_vec
+OpExecutionMode %main OriginUpperLeft
+OpName %null_vec "nullVec"
+OpName %body_null "bodyNull"
+OpName %out_vec "outVec"
+OpDecorate %out_vec Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%null_vec = OpConstantNull %v4float
+%out_vec = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%body_null = OpConstantNull %v4float
+OpStore %out_vec %null_vec
+OpStore %out_vec %body_null
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SPEC_FRAGMENT_TERMINATION_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
@@ -1510,6 +1538,26 @@ def test_spirv_spec_undef_parse():
     assert isinstance(body_assignment, AssignmentNode)
     assert isinstance(body_assignment.right, FunctionCallNode)
     assert body_assignment.right.name == "spirvUndef_vec4"
+    assert body_assignment.right.args == []
+
+
+def test_spirv_spec_constant_null_parse():
+    tokens = tokenize_code(SPIRV_SPEC_CONSTANT_NULL_ASSEMBLY)
+    ast = parse_code(tokens)
+    module_assignment = ast.functions[0].body[0]
+    body_assignment = ast.functions[0].body[1]
+    null_value = ast.spirv_constants["%null_vec"]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_constant_types["%null_vec"] == "%v4float"
+    assert isinstance(null_value, FunctionCallNode)
+    assert null_value.name == "spirvNull_vec4"
+    assert null_value.args == []
+    assert isinstance(module_assignment, AssignmentNode)
+    assert module_assignment.right is null_value
+    assert isinstance(body_assignment, AssignmentNode)
+    assert isinstance(body_assignment.right, FunctionCallNode)
+    assert body_assignment.right.name == "spirvNull_vec4"
     assert body_assignment.right.args == []
 
 

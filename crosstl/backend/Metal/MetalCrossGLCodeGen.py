@@ -356,6 +356,10 @@ class MetalToCrossGLConverter:
             # SwiftUI layer-effect shaders expose the rendered layer as a
             # sampler-like object with sample(coord) syntax.
             "SwiftUI::Layer": "sampler2D",
+            # RealityKit custom material shaders use framework-scoped opaque
+            # parameter types with no direct CrossGL namespace syntax.
+            "realitykit::surface_parameters": "surface_parameters",
+            "realitykit::geometry_parameters": "geometry_parameters",
             "acceleration_structure": "acceleration_structure",
             "intersection_function_table": "intersection_function_table",
             "visible_function_table": "visible_function_table",

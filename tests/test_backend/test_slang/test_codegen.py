@@ -1288,6 +1288,26 @@ def test_local_and_parameter_generic_resource_type_codegen():
     assert "Texture2D<float4>" not in generated_code
 
 
+def test_parameter_attribute_codegen_from_cuda_format_docs_reparses():
+    # Source: shader-slang/slang docs/cuda-target.md at
+    # 11e97e77155f454c67dc66daf25c75386d13c378 documents
+    # [format(...)] on function parameters.
+    code = """
+    float2 getValue([format("rg16f")] RWTexture2D<float2> t)
+    {
+        return t[int2(0, 0)];
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec2 getValue(image2D t)" in generated_code
+    assert "return t[ivec2(0, 0)];" in generated_code
+    assert "[format" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_texture_method_call_codegen():
     code = """
     Texture2D<float4> albedo;

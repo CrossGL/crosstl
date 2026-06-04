@@ -386,6 +386,24 @@ EXTERNAL_FIXTURES = [
         """).strip(),
     ),
     ExternalFixture(
+        name="glslang-fragcoord-origin-layout-flags",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/gl_FragCoord.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 150 core
+            #extension GL_ARB_explicit_attrib_location : enable
+
+            layout (origin_upper_left,pixel_center_integer) in vec4 gl_FragCoord;
+            layout (location = 0) out vec4 myColor;
+
+            void main() {
+                myColor = vec4(gl_FragCoord.xy, 0.0, 1.0);
+            }
+        """).strip(),
+    ),
+    ExternalFixture(
         name="saschawillems-compute-particles-ssbo",
         repo="https://github.com/SaschaWillems/Vulkan",
         commit="180be3f9f9a0e86fff2a7de283a54063999f2b69",
@@ -856,6 +874,27 @@ def test_parse_glslang_invariant_builtin_list_fixture():
         ["invariant"],
         ["invariant"],
     ]
+
+
+def test_codegen_glslang_fragcoord_origin_layout_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-fragcoord-origin-layout-flags"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    frag_coord = next(var for var in ast.io_variables if var.name == "gl_FragCoord")
+
+    assert frag_coord.layout == {
+        "origin_upper_left": None,
+        "pixel_center_integer": None,
+    }
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "vec4 gl_FragCoord @origin_upper_left @pixel_center_integer;" in crossgl
+    parse_crossgl(crossgl)
 
 
 def test_parse_godot_particles_precision_ubo_hash_fixture():
