@@ -760,6 +760,29 @@ def test_codegen_glslang_while_condition_declaration_roundtrip():
     assert "if (!test)" in crossgl
 
 
+def test_codegen_invariant_builtin_redeclaration_from_glslang_150_vert():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/150.vert.
+    code = textwrap.dedent("""
+        #version 150 core
+
+        in vec4 iv4;
+
+        invariant gl_Position;
+
+        void main()
+        {
+            gl_Position = iv4;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "vec4 gl_Position @invariant @ gl_Position;" in crossgl
+    assert " gl_Position @invariant;" not in crossgl
+    assert "output.gl_Position = input.iv4;" in crossgl
+
+
 def test_codegen_reserved_helper_name_from_glslang_struct_sample_roundtrip():
     code = textwrap.dedent("""
         #version 450 core

@@ -886,6 +886,28 @@ def test_codegen_template_style_vector_matrix_types_and_constructors():
     parse_crossgl(output)
 
 
+def test_codegen_one_row_matrix_aliases_from_dxc_matrix_syntax():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/SemaHLSL/matrix-syntax.hlsl
+    hlsl = textwrap.dedent("""
+        void abs_on_demand() {
+            float1x2 f12;
+            float1x2 result = abs(f12);
+            matrix<float, 1, 4> templatedRow;
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "vec2 f12;" in output
+    assert "vec2 result = abs(f12);" in output
+    assert "vec4 templatedRow;" in output
+    assert "float1x2" not in output
+    assert "matrix<" not in output
+
+    parse_crossgl(output)
+
+
 def test_codegen_compute_roundtrip():
     output = generate_crossgl(COMPUTE_HLSL)
     lowered = output.lower()

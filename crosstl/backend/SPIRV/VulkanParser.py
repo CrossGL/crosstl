@@ -1754,6 +1754,14 @@ class VulkanParser:
                     )
                 continue
 
+            if opcode in {
+                "OpKill",
+                "OpTerminateInvocation",
+                "OpDemoteToHelperInvocation",
+            }:
+                statements.append(DiscardNode())
+                continue
+
             if opcode == "OpReturnValue" and operands:
                 statements.append(
                     ReturnNode(

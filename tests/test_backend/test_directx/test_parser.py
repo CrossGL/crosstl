@@ -1179,6 +1179,31 @@ def test_parse_template_style_vector_matrix_types_and_constructors():
     assert func.body[-1].value.type_name == "vector<double, 4>"
 
 
+def test_parse_one_row_column_matrix_aliases_from_dxc_matrix_syntax():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/SemaHLSL/matrix-syntax.hlsl
+    ast = parse_code("""
+    void matrix_on_demand() {
+        float1x2 f12;
+        bool2x1 boolMatrix;
+        unsigned int4x2 unsignedMatrix;
+    }
+    """)
+
+    declarations = ast.functions[0].body
+
+    assert [declaration.vtype for declaration in declarations] == [
+        "float1x2",
+        "bool2x1",
+        "unsigned int4x2",
+    ]
+    assert [declaration.name for declaration in declarations] == [
+        "f12",
+        "boolMatrix",
+        "unsignedMatrix",
+    ]
+
+
 def test_parse_template_function_prefix_from_raytracing_sample():
     ast = parse_code("""
     template<typename T>

@@ -9546,7 +9546,7 @@ class RustToCrossGLConverter:
                     depth -= 1
                     continue
                 if depth == 0:
-                    values.append(str(token))
+                    values.append(self.normalize_attribute_metadata_value(str(token)))
 
             if values:
                 while len(values) < 3:
@@ -9597,27 +9597,47 @@ class RustToCrossGLConverter:
                     )
 
                     if location is not None:
-                        semantics.append(f"location({location})")
+                        semantics.append(
+                            f"location({self.normalize_attribute_metadata_value(location)})"
+                        )
                     if descriptor_set is not None:
-                        semantics.append(f"set({descriptor_set})")
+                        semantics.append(
+                            f"set({self.normalize_attribute_metadata_value(descriptor_set)})"
+                        )
                     if binding_index is not None:
-                        semantics.append(f"binding({binding_index})")
+                        semantics.append(
+                            f"binding({self.normalize_attribute_metadata_value(binding_index)})"
+                        )
                     if "push_constant" in attr.args:
                         semantics.append("push_constant")
                     if spec_constant_id is not None:
-                        semantics.append(f"constant_id({spec_constant_id})")
+                        semantics.append(
+                            "constant_id("
+                            f"{self.normalize_attribute_metadata_value(spec_constant_id)}"
+                            ")"
+                        )
                     if input_attachment_index is not None:
                         semantics.append(
-                            f"input_attachment_index({input_attachment_index})"
+                            "input_attachment_index("
+                            f"{self.normalize_attribute_metadata_value(input_attachment_index)}"
+                            ")"
                         )
                     if "workgroup" in attr.args:
                         semantics.append("groupshared")
                     if semantics:
                         return "".join(f" @ {semantic}" for semantic in semantics)
                 elif attr.name == "location" and attr.args:
-                    return f" @ location({attr.args[0]})"
+                    return (
+                        " @ location("
+                        f"{self.normalize_attribute_metadata_value(attr.args[0])}"
+                        ")"
+                    )
                 elif attr.name == "binding" and attr.args:
-                    return f" @ binding({attr.args[0]})"
+                    return (
+                        " @ binding("
+                        f"{self.normalize_attribute_metadata_value(attr.args[0])}"
+                        ")"
+                    )
         return ""
 
     def attribute_arg_value(self, args, key):
@@ -9629,6 +9649,16 @@ class RustToCrossGLConverter:
             if index + 1 < len(args):
                 return args[index + 1]
         return None
+
+    def normalize_attribute_metadata_value(self, value):
+        if not isinstance(value, str):
+            return value
+
+        match = RUST_NUMERIC_LITERAL_RE.match(value)
+        if not match:
+            return value
+
+        return match.group("body").replace("_", "")
 
     def visit_StructNode(self, node):
         code = f"struct {node.name} {{\n"

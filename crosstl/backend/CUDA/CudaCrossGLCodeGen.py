@@ -4086,6 +4086,10 @@ class CudaToCrossGLConverter:
         if integer_intrinsic is not None:
             return integer_intrinsic
 
+        float_intrinsic = self.format_cuda_float_intrinsic_call(raw_name, args)
+        if float_intrinsic is not None:
+            return float_intrinsic
+
         block_sync_vote = self.format_cuda_block_sync_vote_call(raw_name, args)
         if block_sync_vote is not None:
             return block_sync_vote
@@ -4230,6 +4234,15 @@ class CudaToCrossGLConverter:
             return f"countLeadingZeros({args[0]})"
         if function_name in {"__brev", "__brevll"} and len(args) == 1:
             return f"reverseBits({args[0]})"
+        return None
+
+    def format_cuda_float_intrinsic_call(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
+        if function_name == "__saturatef" and len(args) == 1:
+            return f"clamp({args[0]}, 0.0f, 1.0f)"
+
         return None
 
     def format_cuda_signed_24_bit_operand(self, arg):

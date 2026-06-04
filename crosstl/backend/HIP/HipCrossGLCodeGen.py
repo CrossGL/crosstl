@@ -5883,9 +5883,8 @@ class HipToCrossGLConverter:
                 return None
             return self.wrap_mapped_hip_array_type(hip_type, mapped_type)
 
-        if "*" in hip_type:
-            pointer_depth = hip_type.count("*")
-            base_type = hip_type.replace("*", "").strip()
+        base_type, pointer_depth = self.split_pointer_declarators(hip_type)
+        if pointer_depth:
             mapped_type = self.convert_hip_resource_object_base_type(base_type, hint)
             if mapped_type is None:
                 return None
@@ -5992,7 +5991,8 @@ class HipToCrossGLConverter:
         if self.has_array_suffix(hip_type):
             return self.convert_hip_array_type(hip_type, type_mapping)
 
-        if "*" in hip_type:
+        _, pointer_depth = self.split_pointer_declarators(hip_type)
+        if pointer_depth:
             return self.convert_hip_pointer_type(hip_type)
 
         return type_mapping.get(hip_type, hip_type)
@@ -6054,6 +6054,27 @@ class HipToCrossGLConverter:
             return type_name[:-2].strip(), True
         return type_name, False
 
+    def split_pointer_declarators(self, type_name):
+        base_chars = []
+        pointer_depth = 0
+        template_depth = 0
+
+        for char in str(type_name):
+            if char == "<":
+                template_depth += 1
+                base_chars.append(char)
+                continue
+            if char == ">":
+                template_depth = max(0, template_depth - 1)
+                base_chars.append(char)
+                continue
+            if char == "*" and template_depth == 0:
+                pointer_depth += 1
+                continue
+            base_chars.append(char)
+
+        return "".join(base_chars).strip(), pointer_depth
+
     def parse_cpp_template(self, text):
         if not isinstance(text, str):
             return str(text), []
@@ -6086,8 +6107,7 @@ class HipToCrossGLConverter:
         return args
 
     def convert_hip_pointer_type(self, hip_type):
-        pointer_depth = hip_type.count("*")
-        base_type = hip_type.replace("*", "").strip()
+        base_type, pointer_depth = self.split_pointer_declarators(hip_type)
         mapped_type = self.convert_hip_type_to_crossgl(base_type)
 
         for _ in range(pointer_depth):
@@ -6096,8 +6116,7 @@ class HipToCrossGLConverter:
         return mapped_type
 
     def convert_hip_pointer_element_type(self, hip_type):
-        pointer_depth = hip_type.count("*")
-        base_type = hip_type.replace("*", "").strip()
+        base_type, pointer_depth = self.split_pointer_declarators(hip_type)
         mapped_type = self.convert_hip_type_to_crossgl(base_type)
 
         for _ in range(max(0, pointer_depth - 1)):

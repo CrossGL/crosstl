@@ -22,6 +22,7 @@ EXTERNAL_SAMPLES = [
             "cpp/0_Introduction/simpleSurfaceWrite/simpleSurfaceWrite.cu",
             "cpp/0_Introduction/simpleTexture3D/simpleTexture3D_kernel.cu",
             "cpp/0_Introduction/simpleVoteIntrinsics/simpleVote_kernel.cuh",
+            "cpp/2_Concepts_and_Techniques/boxFilter/boxFilter_kernel.cu",
             "cpp/2_Concepts_and_Techniques/MC_SingleAsianOptionP/src/pricingengine.cu",
             "cpp/2_Concepts_and_Techniques/reduction/reduction_kernel.cu",
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
@@ -654,6 +655,31 @@ def test_cuda_samples_simple_texture3d_umul24_codegen_reparse():
     assert "(gl_WorkGroupID.x & 0x00ffffffu)" in crossgl
     assert "(gl_WorkGroupSize.x & 0x00ffffffu)" in crossgl
     assert "__umul24" not in crossgl
+
+
+def test_cuda_samples_box_filter_saturatef_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/2_Concepts_and_Techniques/boxFilter/boxFilter_kernel.cu
+    source = """
+    __device__ unsigned int rgbaFloatToInt(float4 rgba) {
+        rgba.x = __saturatef(rgba.x);
+        rgba.y = __saturatef(rgba.y);
+        return (unsigned int)(rgba.x * 255.0f);
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].right.name == "__saturatef"
+    assert body[1].right.name == "__saturatef"
+    assert "rgba.x = clamp(rgba.x, 0.0f, 1.0f);" in crossgl
+    assert "rgba.y = clamp(rgba.y, 0.0f, 1.0f);" in crossgl
+    assert "__saturatef" not in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():

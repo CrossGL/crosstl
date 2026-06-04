@@ -362,6 +362,25 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_FRAGMENT_TERMINATION_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
+; Reduced from OpKill, OpTerminateInvocation, and OpDemoteToHelperInvocation.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main"
+OpExecutionMode %main OriginUpperLeft
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpKill
+OpTerminateInvocation
+OpDemoteToHelperInvocation
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_OPSELECT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -2309,6 +2328,19 @@ def test_spirv_spec_vector_insert_dynamic_codegen_reparse():
     )
     assert "outVec = inserted;" not in generated_code
     assert "OpVectorInsertDynamic" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_spec_fragment_termination_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SPEC_FRAGMENT_TERMINATION_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert generated_code.count("discard;") == 3
+    assert "OpKill" not in generated_code
+    assert "OpTerminateInvocation" not in generated_code
+    assert "OpDemoteToHelperInvocation" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

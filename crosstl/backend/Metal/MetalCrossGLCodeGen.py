@@ -459,6 +459,7 @@ class MetalToCrossGLConverter:
             "threadgroup_position_in_grid": "gl_WorkGroupID",
             "thread_index_in_threadgroup": "gl_LocalInvocationIndex",
             "threads_per_threadgroup": "gl_WorkGroupSize",
+            "threadgroups_per_grid": "gl_NumWorkGroups",
             "stage_in": "",
         }
 

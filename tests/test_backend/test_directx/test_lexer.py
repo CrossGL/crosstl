@@ -88,6 +88,22 @@ def test_keywords_and_types_tokenization():
     assert_values_present(values, expected, case_insensitive=True)
 
 
+def test_one_row_column_matrix_aliases_from_dxc_matrix_syntax_tokenize_as_matrices():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/SemaHLSL/matrix-syntax.hlsl
+    tokens = tokenize_code("""
+    void matrix_on_demand() {
+        float1x2 f12;
+        bool2x1 boolMatrix;
+        unsigned int4x2 unsignedMatrix;
+    }
+    """)
+
+    assert ("MATRIX", "float1x2") in tokens
+    assert ("MATRIX", "bool2x1") in tokens
+    assert ("MATRIX", "int4x2") in tokens
+
+
 def test_control_flow_keywords_tokenization():
     code = """
     int ControlFlow(int a, int b) {
