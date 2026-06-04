@@ -6797,6 +6797,7 @@
         "cuda": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -6808,6 +6809,7 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -6819,6 +6821,7 @@
         "hip": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -6830,6 +6833,7 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -6841,6 +6845,7 @@
         "mojo": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -6852,6 +6857,7 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -6863,6 +6869,7 @@
         "rust": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -6874,6 +6881,7 @@
         "slang": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -6885,6 +6893,7 @@
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",

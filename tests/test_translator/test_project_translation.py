@@ -4189,6 +4189,40 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     assert payload["report"]["generator"]["pipeline"] == "project-porting"
 
 
+def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Migration actions:" in result.stdout
+    assert "- manual-runtime-integration:" in result.stdout
+    assert "CrossTL translated shader/kernel source artifacts only" in result.stdout
+    assert (
+        "review host runtime API calls, resource binding setup, build scripts, "
+        "and backend framework integration separately"
+    ) in result.stdout
+
+
 def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

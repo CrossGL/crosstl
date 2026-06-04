@@ -5238,6 +5238,7 @@
           "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -5249,6 +5250,7 @@
           "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -5260,6 +5262,7 @@
           "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -5271,6 +5274,7 @@
           "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -5282,6 +5286,7 @@
           "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -5293,6 +5298,7 @@
           "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -5304,6 +5310,7 @@
           "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -5315,6 +5322,7 @@
           "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
@@ -5326,6 +5334,7 @@
           "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, and validation rejects action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
