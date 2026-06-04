@@ -972,6 +972,99 @@ def test_validate_project_report_rejects_malformed_unit_and_skipped_records(tmp_
     assert "skipped[1] must be an object" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_malformed_generator_and_validation_records(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-validation-record-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "generator": {
+                    "name": "",
+                    "pipeline": "single-file-translate",
+                },
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "validation": {
+                    "toolchains": [
+                        {
+                            "target": "",
+                            "status": "ready",
+                            "tools": [
+                                {
+                                    "name": "",
+                                    "path": [],
+                                    "available": "yes",
+                                },
+                                "not a tool",
+                            ],
+                            "message": "",
+                        },
+                        "not a toolchain",
+                    ],
+                    "artifacts": [
+                        {
+                            "source": "",
+                            "target": "",
+                            "path": "",
+                            "exists": "yes",
+                            "status": "missing",
+                        },
+                        "not an artifact check",
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "generator.name must be a string" in diagnostic["message"]
+    assert "generator.pipeline must be project-porting" in diagnostic["message"]
+    assert "validation.toolchains[0].target must be a string" in (diagnostic["message"])
+    assert (
+        "validation.toolchains[0].status must be available, unavailable, or "
+        "not-configured"
+    ) in diagnostic["message"]
+    assert "validation.toolchains[0].tools[0].name must be a string" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchains[0].tools[0].path must be a string or null" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchains[0].tools[0].available must be a boolean" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchains[0].tools[1] must be an object" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchains[0].message must be a string" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchains[1] must be an object" in diagnostic["message"]
+    assert "validation.artifacts[0].source must be a string" in diagnostic["message"]
+    assert "validation.artifacts[0].target must be a string" in diagnostic["message"]
+    assert "validation.artifacts[0].path must be a string" in diagnostic["message"]
+    assert "validation.artifacts[0].exists must be a boolean" in (diagnostic["message"])
+    assert "validation.artifacts[0].status must be ok or failed" in (
+        diagnostic["message"]
+    )
+    assert "validation.artifacts[1] must be an object" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

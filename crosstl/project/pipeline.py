@@ -24,6 +24,7 @@ from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default
 
 REPORT_KIND = "crosstl-project-portability-report"
 REPORT_SCHEMA_VERSION = 1
+REPORT_GENERATOR_PIPELINE = "project-porting"
 REPORT_MIGRATION_SCOPE = "shader-kernel-translation"
 REPORT_MIGRATION_NON_GOALS = (
     "automatic runtime API migration",
@@ -603,7 +604,7 @@ class ProjectPortabilityReport:
             "kind": REPORT_KIND,
             "generator": {
                 "name": "CrossTL",
-                "pipeline": "project-porting",
+                "pipeline": REPORT_GENERATOR_PIPELINE,
             },
             "project": {
                 "root": str(self.config.root),
@@ -1486,6 +1487,100 @@ def _project_metadata_contract_reasons(
     return reasons
 
 
+def _generator_contract_reasons(
+    report: Mapping[str, Any], *, require_generator: bool
+) -> list[str]:
+    if "generator" not in report:
+        return ["generator must be an object"] if require_generator else []
+
+    generator = report.get("generator")
+    if not isinstance(generator, Mapping):
+        return ["generator must be an object"]
+
+    reasons = []
+    if not _is_non_empty_string(generator.get("name")):
+        reasons.append("generator.name must be a string")
+    if generator.get("pipeline") != REPORT_GENERATOR_PIPELINE:
+        reasons.append(f"generator.pipeline must be {REPORT_GENERATOR_PIPELINE}")
+    return reasons
+
+
+def _tool_status_contract_reasons(index: int, toolchain: Any) -> list[str]:
+    prefix = f"validation.toolchains[{index}]"
+    if not isinstance(toolchain, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    if not _is_non_empty_string(toolchain.get("target")):
+        reasons.append(f"{prefix}.target must be a string")
+    if toolchain.get("status") not in {"available", "unavailable", "not-configured"}:
+        reasons.append(
+            f"{prefix}.status must be available, unavailable, or not-configured"
+        )
+    tools = toolchain.get("tools")
+    if not isinstance(tools, list):
+        reasons.append(f"{prefix}.tools must be a list")
+    else:
+        for tool_index, tool in enumerate(tools):
+            tool_prefix = f"{prefix}.tools[{tool_index}]"
+            if not isinstance(tool, Mapping):
+                reasons.append(f"{tool_prefix} must be an object")
+                continue
+            if not _is_non_empty_string(tool.get("name")):
+                reasons.append(f"{tool_prefix}.name must be a string")
+            path = tool.get("path")
+            if path is not None and not _is_non_empty_string(path):
+                reasons.append(f"{tool_prefix}.path must be a string or null")
+            if not isinstance(tool.get("available"), bool):
+                reasons.append(f"{tool_prefix}.available must be a boolean")
+    if "message" in toolchain and not _is_non_empty_string(toolchain.get("message")):
+        reasons.append(f"{prefix}.message must be a string")
+    return reasons
+
+
+def _validation_artifact_contract_reasons(index: int, artifact: Any) -> list[str]:
+    prefix = f"validation.artifacts[{index}]"
+    if not isinstance(artifact, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    for field_name in ("source", "target", "path"):
+        if not _is_non_empty_string(artifact.get(field_name)):
+            reasons.append(f"{prefix}.{field_name} must be a string")
+    if not isinstance(artifact.get("exists"), bool):
+        reasons.append(f"{prefix}.exists must be a boolean")
+    if artifact.get("status") not in {"ok", "failed"}:
+        reasons.append(f"{prefix}.status must be ok or failed")
+    return reasons
+
+
+def _validation_contract_reasons(
+    report: Mapping[str, Any], *, require_validation: bool
+) -> list[str]:
+    if "validation" not in report:
+        return ["validation must be an object"] if require_validation else []
+
+    validation = report.get("validation")
+    if not isinstance(validation, Mapping):
+        return ["validation must be an object"]
+
+    reasons = []
+    toolchains = validation.get("toolchains")
+    if not isinstance(toolchains, list):
+        reasons.append("validation.toolchains must be a list")
+    else:
+        for index, toolchain in enumerate(toolchains):
+            reasons.extend(_tool_status_contract_reasons(index, toolchain))
+
+    artifact_checks = validation.get("artifacts")
+    if not isinstance(artifact_checks, list):
+        reasons.append("validation.artifacts must be a list")
+    else:
+        for index, artifact in enumerate(artifact_checks):
+            reasons.extend(_validation_artifact_contract_reasons(index, artifact))
+    return reasons
+
+
 def _migration_contract_reasons(
     report: Mapping[str, Any], *, require_migration: bool
 ) -> list[str]:
@@ -1739,6 +1834,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         reasons.append(f"expected schemaVersion {REPORT_SCHEMA_VERSION}")
     if report.get("kind") != REPORT_KIND:
         reasons.append(f"expected kind {REPORT_KIND}")
+    reasons.extend(_generator_contract_reasons(report, require_generator=has_summary))
 
     project = report.get("project")
     if not isinstance(project, Mapping):
@@ -1871,6 +1967,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     f"diagnostics[{index}].missingCapabilities must be a list of strings"
                 )
 
+    reasons.extend(_validation_contract_reasons(report, require_validation=has_summary))
     if "diagnosticCounts" in report and isinstance(diagnostics, list):
         reasons.extend(
             _diagnostic_counts_contract_reasons(
