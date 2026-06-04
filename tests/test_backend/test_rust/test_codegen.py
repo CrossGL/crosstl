@@ -461,6 +461,38 @@ def test_rust_gpu_spirv_entry_point_name_drives_stage_name():
     assert "vertex vertex_body {" not in result
 
 
+def test_rust_gpu_vec_extend_codegen_from_upstream_examples():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/{sky-shader,mouse-shader}/src/lib.rs.
+    code = """
+    use spirv_std::glam::{vec3, Vec2, Vec3, Vec4};
+    use spirv_std::spirv;
+
+    fn tonemap(color: Vec3) -> Vec3 {
+        color
+    }
+
+    #[spirv(fragment)]
+    pub fn main_fs(output: &mut Vec4) {
+        let color = vec3(1.0, 0.5, 0.25);
+        *output = tonemap(color).extend(1.0);
+    }
+
+    #[spirv(vertex)]
+    pub fn main_vs(pos: Vec2, #[spirv(position)] builtin_pos: &mut Vec4) {
+        *builtin_pos = pos.extend(0.0).extend(1.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "output = vec4(tonemap(color), 1.0);" in result
+    assert "builtin_pos = vec4(vec3(pos, 0.0), 1.0);" in result
+    assert ".extend(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_image_macro_types_drive_resource_parameters():
     code = """
     use spirv_std::{spirv, Image};

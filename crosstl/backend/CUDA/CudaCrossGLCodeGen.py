@@ -4086,6 +4086,10 @@ class CudaToCrossGLConverter:
         if integer_intrinsic is not None:
             return integer_intrinsic
 
+        block_sync_vote = self.format_cuda_block_sync_vote_call(raw_name, args)
+        if block_sync_vote is not None:
+            return block_sync_vote
+
         resource_call = self.format_cuda_resource_call(raw_name, args)
         if resource_call is not None:
             return resource_call
@@ -4172,6 +4176,26 @@ class CudaToCrossGLConverter:
         args_text = ", ".join(args)
         return (
             f"(/* cuda warp intrinsic {function_name}({args_text}) "
+            "not directly supported in CrossGL */ 0)"
+        )
+
+    def format_cuda_block_sync_vote_call(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
+        if function_name not in {
+            "__syncthreads_count",
+            "__syncthreads_and",
+            "__syncthreads_or",
+        }:
+            return None
+
+        return self.format_unsupported_cuda_block_sync_vote(function_name, args)
+
+    def format_unsupported_cuda_block_sync_vote(self, function_name, args):
+        args_text = ", ".join(args)
+        return (
+            f"(/* cuda thread block sync vote {function_name}({args_text}) "
             "not directly supported in CrossGL */ 0)"
         )
 

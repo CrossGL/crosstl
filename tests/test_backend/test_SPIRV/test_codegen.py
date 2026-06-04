@@ -1277,6 +1277,70 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_BIT_INSTRUCTIONS_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Reduced from core bit instruction definitions for OpBitCount, OpBitReverse,
+; OpBitFieldUExtract, OpBitFieldSExtract, and OpBitFieldInsert.
+OpCapability Shader
+OpCapability BitInstructions
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %mask %signed_mask %offset %bits %count_out %reverse_out %uextract_out %sextract_out %insert_out
+OpExecutionMode %main OriginUpperLeft
+OpName %mask "mask"
+OpName %signed_mask "signedMask"
+OpName %offset "offset"
+OpName %bits "bits"
+OpName %count_out "countOut"
+OpName %reverse_out "reverseOut"
+OpName %uextract_out "uExtractOut"
+OpName %sextract_out "sExtractOut"
+OpName %insert_out "insertOut"
+OpDecorate %mask Location 0
+OpDecorate %signed_mask Location 1
+OpDecorate %offset Location 2
+OpDecorate %bits Location 3
+OpDecorate %count_out Location 0
+OpDecorate %reverse_out Location 1
+OpDecorate %uextract_out Location 2
+OpDecorate %sextract_out Location 3
+OpDecorate %insert_out Location 4
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%int = OpTypeInt 32 1
+%ptr_input_uint = OpTypePointer Input %uint
+%ptr_input_int = OpTypePointer Input %int
+%ptr_output_uint = OpTypePointer Output %uint
+%ptr_output_int = OpTypePointer Output %int
+%mask = OpVariable %ptr_input_uint Input
+%signed_mask = OpVariable %ptr_input_int Input
+%offset = OpVariable %ptr_input_int Input
+%bits = OpVariable %ptr_input_int Input
+%count_out = OpVariable %ptr_output_uint Output
+%reverse_out = OpVariable %ptr_output_uint Output
+%uextract_out = OpVariable %ptr_output_uint Output
+%sextract_out = OpVariable %ptr_output_int Output
+%insert_out = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_mask = OpLoad %uint %mask
+%loaded_signed = OpLoad %int %signed_mask
+%loaded_offset = OpLoad %int %offset
+%loaded_bits = OpLoad %int %bits
+%counted = OpBitCount %uint %loaded_mask
+OpStore %count_out %counted
+%reversed = OpBitReverse %uint %loaded_mask
+OpStore %reverse_out %reversed
+%uextracted = OpBitFieldUExtract %uint %loaded_mask %loaded_offset %loaded_bits
+OpStore %uextract_out %uextracted
+%sextracted = OpBitFieldSExtract %int %loaded_signed %loaded_offset %loaded_bits
+OpStore %sextract_out %sextracted
+%inserted = OpBitFieldInsert %uint %loaded_mask %uextracted %loaded_offset %loaded_bits
+OpStore %insert_out %inserted
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_COPY_OBJECT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
@@ -2457,6 +2521,28 @@ def test_spirv_tools_bitcast_success_codegen_reparse():
     assert "vecOut = uintBitsToFloat(uint2(1, 2));" in generated_code
     assert "float_value" not in generated_code
     assert "vec_value" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_spec_core_bit_instructions_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SPEC_BIT_INSTRUCTIONS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "uint mask @input @location(0);" in generated_code
+    assert "int signedMask @input @location(1);" in generated_code
+    assert "countOut = bitCount(mask);" in generated_code
+    assert "reverseOut = bitfieldReverse(mask);" in generated_code
+    assert "uExtractOut = bitfieldExtract(mask, offset, bits);" in generated_code
+    assert "sExtractOut = bitfieldExtract(signedMask, offset, bits);" in generated_code
+    assert (
+        "insertOut = bitfieldInsert(mask, bitfieldExtract(mask, offset, bits), offset, bits);"
+        in generated_code
+    )
+    assert "counted" not in generated_code
+    assert "uextracted" not in generated_code
+    assert "spirv_Bit" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
