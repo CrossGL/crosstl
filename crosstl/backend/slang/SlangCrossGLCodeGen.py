@@ -297,6 +297,14 @@ class SlangToCrossGLConverter:
             "RWTextureCubeArray": "imageCubeArray",
         }
         self.function_map = {
+            "ddx": "dFdx",
+            "ddx_coarse": "dFdxCoarse",
+            "ddx_fine": "dFdxFine",
+            "ddy": "dFdy",
+            "ddy_coarse": "dFdyCoarse",
+            "ddy_fine": "dFdyFine",
+            "fwidth_coarse": "fwidthCoarse",
+            "fwidth_fine": "fwidthFine",
             "frac": "fract",
             "fmod": "mod",
             "lerp": "mix",

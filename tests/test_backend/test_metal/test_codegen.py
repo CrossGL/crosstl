@@ -1093,6 +1093,30 @@ def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_normalizes_generic_atomic_types_from_apple_msl_spec():
+    # Provenance: Apple Metal Shading Language Specification, section 2.8
+    # "Atomic Data Types", version 2025-10-23.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void atomics(device atomic<uint>* counters [[buffer(0)]],
+                        device metal::atomic<float>* weights [[buffer(1)]],
+                        device atomic<ulong>* totals [[buffer(2)]],
+                        device atomic<bool>* flags [[buffer(3)]]) {
+    }
+    """
+    crossgl = convert(code)
+
+    assert "RWStructuredBuffer<atomic_uint> counters @buffer(0)" in crossgl
+    assert "RWStructuredBuffer<atomic_float> weights @buffer(1)" in crossgl
+    assert "RWStructuredBuffer<atomic_ulong> totals @buffer(2)" in crossgl
+    assert "RWStructuredBuffer<atomic_bool> flags @buffer(3)" in crossgl
+    assert "atomic<" not in crossgl
+    assert "metal::atomic" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_unknown_struct_cast_uses_parseable_constructor_call():
     code = """
     struct Token {

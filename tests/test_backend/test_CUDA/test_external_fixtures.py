@@ -23,6 +23,7 @@ EXTERNAL_SAMPLES = [
             "cpp/0_Introduction/simpleTexture3D/simpleTexture3D_kernel.cu",
             "cpp/0_Introduction/simpleVoteIntrinsics/simpleVote_kernel.cuh",
             "cpp/2_Concepts_and_Techniques/boxFilter/boxFilter_kernel.cu",
+            "cpp/2_Concepts_and_Techniques/interval/cuda_interval_rounded_arith.h",
             "cpp/2_Concepts_and_Techniques/MC_SingleAsianOptionP/src/pricingengine.cu",
             "cpp/2_Concepts_and_Techniques/reduction/reduction_kernel.cu",
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
@@ -192,6 +193,50 @@ def test_cuda_samples_fp16_scalar_product_high2float_codegen_reparse():
     assert_crossgl_reparse(crossgl)
     assert "var f_result: f32 = (f32(result.x) + f32(result.y));" in crossgl
     assert "__high2float" not in crossgl
+
+
+def test_cuda_samples_interval_bit_reinterpret_intrinsics_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/2_Concepts_and_Techniques/interval/cuda_interval_rounded_arith.h
+    # Semantics source:
+    # NVIDIA CUDA Math API v13.3, section 11 Type Casting Intrinsics.
+    source = """
+    __device__ float neg_inf() {
+        return __int_as_float(0xff800000);
+    }
+
+    __device__ float pos_inf() {
+        return ::__int_as_float(0x7f800000);
+    }
+
+    __device__ void roundtrip_bits(float value,
+                                   int signedBits,
+                                   unsigned int unsignedBits,
+                                   int *outSigned,
+                                   unsigned int *outUnsigned,
+                                   float *outFloat) {
+        outSigned[0] = __float_as_int(value);
+        outUnsigned[0] = __float_as_uint(value);
+        outFloat[0] = __int_as_float(signedBits);
+        outFloat[1] = __uint_as_float(unsignedBits);
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "return intBitsToFloat(0xff800000);" in crossgl
+    assert "return intBitsToFloat(0x7f800000);" in crossgl
+    assert "outSigned[0] = floatBitsToInt(value);" in crossgl
+    assert "outUnsigned[0] = floatBitsToUint(value);" in crossgl
+    assert "outFloat[0] = intBitsToFloat(signedBits);" in crossgl
+    assert "outFloat[1] = uintBitsToFloat(unsignedBits);" in crossgl
+    assert "__int_as_float" not in crossgl
+    assert "__uint_as_float" not in crossgl
+    assert "__float_as_int" not in crossgl
+    assert "__float_as_uint" not in crossgl
 
 
 def test_cuda_samples_monte_carlo_reserved_in_parameter_codegen_reparse():

@@ -201,6 +201,8 @@ class MetalToCrossGLConverter:
             "atomic_int": "atomic_int",
             "atomic_uint": "atomic_uint",
             "atomic_bool": "atomic_bool",
+            "atomic_ulong": "atomic_ulong",
+            "atomic_float": "atomic_float",
             # Vector Types - float
             "float2": "vec2",
             "float3": "vec3",
@@ -1804,6 +1806,10 @@ class MetalToCrossGLConverter:
             suffix = base[-1] + suffix
             base = base[:-1].strip()
 
+        atomic_alias = self.atomic_type_alias(base)
+        if atomic_alias:
+            return f"{atomic_alias}{suffix}"
+
         pixel_payload_type = self.pixel_data_payload_type(base)
         if pixel_payload_type:
             return f"{self.map_type(pixel_payload_type)}{suffix}"
@@ -1824,6 +1830,20 @@ class MetalToCrossGLConverter:
 
         mapped = self.type_map.get(base, base)
         return f"{mapped}{suffix}"
+
+    def atomic_type_alias(self, metal_type):
+        base_name, generic_args = self.generic_type_parts(metal_type)
+        if base_name != "atomic" or len(generic_args) != 1:
+            return None
+
+        element_type = self.map_type(generic_args[0].strip())
+        return {
+            "int": "atomic_int",
+            "uint": "atomic_uint",
+            "bool": "atomic_bool",
+            "uint64": "atomic_ulong",
+            "float": "atomic_float",
+        }.get(element_type)
 
     def pixel_data_payload_type(self, metal_type):
         base_name, generic_args = self.generic_type_parts(metal_type)

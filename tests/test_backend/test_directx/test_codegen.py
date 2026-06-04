@@ -635,6 +635,32 @@ def test_codegen_mul_intrinsic_imports_to_multiply_expression():
     parse_crossgl(crossgl)
 
 
+def test_codegen_bit_scan_intrinsics_from_microsoft_docs_reparse():
+    # Source: Microsoft Learn HLSL intrinsic functions and firstbitlow docs.
+    # URLs:
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-intrinsic-functions
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/firstbitlow
+    crossgl = generate_crossgl("""
+        uint4 main(uint value : TEXCOORD0) : SV_Target0 {
+            uint low = firstbitlow(value);
+            uint high = firstbithigh(value);
+            uint count = countbits(value);
+            uint reversed = reversebits(value);
+            return uint4(low, high, count, reversed);
+        }
+    """)
+
+    assert "uint low = findLSB(value);" in crossgl
+    assert "uint high = findMSB(value);" in crossgl
+    assert "uint count = bitCount(value);" in crossgl
+    assert "uint reversed = reverseBits(value);" in crossgl
+    assert "firstbitlow" not in crossgl
+    assert "firstbithigh" not in crossgl
+    assert "countbits" not in crossgl
+    assert "reversebits" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_sampler_state_initializer_block_imports_to_crossgl():
     crossgl = generate_crossgl(SAMPLER_STATE_BLOCK_HLSL)
 

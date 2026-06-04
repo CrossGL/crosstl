@@ -146,6 +146,21 @@ class RustToCrossGLConverter:
         "bvec4": "bvec4",
     }
     VECTOR_SPLAT_CONSTRUCTORS = set(VECTOR_CONSTRUCTOR_RETURN_TYPES.values())
+    VECTOR_COMPONENT_COUNTS = {
+        "vec2": 2,
+        "vec3": 3,
+        "vec4": 4,
+        "ivec2": 2,
+        "ivec3": 3,
+        "ivec4": 4,
+        "uvec2": 2,
+        "uvec3": 3,
+        "uvec4": 4,
+        "bvec2": 2,
+        "bvec3": 3,
+        "bvec4": 4,
+    }
+    VECTOR_AXIS_CONSTANT_INDICES = {"X": 0, "Y": 1, "Z": 2, "W": 3}
 
     def __init__(self):
         self.type_map = {
@@ -4329,6 +4344,47 @@ class RustToCrossGLConverter:
 
         return f"{mapped_type}({', '.join(args)})"
 
+    def format_vector_associated_constant(self, value):
+        if not isinstance(value, str) or "::" not in value:
+            return None
+
+        type_name, constant_name = value.rsplit("::", 1)
+        mapped_type = self.map_type(type_name)
+        components = self.vector_associated_constant_components(
+            mapped_type,
+            constant_name,
+        )
+        if components is None:
+            return None
+
+        return f"{mapped_type}({', '.join(components)})"
+
+    def vector_associated_constant_components(self, mapped_type, constant_name):
+        count = self.VECTOR_COMPONENT_COUNTS.get(mapped_type)
+        if count is None:
+            return None
+
+        zero, one = self.vector_zero_one_literals(mapped_type)
+        if constant_name == "ZERO":
+            return [zero] * count
+        if constant_name == "ONE":
+            return [one] * count
+
+        axis_index = self.VECTOR_AXIS_CONSTANT_INDICES.get(constant_name)
+        if axis_index is None or axis_index >= count:
+            return None
+
+        components = [zero] * count
+        components[axis_index] = one
+        return components
+
+    def vector_zero_one_literals(self, mapped_type):
+        if mapped_type.startswith("bvec"):
+            return "false", "true"
+        if mapped_type.startswith("vec"):
+            return "0.0", "1.0"
+        return "0", "1"
+
     def generate_try_ternary_expression(self, expression, indent, loop_contexts=None):
         indent_str = "    " * indent
         condition_code, condition = self.generate_try_expression(
@@ -7918,6 +7974,9 @@ class RustToCrossGLConverter:
         """Render a Rust backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
             value = self.resolve_imported_module_path(self.normalize_rust_literal(expr))
+            vector_constant = self.format_vector_associated_constant(value)
+            if vector_constant is not None:
+                return vector_constant
             return self.resolve_name_alias(value)
         elif isinstance(expr, VariableNode):
             return self.resolve_name_alias(expr.name)

@@ -442,6 +442,39 @@ def test_codegen_scientific_float_literals_import_to_parseable_crossgl():
     assert "gl_Position" in glsl
 
 
+def test_codegen_double_float_suffix_literals_from_glslang_numeral_reparse():
+    # Reduced from KhronosGroup/glslang Test/numeral.frag. GLSL 4.60.8
+    # section 4.1.4 defines lf/LF as double-precision floating suffixes.
+    code = textwrap.dedent("""
+        #version 400
+        layout(location = 0) out double outValue;
+
+        void main() {
+            double gf1 = 1.0lf;
+            double gf2 = 2.Lf;
+            double gf3 = .3e1lF;
+            double gf4 = .4e1LF;
+            outValue = gf1 + gf2 + gf3 + gf4;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "lf" not in crossgl.lower()
+    assert "double gf1 = 1.0;" in crossgl
+    assert "double gf2 = 2.;" in crossgl
+    assert "double gf3 = .3e1;" in crossgl
+    assert "double gf4 = .4e1;" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "double gf1 = 1.0;" in glsl
+    assert "double gf2 = 2.0;" in glsl
+    assert "double gf3 = 3.0;" in glsl
+    assert "double gf4 = 4.0;" in glsl
+    assert "outValue = (((gf1 + gf2) + gf3) + gf4);" in glsl
+    assert "fragColor = outValue;" in glsl
+
+
 def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
     code = textwrap.dedent("""
         #version 450

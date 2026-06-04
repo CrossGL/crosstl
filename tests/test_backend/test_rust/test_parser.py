@@ -1270,6 +1270,38 @@ def test_rust_gpu_reduce_subgroup_builtins_parse_from_upstream_example():
     ]
 
 
+def test_rust_gpu_vector_associated_constants_parse_from_upstream_compiletests():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/spirv-attr/matrix-type.rs,
+    # tests/compiletests/ui/arch/subgroup/subgroup_composite.rs,
+    # and tests/difftests/tests/lang/core/ops/vector_ops/vector_ops-rust/src/lib.rs.
+    code = """
+    use glam::{UVec3, Vec2, Vec3, Vec4};
+
+    fn main() {
+        let zero = glam::Vec3::ZERO;
+        let axis = Vec3::X;
+        let subgroup_out = UVec3::ZERO;
+        let component = Vec4::Y.y;
+        let scalar = Vec2::ZERO.x;
+    }
+    """
+
+    ast = parse_code(code)
+    body = ast.functions[0].body
+
+    assert body[0].value == "glam::Vec3::ZERO"
+    assert body[1].value == "Vec3::X"
+    assert body[2].value == "UVec3::ZERO"
+    assert isinstance(body[3].value, MemberAccessNode)
+    assert body[3].value.object == "Vec4::Y"
+    assert body[3].value.member == "y"
+    assert isinstance(body[4].value, MemberAccessNode)
+    assert body[4].value.object == "Vec2::ZERO"
+    assert body[4].value.member == "x"
+
+
 def test_rust_gpu_compute_collatz_option_chain_parse_from_upstream_example():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

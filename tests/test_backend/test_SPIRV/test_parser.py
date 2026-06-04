@@ -959,6 +959,49 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_IMPLICIT_LOD_BIAS_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 62138e5bb72e73a202d2a10360367754f94a621d
+; Source path: test/val/val_image_test.cpp
+; Reduced from ValidateImage::SampleImplicitLodSuccess OpImageSampleImplicitLod
+; with the Bias image operand.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %uv %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %color_tex "colorTex"
+OpName %uv "uv"
+OpName %out_color "outColor"
+OpDecorate %color_tex DescriptorSet 0
+OpDecorate %color_tex Binding 0
+OpDecorate %uv Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v2float = OpTypeVector %float 2
+%v4float = OpTypeVector %float 4
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%ptr_input_v2float = OpTypePointer Input %v2float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%bias = OpConstant %float 0.25
+%color_tex = OpVariable %ptr_sampled UniformConstant
+%uv = OpVariable %ptr_input_v2float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_tex = OpLoad %sampled %color_tex
+%loaded_uv = OpLoad %v2float %uv
+%sample = OpImageSampleImplicitLod %v4float %loaded_tex %loaded_uv Bias %bias
+OpStore %out_color %sample
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_VULKAN_SAMPLES_IMAGE_WRITE_ASSEMBLY = """
 ; Reduced from KhronosGroup/Vulkan-Samples@ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a
 ; shaders/timeline_semaphore/glsl/game_of_life_init.comp imageStore(Image, index, ...).
@@ -1501,6 +1544,24 @@ def test_spirv_assembly_uniform_constant_resources_parse():
     assert linear_sampler.variable_name == "linearSampler"
     assert linear_sampler.qualifiers == [("set", "0"), ("binding", "1")]
     assert linear_sampler.spirv_storage_class == "UniformConstant"
+
+
+def test_spirv_tools_implicit_lod_bias_parse():
+    tokens = tokenize_code(SPIRV_TOOLS_IMPLICIT_LOD_BIAS_ASSEMBLY)
+    ast = parse_code(tokens)
+    assignment = ast.functions[0].body[0]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_constants["%bias"] == "0.25"
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.right, FunctionCallNode)
+    assert assignment.right.name == "texture"
+    assert len(assignment.right.args) == 3
+    assert isinstance(assignment.right.args[0], VariableNode)
+    assert assignment.right.args[0].name == "colorTex"
+    assert isinstance(assignment.right.args[1], VariableNode)
+    assert assignment.right.args[1].name == "uv"
+    assert assignment.right.args[2] == "0.25"
 
 
 def test_spirv_assembly_storage_image_format_parse():

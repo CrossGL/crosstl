@@ -48,6 +48,14 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "0447ec8e079d9cd0a2bc966124977a0b92fac472",
         "paths": ["docs/tools/example_codes/low_precision_float_fp16.hip"],
     },
+    "hip_tests": {
+        "url": "https://github.com/ROCm/hip-tests",
+        "commit": "d01e1f96059edc25600eb13434d7e2b71c09af01",
+        "paths": [
+            "catch/unit/math/integer_intrinsics.cc",
+            "catch/unit/deviceLib/popc.cc",
+        ],
+    },
     "hip_kittens": {
         "url": "https://github.com/HazyResearch/HipKittens",
         "commit": "cd090ae98ee4e7b8d3d5291fc62cfd716aecb946",
@@ -789,3 +797,33 @@ def test_external_rocm_warp_size_reduction_popcount_codegen_reparse():
         "__popcnt64",
     ):
         assert raw_name not in crossgl
+
+
+def test_external_rocm_hip_tests_popc_intrinsics_codegen_reparse():
+    source = """
+    __global__ void popc_kernel(
+        unsigned int* a,
+        unsigned int* b,
+        unsigned long long int* c,
+        unsigned long long int* d,
+        int width,
+        int height) {
+        int x = blockDim.x * blockIdx.x + threadIdx.x;
+        int y = blockDim.y * blockIdx.y + threadIdx.y;
+        int i = y * width + x;
+        if (i < (width * height)) {
+            a[i] = __popc(b[i]);
+            c[i] = __popcll(d[i]);
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    branch = ast.statements[0].body[-1]
+
+    assert branch.if_body[0].right.name == "__popc"
+    assert branch.if_body[1].right.name == "__popcll"
+    assert "a[i] = bitCount(b[i]);" in crossgl
+    assert "c[i] = bitCount(d[i]);" in crossgl
+    assert "__popc" not in crossgl
+    assert "__popcll" not in crossgl

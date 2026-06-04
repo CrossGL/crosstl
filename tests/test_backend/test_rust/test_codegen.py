@@ -250,8 +250,8 @@ def test_rust_gpu_ray_query_parenthesized_statement_macro_codegen():
     assert "AccelerationStructure accel @ set(0) @ binding(0)" in result
     assert "spirv_std::ray_query!(let mut handle);" in result
     assert (
-        "handle.initialize(accel, RayFlags::NONE, 0, Vec3::ZERO, 0.0, Vec3::ZERO, 0.0);"
-        in result
+        "handle.initialize(accel, RayFlags::NONE, 0, vec3(0.0, 0.0, 0.0), "
+        "0.0, vec3(0.0, 0.0, 0.0), 0.0);" in result
     )
     assert "vec3 origin = handle.get_world_ray_origin();" in result
 
@@ -1048,6 +1048,40 @@ def test_rust_gpu_reduce_subgroup_builtins_codegen_from_upstream_example():
     assert "sum = subgroup_add(sum);" in result
     assert "spirv_std::arch::workgroup_memory_barrier_with_group_sync();" in result
     assert "output[workgroup_id_x] = sum_;" in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_gpu_vector_associated_constants_codegen_from_upstream_compiletests():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/spirv-attr/matrix-type.rs,
+    # tests/compiletests/ui/arch/subgroup/subgroup_composite.rs,
+    # and tests/difftests/tests/lang/core/ops/vector_ops/vector_ops-rust/src/lib.rs.
+    code = """
+    use glam::{UVec3, Vec2, Vec3, Vec4};
+
+    fn vector_constants() -> Vec4 {
+        let uv: UVec3 = UVec3::ZERO;
+        let zero = Vec2::ZERO.x;
+        let one = Vec3::ONE.x;
+        let axes = Vec4::X + Vec4::Y;
+        Vec4::new(zero + one, axes.x, axes.y, uv.x as f32)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uvec3 uv = uvec3(0, 0, 0);" in result
+    assert "let zero = vec2(0.0, 0.0).x;" in result
+    assert "let one = vec3(1.0, 1.0, 1.0).x;" in result
+    assert (
+        "let axes = (vec4(1.0, 0.0, 0.0, 0.0) + " "vec4(0.0, 1.0, 0.0, 0.0));"
+    ) in result
+    assert "return vec4((zero + one), axes.x, axes.y, (float)uv.x);" in result
+    assert "::ZERO" not in result
+    assert "::ONE" not in result
+    assert "Vec4::X" not in result
+    assert "Vec4::Y" not in result
     crosstl.translator.parse(result)
 
 
