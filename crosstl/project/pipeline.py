@@ -1993,8 +1993,10 @@ def _hash_contract_reasons(prefix: str, value: Any) -> list[str]:
     return reasons
 
 
-def _source_hash_contract_reasons(index: int, artifact: Mapping[str, Any]) -> list[str]:
-    if "sourceHash" not in artifact:
+def _source_hash_contract_reasons(
+    index: int, artifact: Mapping[str, Any], *, required: bool = False
+) -> list[str]:
+    if "sourceHash" not in artifact and not required:
         return []
     return _hash_contract_reasons(
         f"artifacts[{index}].sourceHash", artifact.get("sourceHash")
@@ -2002,9 +2004,9 @@ def _source_hash_contract_reasons(index: int, artifact: Mapping[str, Any]) -> li
 
 
 def _generated_hash_contract_reasons(
-    index: int, artifact: Mapping[str, Any]
+    index: int, artifact: Mapping[str, Any], *, required: bool = False
 ) -> list[str]:
-    if "generatedHash" not in artifact:
+    if "generatedHash" not in artifact and not required:
         return []
     return _hash_contract_reasons(
         f"artifacts[{index}].generatedHash", artifact.get("generatedHash")
@@ -3130,8 +3132,21 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     reasons.append(
                         f"artifacts[{index}].variant must be listed in project.variants"
                     )
-            reasons.extend(_source_hash_contract_reasons(index, artifact))
-            reasons.extend(_generated_hash_contract_reasons(index, artifact))
+            require_artifact_hashes = has_summary and status == "translated"
+            reasons.extend(
+                _source_hash_contract_reasons(
+                    index,
+                    artifact,
+                    required=require_artifact_hashes,
+                )
+            )
+            reasons.extend(
+                _generated_hash_contract_reasons(
+                    index,
+                    artifact,
+                    required=require_artifact_hashes,
+                )
+            )
             reasons.extend(_provenance_contract_reasons(index, artifact))
             reasons.extend(_source_map_contract_reasons(index, artifact))
 
