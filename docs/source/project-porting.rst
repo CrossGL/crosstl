@@ -72,7 +72,8 @@ Validate artifacts referenced by a report:
 
 Validation exits nonzero when the report metadata is malformed, artifact
 records, source-map records, or preserved diagnostics are malformed, artifact
-targets are not declared by the report, translated outputs are missing, artifact
+targets are not declared by the report, embedded validation records reference
+artifacts not declared by the report, translated outputs are missing, artifact
 paths resolve outside the repository, generated artifact hashes no longer match
 the files on disk, source files with recorded hashes are missing or changed, or
 opt-in toolchain smoke checks fail. Toolchain smoke checks only run for

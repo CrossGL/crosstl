@@ -2154,6 +2154,30 @@ def _payload_artifact_records(artifacts: Sequence[Any]) -> list[Mapping[str, Any
     return [artifact for artifact in artifacts if isinstance(artifact, Mapping)]
 
 
+ArtifactIdentity = tuple[str, str, str, str | None]
+
+
+def _artifact_identity(record: Mapping[str, Any]) -> ArtifactIdentity | None:
+    source = record.get("source")
+    target = record.get("target")
+    path = record.get("path")
+    if not (
+        _is_non_empty_string(source)
+        and _is_non_empty_string(target)
+        and _is_non_empty_string(path)
+    ):
+        return None
+
+    variant = record.get("variant")
+    if "variant" in record:
+        if not _is_non_empty_string(variant):
+            return None
+        variant_identity = variant
+    else:
+        variant_identity = None
+    return source, _normalized_targets([target])[0], path, variant_identity
+
+
 def _diagnostic_counts_contract_reasons(
     prefix: str, value: Any, diagnostics: Sequence[Any]
 ) -> list[str]:
@@ -2428,7 +2452,9 @@ def _validation_artifact_contract_reasons(
     index: int,
     artifact: Any,
     *,
+    declared_targets: set[str] | None = None,
     declared_variants: set[str] | None = None,
+    declared_artifact_identities: set[ArtifactIdentity] | None = None,
 ) -> list[str]:
     prefix = f"validation.artifacts[{index}]"
     if not isinstance(artifact, Mapping):
@@ -2438,6 +2464,11 @@ def _validation_artifact_contract_reasons(
     for field_name in ("source", "target", "path"):
         if not _is_non_empty_string(artifact.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
+    target = artifact.get("target")
+    if _is_non_empty_string(target) and declared_targets is not None:
+        normalized_target = _normalized_targets([target])[0]
+        if normalized_target not in declared_targets:
+            reasons.append(f"{prefix}.target must be listed in project.targets")
     if not isinstance(artifact.get("exists"), bool):
         reasons.append(f"{prefix}.exists must be a boolean")
     if artifact.get("status") not in {"ok", "failed"}:
@@ -2448,6 +2479,13 @@ def _validation_artifact_contract_reasons(
             reasons.append(f"{prefix}.variant must be a string")
         elif declared_variants is not None and variant not in declared_variants:
             reasons.append(f"{prefix}.variant must be listed in project.variants")
+    identity = _artifact_identity(artifact)
+    if (
+        identity is not None
+        and declared_artifact_identities is not None
+        and identity not in declared_artifact_identities
+    ):
+        reasons.append(f"{prefix} must reference an artifact in report.artifacts")
     source_hash_status = artifact.get("sourceHashStatus")
     if (
         "sourceHashStatus" in artifact
@@ -2504,6 +2542,7 @@ def _toolchain_run_contract_reasons(
     *,
     declared_targets: set[str] | None = None,
     declared_variants: set[str] | None = None,
+    declared_artifact_identities: set[ArtifactIdentity] | None = None,
 ) -> list[str]:
     prefix = f"validation.toolchainRuns[{index}]"
     if not isinstance(run, Mapping):
@@ -2524,6 +2563,13 @@ def _toolchain_run_contract_reasons(
             reasons.append(f"{prefix}.variant must be a string")
         elif declared_variants is not None and variant not in declared_variants:
             reasons.append(f"{prefix}.variant must be listed in project.variants")
+    identity = _artifact_identity(run)
+    if (
+        identity is not None
+        and declared_artifact_identities is not None
+        and identity not in declared_artifact_identities
+    ):
+        reasons.append(f"{prefix} must reference an artifact in report.artifacts")
 
     command = run.get("command")
     if not isinstance(command, list) or any(
@@ -2580,6 +2626,18 @@ def _validation_contract_reasons(
         if project_has_variants and project_variants_valid
         else None
     )
+    artifacts = report.get("artifacts", [])
+    declared_artifact_identities = (
+        {
+            identity
+            for artifact in artifacts
+            if isinstance(artifact, Mapping)
+            for identity in [_artifact_identity(artifact)]
+            if identity is not None
+        }
+        if isinstance(artifacts, list)
+        else None
+    )
     toolchains = validation.get("toolchains")
     if not isinstance(toolchains, list):
         reasons.append("validation.toolchains must be a list")
@@ -2602,7 +2660,9 @@ def _validation_contract_reasons(
                 _validation_artifact_contract_reasons(
                     index,
                     artifact,
+                    declared_targets=declared_targets,
                     declared_variants=declared_variants,
+                    declared_artifact_identities=declared_artifact_identities,
                 )
             )
 
@@ -2626,6 +2686,7 @@ def _validation_contract_reasons(
                         run,
                         declared_targets=declared_targets,
                         declared_variants=declared_variants,
+                        declared_artifact_identities=declared_artifact_identities,
                     )
                 )
     return reasons
@@ -3185,7 +3246,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             _is_non_empty_string(name) for name in project_variants
         )
         declared_variants = set(project_variants) if project_variants_valid else set()
-        artifact_identities: dict[tuple[str, str, str, str | None], int] = {}
+        artifact_identities: dict[ArtifactIdentity, int] = {}
         for index, artifact in enumerate(artifacts):
             if not isinstance(artifact, Mapping):
                 reasons.append(f"artifacts[{index}] must be an object")
@@ -3221,20 +3282,8 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     reasons.append(
                         f"artifacts[{index}].variant must be listed in project.variants"
                     )
-            source = artifact.get("source")
-            artifact_path = artifact.get("path")
-            if (
-                _is_non_empty_string(source)
-                and _is_non_empty_string(target)
-                and _is_non_empty_string(artifact_path)
-                and ("variant" not in artifact or _is_non_empty_string(variant))
-            ):
-                identity = (
-                    source,
-                    _normalized_targets([target])[0],
-                    artifact_path,
-                    variant if "variant" in artifact else None,
-                )
+            identity = _artifact_identity(artifact)
+            if identity is not None:
                 previous_index = artifact_identities.get(identity)
                 if previous_index is None:
                     artifact_identities[identity] = index

@@ -1818,7 +1818,15 @@ def test_validate_project_report_rejects_validation_records_with_undeclared_targ
                             "tools": [],
                         }
                     ],
-                    "artifacts": [],
+                    "artifacts": [
+                        {
+                            "source": "simple.cgl",
+                            "target": "metal",
+                            "path": "out/metal/simple.metal",
+                            "exists": True,
+                            "status": "ok",
+                        }
+                    ],
                     "toolchainRuns": [
                         {
                             "source": "simple.cgl",
@@ -1844,6 +1852,9 @@ def test_validate_project_report_rejects_validation_records_with_undeclared_targ
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "validation.toolchains[0].target must be listed in project.targets" in (
+        diagnostic["message"]
+    )
+    assert "validation.artifacts[0].target must be listed in project.targets" in (
         diagnostic["message"]
     )
     assert "validation.toolchainRuns[0].target must be listed in project.targets" in (
@@ -1911,6 +1922,74 @@ def test_validate_project_report_rejects_validation_records_with_undeclared_vari
     )
     assert "validation.toolchainRuns[0].variant must be listed in project.variants" in (
         diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_validation_records_with_undeclared_artifacts(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "undeclared-validation-artifact-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "opengl",
+                        "path": "out/opengl/simple.glsl",
+                        "status": "translated",
+                    }
+                ],
+                "validation": {
+                    "toolchains": [],
+                    "artifacts": [
+                        {
+                            "source": "simple.cgl",
+                            "target": "opengl",
+                            "path": "out/opengl/other.glsl",
+                            "exists": True,
+                            "status": "ok",
+                        }
+                    ],
+                    "toolchainRuns": [
+                        {
+                            "source": "simple.cgl",
+                            "target": "opengl",
+                            "path": "out/opengl/other.glsl",
+                            "command": ["glslangValidator"],
+                            "returncode": 0,
+                            "status": "ok",
+                            "stdout": "",
+                            "stderr": "",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "validation.artifacts[0] must reference an artifact in report.artifacts" in (
+        diagnostic["message"]
+    )
+    assert (
+        "validation.toolchainRuns[0] must reference an artifact in report.artifacts"
+        in diagnostic["message"]
     )
 
 
