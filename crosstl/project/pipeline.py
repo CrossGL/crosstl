@@ -3324,6 +3324,14 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             for index, skipped_record in enumerate(skipped):
                 reasons.extend(_skipped_contract_reasons(index, skipped_record))
 
+    project_targets = project.get("targets", []) if isinstance(project, Mapping) else []
+    project_targets_valid = isinstance(project_targets, list) and all(
+        _is_non_empty_string(target) for target in project_targets
+    )
+    declared_targets = (
+        set(_normalized_targets(project_targets)) if project_targets_valid else set()
+    )
+
     artifacts = report.get("artifacts", [])
     if has_summary and "artifacts" not in report:
         reasons.append("artifacts must be a list")
@@ -3332,17 +3340,6 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
     else:
         declared_units_by_path = _declared_units_by_path(
             units, require_full_metadata=has_summary
-        )
-        project_targets = (
-            project.get("targets", []) if isinstance(project, Mapping) else []
-        )
-        project_targets_valid = isinstance(project_targets, list) and all(
-            _is_non_empty_string(target) for target in project_targets
-        )
-        declared_targets = (
-            set(_normalized_targets(project_targets))
-            if project_targets_valid
-            else set()
         )
         project_variants = (
             project.get("variants", {}) if isinstance(project, Mapping) else {}
@@ -3466,6 +3463,16 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 diagnostic.get("target")
             ):
                 reasons.append(f"diagnostics[{index}].target must be a string")
+            elif (
+                has_summary
+                and "target" in diagnostic
+                and project_targets_valid
+                and _normalized_targets([diagnostic["target"]])[0]
+                not in declared_targets
+            ):
+                reasons.append(
+                    f"diagnostics[{index}].target must be listed in project.targets"
+                )
             missing_capabilities = diagnostic.get("missingCapabilities", [])
             if not isinstance(missing_capabilities, list) or any(
                 not _is_non_empty_string(capability)

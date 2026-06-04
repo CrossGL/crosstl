@@ -3009,6 +3009,37 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
     )
 
 
+def test_validate_project_report_rejects_diagnostics_with_undeclared_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+    payload["diagnostics"] = [
+        {
+            "severity": "error",
+            "code": "project.config.unsupported-target",
+            "message": "Target is not declared by the report.",
+            "location": _diagnostic_location("crosstl.toml"),
+            "target": "metal",
+            "missingCapabilities": ["target.backend"],
+        }
+    ]
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "diagnostics[0].target must be listed in project.targets" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
