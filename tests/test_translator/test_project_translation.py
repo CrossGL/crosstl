@@ -2500,6 +2500,71 @@ def test_validate_project_report_rejects_validation_records_with_undeclared_arti
     )
 
 
+def test_validate_project_report_rejects_validation_summary_missing_artifact_checks(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "incomplete-validation-summary-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "opengl",
+                        "path": "out/opengl/simple.glsl",
+                        "status": "translated",
+                    },
+                    {
+                        "source": "other.cgl",
+                        "target": "opengl",
+                        "path": "out/opengl/other.glsl",
+                        "status": "translated",
+                    },
+                ],
+                "validation": {
+                    "toolchains": [],
+                    "artifacts": [
+                        {
+                            "source": "simple.cgl",
+                            "target": "opengl",
+                            "path": "out/opengl/simple.glsl",
+                            "exists": True,
+                            "status": "ok",
+                        }
+                    ],
+                    "summary": {
+                        "artifactCount": 1,
+                        "okCount": 1,
+                        "failedCount": 0,
+                        "sourceHashStatusCounts": _source_hash_status_counts(),
+                        "generatedHashStatusCounts": _generated_hash_status_counts(),
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.artifacts must include report.artifacts[1]" in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_validation_records_with_escaped_paths(
     tmp_path,
 ):

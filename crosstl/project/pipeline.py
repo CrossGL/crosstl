@@ -2328,6 +2328,30 @@ def _duplicate_toolchain_target_contract_reasons(records: Sequence[Any]) -> list
     return reasons
 
 
+def _validation_artifact_coverage_contract_reasons(
+    artifact_checks: Sequence[Any],
+    declared_artifacts_by_identity: Mapping[ArtifactIdentity, DeclaredArtifact] | None,
+) -> list[str]:
+    if declared_artifacts_by_identity is None:
+        return []
+
+    validation_identities: set[ArtifactIdentity] = set()
+    for artifact_check in artifact_checks:
+        if not isinstance(artifact_check, Mapping):
+            continue
+        identity = _artifact_identity(artifact_check)
+        if identity is not None:
+            validation_identities.add(identity)
+
+    reasons = []
+    for identity, (artifact_index, _) in declared_artifacts_by_identity.items():
+        if identity not in validation_identities:
+            reasons.append(
+                f"validation.artifacts must include report.artifacts[{artifact_index}]"
+            )
+    return reasons
+
+
 def _diagnostic_counts_contract_reasons(
     prefix: str, value: Any, diagnostics: Sequence[Any]
 ) -> list[str]:
@@ -2979,6 +3003,13 @@ def _validation_contract_reasons(
         )
 
     if "summary" in validation:
+        if isinstance(artifact_checks, list):
+            reasons.extend(
+                _validation_artifact_coverage_contract_reasons(
+                    artifact_checks,
+                    declared_artifacts_by_identity,
+                )
+            )
         reasons.extend(
             _validation_summary_contract_reasons(
                 validation.get("summary"),
