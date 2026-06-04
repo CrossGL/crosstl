@@ -936,6 +936,62 @@ def test_validate_project_report_rejects_malformed_source_maps(tmp_path):
     assert "artifacts[0].sourceMap.mappings must be a list" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-artifact-metadata-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "sourceBackend": "",
+                        "target": "opengl",
+                        "path": "out/opengl/simple.glsl",
+                        "status": "translated",
+                        "sourceHash": {
+                            "algorithm": "md5",
+                            "value": "A" * 64,
+                        },
+                        "provenance": {
+                            "pipeline": "",
+                            "intermediate": [],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].sourceBackend must be a string" in diagnostic["message"]
+    assert "artifacts[0].sourceHash.algorithm must be sha256" in (diagnostic["message"])
+    assert (
+        "artifacts[0].sourceHash.value must be a lowercase 64-character hex digest"
+        in diagnostic["message"]
+    )
+    assert "artifacts[0].provenance.pipeline must be a string" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].provenance.intermediate must be a string or null" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_artifacts_with_undeclared_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

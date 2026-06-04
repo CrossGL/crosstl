@@ -53,6 +53,8 @@ TOOLCHAIN_BY_BACKEND = {
 }
 
 CROSSL_TARGETS = {"cgl", "crossgl"}
+SHA256_HEX_LENGTH = 64
+LOWERCASE_HEX_DIGITS = frozenset("0123456789abcdef")
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -1231,6 +1233,49 @@ def _is_non_negative_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def _is_sha256_digest(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == SHA256_HEX_LENGTH
+        and all(character in LOWERCASE_HEX_DIGITS for character in value)
+    )
+
+
+def _source_hash_contract_reasons(index: int, artifact: Mapping[str, Any]) -> list[str]:
+    if "sourceHash" not in artifact:
+        return []
+
+    prefix = f"artifacts[{index}].sourceHash"
+    source_hash = artifact.get("sourceHash")
+    if not isinstance(source_hash, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    if source_hash.get("algorithm") != "sha256":
+        reasons.append(f"{prefix}.algorithm must be sha256")
+    if not _is_sha256_digest(source_hash.get("value")):
+        reasons.append(f"{prefix}.value must be a lowercase 64-character hex digest")
+    return reasons
+
+
+def _provenance_contract_reasons(index: int, artifact: Mapping[str, Any]) -> list[str]:
+    if "provenance" not in artifact:
+        return []
+
+    prefix = f"artifacts[{index}].provenance"
+    provenance = artifact.get("provenance")
+    if not isinstance(provenance, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    if not _is_non_empty_string(provenance.get("pipeline")):
+        reasons.append(f"{prefix}.pipeline must be a string")
+    intermediate = provenance.get("intermediate")
+    if intermediate is not None and not _is_non_empty_string(intermediate):
+        reasons.append(f"{prefix}.intermediate must be a string or null")
+    return reasons
+
+
 def _source_map_span_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
@@ -1361,6 +1406,10 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             for field_name in ("source", "target", "path", "status"):
                 if not _is_non_empty_string(artifact.get(field_name)):
                     reasons.append(f"artifacts[{index}].{field_name} must be a string")
+            if "sourceBackend" in artifact and not _is_non_empty_string(
+                artifact.get("sourceBackend")
+            ):
+                reasons.append(f"artifacts[{index}].sourceBackend must be a string")
             target = artifact.get("target")
             if _is_non_empty_string(target) and project_targets_valid:
                 normalized_target = _normalized_targets([target])[0]
@@ -1373,6 +1422,8 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"artifacts[{index}].status must be translated or failed"
                 )
+            reasons.extend(_source_hash_contract_reasons(index, artifact))
+            reasons.extend(_provenance_contract_reasons(index, artifact))
             reasons.extend(_source_map_contract_reasons(index, artifact))
 
     diagnostics = report.get("diagnostics", [])
