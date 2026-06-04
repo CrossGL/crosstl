@@ -4660,7 +4660,7 @@
       "support": {
         "directx": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4670,6 +4670,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets"
@@ -4677,7 +4679,7 @@
         },
         "opengl": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4687,6 +4689,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets"
@@ -4694,7 +4698,7 @@
         },
         "metal": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4704,6 +4708,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets"
@@ -4711,7 +4717,7 @@
         },
         "vulkan": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4721,6 +4727,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets"
@@ -4728,7 +4736,7 @@
         },
         "cuda": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4738,6 +4746,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets"
@@ -4745,7 +4755,7 @@
         },
         "hip": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4755,6 +4765,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets"
@@ -4762,7 +4774,7 @@
         },
         "mojo": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4772,6 +4784,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets"
@@ -4779,7 +4793,7 @@
         },
         "rust": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4789,6 +4803,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets"
@@ -4796,7 +4812,7 @@
         },
         "slang": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4806,6 +4822,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets"
@@ -4919,83 +4937,83 @@
       "support": {
         "directx": {
           "status": "partial",
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps"
           ]
         },
         "opengl": {
           "status": "partial",
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps"
           ]
         },
         "metal": {
           "status": "partial",
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps"
           ]
         },
         "vulkan": {
           "status": "partial",
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps"
           ]
         },
         "cuda": {
           "status": "partial",
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps"
           ]
         },
         "hip": {
           "status": "partial",
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps"
           ]
         },
         "mojo": {
           "status": "partial",
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps"
           ]
         },
         "rust": {
           "status": "partial",
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps"
           ]
         },
         "slang": {
           "status": "partial",
-          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed source-map records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps"
           ]
         }
       }

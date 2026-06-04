@@ -577,6 +577,30 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
     ]
 
 
+def test_validate_project_report_accepts_generated_source_maps(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report_path = repo / "portability-report.json"
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report.write_json(report_path)
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is True
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["artifacts"] == [
+        {
+            "source": "simple.cgl",
+            "target": "cgl",
+            "path": "out/cgl/simple.cgl",
+            "exists": True,
+            "status": "ok",
+        }
+    ]
+
+
 def test_translate_project_normalizes_and_deduplicates_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -852,6 +876,64 @@ def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "artifacts[0].path must be a string" in diagnostic["message"]
     assert "artifacts[0].status must be translated or failed" in (diagnostic["message"])
+
+
+def test_validate_project_report_rejects_malformed_source_maps(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-source-map-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "opengl",
+                        "path": "out/opengl/simple.glsl",
+                        "status": "translated",
+                        "sourceMap": {
+                            "schemaVersion": 2,
+                            "kind": "wrong-kind",
+                            "mappingGranularity": "line",
+                            "target": "metal",
+                            "source": {"file": "simple.cgl", "line": 1},
+                            "generated": "out/opengl/simple.glsl",
+                            "mappings": "invalid",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].sourceMap.schemaVersion must be 1" in diagnostic["message"]
+    assert "artifacts[0].sourceMap.kind must be crosstl-artifact-source-map" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].sourceMap.mappingGranularity must be file" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].sourceMap.target must match artifacts[0].target" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].sourceMap.generated must be an object" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].sourceMap.mappings must be a list" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_artifacts_with_undeclared_targets(tmp_path):

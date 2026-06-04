@@ -1227,6 +1227,84 @@ def _is_non_empty_string(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _is_non_negative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _source_map_span_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    if not _is_non_empty_string(value.get("file")):
+        reasons.append(f"{prefix}.file must be a string")
+    for field_name in (
+        "line",
+        "column",
+        "offset",
+        "length",
+        "endLine",
+        "endColumn",
+        "endOffset",
+    ):
+        if not _is_non_negative_int(value.get(field_name)):
+            reasons.append(f"{prefix}.{field_name} must be a non-negative integer")
+    return reasons
+
+
+def _source_map_contract_reasons(index: int, artifact: Mapping[str, Any]) -> list[str]:
+    if "sourceMap" not in artifact:
+        return []
+
+    prefix = f"artifacts[{index}].sourceMap"
+    source_map = artifact.get("sourceMap")
+    if not isinstance(source_map, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    if source_map.get("schemaVersion") != 1:
+        reasons.append(f"{prefix}.schemaVersion must be 1")
+    if source_map.get("kind") != "crosstl-artifact-source-map":
+        reasons.append(f"{prefix}.kind must be crosstl-artifact-source-map")
+    if source_map.get("mappingGranularity") != "file":
+        reasons.append(f"{prefix}.mappingGranularity must be file")
+
+    target = source_map.get("target")
+    if not _is_non_empty_string(target):
+        reasons.append(f"{prefix}.target must be a string")
+    elif _is_non_empty_string(artifact.get("target")) and target != artifact["target"]:
+        reasons.append(f"{prefix}.target must match artifacts[{index}].target")
+
+    reasons.extend(
+        _source_map_span_reasons(f"{prefix}.source", source_map.get("source"))
+    )
+    reasons.extend(
+        _source_map_span_reasons(f"{prefix}.generated", source_map.get("generated"))
+    )
+
+    mappings = source_map.get("mappings")
+    if not isinstance(mappings, list):
+        reasons.append(f"{prefix}.mappings must be a list")
+    else:
+        for mapping_index, mapping in enumerate(mappings):
+            mapping_prefix = f"{prefix}.mappings[{mapping_index}]"
+            if not isinstance(mapping, Mapping):
+                reasons.append(f"{mapping_prefix} must be an object")
+                continue
+            reasons.extend(
+                _source_map_span_reasons(
+                    f"{mapping_prefix}.source", mapping.get("source")
+                )
+            )
+            reasons.extend(
+                _source_map_span_reasons(
+                    f"{mapping_prefix}.generated", mapping.get("generated")
+                )
+            )
+
+    return reasons
+
+
 def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnostic]:
     if not isinstance(report, Mapping):
         return [_invalid_report_diagnostic(path, ["expected a JSON object"])]
@@ -1295,6 +1373,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"artifacts[{index}].status must be translated or failed"
                 )
+            reasons.extend(_source_map_contract_reasons(index, artifact))
 
     diagnostics = report.get("diagnostics", [])
     if not isinstance(diagnostics, list):

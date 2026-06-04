@@ -63,11 +63,12 @@ Validate artifacts referenced by a report:
 
    python -m crosstl._crosstl validate-project crosstl-out/portability-report.json
 
-Validation exits nonzero when the report metadata is malformed, artifact records
-or preserved diagnostics are malformed, artifact targets are not declared by the
-report, translated outputs are missing, artifact paths resolve outside the
-repository, or opt-in toolchain smoke checks fail. Toolchain smoke checks only
-run for translated artifacts that still exist inside the repository.
+Validation exits nonzero when the report metadata is malformed, artifact
+records, source-map records, or preserved diagnostics are malformed, artifact
+targets are not declared by the report, translated outputs are missing, artifact
+paths resolve outside the repository, or opt-in toolchain smoke checks fail.
+Toolchain smoke checks only run for translated artifacts that still exist inside
+the repository.
 
 Configuration
 -------------
@@ -140,9 +141,9 @@ Project reports are JSON documents with:
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract.
 - ``validation``: report contract checks, failed source artifact checks,
-  project metadata checks, artifact record shape checks, preserved diagnostic
-  shape checks, artifact target declaration checks, translated artifact existence
-  checks, escaped artifact-path checks, optional external toolchain availability,
-  and opt-in toolchain smoke results.
+  project metadata checks, artifact record shape checks, source-map record shape
+  checks, preserved diagnostic shape checks, artifact target declaration checks,
+  translated artifact existence checks, escaped artifact-path checks, optional
+  external toolchain availability, and opt-in toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation.
