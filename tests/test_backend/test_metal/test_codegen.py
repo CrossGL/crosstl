@@ -376,6 +376,24 @@ def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():
     parse_crossgl(result)
 
 
+def test_codegen_host_name_attribute_uses_exported_entry_name():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    [[host_name("api_kernel")]]
+    kernel void source_kernel(device float* data [[buffer(0)]]) {
+        data[0] = 1.0;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "void api_kernel(RWStructuredBuffer<float> data @buffer(0))" in crossgl
+    assert "source_kernel" not in crossgl
+    assert "@host_name" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_texture_sample_level_option_roundtrip():
     code = """
     float4 sampleLevel(texture2d<float> tex, sampler samp, float2 uv, float lod) {

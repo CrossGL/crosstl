@@ -286,6 +286,41 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_VECTOR_EXTRACT_DYNAMIC_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Reduced from the core OpVectorExtractDynamic instruction definition.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_vec %index %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %input_vec "inputVec"
+OpName %index "index"
+OpName %out_value "outValue"
+OpDecorate %input_vec Location 0
+OpDecorate %index Flat
+OpDecorate %index Location 1
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%uint = OpTypeInt 32 0
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_input_uint = OpTypePointer Input %uint
+%ptr_output_float = OpTypePointer Output %float
+%input_vec = OpVariable %ptr_input_v4float Input
+%index = OpVariable %ptr_input_uint Input
+%out_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_vec = OpLoad %v4float %input_vec
+%loaded_index = OpLoad %uint %index
+%component = OpVectorExtractDynamic %float %loaded_vec %loaded_index
+OpStore %out_value %component
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_OPSELECT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -2199,6 +2234,21 @@ def test_glslang_precise_dot_codegen_reparse():
     assert "float4 inputVec @input @location(0);" in generated_code
     assert "outValue = dot(inputVec, inputVec);" in generated_code
     assert "outValue = dot;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_spec_vector_extract_dynamic_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SPEC_VECTOR_EXTRACT_DYNAMIC_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 inputVec @input @location(0);" in generated_code
+    assert "uint index @input @location(1) @flat;" in generated_code
+    assert "float outValue @output @location(0);" in generated_code
+    assert "outValue = inputVec[index];" in generated_code
+    assert "outValue = component;" not in generated_code
+    assert "OpVectorExtractDynamic" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

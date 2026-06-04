@@ -610,6 +610,40 @@ def test_rust_gpu_image_query_and_fetch_methods_codegen_from_upstream_compiletes
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_extra_image_macro_dimensions_codegen_from_upstream():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/image/query/{rect_image_query_size,storage_image_query_size}.rs
+    # and tests/compiletests/ui/image/read_subpass.rs.
+    code = """
+    use spirv_std::{spirv, Image};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] rect_storage: &Image!(rect, type=f32, sampled=false),
+        #[spirv(descriptor_set = 1, binding = 1)] rect_storage_array: &Image!(rect, type=f32, sampled=false, arrayed),
+        #[spirv(descriptor_set = 2, binding = 2)] buffer_image: &Image!(buffer, type=f32, sampled=false),
+        #[spirv(descriptor_set = 3, binding = 3)] sampled_buffer: &Image!(buffer, type=u32, sampled),
+        #[spirv(descriptor_set = 4, binding = 4, input_attachment_index = 0)] input_attachment: &Image!(subpass, type=f32, sampled=false),
+        #[spirv(descriptor_set = 5, binding = 5)] ms_input_attachment: &Image!(subpass, type=i32, sampled=false, multisampled),
+    ) {}
+    """
+
+    result = parse_and_generate(code)
+
+    assert "image2DRect rect_storage @ set(0) @ binding(0)" in result
+    assert "image2DRectArray rect_storage_array @ set(1) @ binding(1)" in result
+    assert "imageBuffer buffer_image @ set(2) @ binding(2)" in result
+    assert "usamplerBuffer sampled_buffer @ set(3) @ binding(3)" in result
+    assert (
+        "subpassInput input_attachment @ set(4) @ binding(4) "
+        "@ input_attachment_index(0)"
+    ) in result
+    assert "isubpassInputMS ms_input_attachment @ set(5) @ binding(5)" in result
+    assert "Image!(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_fetch_with_sample_index_codegen_from_upstream_release_pattern():
     # Reduced from EmbarkStudios/rust-gpu v0.7 release notes for the Image API
     # sample_with builder pattern:

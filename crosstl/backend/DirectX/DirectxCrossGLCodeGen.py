@@ -177,6 +177,7 @@ class HLSLToCrossGLConverter:
             "TextureCubeArray": "samplerCubeArrayShadow",
         }
         self.function_map = {
+            "frac": "fract",
             "lerp": "mix",
             "rsqrt": "inverseSqrt",
             "EvaluateAttributeAtSample": "interpolateAtSample",

@@ -9098,6 +9098,10 @@ class RustToCrossGLConverter:
         if image_config is None:
             return None
 
+        subpass_type = self.map_image_macro_subpass_type(image_config)
+        if subpass_type is not None:
+            return subpass_type
+
         suffix = self.image_macro_dimension_suffix(image_config)
         if suffix is None:
             return None
@@ -9161,13 +9165,24 @@ class RustToCrossGLConverter:
         return None
 
     def image_macro_dimension_suffix(self, config):
+        dimension = config["dimension"].lower()
+        if dimension == "buffer":
+            if (
+                config["multisampled"] is True
+                or config["arrayed"] is True
+                or config["depth"] is True
+            ):
+                return None
+            return "Buffer"
+
         suffix_map = {
             "1d": "1D",
             "2d": "2D",
+            "rect": "2DRect",
             "3d": "3D",
             "cube": "Cube",
         }
-        suffix = suffix_map.get(config["dimension"].lower())
+        suffix = suffix_map.get(dimension)
         if suffix is None:
             return None
 
@@ -9180,6 +9195,24 @@ class RustToCrossGLConverter:
             suffix = f"{suffix}Array"
 
         return suffix
+
+    def map_image_macro_subpass_type(self, config):
+        if config["dimension"].lower() != "subpass":
+            return None
+
+        family = self.image_macro_numeric_family(config)
+        if family == "u":
+            subpass_type = "usubpassInput"
+        elif family == "i":
+            subpass_type = "isubpassInput"
+        else:
+            subpass_type = "subpassInput"
+
+        if config["multisampled"] is True:
+            subpass_type += "MS"
+        if config["arrayed"] is True:
+            subpass_type += "Array"
+        return subpass_type
 
     def image_macro_sampler_prefix(self, config):
         if config["depth"] is True:
@@ -9559,6 +9592,9 @@ class RustToCrossGLConverter:
                     spec_constant_id = None
                     if "spec_constant" in attr.args:
                         spec_constant_id = self.attribute_arg_value(attr.args, "id")
+                    input_attachment_index = self.attribute_arg_value(
+                        attr.args, "input_attachment_index"
+                    )
 
                     if location is not None:
                         semantics.append(f"location({location})")
@@ -9570,6 +9606,10 @@ class RustToCrossGLConverter:
                         semantics.append("push_constant")
                     if spec_constant_id is not None:
                         semantics.append(f"constant_id({spec_constant_id})")
+                    if input_attachment_index is not None:
+                        semantics.append(
+                            f"input_attachment_index({input_attachment_index})"
+                        )
                     if "workgroup" in attr.args:
                         semantics.append("groupshared")
                     if semantics:

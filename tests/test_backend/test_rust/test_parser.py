@@ -1103,6 +1103,46 @@ def test_rust_gpu_image_macro_type_parsing():
     ]
 
 
+def test_rust_gpu_extra_image_macro_dimensions_parsing_from_upstream():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/image/query/{rect_image_query_size,storage_image_query_size}.rs
+    # and tests/compiletests/ui/image/read_subpass.rs.
+    code = """
+    use spirv_std::{spirv, Image};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] rect_storage: &Image!(rect, type=f32, sampled=false),
+        #[spirv(descriptor_set = 1, binding = 1)] rect_storage_array: &Image!(rect, type=f32, sampled=false, arrayed),
+        #[spirv(descriptor_set = 2, binding = 2)] buffer_image: &Image!(buffer, type=f32, sampled=false),
+        #[spirv(descriptor_set = 3, binding = 3)] sampled_buffer: &Image!(buffer, type=u32, sampled),
+        #[spirv(descriptor_set = 4, binding = 4, input_attachment_index = 0)] input_attachment: &Image!(subpass, type=f32, sampled=false),
+    ) {}
+    """
+    ast = parse_code(code)
+
+    function = ast.functions[0]
+    assert [param.vtype for param in function.params] == [
+        "&Image!(rect, type=f32, sampled=false)",
+        "&Image!(rect, type=f32, sampled=false, arrayed)",
+        "&Image!(buffer, type=f32, sampled=false)",
+        "&Image!(buffer, type=u32, sampled)",
+        "&Image!(subpass, type=f32, sampled=false)",
+    ]
+    assert function.params[4].attributes[0].args == [
+        "descriptor_set",
+        "=",
+        "4",
+        "binding",
+        "=",
+        "4",
+        "input_attachment_index",
+        "=",
+        "0",
+    ]
+
+
 def test_rust_gpu_sampled_image_generic_type_parsing():
     code = """
     use spirv_std::{spirv, Image};

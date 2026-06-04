@@ -518,6 +518,25 @@ def test_parse_argument_buffers_and_function_constants():
     parse_ok(code)
 
 
+def test_parse_host_name_function_attribute_from_apple_spec():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    [[host_name("api_kernel")]]
+    kernel void source_kernel(device float* data [[buffer(0)]]) {
+        data[0] = 1.0;
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+
+    assert function.name == "source_kernel"
+    assert function.qualifier == "kernel"
+    assert function.attributes[0].name == "host_name"
+    assert function.attributes[0].args == ['"api_kernel"']
+
+
 def test_parse_argument_buffer_reference_array_parameter():
     code = """
     #include <metal_stdlib>

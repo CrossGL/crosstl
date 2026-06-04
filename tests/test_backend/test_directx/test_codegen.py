@@ -4030,6 +4030,24 @@ def test_codegen_math_intrinsics_mapping():
     assert "clamp(" in output
 
 
+def test_codegen_frac_intrinsic_from_microsoft_docs_roundtrips():
+    hlsl = textwrap.dedent("""
+        float4 main(float4 uvPhase : TEXCOORD0) : SV_Target0 {
+            float4 wrapped = frac(uvPhase);
+            return wrapped;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(hlsl)
+
+    assert "vec4 wrapped = fract(uvPhase);" in crossgl
+    assert "frac(" not in crossgl
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "float4 wrapped = frac(uvPhase);" in regenerated_hlsl
+    assert "fract(" not in regenerated_hlsl
+
+
 def test_codegen_interpolation_intrinsics_roundtrip():
     crossgl = generate_crossgl(INTERPOLATION_INTRINSICS_HLSL)
 
