@@ -5,6 +5,7 @@ import pytest
 
 from crosstl.backend.GLSL.OpenglAst import (
     BinaryOpNode,
+    DoWhileNode,
     InitializerListNode,
     ReturnNode,
     StructNode,
@@ -406,6 +407,32 @@ def test_parse_single_statement_control_bodies():
         """)
 
     parse_ok(code, "compute")
+
+
+def test_parse_do_while_single_statement_from_glsl_spec_grammar():
+    # Reduced from Khronos GLSL 4.60.8 grammar: DO statement WHILE (...).
+    code = textwrap.dedent("""
+        #version 460
+
+        void main()
+        {
+            int i = 17;
+            do
+                int i = 4;
+            while (i == 0);
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+    main = next(function for function in ast.functions if function.name == "main")
+    loop = next(stmt for stmt in main.body if isinstance(stmt, DoWhileNode))
+
+    assert len(loop.body) == 1
+    assert isinstance(loop.body[0], VariableNode)
+    assert loop.body[0].name == "i"
+    assert loop.body[0].value.value == "4"
+    assert isinstance(loop.condition, BinaryOpNode)
+    assert loop.condition.op == "=="
 
 
 def test_parse_structs_and_arrays():

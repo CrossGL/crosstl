@@ -717,6 +717,27 @@ def test_codegen_control_flow_roundtrip():
     assert "switch" in lowered
 
 
+def test_codegen_do_while_single_statement_from_glsl_spec_grammar():
+    # Reduced from Khronos GLSL 4.60.8 grammar: DO statement WHILE (...).
+    code = textwrap.dedent("""
+        #version 460
+
+        void main()
+        {
+            int i = 17;
+            do
+                int i = 4;
+            while (i == 0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert "do {" in crossgl
+    assert "int i = 4;" in crossgl
+    assert "} while ((i == 0));" in crossgl
+
+
 def test_codegen_glslang_while_condition_declaration_roundtrip():
     code = textwrap.dedent("""
         #version 450 core

@@ -3241,6 +3241,7 @@ class HipParser:
         return function_arg
 
     def parse_kernel_launch(self, kernel_name):
+        kernel_name = self.unwrap_hip_kernel_function_arg(kernel_name)
         self.consume("KERNEL_LAUNCH_START")
 
         self.skip_newlines()

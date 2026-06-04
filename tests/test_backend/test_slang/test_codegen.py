@@ -725,6 +725,28 @@ def test_standalone_array_and_member_assignment_targets_codegen():
     assert "object.field = value;" in generated_code
 
 
+def test_multi_index_subscript_expressions_codegen_from_official_operator_sample():
+    code = """
+    int test(S value, int x, int y)
+    {
+        value[] = 0;
+        value[x] = 1;
+        value[x, y] = value[1, 0];
+        return value[x, y];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "value[] = 0;" in generated_code
+    assert "value[x] = 1;" in generated_code
+    assert "value[x, y] = value[1, 0];" in generated_code
+    assert "return value[x, y];" in generated_code
+    assert "value[(x, y)]" not in generated_code
+
+
 def test_logical_not_codegen():
     code = """
     bool negate(bool disabled) {
