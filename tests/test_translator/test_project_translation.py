@@ -1095,6 +1095,60 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     assert "diagnosticCounts must match diagnostics" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_malformed_migration_actions(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-migration-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "migration": {
+                    "scope": "runtime-porting",
+                    "nonGoals": "runtime migration",
+                    "actions": [
+                        {
+                            "kind": "",
+                            "severity": "fatal",
+                            "message": "",
+                            "targets": "opengl",
+                        },
+                        "not an action",
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "migration.scope must be shader-kernel-translation" in (
+        diagnostic["message"]
+    )
+    assert "migration.nonGoals must be a list of strings" in diagnostic["message"]
+    assert "migration.actions[0].kind must be a string" in diagnostic["message"]
+    assert "migration.actions[0].message must be a string" in diagnostic["message"]
+    assert "migration.actions[0].severity must be note, warning, or error" in (
+        diagnostic["message"]
+    )
+    assert "migration.actions[0].targets must be a list of strings" in (
+        diagnostic["message"]
+    )
+    assert "migration.actions[1] must be an object" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_artifacts_with_undeclared_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

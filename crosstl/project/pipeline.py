@@ -24,6 +24,12 @@ from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default
 
 REPORT_KIND = "crosstl-project-portability-report"
 REPORT_SCHEMA_VERSION = 1
+REPORT_MIGRATION_SCOPE = "shader-kernel-translation"
+REPORT_MIGRATION_NON_GOALS = (
+    "automatic runtime API migration",
+    "application build-system rewrites",
+    "backend framework integration",
+)
 DEFAULT_CONFIG_NAME = "crosstl.toml"
 DEFAULT_OUTPUT_DIR = "crosstl-out"
 OUTPUT_DIR_OUTSIDE_PROJECT_CODE = "project.config.output-dir-outside-project"
@@ -626,12 +632,8 @@ class ProjectPortabilityReport:
             "diagnostics": diagnostics,
             "validation": dict(self.validation),
             "migration": {
-                "scope": "shader-kernel-translation",
-                "nonGoals": [
-                    "automatic runtime API migration",
-                    "application build-system rewrites",
-                    "backend framework integration",
-                ],
+                "scope": REPORT_MIGRATION_SCOPE,
+                "nonGoals": list(REPORT_MIGRATION_NON_GOALS),
                 "actions": list(self.migration_actions),
             },
         }
@@ -1329,6 +1331,54 @@ def _diagnostic_counts_contract_reasons(
     return _mapping_field_contract_reasons(prefix, value, expected, "diagnostics")
 
 
+def _string_list_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, list) or any(
+        not _is_non_empty_string(item) for item in value
+    ):
+        return [f"{prefix} must be a list of strings"]
+    return []
+
+
+def _migration_contract_reasons(
+    report: Mapping[str, Any], *, require_migration: bool
+) -> list[str]:
+    if "migration" not in report:
+        return ["migration must be an object"] if require_migration else []
+
+    migration = report.get("migration")
+    if not isinstance(migration, Mapping):
+        return ["migration must be an object"]
+
+    reasons = []
+    if migration.get("scope") != REPORT_MIGRATION_SCOPE:
+        reasons.append(f"migration.scope must be {REPORT_MIGRATION_SCOPE}")
+    reasons.extend(
+        _string_list_contract_reasons("migration.nonGoals", migration.get("nonGoals"))
+    )
+
+    actions = migration.get("actions")
+    if not isinstance(actions, list):
+        reasons.append("migration.actions must be a list")
+    else:
+        for index, action in enumerate(actions):
+            prefix = f"migration.actions[{index}]"
+            if not isinstance(action, Mapping):
+                reasons.append(f"{prefix} must be an object")
+                continue
+            for field_name in ("kind", "message"):
+                if not _is_non_empty_string(action.get(field_name)):
+                    reasons.append(f"{prefix}.{field_name} must be a string")
+            severity = action.get("severity")
+            if severity not in {"note", "warning", "error"}:
+                reasons.append(f"{prefix}.severity must be note, warning, or error")
+            reasons.extend(
+                _string_list_contract_reasons(
+                    f"{prefix}.targets", action.get("targets")
+                )
+            )
+    return reasons
+
+
 def _summary_contract_reasons(
     report: Mapping[str, Any],
     project: Any,
@@ -1666,6 +1716,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             report, project, units, skipped, artifacts, diagnostics
         )
     )
+    reasons.extend(_migration_contract_reasons(report, require_migration=has_summary))
 
     return [_invalid_report_diagnostic(path, reasons)] if reasons else []
 

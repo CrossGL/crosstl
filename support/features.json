@@ -4660,7 +4660,7 @@
       "support": {
         "directx": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, migration actions, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4675,12 +4675,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
           ]
         },
         "opengl": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, migration actions, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4695,12 +4696,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
           ]
         },
         "metal": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, migration actions, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4715,12 +4717,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
           ]
         },
         "vulkan": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, migration actions, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4735,12 +4738,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
           ]
         },
         "cuda": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, migration actions, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4755,12 +4759,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
           ]
         },
         "hip": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, migration actions, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4775,12 +4780,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
           ]
         },
         "mojo": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, migration actions, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4795,12 +4801,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
           ]
         },
         "rust": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, migration actions, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4815,12 +4822,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
           ]
         },
         "slang": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata, artifact records, source-map records, summary rollups, migration actions, and preserved diagnostics, rejects artifacts for targets not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4835,7 +4843,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions"
           ]
         }
       }
