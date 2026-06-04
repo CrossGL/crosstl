@@ -6801,6 +6801,35 @@ def test_lifetime_reference_type_conversion():
         pytest.fail(f"Lifetime reference type conversion failed: {e}")
 
 
+def test_lifetime_receiver_codegen_from_rust_gpu_wgpu_runner():
+    # Reduced from https://github.com/Rust-GPU/rust-gpu.git commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/runners/wgpu/src/lib.rs CompiledShaderModules::spv_module_for_entry_point.
+    code = """
+    struct CompiledShaderModules;
+
+    impl CompiledShaderModules {
+        fn spv_module_for_entry_point<'a>(
+            &'a self,
+            wanted_entry: &str,
+        ) -> wgpu::ShaderModuleDescriptor<'a> {
+            unreachable!();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert (
+            "wgpu::ShaderModuleDescriptor "
+            "CompiledShaderModules_spv_module_for_entry_point("
+            "CompiledShaderModules self, str wanted_entry)" in result
+        )
+        assert "'a" not in result
+        assert "&" not in result
+    except Exception as e:
+        pytest.fail(f"Lifetime receiver conversion failed: {e}")
+
+
 def test_use_statement_conversion():
     code = """
     use std::collections::HashMap;

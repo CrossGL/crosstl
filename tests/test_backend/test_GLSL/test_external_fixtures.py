@@ -514,6 +514,29 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/400.frag.
+    # Reduced from GLSL subroutine coverage with a comma-separated association list.
+    ExternalFixture(
+        name="glslang-400-frag-subroutine-association-list",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/400.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 400 core
+
+            subroutine(subT1, subT2);
+            subroutine float subT1() { return 1.0; }
+            subroutine float subT2() { return 2.0; }
+
+            out vec4 outp;
+
+            void main()
+            {
+                outp = vec4(subT1() + subT2());
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="glslang-fragcoord-origin-layout-flags",
         repo="https://github.com/KhronosGroup/glslang",
@@ -1299,6 +1322,22 @@ def test_parse_ekmett_vr_scan_multi_declarator_for_fixture():
 
     assert [declaration.name for declaration in loop.init] == ["i", "i_max"]
     assert [declaration.vtype for declaration in loop.init] == ["uint", "uint"]
+
+
+def test_parse_glslang_subroutine_association_list_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-400-frag-subroutine-association-list"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+
+    assert [function.name for function in ast.functions] == [
+        "subT1",
+        "subT2",
+        "main",
+    ]
 
 
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda fixture: fixture.name)

@@ -641,9 +641,13 @@ class MetalParser:
                     brace_depth -= 1
                     self.eat("RBRACE")
                     if brace_depth == 0 and paren_depth == 0:
+                        if self.current_token[0] == "SEMICOLON":
+                            self.eat("SEMICOLON")
                         return
                     continue
                 self.eat("RBRACE")
+                if self.current_token[0] == "SEMICOLON":
+                    self.eat("SEMICOLON")
                 return
             elif token_type == "SEMICOLON" and paren_depth == 0 and brace_depth == 0:
                 self.eat("SEMICOLON")

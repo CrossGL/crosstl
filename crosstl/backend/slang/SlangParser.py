@@ -1188,6 +1188,7 @@ class SlangParser:
         self.eat("LBRACE")
         methods = []
         associated_types = []
+        properties = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
                 raise SyntaxError("Unterminated interface declaration")
@@ -1202,6 +1203,11 @@ class SlangParser:
             declaration_token = self.peek_declaration_token_type()
             if declaration_token == "ASSOCIATEDTYPE":
                 associated_types.append(self.parse_associated_type())
+                continue
+            if self.is_property_declaration_start():
+                properties.append(
+                    self.parse_property_member(attributes=pending_attributes)
+                )
                 continue
             if not self.is_function():
                 raise SyntaxError(
@@ -1226,6 +1232,7 @@ class SlangParser:
             methods,
             generic_parameters=generic_parameters,
             associated_types=associated_types,
+            properties=properties,
         )
         node.qualifiers = qualifiers
         node.conformances = conformances
@@ -1371,11 +1378,7 @@ class SlangParser:
         attributes = attributes or []
         qualifiers = self.parse_qualifiers()
         self.eat("IDENTIFIER")
-        vtype = self.parse_type_name(allow_array_suffix=True)
-        vtype += self.parse_pointer_suffix()
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
-        array_sizes = self.parse_array_suffixes()
+        vtype, name, array_sizes = self.parse_property_declarator()
         semantic = None
         if self.current_token[0] == "COLON":
             semantic = self.parse_semantic_annotations()
@@ -1413,6 +1416,30 @@ class SlangParser:
             semantic=semantic,
             is_property=True,
             property_accessors=accessors,
+        )
+
+    def parse_property_declarator(self):
+        if self.is_name_first_property_declarator_start():
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            array_sizes = self.parse_array_suffixes()
+            self.eat("COLON")
+            vtype = self.parse_type_name(allow_array_suffix=True)
+            vtype += self.parse_pointer_suffix()
+            return vtype, name, array_sizes
+
+        vtype = self.parse_type_name(allow_array_suffix=True)
+        vtype += self.parse_pointer_suffix()
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        array_sizes = self.parse_array_suffixes()
+        return vtype, name, array_sizes
+
+    def is_name_first_property_declarator_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "COLON"
         )
 
     def is_constructor(self):

@@ -96,6 +96,24 @@ def test_struct_array_member_codegen():
     assert "vec4 colors[2][3]" in generated_code
 
 
+def test_name_first_property_codegen_from_generated_interface_sample():
+    code = """
+    struct IntProperty
+    {
+        int _val;
+        property prop : int { get { return _val; } }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "struct IntProperty" in generated_code
+    assert "int _val;" in generated_code
+    assert "int prop;" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_struct_comma_member_declarators_codegen():
     code = """
     struct Uniforms {

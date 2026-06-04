@@ -2233,10 +2233,7 @@ class HLSLParser:
     def parse_unary_expression(self):
         if self.current_token[0] == "LPAREN" and self.looks_like_cast():
             self.eat("LPAREN")
-            target_type = self.parse_type()
-            target_type += self.format_array_suffixes_for_type(
-                self.parse_array_suffixes()
-            )
+            target_type = self.parse_cast_target_type()
             self.eat("RPAREN")
             operand = self.parse_unary_expression()
             return CastNode(target_type, operand)
@@ -2256,15 +2253,21 @@ class HLSLParser:
 
         return self.parse_postfix_expression()
 
+    def parse_cast_target_type(self):
+        self.parse_qualifiers()
+        target_type = self.parse_type()
+        self.parse_post_type_qualifiers()
+        target_type += self.format_array_suffixes_for_type(self.parse_array_suffixes())
+        return target_type
+
     def looks_like_cast(self):
         if self.current_token[0] != "LPAREN":
             return False
 
-        idx = self.skip_type_name_at(self.current_index + 1)
+        idx = self.skip_cast_target_type_at(self.current_index + 1)
         if idx is None:
             return False
-        idx = self.skip_array_suffixes_at(idx)
-        if idx is None or idx >= len(self.tokens) or self.tokens[idx][0] != "RPAREN":
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "RPAREN":
             return False
 
         next_token = self.tokens[idx + 1] if idx + 1 < len(self.tokens) else ("EOF", "")
@@ -2288,6 +2291,19 @@ class HLSLParser:
             "DECREMENT",
             *TYPE_TOKENS,
         }
+
+    def skip_cast_target_type_at(self, idx):
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
+
+        idx = self.skip_type_name_at(idx)
+        if idx is None:
+            return None
+
+        while idx < len(self.tokens) and self.is_post_type_qualifier_token_at(idx):
+            idx += 1
+
+        return self.skip_array_suffixes_at(idx)
 
     def parse_postfix_expression(self):
         expr = self.parse_primary_expression()

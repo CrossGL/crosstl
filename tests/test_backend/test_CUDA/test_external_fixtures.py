@@ -71,6 +71,11 @@ EXTERNAL_SAMPLES = [
         "paths": ["src/CudaKernels.cu"],
     },
     {
+        "repo": "https://github.com/rapidsai/cudf",
+        "commit": "d387ee637326739a00bb4825eebb2ad0c66bdd01",
+        "paths": ["cpp/include/cudf/hashing/detail/hash_functions.cuh"],
+    },
+    {
         "repo": "https://github.com/Madreag/turbo3-cuda",
         "commit": "ae6ee21b92bc3e0fb4e6a5ab7383497861e644cc",
         "paths": ["ggml/src/ggml-cuda/fattn-vec.cuh"],
@@ -1234,6 +1239,31 @@ def test_cuda_math_api_sad_intrinsics_codegen_reparse():
     assert "out[1] = (((ux > uy) ? (ux - uy) : (uy - ux)) + bias);" in crossgl
     assert "__sad" not in crossgl
     assert "__usad" not in crossgl
+
+
+def test_rapids_cudf_hash_byte_perm_endian_swap_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/rapidsai/cudf
+    # commit: d387ee637326739a00bb4825eebb2ad0c66bdd01
+    # path: cpp/include/cudf/hashing/detail/hash_functions.cuh
+    source = """
+    __device__ inline uint32_t swap_endian(uint32_t x)
+    {
+        return __byte_perm(x, 0, 0x0123);
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].value.name == "__byte_perm"
+    assert_crossgl_reparse(crossgl)
+    assert (
+        "return ((((x & 0x000000ffu) << 24) | ((x & 0x0000ff00u) << 8)) | "
+        "(((x & 0x00ff0000u) >> 8) | ((x & 0xff000000u) >> 24)));"
+    ) in crossgl
+    assert "__byte_perm" not in crossgl
 
 
 def test_cuda_samples_reduction_reduce_add_sync_codegen_reparse():

@@ -820,18 +820,24 @@ class GLSLParser:
                 self.advance()
                 if self.current_token[0] == "LPAREN":
                     self.eat("LPAREN")
-                    if self.current_token[0] in TYPE_TOKENS:
-                        type_name = self.current_token[1]
-                        self.advance()
-                    elif self.current_token[0] == "IDENTIFIER":
-                        type_name = self.current_token[1]
-                        self.advance()
-                    else:
-                        raise SyntaxError(
-                            f"Expected subroutine type, got {self.current_token}"
-                        )
+                    type_names = []
+                    while True:
+                        if self.current_token[0] in TYPE_TOKENS:
+                            type_names.append(self.current_token[1])
+                            self.advance()
+                        elif self.current_token[0] == "IDENTIFIER":
+                            type_names.append(self.current_token[1])
+                            self.advance()
+                        else:
+                            raise SyntaxError(
+                                f"Expected subroutine type, got {self.current_token}"
+                            )
+                        if self.current_token[0] != "COMMA":
+                            break
+                        self.eat("COMMA")
+                        self.skip_newlines()
                     self.eat("RPAREN")
-                    qualifiers.append(f"subroutine({type_name})")
+                    qualifiers.append(f"subroutine({', '.join(type_names)})")
                 else:
                     qualifiers.append("subroutine")
                 continue

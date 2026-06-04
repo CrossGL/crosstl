@@ -406,6 +406,31 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_layout_qualified_matrix_casts",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/cast.vec-to-mat.explicit.hlsl",
+        code=textwrap.dedent("""
+            float4 main(float4 input : A) : SV_Target
+            {
+                float2x2 baseMatrix = (float2x2)input;
+                float2x2 rowMajorMatrix = (row_major float2x2)input;
+                float2x2 columnMajorMatrix = (column_major float2x2)input;
+
+                return float4(
+                    baseMatrix[0][0],
+                    rowMajorMatrix[0][1],
+                    columnMajorMatrix[1][0],
+                    baseMatrix[1][1]);
+            }
+        """).strip(),
+        contains=(
+            "mat2 baseMatrix = mat2(input);",
+            "mat2 rowMajorMatrix = mat2(input);",
+            "mat2 columnMajorMatrix = mat2(input);",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_block_scope_using_linalg_aliases",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

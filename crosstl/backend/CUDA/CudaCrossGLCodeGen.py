@@ -4276,6 +4276,8 @@ class CudaToCrossGLConverter:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
         if function_name == "__dp4a" and len(args) == 3:
             return f"(dot4I8Packed({args[0]}, {args[1]}) + {args[2]})"
+        if function_name == "__byte_perm" and len(args) == 3:
+            return self.format_cuda_byte_perm_intrinsic(args[0], args[1], args[2])
         if function_name in {"__ffs", "__ffsll"} and len(args) == 1:
             return f"(findLSB({args[0]}) + 1)"
         if function_name in {"__clz", "__clzll"} and len(args) == 1:
@@ -4308,6 +4310,36 @@ class CudaToCrossGLConverter:
             f"(/* cuda integer intrinsic {function_name}({args_text}) "
             "not directly supported in CrossGL */ 0)"
         )
+
+    def format_cuda_byte_perm_intrinsic(self, left, right, selector):
+        normalized_selector = self.normalize_cuda_integer_literal(selector)
+        if normalized_selector in {"0x0123", "0x123"}:
+            return self.format_cuda_byte_swap_32(left)
+
+        return self.format_cuda_integer_intrinsic_diagnostic(
+            "__byte_perm", [left, right, selector]
+        )
+
+    def format_cuda_byte_swap_32(self, value):
+        operand = self.format_bitwise_operand(value)
+        return (
+            f"(((({operand} & 0x000000ffu) << 24) | "
+            f"(({operand} & 0x0000ff00u) << 8)) | "
+            f"((({operand} & 0x00ff0000u) >> 8) | "
+            f"(({operand} & 0xff000000u) >> 24)))"
+        )
+
+    def normalize_cuda_integer_literal(self, value):
+        text = str(value).strip().replace("'", "").lower()
+        while text.endswith(("u", "l")):
+            text = text[:-1]
+        return text
+
+    def format_bitwise_operand(self, value):
+        text = str(value).strip()
+        if text and all(char.isalnum() or char in "_." for char in text):
+            return text
+        return f"({text})"
 
     def format_integer_average_floor(self, left, right):
         return f"(({left} & {right}) + (({left} ^ {right}) >> 1))"

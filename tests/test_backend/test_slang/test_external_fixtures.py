@@ -16,6 +16,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "8c4e02e4021d73091a4f1d4eba842c0dd986997e",
     },
+    "shader-slang/slang-property-2026-06-04": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
+    },
     "shader-slang/slang-gfx-tools-2026": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "c6f104ca76a54ca1565dac54363ea763dd906de6",
@@ -938,3 +942,40 @@ def test_falcor_exported_import_and_default_interface_parameter_parse():
     assert hints.name == "hints"
     assert hints.value.target_type == "uint"
     assert hints.value.expression.name == "MaterialInstanceHints::None"
+
+
+def test_generated_type_equality_property_syntax_parse():
+    source = """
+        interface IFace
+        {
+            associatedtype PropertyType;
+            property prop : PropertyType { get; }
+        }
+
+        struct IntProperty : IFace
+        {
+            typealias PropertyType = int;
+            int _val;
+            property prop : int { get { return _val; } }
+        }
+
+        int addTwoInts<T : IFace>(T a, T b) where T.PropertyType == int
+        {
+            return a.prop + b.prop;
+        }
+    """
+
+    ast = parse_slang(source)
+    interface_property = ast.interfaces[0].properties[0]
+    struct_property = ast.structs[0].members[1]
+    function = ast.functions[0]
+
+    assert interface_property.name == "prop"
+    assert interface_property.vtype == "PropertyType"
+    assert interface_property.property_accessors == {"get": []}
+    assert struct_property.name == "prop"
+    assert struct_property.vtype == "int"
+    assert list(struct_property.property_accessors) == ["get"]
+    assert function.generic_constraints[0].parameter == "T.PropertyType"
+    assert function.generic_constraints[0].relation == "=="
+    assert function.generic_constraints[0].constraint_type == "int"

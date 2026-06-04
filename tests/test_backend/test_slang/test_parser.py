@@ -306,6 +306,25 @@ def test_struct_property_getter_and_setter_preserve_accessor_bodies():
     assert setter.right.left.name == "newValue"
 
 
+def test_name_first_struct_property_from_generated_interface_sample():
+    code = """
+    struct IntProperty
+    {
+        int _val;
+        property prop : int { get { return _val; } }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    prop = ast.structs[0].members[1]
+
+    assert prop.name == "prop"
+    assert prop.vtype == "int"
+    assert prop.is_property is True
+    assert set(prop.property_accessors) == {"get"}
+    assert prop.property_accessors["get"][0].value.name == "_val"
+
+
 def test_struct_method_body_parsing_from_official_example():
     code = """
     struct Primitive {
