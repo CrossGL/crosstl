@@ -136,7 +136,9 @@ the manifest for coverage accounting only: they record declared paths, present
 and missing entries, discovered translation units, source-backend and target
 rollups, and artifact outcomes for entries included in the project run. CrossTL
 does not clone upstream repositories, run native build systems, or claim whole
-corpus semantic parity from this manifest.
+corpus semantic parity from this manifest. Malformed manifest entries are
+reported as configuration diagnostics and skipped before corpus accounting so
+generated project reports remain contract-valid.
 
 Project reports include configured define and variant names and values. Review
 reports before sharing them outside the repository if those values include

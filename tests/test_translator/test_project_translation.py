@@ -827,6 +827,60 @@ def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
     }
 
 
+def test_translate_project_skips_invalid_external_corpus_entries(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/outside",
+                        "path": "../outside.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    },
+                    {
+                        "id": "repo/simple",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    external_corpus = payload["externalCorpus"]
+    assert external_corpus["status"] == "ok"
+    assert external_corpus["summary"]["entryCount"] == 1
+    assert [entry["path"] for entry in external_corpus["entries"]] == ["simple.cgl"]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.external-corpus-entry-invalid"
+    assert diagnostic["severity"] == "warning"
+    assert "entry 1" in diagnostic["message"]
+    assert "path must be repository-relative" in diagnostic["message"]
+
+
 def test_validate_project_report_accepts_generated_source_maps(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

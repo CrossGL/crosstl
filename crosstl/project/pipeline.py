@@ -317,6 +317,47 @@ def _load_external_corpus_manifest(
     return manifest, None
 
 
+def _external_corpus_manifest_entry_reasons(entry: Any) -> list[str]:
+    if not isinstance(entry, Mapping):
+        return ["entry must be an object"]
+
+    reasons = []
+    path = entry.get("path")
+    if not _is_non_empty_string(path):
+        reasons.append("path must be a non-empty repository-relative string")
+    else:
+        normalized_path = path.replace("\\", "/")
+        if not _is_repository_relative_report_path(normalized_path):
+            reasons.append("path must be repository-relative")
+
+    source_backend = entry.get("sourceBackend")
+    if source_backend is not None and not isinstance(source_backend, str):
+        reasons.append("sourceBackend must be a string")
+
+    targets = entry.get("targets")
+    if targets is not None:
+        valid_targets = isinstance(targets, str) or (
+            isinstance(targets, Sequence)
+            and not isinstance(targets, (bytes, bytearray))
+            and all(isinstance(target, str) for target in targets)
+        )
+        if not valid_targets:
+            reasons.append("targets must be a string or list of strings")
+
+    return reasons
+
+
+def _valid_external_corpus_manifest_entries(
+    manifest: Mapping[str, Any],
+) -> list[tuple[int, Mapping[str, Any]]]:
+    entries = []
+    for index, entry in enumerate(manifest.get("entries", [])):
+        if _external_corpus_manifest_entry_reasons(entry):
+            continue
+        entries.append((index, entry))
+    return entries
+
+
 def _external_corpus_manifest_reference(config: ProjectConfig) -> str:
     return str(config.external_corpus_manifest or "")
 
@@ -408,9 +449,7 @@ def _external_corpus_report(
             artifacts_by_source.setdefault(source, []).append(artifact)
 
     entries = []
-    for index, raw_entry in enumerate(manifest.get("entries", [])):
-        if not isinstance(raw_entry, Mapping):
-            continue
+    for index, raw_entry in _valid_external_corpus_manifest_entries(manifest):
         path = str(raw_entry.get("path", "")).replace("\\", "/")
         entry_targets = _manifest_entry_targets(raw_entry, targets)
         source_backend = str(raw_entry.get("sourceBackend", "unknown"))
@@ -622,7 +661,7 @@ def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]
                 )
             )
         else:
-            _, status = _load_external_corpus_manifest(config)
+            manifest, status = _load_external_corpus_manifest(config)
             if status in {"missing", "invalid"}:
                 diagnostics.append(
                     ProjectDiagnostic(
@@ -636,6 +675,32 @@ def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]
                         missing_capabilities=["external.corpus"],
                     )
                 )
+            elif manifest is not None:
+                diagnostics.extend(_external_corpus_entry_diagnostics(config, manifest))
+    return diagnostics
+
+
+def _external_corpus_entry_diagnostics(
+    config: ProjectConfig, manifest: Mapping[str, Any]
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    location = _config_location(config)
+    for index, entry in enumerate(manifest.get("entries", [])):
+        reasons = _external_corpus_manifest_entry_reasons(entry)
+        if not reasons:
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="warning",
+                code="project.config.external-corpus-entry-invalid",
+                message=(
+                    f"External corpus manifest entry {index + 1} is invalid "
+                    "and will be skipped: " + "; ".join(reasons)
+                ),
+                location=location,
+                missing_capabilities=["external.corpus"],
+            )
+        )
     return diagnostics
 
 
