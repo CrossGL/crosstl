@@ -1373,6 +1373,23 @@ class VulkanParser:
                     expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode == "OpArrayLength" and len(operands) >= 3:
+                expressions[result_id] = FunctionCallNode(
+                    "spirvArrayLength",
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        operands[2],
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             if result_id and opcode == "OpCompositeConstruct" and operands:
                 expressions[result_id] = FunctionCallNode(
                     self.spirv_type_name(operands[0], types) or operands[0],

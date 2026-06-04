@@ -772,6 +772,45 @@ class TestHipCodeGen:
         assert "Warp sync not directly supported in CrossGL" not in result
         assert "None" not in result
 
+    def test_rocm_docs_syncthreads_vote_intrinsics_emit_reparseable_diagnostic(self):
+        # Source: ROCm HIP C++ language extensions, HIP 7.0.51831 docs.
+        # URL: https://rocm.docs.amd.com/projects/HIP/en/docs-7.0.2/how-to/hip_cpp_language_extensions.html#synchronization-functions
+        code = """
+        __global__ void vote(int* out, int n) {
+            int idx = threadIdx.x;
+            int count = __syncthreads_count(idx < n);
+            int all_set = __syncthreads_and(idx < n);
+            int any_set = __syncthreads_or(idx < n);
+            out[idx] = count + all_set + any_set;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var count: i32 = (/* HIP block-wide sync vote "
+            "__syncthreads_count predicate: (idx < n) not directly supported "
+            "in CrossGL */ 0);"
+        ) in result
+        assert (
+            "var all_set: i32 = (/* HIP block-wide sync vote "
+            "__syncthreads_and predicate: (idx < n) not directly supported "
+            "in CrossGL */ 0);"
+        ) in result
+        assert (
+            "var any_set: i32 = (/* HIP block-wide sync vote "
+            "__syncthreads_or predicate: (idx < n) not directly supported "
+            "in CrossGL */ 0);"
+        ) in result
+        assert "__syncthreads_count((idx < n))" not in result
+        assert "__syncthreads_and((idx < n))" not in result
+        assert "__syncthreads_or((idx < n))" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_hip_calls(self):
         code = """
         __global__ void warp(unsigned long long mask, int pred, int value, int lane, unsigned int* out) {

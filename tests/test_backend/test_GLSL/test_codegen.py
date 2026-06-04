@@ -183,6 +183,34 @@ def test_codegen_default_function_argument_from_glslang_default_args():
     assert "int x = 2" in output
 
 
+def test_codegen_for_init_custom_struct_declaration_from_glsl_460_grammar():
+    # Reduced from Khronos GLSL 4.60.8 grammar:
+    # for_init_statement accepts declaration_statement, including user types.
+    code = textwrap.dedent("""
+        #version 460
+
+        struct Cursor {
+            int value;
+        };
+
+        void main()
+        {
+            for (Cursor cursor = Cursor(0); cursor.value < 2; cursor.value++)
+            {
+                cursor.value += 1;
+            }
+        }
+    """).strip()
+
+    output = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert (
+        "for (Cursor cursor = Cursor{0}; (cursor.value < 2); (cursor.value++))"
+        in output
+    )
+    assert "cursor.value += 1;" in output
+
+
 def test_codegen_local_function_prototype_from_glslang_scope_vert():
     code = textwrap.dedent("""
         #version 110

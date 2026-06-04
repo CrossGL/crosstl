@@ -785,6 +785,38 @@ def test_codegen_local_static_const_array_from_dxc_bc6hdecode():
     assert isinstance(local_weights.initial_value, ArrayLiteralNode)
 
 
+def test_codegen_sizeof_type_operand_from_dxc_implicit_cast():
+    # Source URL: https://github.com/microsoft/DirectXShaderCompiler
+    # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # Path: tools/clang/test/HLSLFileCheck/hlsl/types/cast/implicit-cast-almost-identical.hlsl
+    output = generate_crossgl("uint main() : OUT { return abs(sizeof(float)); }")
+
+    assert "return abs(4);" in output
+    assert "sizeof(" not in output
+    parse_crossgl(output)
+
+
+def test_codegen_sizeof_vector_array_operands_from_dxc_unary_sizeof():
+    # Source URL: https://github.com/microsoft/DirectXShaderCompiler
+    # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # Path: tools/clang/test/HLSLFileCheck/hlsl/operators/unary/sizeof.hlsl
+    output = generate_crossgl("""
+        AppendStructuredBuffer<int> buf;
+
+        void main() {
+            buf.Append(sizeof(int3[2]));
+            buf.Append(sizeof(half3[2]));
+            buf.Append(sizeof(int64_t3[2]));
+        }
+    """)
+
+    assert "buffer_append(buf, 24);" in output
+    assert "buffer_append(buf, 12);" in output
+    assert "buffer_append(buf, 48);" in output
+    assert "sizeof(" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_vertex_fragment_roundtrip():
     output = generate_crossgl(VERTEX_PIXEL_HLSL)
     assert isinstance(output, str)

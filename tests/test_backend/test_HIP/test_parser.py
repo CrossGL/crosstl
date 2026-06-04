@@ -3246,6 +3246,31 @@ class TestHipParser:
         assert unmasked_sync.sync_type == "__syncwarp"
         assert unmasked_sync.args == []
 
+    def test_rocm_docs_syncthreads_vote_intrinsics_parse_as_value_calls(self):
+        code = """
+        __global__ void vote(int* out, int n) {
+            int idx = threadIdx.x;
+            int count = __syncthreads_count(idx < n);
+            int all_set = __syncthreads_and(idx < n);
+            int any_set = __syncthreads_or(idx < n);
+            out[idx] = count + all_set + any_set;
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+        count = kernel.body[1]
+        all_set = kernel.body[2]
+        any_set = kernel.body[3]
+
+        assert isinstance(kernel, KernelNode)
+        assert isinstance(count.value, FunctionCallNode)
+        assert count.value.name == "__syncthreads_count"
+        assert isinstance(all_set.value, FunctionCallNode)
+        assert all_set.value.name == "__syncthreads_and"
+        assert isinstance(any_set.value, FunctionCallNode)
+        assert any_set.value.name == "__syncthreads_or"
+
     def test_inline_assembly_parsing(self):
         code = r"""
         __global__ void asmKernel(float* out, float in) {

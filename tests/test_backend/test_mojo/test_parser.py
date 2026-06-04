@@ -7,6 +7,7 @@ from crosstl.backend.Mojo.MojoAst import (
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
+    CallNode,
     CastNode,
     ClassNode,
     ConstantBufferNode,
@@ -959,6 +960,40 @@ def test_function_effects_parse_from_modular_and_real_world_mojo():
 
     assert find_function(ast, "exported").body
     assert find_function(ast, "_sum2").body
+
+
+def test_async_nested_function_parse_from_modular_builtin_kernels():
+    # Source: https://github.com/modular/modular
+    # Commit: daa47bb846cc213723a54c51844ea4e923eb5e13
+    # Path: max/kernels/src/graph_compiler/builtin_kernels/kernels.mojo
+    # Lines: 2207-2215
+    # dispatch_async_tasks_to_devices wrapper.
+    code = """
+    def dispatch_devices():
+        @always_inline
+        @parameter
+        async def wrapper[index: Int]() -> None:
+            try:
+                func[index]()
+            except e:
+                errors[index] = e^
+    """
+    ast = parse_code(tokenize_code(code))
+    wrapper = find_function(ast, "dispatch_devices").body[0]
+    try_statement = wrapper.body[0]
+
+    assert isinstance(wrapper, FunctionNode)
+    assert wrapper.name == "wrapper"
+    assert wrapper.return_type == "None"
+    assert getattr(wrapper, "is_async", False)
+    assert [attr.name for attr in wrapper.attributes] == [
+        "always_inline",
+        "parameter",
+    ]
+    assert isinstance(try_statement, TryExceptNode)
+    assert try_statement.exception_name == "e"
+    assert isinstance(try_statement.try_body[0], CallNode)
+    assert isinstance(try_statement.except_body[0], AssignmentNode)
 
 
 def test_else_if_parsing():

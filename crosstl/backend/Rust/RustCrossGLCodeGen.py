@@ -145,6 +145,7 @@ class RustToCrossGLConverter:
         "bvec3": "bvec3",
         "bvec4": "bvec4",
     }
+    VECTOR_SPLAT_CONSTRUCTORS = set(VECTOR_CONSTRUCTOR_RETURN_TYPES.values())
 
     def __init__(self):
         self.type_map = {
@@ -4310,13 +4311,21 @@ class RustToCrossGLConverter:
         )
 
     def format_path_constructor_call_parts(self, function_name, args):
-        if not function_name.endswith("::new"):
+        if "::" not in function_name:
             return None
 
-        type_name = function_name[: -len("::new")]
+        type_name, constructor_name = function_name.rsplit("::", 1)
+        if constructor_name not in {"new", "splat"}:
+            return None
+
         mapped_type = self.map_type(type_name)
         if mapped_type == type_name:
             return None
+
+        if constructor_name == "splat":
+            if len(args) != 1 or mapped_type not in self.VECTOR_SPLAT_CONSTRUCTORS:
+                return None
+            return f"{mapped_type}({args[0]})"
 
         return f"{mapped_type}({', '.join(args)})"
 

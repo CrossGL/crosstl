@@ -5,6 +5,8 @@ import pytest
 from crosstl.backend.Mojo import MojoCrossGLCodeGen
 from crosstl.backend.Mojo.MojoLexer import MojoLexer
 from crosstl.backend.Mojo.MojoParser import MojoParser
+from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import Parser as CrossGLParser
 
 
 def generate_code(ast_node):
@@ -26,6 +28,10 @@ def tokenize_code(code: str) -> List:
 def parse_code(tokens: List):
     parser = MojoParser(tokens)
     return parser.parse()
+
+
+def parse_crossgl(code: str):
+    return CrossGLParser(CrossGLLexer(code).tokens).parse()
 
 
 def test_struct_codegen():
@@ -278,6 +284,32 @@ def test_function_capturing_raises_effects_codegen_are_dropped():
     )
     assert "capturing" not in generated_code
     assert "raises" not in generated_code
+
+
+def test_async_function_codegen_from_modular_builtin_kernels_reparses_crossgl():
+    # Source: https://github.com/modular/modular
+    # Commit: daa47bb846cc213723a54c51844ea4e923eb5e13
+    # Path: max/kernels/src/graph_compiler/builtin_kernels/kernels.mojo
+    # Lines: 2207-2215
+    # dispatch_async_tasks_to_devices wrapper.
+    code = """
+    @always_inline
+    @parameter
+    async def wrapper[index: Int]() -> None:
+        return
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+    reparsed = parse_crossgl(generated_code)
+
+    assert getattr(ast.functions[0], "is_async", False)
+    assert "void wrapper() @ always_inline @ parameter" in generated_code
+    assert "async" not in generated_code
+    assert reparsed.functions[0].name == "wrapper"
+    assert [attr.name for attr in reparsed.functions[0].attributes] == [
+        "always_inline",
+        "parameter",
+    ]
 
 
 def test_function_capture_list_codegen_from_modular_packing_kernel():

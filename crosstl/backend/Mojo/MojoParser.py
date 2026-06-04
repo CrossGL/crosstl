@@ -12,6 +12,7 @@ class MojoParser:
     STATEMENT_END_TOKENS = {"NEWLINE", "DEDENT", "EOF", "RBRACE"}
     ATTRIBUTE_START_TOKENS = {"ATTRIBUTE", "AT"}
     FUNCTION_TOKENS = {"FN", "DEF"}
+    ASYNC_FUNCTION_MODIFIER = "async"
     TYPE_START_TOKENS = {"IDENTIFIER", "INT", "FLOAT", "BOOL", "STRING"}
     FUNCTION_TYPE_TOKENS = {"FN", "DEF"}
     PARAMETER_CONVENTION_TOKENS = {"VAR"}
@@ -134,7 +135,7 @@ class MojoParser:
                 if isinstance(node, VariableDeclarationNode):
                     global_variables.append(node)
                 all_items.append(node)
-            elif self.current_token[0] in self.FUNCTION_TOKENS:
+            elif self.is_function_declaration_start():
                 node = self.parse_function(attributes)
                 functions.append(node)
                 all_items.append(node)
@@ -339,7 +340,7 @@ class MojoParser:
     def parse_struct_member(self):
         self.skip_newlines()
         attributes = self.parse_attributes()
-        if self.current_token[0] in self.FUNCTION_TOKENS:
+        if self.is_function_declaration_start():
             return self.parse_function(attributes)
         if self.current_token[0] in ["COMPTIME", "ALIAS"]:
             member = self.parse_comptime_or_alias_statement()
@@ -490,7 +491,7 @@ class MojoParser:
 
         if self.is_ellipsis_statement():
             return self.parse_ellipsis_statement()
-        if self.current_token[0] in self.FUNCTION_TOKENS:
+        if self.is_function_declaration_start():
             return self.parse_function(attributes)
         if self.current_token[0] == "CLASS":
             return self.parse_class(attributes)
@@ -584,8 +585,18 @@ class MojoParser:
         attributes.extend(self.parse_attributes())
 
         qualifier = None
+        is_async = False
+        if self.is_async_function_modifier():
+            is_async = True
+            self.eat("IDENTIFIER")
+            self.skip_layout_tokens()
+
         if self.current_token[0] in self.FUNCTION_TOKENS:
             self.eat(self.current_token[0])
+        else:
+            raise SyntaxError(
+                f"Expected function declaration, got {self.current_token[0]}"
+            )
 
         return_type = None
         if self.current_token[0] not in {"IDENTIFIER", "DEFAULT"}:
@@ -624,7 +635,20 @@ class MojoParser:
         )
         func.qualifier = qualifier
         func.where_clause = where_clause
+        func.is_async = is_async
         return func
+
+    def is_function_declaration_start(self):
+        if self.current_token[0] in self.FUNCTION_TOKENS:
+            return True
+        return self.is_async_function_modifier()
+
+    def is_async_function_modifier(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == self.ASYNC_FUNCTION_MODIFIER
+            and self.peek_token()[0] in self.FUNCTION_TOKENS
+        )
 
     def parse_function_signature_modifiers(self):
         while True:
@@ -1000,6 +1024,8 @@ class MojoParser:
             return self.parse_assert_statement()
         if self.current_token[0] in ["IMPORT", "FROM"]:
             return self.parse_import_statement()
+        if self.is_function_declaration_start():
+            return self.parse_function()
 
         if self.current_token[0] in [
             "FLOAT",
@@ -1016,7 +1042,7 @@ class MojoParser:
 
         elif self.current_token[0] in self.ATTRIBUTE_START_TOKENS:
             attributes = self.parse_attributes()
-            if self.current_token[0] in self.FUNCTION_TOKENS:
+            if self.is_function_declaration_start():
                 return self.parse_function(attributes)
             if self.current_token[0] == "STRUCT":
                 return self.parse_struct(attributes)
@@ -1028,7 +1054,7 @@ class MojoParser:
                 statement.attributes = attributes + existing_attributes
             return statement
 
-        elif self.current_token[0] in self.FUNCTION_TOKENS:
+        elif self.is_function_declaration_start():
             return self.parse_function()
         elif self.current_token[0] == "IF":
             return self.parse_if_statement()
