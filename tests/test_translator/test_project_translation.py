@@ -1131,6 +1131,29 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
                         },
                         "not an artifact check",
                     ],
+                    "toolchainRuns": [
+                        {
+                            "source": "",
+                            "target": "",
+                            "path": "",
+                            "command": ["glslangValidator", ""],
+                            "returncode": True,
+                            "status": "ok",
+                            "stdout": [],
+                            "stderr": None,
+                        },
+                        {
+                            "source": "simple.cgl",
+                            "target": "opengl",
+                            "path": "out/opengl/simple.glsl",
+                            "command": ["glslangValidator"],
+                            "returncode": 2,
+                            "status": "ok",
+                            "stdout": "",
+                            "stderr": "",
+                        },
+                        "not a toolchain run",
+                    ],
                 },
             }
         ),
@@ -1174,6 +1197,31 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
         diagnostic["message"]
     )
     assert "validation.artifacts[1] must be an object" in diagnostic["message"]
+    assert "validation.toolchainRuns[0].source must be a string" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].target must be a string" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].path must be a string" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].command must be a list of strings" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].returncode must be an integer" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].stdout must be a string" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].stderr must be a string" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[1].status must match returncode" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[2] must be an object" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_malformed_external_corpus_records(tmp_path):

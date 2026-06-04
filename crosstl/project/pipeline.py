@@ -1819,6 +1819,40 @@ def _validation_artifact_contract_reasons(index: int, artifact: Any) -> list[str
     return reasons
 
 
+def _toolchain_run_contract_reasons(index: int, run: Any) -> list[str]:
+    prefix = f"validation.toolchainRuns[{index}]"
+    if not isinstance(run, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    for field_name in ("source", "target", "path"):
+        if not _is_non_empty_string(run.get(field_name)):
+            reasons.append(f"{prefix}.{field_name} must be a string")
+
+    command = run.get("command")
+    if not isinstance(command, list) or any(
+        not _is_non_empty_string(part) for part in command
+    ):
+        reasons.append(f"{prefix}.command must be a list of strings")
+
+    returncode = run.get("returncode")
+    if not isinstance(returncode, int) or isinstance(returncode, bool):
+        reasons.append(f"{prefix}.returncode must be an integer")
+
+    status = run.get("status")
+    if status not in {"ok", "failed"}:
+        reasons.append(f"{prefix}.status must be ok or failed")
+    elif isinstance(returncode, int) and not isinstance(returncode, bool):
+        expected_status = "ok" if returncode == 0 else "failed"
+        if status != expected_status:
+            reasons.append(f"{prefix}.status must match returncode")
+
+    for field_name in ("stdout", "stderr"):
+        if not isinstance(run.get(field_name), str):
+            reasons.append(f"{prefix}.{field_name} must be a string")
+    return reasons
+
+
 def _validation_contract_reasons(
     report: Mapping[str, Any], *, require_validation: bool
 ) -> list[str]:
@@ -1843,6 +1877,14 @@ def _validation_contract_reasons(
     else:
         for index, artifact in enumerate(artifact_checks):
             reasons.extend(_validation_artifact_contract_reasons(index, artifact))
+
+    if "toolchainRuns" in validation:
+        toolchain_runs = validation.get("toolchainRuns")
+        if not isinstance(toolchain_runs, list):
+            reasons.append("validation.toolchainRuns must be a list")
+        else:
+            for index, run in enumerate(toolchain_runs):
+                reasons.extend(_toolchain_run_contract_reasons(index, run))
     return reasons
 
 
