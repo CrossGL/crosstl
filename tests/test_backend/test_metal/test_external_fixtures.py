@@ -33,6 +33,7 @@ MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
 MLX_CURRENT_COMMIT = "b155224b9963cd9476363b464a559232a0868000"
 MLX_FP_QUANTIZED_COMMIT = "c52b04b650be06291e3a6ff6e98b0ef1af3ff56b"
+MLX_STEEL_DEPENDENT_TEMPLATE_COMMIT = "e1a3f2f31fc298cfd7f017d19e8165d88a0c3c59"
 PYTORCH_REPO = "https://github.com/pytorch/pytorch"
 PYTORCH_BUCKETIZATION_COMMIT = "5ee1f788c7098ae5e50e49543ee7822f73cd8990"
 CANDLE_REPO = "https://github.com/huggingface/candle"
@@ -751,6 +752,36 @@ EXTERNAL_FIXTURES = [
                 }
 
                 uint8_t bits;
+            };
+        """
+        ),
+    },
+    {
+        "name": "mlx_steel_dependent_template_type_disambiguator",
+        "repo_url": MLX_REPO,
+        "commit": MLX_STEEL_DEPENDENT_TEMPLATE_COMMIT,
+        "source_path": (
+            "mlx/backend/metal/kernels/steel/gemm/kernels/" "steel_gemm_fused_nax.h"
+        ),
+        "roundtrip": True,
+        "struct_names": ["TransformNone"],
+        "contains": [
+            "struct TransformNone",
+            "cfrag_t celems;",
+        ],
+        "not_contains": ["::template"],
+        "source": (
+            """
+            // Reduced from MLX Steel GEMM fused NAX TransformNone:
+            // using cfrag_t = typename CFrag::template dtype_frag_t<T>;
+            using namespace mlx::steel;
+
+            template <typename T, typename NAXTile_t>
+            struct TransformNone {
+                using CFrag = typename NAXTile_t::NAXFrag_t;
+                using cfrag_t = typename CFrag::template dtype_frag_t<T>;
+
+                cfrag_t celems;
             };
         """
         ),

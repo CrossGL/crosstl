@@ -4725,9 +4725,22 @@ class HipToCrossGLConverter:
             return f"(WaveActiveAllTrue({predicate}) ? 1 : 0)"
 
         if function_name == "__shfl_sync":
-            if len(args) != 3 or not self.is_full_or_active_warp_mask(args[0]):
+            if (
+                len(args) not in {3, 4}
+                or not self.is_full_or_active_warp_mask(args[0])
+                or not self.is_full_warp_shuffle_width(args[3:] or None)
+            ):
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
             return f"WaveReadLaneAt({args[1]}, {args[2]})"
+
+        if function_name == "__shfl_xor_sync":
+            if (
+                len(args) not in {3, 4}
+                or not self.is_full_or_active_warp_mask(args[0])
+                or not self.is_full_warp_shuffle_width(args[3:] or None)
+            ):
+                return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            return f"WaveReadLaneAt({args[1]}, " f"(WaveGetLaneIndex() ^ {args[2]}))"
 
         if function_name in {
             "__ballot",
@@ -4739,11 +4752,18 @@ class HipToCrossGLConverter:
             "__shfl_xor",
             "__shfl_up_sync",
             "__shfl_down_sync",
-            "__shfl_xor_sync",
         }:
             return self.format_unsupported_hip_warp_intrinsic(function_name, args)
 
         return None
+
+    def is_full_warp_shuffle_width(self, width_args):
+        if not width_args:
+            return True
+        if len(width_args) != 1:
+            return False
+        normalized = self.normalize_warp_mask_expression(width_args[0])
+        return normalized in {"32", "warpsize", "warp_size", "warp_full_width"}
 
     def is_full_or_active_warp_mask(self, mask):
         normalized = self.normalize_warp_mask_expression(mask)

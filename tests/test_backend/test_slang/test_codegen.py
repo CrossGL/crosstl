@@ -1720,6 +1720,36 @@ def test_texture_compare_offset_method_call_codegen():
     assert "shadowMap.SampleCmp" not in generated_code
 
 
+def test_texture_lod_query_method_codegen_from_current_slang_intrinsic_test():
+    # Source: shader-slang/slang@564ac9f050d6569efd773e2f74e7d067a4e54baa
+    # tests/hlsl-intrinsic/texture/texture-calculate-level-of-detail.slang
+    # https://github.com/shader-slang/slang/blob/564ac9f050d6569efd773e2f74e7d067a4e54baa/tests/hlsl-intrinsic/texture/texture-calculate-level-of-detail.slang
+    code = """
+    Texture2D t;
+    SamplerState s;
+    SamplerComparisonState sc;
+
+    float fragmentMain()
+    {
+        float result = 0.0;
+        result += t.CalculateLevelOfDetail(s, float2(0, 0));
+        result += t.CalculateLevelOfDetailUnclamped(sc, float2(0, 0));
+        return result;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D t;" in generated_code
+    assert "sampler s;" in generated_code
+    assert "sampler sc;" in generated_code
+    assert "result += textureQueryLod(t, s, vec2(0, 0)).x;" in generated_code
+    assert "result += textureQueryLod(t, sc, vec2(0, 0)).y;" in generated_code
+    assert "CalculateLevelOfDetail" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_resource_array_sample_method_call_codegen():
     code = """
     Sampler2D<float4> textures[3];

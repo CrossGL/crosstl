@@ -1075,6 +1075,42 @@ def test_parse_precision_qualifiers():
     parse_ok(code, "fragment")
 
 
+def test_parse_block_scope_precision_statement_from_glslang_precision_frag():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/precision.frag, which declares precision defaults inside nested blocks.
+    code = textwrap.dedent("""
+        #version 100
+        precision highp int;
+
+        void main()
+        {
+            precision lowp int;
+            lowp int sum = 0;
+
+            {
+                precision highp int;
+                int level2_high = sum;
+            }
+
+            do {
+                if (true) {
+                    precision mediump int;
+                    int level4_medium = sum;
+                }
+            } while (false);
+
+            gl_FragColor = vec4(float(sum));
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    main = next(function for function in ast.functions if function.name == "main")
+    declarations = [stmt for stmt in main.body if isinstance(stmt, VariableNode)]
+
+    assert declarations[0].name == "sum"
+    assert declarations[0].qualifiers == ["lowp"]
+
+
 def test_parse_preprocessor_directives():
     code = textwrap.dedent("""
         #version 450 core

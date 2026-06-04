@@ -1075,6 +1075,25 @@ def test_codegen_one_row_matrix_aliases_from_dxc_matrix_syntax():
     parse_crossgl(output)
 
 
+def test_codegen_function_array_return_from_dxc_longvec_decls():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/CodeGenDXIL/hlsl/types/longvec-decls.hlsl
+    hlsl = textwrap.dedent("""
+        vector<float, 4> lv_param_arr_passthru(vector<float, 4> vec[10])[10] {
+            return vec;
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "vec4[10] lv_param_arr_passthru(vec4 vec[10])" in output
+    assert "return vec;" in output
+
+    shader_ast = parse_crossgl(output)
+    func = shader_ast.functions[0]
+    assert isinstance(func.return_type, ArrayType)
+
+
 def test_codegen_compute_roundtrip():
     output = generate_crossgl(COMPUTE_HLSL)
     lowered = output.lower()

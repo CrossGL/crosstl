@@ -1289,6 +1289,7 @@ class HLSLParser:
     def parse_function(self, return_type, name, qualifiers, attributes):
         params = self.parse_parameters()
         qualifiers = qualifiers + self.parse_trailing_function_qualifiers()
+        return_array_sizes = self.parse_array_suffixes()
 
         semantic = None
         if self.current_token[0] == "COLON":
@@ -1313,6 +1314,7 @@ class HLSLParser:
             attributes=attributes,
             qualifier=qualifier,
             semantic=semantic,
+            array_sizes=return_array_sizes,
         )
         function.is_prototype = is_prototype
         return function

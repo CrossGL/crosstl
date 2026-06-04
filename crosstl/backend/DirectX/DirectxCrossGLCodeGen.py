@@ -2371,10 +2371,10 @@ class HLSLToCrossGLConverter:
         semantic = self.map_semantic(func.semantic)
         semantic = f" {semantic}" if semantic else ""
         function_name = self.render_function_identifier(entry_name or func.name)
-        code += (
-            f"{self.map_type(func.return_type)} "
-            f"{function_name}({params}){semantic} {{\n"
+        return_type = (
+            f"{self.map_type(func.return_type)}{self.format_array_suffixes(func)}"
         )
+        code += f"{return_type} " f"{function_name}({params}){semantic} {{\n"
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    " * indent + "}\n\n"
         self.current_variable_types = previous_variable_types

@@ -1229,6 +1229,23 @@ def test_parse_template_style_vector_matrix_types_and_constructors():
     assert func.body[-1].value.type_name == "vector<double, 4>"
 
 
+def test_parse_function_array_return_declarator_from_dxc_longvec_decls():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/CodeGenDXIL/hlsl/types/longvec-decls.hlsl
+    ast = parse_code("""
+    vector<float, 4> lv_param_arr_passthru(vector<float, 4> vec[10])[10] {
+        return vec;
+    }
+    """)
+
+    func = ast.functions[0]
+
+    assert func.return_type == "vector<float, 4>"
+    assert func.array_sizes == [10]
+    assert func.params[0].vtype == "vector<float, 4>"
+    assert func.params[0].array_sizes == [10]
+
+
 def test_parse_one_row_column_matrix_aliases_from_dxc_matrix_syntax():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/SemaHLSL/matrix-syntax.hlsl

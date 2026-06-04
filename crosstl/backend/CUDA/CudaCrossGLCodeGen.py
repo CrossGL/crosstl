@@ -4234,6 +4234,8 @@ class CudaToCrossGLConverter:
     def format_cuda_fp16_intrinsic_call(self, function_name, args):
         if function_name == "__float2half2_rn" and len(args) == 1:
             return self.format_vector_constructor("vec2", [args[0], args[0]], "f16")
+        if function_name == "__half2float" and len(args) == 1:
+            return f"f32({args[0]})"
         if function_name == "__low2float" and len(args) == 1:
             return f"f32({self.format_vector_component_access(args[0], 'x')})"
         if function_name == "__high2float" and len(args) == 1:
