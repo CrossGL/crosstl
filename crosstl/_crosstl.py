@@ -295,7 +295,7 @@ def _run_validate_project(args):
     return 0 if payload["success"] else 1
 
 
-def _format_count_rollup(label, counts):
+def _format_count_rollup(label, counts, *, include_zero=True):
     if not isinstance(counts, Mapping):
         return None
 
@@ -304,6 +304,8 @@ def _format_count_rollup(label, counts):
         if not isinstance(name, str) or not name.strip():
             continue
         if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            continue
+        if not include_zero and count == 0:
             continue
         entries.append((name, count))
     if not entries:
@@ -402,6 +404,20 @@ def _format_project_report_inspection(payload):
             f"{validation_summary.get('okCount', 0)} ok, "
             f"{validation_summary.get('failedCount', 0)} failed"
         )
+        source_hashes = _format_count_rollup(
+            "Validation source hashes",
+            validation_summary.get("sourceHashStatusCounts"),
+            include_zero=False,
+        )
+        if source_hashes:
+            lines.append(source_hashes)
+        generated_hashes = _format_count_rollup(
+            "Validation generated hashes",
+            validation_summary.get("generatedHashStatusCounts"),
+            include_zero=False,
+        )
+        if generated_hashes:
+            lines.append(generated_hashes)
 
     external_corpus = payload.get("externalCorpus")
     if isinstance(external_corpus, Mapping):
@@ -445,6 +461,21 @@ def _format_project_report_inspection(payload):
             )
             if artifact.get("error"):
                 description = f"{description}: {artifact.get('error')}"
+            else:
+                validation_details = []
+                source_hash_status = artifact.get("sourceHashStatus")
+                generated_hash_status = artifact.get("generatedHashStatus")
+                if source_hash_status and source_hash_status != "ok":
+                    validation_details.append(f"source hash: {source_hash_status}")
+                if generated_hash_status and generated_hash_status != "ok":
+                    validation_details.append(
+                        f"generated hash: {generated_hash_status}"
+                    )
+                if validation_details:
+                    description = (
+                        f"{description}: validation failed "
+                        f"({'; '.join(validation_details)})"
+                    )
             lines.append(description)
 
     diagnostics = payload.get("diagnostics", [])

@@ -3285,6 +3285,57 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
     ) in result.stdout
 
 
+def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    (repo / "out" / "cgl" / "simple.cgl").write_text(
+        "shader main() {}\n",
+        encoding="utf-8",
+    )
+
+    payload = inspect_project_report(report_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert payload["failedArtifacts"] == [
+        {
+            "source": "simple.cgl",
+            "target": "cgl",
+            "path": "out/cgl/simple.cgl",
+            "exists": True,
+            "sourceHashStatus": "ok",
+            "generatedHashStatus": "mismatch",
+            "validationStatus": "failed",
+        }
+    ]
+    assert result.returncode == 1
+    assert "Validation artifacts: 0 ok, 1 failed" in result.stdout
+    assert "Validation source hashes: ok=1" in result.stdout
+    assert "Validation generated hashes: mismatch=1" in result.stdout
+    assert (
+        "- simple.cgl -> cgl at out/cgl/simple.cgl: "
+        "validation failed (generated hash: mismatch)"
+    ) in result.stdout
+    assert "project.validate.generated-hash-mismatch" in result.stdout
+
+
 def test_project_cli_inspect_report_text_fails_on_error_diagnostics(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

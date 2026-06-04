@@ -1795,15 +1795,50 @@ def inspect_project_report(
     }
 
     artifacts = report.get("artifacts", [])
+    failed_artifacts_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
     if isinstance(artifacts, Sequence) and not isinstance(
         artifacts, (str, bytes, bytearray)
     ):
-        failed_artifacts = [
-            _inspection_failed_artifact(artifact)
-            for artifact in artifacts
-            if isinstance(artifact, Mapping) and artifact.get("status") == "failed"
-        ]
-        payload["failedArtifacts"] = failed_artifacts[: max(0, max_failed_artifacts)]
+        for artifact in artifacts:
+            if not isinstance(artifact, Mapping) or artifact.get("status") != "failed":
+                continue
+            failed = _inspection_failed_artifact(artifact)
+            failed_artifacts_by_key[_inspection_failed_artifact_key(failed)] = failed
+
+    validation_result = validation_report.get("validation", {})
+    validation_artifacts = (
+        validation_result.get("artifacts")
+        if isinstance(validation_result, Mapping)
+        else None
+    )
+    if isinstance(validation_artifacts, Sequence) and not isinstance(
+        validation_artifacts, (str, bytes, bytearray)
+    ):
+        for artifact in validation_artifacts:
+            if not isinstance(artifact, Mapping) or artifact.get("status") != "failed":
+                continue
+            failed = _inspection_failed_artifact(artifact)
+            failed["validationStatus"] = "failed"
+            key = _inspection_failed_artifact_key(failed)
+            existing = failed_artifacts_by_key.get(key)
+            if existing:
+                existing.update(
+                    {
+                        field_name: failed[field_name]
+                        for field_name in (
+                            "exists",
+                            "sourceHashStatus",
+                            "generatedHashStatus",
+                            "validationStatus",
+                        )
+                        if field_name in failed
+                    }
+                )
+            else:
+                failed_artifacts_by_key[key] = failed
+    payload["failedArtifacts"] = list(failed_artifacts_by_key.values())[
+        : max(0, max_failed_artifacts)
+    ]
 
     migration = report.get("migration")
     if isinstance(migration, Mapping):
@@ -1861,7 +1896,19 @@ def _inspection_failed_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
         failed["variant"] = artifact.get("variant")
     if "error" in artifact:
         failed["error"] = artifact.get("error")
+    for field_name in ("exists", "sourceHashStatus", "generatedHashStatus"):
+        if field_name in artifact:
+            failed[field_name] = artifact.get(field_name)
     return failed
+
+
+def _inspection_failed_artifact_key(artifact: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        artifact.get("source"),
+        artifact.get("target"),
+        artifact.get("path"),
+        artifact.get("variant"),
+    )
 
 
 def _toolchain_run_diagnostics(
