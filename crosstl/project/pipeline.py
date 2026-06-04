@@ -3044,6 +3044,18 @@ def _external_corpus_contract_reasons(
         )
     if not _is_non_empty_string(external_corpus.get("manifest")):
         reasons.append("externalCorpus.manifest must be a string")
+    project = report.get("project")
+    project_manifest = (
+        project.get("externalCorpusManifest") if isinstance(project, Mapping) else None
+    )
+    external_manifest = external_corpus.get("manifest")
+    if _is_non_empty_string(project_manifest) and _is_non_empty_string(
+        external_manifest
+    ):
+        if external_manifest != project_manifest:
+            reasons.append(
+                "externalCorpus.manifest must match project.externalCorpusManifest"
+            )
     if external_corpus.get("status") not in {
         "ok",
         "missing",

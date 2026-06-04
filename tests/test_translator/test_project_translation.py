@@ -2549,6 +2549,57 @@ def test_validate_project_report_rejects_malformed_external_corpus_records(tmp_p
     )
 
 
+def test_validate_project_report_rejects_mismatched_external_corpus_manifest(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "mismatched-external-corpus-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "externalCorpusManifest": "corpus.json",
+                },
+                "artifacts": [],
+                "externalCorpus": {
+                    "schemaVersion": 1,
+                    "manifest": "other-corpus.json",
+                    "status": "missing",
+                    "entries": [],
+                    "summary": {
+                        "entryCount": 0,
+                        "presentCount": 0,
+                        "missingCount": 0,
+                        "discoveredUnitCount": 0,
+                        "undiscoveredPresentCount": 0,
+                        "entriesBySourceBackend": {},
+                        "entriesByTarget": {},
+                        "artifactsByTarget": {},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "externalCorpus.manifest must match project.externalCorpusManifest"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_external_corpus_entry_count_mismatches(
     tmp_path,
 ):
