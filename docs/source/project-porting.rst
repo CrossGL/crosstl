@@ -104,12 +104,13 @@ Project reports are JSON documents with:
 - ``project`` metadata: root, config path, source roots, include/exclude
   patterns, targets, output directory, include directories, and define/variant
   counts.
-- ``summary``: total unit/artifact/diagnostic counts plus rollups by source
-  backend and target backend.
+- ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
+  source backend and target backend.
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, and source overrides.
 - ``artifacts``: attempted outputs with source path, source backend, target,
-  output path, status, source hash, and pipeline provenance.
+  output path, status, source hash, pipeline provenance, and file-granularity
+  source-map anchors for successful translations.
 - ``diagnostics``: structured diagnostics using severity, code, message,
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract.

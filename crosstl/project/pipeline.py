@@ -130,6 +130,31 @@ def _source_hash(path: Path) -> dict[str, str]:
     return {"algorithm": "sha256", "value": digest}
 
 
+def _file_span(path: Path, report_path: str) -> SourceLocation:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    line = 1
+    column = 1
+    for character in text:
+        if character == "\n":
+            line += 1
+            column = 1
+        else:
+            column += 1
+    return SourceLocation(
+        file=report_path,
+        length=len(text),
+        end_line=line,
+        end_column=column,
+        end_offset=len(text),
+    )
+
+
+def _artifact_report_path(path: Path, config: ProjectConfig) -> str:
+    return (
+        _relpath(path, config.root) if _is_relative_to(path, config.root) else str(path)
+    )
+
+
 def _diagnostic_counts(diagnostics: Sequence[ProjectDiagnostic]) -> dict[str, int]:
     counts = {"note": 0, "warning": 0, "error": 0}
     for diagnostic in diagnostics:
@@ -176,6 +201,14 @@ def _artifact_counts_by_target(
         elif artifact.get("status") == "failed":
             row["failedCount"] += 1
     return {target: counts[target] for target in sorted(counts)}
+
+
+def _source_map_counts(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    source_map_count = sum(1 for artifact in artifacts if artifact.get("sourceMap"))
+    return {
+        "sourceMapCount": source_map_count,
+        "fineGrainedSourceMapCount": 0,
+    }
 
 
 def _resolved_include_dir(config: ProjectConfig, include_dir: str) -> Path:
@@ -432,6 +465,7 @@ class ProjectPortabilityReport:
             1 for artifact in self.artifacts if artifact.get("status") == "failed"
         )
         diagnostics = [diagnostic.to_json() for diagnostic in self.diagnostics]
+        source_map_counts = _source_map_counts(self.artifacts)
         return {
             "schemaVersion": REPORT_SCHEMA_VERSION,
             "kind": REPORT_KIND,
@@ -463,6 +497,7 @@ class ProjectPortabilityReport:
                 "diagnosticCounts": _diagnostic_counts(self.diagnostics),
                 "unitsBySourceBackend": _unit_counts_by_source_backend(self.units),
                 "artifactsByTarget": _artifact_counts_by_target(self.artifacts),
+                **source_map_counts,
             },
             "units": [unit.to_json() for unit in self.units],
             "skipped": list(self.skipped),
@@ -672,6 +707,31 @@ def _artifact_path(
     return config.output_path / target / relative.with_suffix(extension)
 
 
+def _artifact_source_map(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+    output_path: Path,
+) -> dict[str, Any]:
+    artifact_path = _artifact_report_path(output_path, config)
+    source_span = _file_span(unit.path, unit.relative_path)
+    generated_span = _file_span(output_path, artifact_path)
+    return {
+        "schemaVersion": 1,
+        "kind": "crosstl-artifact-source-map",
+        "mappingGranularity": "file",
+        "target": target,
+        "source": source_span.to_json(),
+        "generated": generated_span.to_json(),
+        "mappings": [
+            {
+                "source": source_span.to_json(),
+                "generated": generated_span.to_json(),
+            }
+        ],
+    }
+
+
 def _runtime_migration_actions(
     units: Sequence[ProjectTranslationUnit], targets: Sequence[str]
 ) -> list[dict[str, Any]]:
@@ -738,11 +798,7 @@ def translate_project(
                 "source": unit.relative_path,
                 "sourceBackend": unit.source_backend,
                 "target": target,
-                "path": (
-                    _relpath(output_path, config.root)
-                    if _is_relative_to(output_path, config.root)
-                    else str(output_path)
-                ),
+                "path": _artifact_report_path(output_path, config),
                 "status": "translated",
                 "sourceHash": _source_hash(unit.path),
                 "provenance": {
@@ -765,6 +821,9 @@ def translate_project(
                     source_backend=unit.source_backend,
                     include_paths=include_paths,
                     defines=config.defines,
+                )
+                artifact["sourceMap"] = _artifact_source_map(
+                    config, unit, target, output_path
                 )
             except Exception as exc:  # noqa: BLE001
                 # Project translation reports per-artifact failures so one bad

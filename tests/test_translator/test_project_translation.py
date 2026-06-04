@@ -418,6 +418,35 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     ]
 
 
+def test_translate_project_records_file_granularity_source_maps(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    source_map = artifact["sourceMap"]
+
+    assert payload["summary"]["sourceMapCount"] == 1
+    assert payload["summary"]["fineGrainedSourceMapCount"] == 0
+    assert source_map["schemaVersion"] == 1
+    assert source_map["kind"] == "crosstl-artifact-source-map"
+    assert source_map["mappingGranularity"] == "file"
+    assert source_map["target"] == "cgl"
+    assert source_map["source"]["file"] == "simple.cgl"
+    assert source_map["generated"]["file"] == "out/cgl/simple.cgl"
+    assert source_map["source"]["length"] == len(SIMPLE_CROSSL)
+    assert source_map["generated"]["length"] == len(SIMPLE_CROSSL)
+    assert source_map["mappings"] == [
+        {
+            "source": source_map["source"],
+            "generated": source_map["generated"],
+        }
+    ]
+
+
 def test_translate_project_normalizes_and_deduplicates_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

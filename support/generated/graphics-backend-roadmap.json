@@ -87,7 +87,7 @@
       "category": "project",
       "feature": "Source provenance and source-map bridge",
       "feature_id": "project.source_provenance",
-      "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+      "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
       "status": "partial"
     },
     {
@@ -96,7 +96,7 @@
       "category": "project",
       "feature": "Source provenance and source-map bridge",
       "feature_id": "project.source_provenance",
-      "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+      "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
       "status": "partial"
     },
     {
@@ -105,7 +105,7 @@
       "category": "project",
       "feature": "Source provenance and source-map bridge",
       "feature_id": "project.source_provenance",
-      "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+      "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
       "status": "partial"
     },
     {
@@ -1983,25 +1983,28 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
           ],
-          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "status": "partial"
         },
         "metal": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
           ],
-          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "status": "partial"
         },
         "opengl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps"
           ],
-          "notes": "Project reports include source hashes, relative paths, source backend names, and intermediate CrossGL provenance. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "status": "partial"
         }
       }
