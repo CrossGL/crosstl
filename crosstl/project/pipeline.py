@@ -142,6 +142,16 @@ def _is_repository_relative_glob(pattern: str) -> bool:
     )
 
 
+def _is_repository_relative_report_path(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    parts = [part for part in normalized.split("/") if part and part != "."]
+    return (
+        not Path(path).is_absolute()
+        and not PureWindowsPath(path).is_absolute()
+        and ".." not in parts
+    )
+
+
 def _repository_relative_globs(patterns: Sequence[str]) -> list[str]:
     return [pattern for pattern in patterns if _is_repository_relative_glob(pattern)]
 
@@ -1339,6 +1349,58 @@ def _string_list_contract_reasons(prefix: str, value: Any) -> list[str]:
     return []
 
 
+def _repository_path_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not _is_non_empty_string(value):
+        return [f"{prefix} must be a string"]
+    if not _is_repository_relative_report_path(value):
+        return [f"{prefix} must be repository-relative"]
+    return []
+
+
+def _unit_contract_reasons(index: int, unit: Any) -> list[str]:
+    prefix = f"units[{index}]"
+    if not isinstance(unit, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    path = unit.get("path")
+    reasons.extend(_repository_path_contract_reasons(f"{prefix}.path", path))
+
+    unit_id = unit.get("id")
+    if not _is_non_empty_string(unit_id):
+        reasons.append(f"{prefix}.id must be a string")
+    elif _is_non_empty_string(path) and unit_id != path:
+        reasons.append(f"{prefix}.id must match {prefix}.path")
+
+    if not _is_non_empty_string(unit.get("sourceBackend")):
+        reasons.append(f"{prefix}.sourceBackend must be a string")
+    if not isinstance(unit.get("extension"), str):
+        reasons.append(f"{prefix}.extension must be a string")
+    if "sourceOverride" in unit and not _is_non_empty_string(
+        unit.get("sourceOverride")
+    ):
+        reasons.append(f"{prefix}.sourceOverride must be a string")
+    return reasons
+
+
+def _skipped_contract_reasons(index: int, skipped: Any) -> list[str]:
+    prefix = f"skipped[{index}]"
+    if not isinstance(skipped, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    reasons.extend(
+        _repository_path_contract_reasons(f"{prefix}.path", skipped.get("path"))
+    )
+    if not _is_non_empty_string(skipped.get("reason")):
+        reasons.append(f"{prefix}.reason must be a string")
+    if "sourceOverride" in skipped and not _is_non_empty_string(
+        skipped.get("sourceOverride")
+    ):
+        reasons.append(f"{prefix}.sourceOverride must be a string")
+    return reasons
+
+
 def _config_string_list_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         return [f"{prefix} must be a list of strings"]
@@ -1704,6 +1766,9 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
     if has_summary or "units" in report:
         if not isinstance(units, list):
             reasons.append("units must be a list")
+        else:
+            for index, unit in enumerate(units):
+                reasons.extend(_unit_contract_reasons(index, unit))
 
     skipped = report.get("skipped", [])
     if has_summary and "skipped" not in report:
@@ -1711,6 +1776,9 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
     if has_summary or "skipped" in report:
         if not isinstance(skipped, list):
             reasons.append("skipped must be a list")
+        else:
+            for index, skipped_record in enumerate(skipped):
+                reasons.extend(_skipped_contract_reasons(index, skipped_record))
 
     artifacts = report.get("artifacts", [])
     if has_summary and "artifacts" not in report:

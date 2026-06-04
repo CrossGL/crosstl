@@ -894,6 +894,62 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     )
 
 
+def test_validate_project_report_rejects_malformed_unit_and_skipped_records(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-unit-record-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "units": [
+                    {
+                        "id": "other.cgl",
+                        "path": "../simple.cgl",
+                        "sourceBackend": "",
+                        "extension": [],
+                        "sourceOverride": "",
+                    },
+                    "not a unit",
+                ],
+                "skipped": [
+                    {
+                        "path": "/tmp/outside.txt",
+                        "reason": "",
+                        "sourceOverride": [],
+                    },
+                    "not a skipped record",
+                ],
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].path must be repository-relative" in diagnostic["message"]
+    assert "units[0].id must match units[0].path" in diagnostic["message"]
+    assert "units[0].sourceBackend must be a string" in diagnostic["message"]
+    assert "units[0].extension must be a string" in diagnostic["message"]
+    assert "units[0].sourceOverride must be a string" in diagnostic["message"]
+    assert "units[1] must be an object" in diagnostic["message"]
+    assert "skipped[0].path must be repository-relative" in diagnostic["message"]
+    assert "skipped[0].reason must be a string" in diagnostic["message"]
+    assert "skipped[0].sourceOverride must be a string" in diagnostic["message"]
+    assert "skipped[1] must be an object" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
