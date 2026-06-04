@@ -295,6 +295,111 @@ def _run_validate_project(args):
     return 0 if payload["success"] else 1
 
 
+def _format_project_report_inspection(payload):
+    report = payload.get("report", {})
+    summary = report.get("summary", {}) if isinstance(report, Mapping) else {}
+    project = report.get("project", {}) if isinstance(report, Mapping) else {}
+    diagnostic_counts = summary.get("diagnosticCounts", {})
+    validation_counts = payload.get("validation", {}).get("diagnosticCounts", {})
+    targets = project.get("targets", [])
+    target_names = (
+        [str(target) for target in targets] if isinstance(targets, list) else []
+    )
+    lines = [
+        f"Project report: {payload.get('sourceReport')}",
+        f"Status: {'ok' if payload.get('success') else 'failed'}",
+        "Targets: " + (", ".join(target_names) if target_names else "(none)"),
+        (
+            "Units: "
+            f"{summary.get('unitCount', 0)}; artifacts: "
+            f"{summary.get('artifactCount', 0)} "
+            f"({summary.get('translatedCount', 0)} translated, "
+            f"{summary.get('failedCount', 0)} failed)"
+        ),
+        (
+            "Diagnostics: "
+            f"{diagnostic_counts.get('error', 0)} errors, "
+            f"{diagnostic_counts.get('warning', 0)} warnings, "
+            f"{diagnostic_counts.get('note', 0)} notes"
+        ),
+        (
+            "Validation diagnostics: "
+            f"{validation_counts.get('error', 0)} errors, "
+            f"{validation_counts.get('warning', 0)} warnings, "
+            f"{validation_counts.get('note', 0)} notes"
+        ),
+    ]
+
+    external_corpus = payload.get("externalCorpus")
+    if isinstance(external_corpus, Mapping):
+        external_summary = external_corpus.get("summary", {})
+        if isinstance(external_summary, Mapping):
+            lines.append(
+                "External corpus: "
+                f"{external_corpus.get('status', 'unknown')}; "
+                f"{external_summary.get('entryCount', 0)} entries, "
+                f"{external_summary.get('presentCount', 0)} present, "
+                f"{external_summary.get('missingCount', 0)} missing"
+            )
+
+    failed_artifacts = payload.get("failedArtifacts", [])
+    if failed_artifacts:
+        lines.append("Failed artifacts:")
+        for artifact in failed_artifacts:
+            if not isinstance(artifact, Mapping):
+                continue
+            description = (
+                f"- {artifact.get('source')} -> {artifact.get('target')} "
+                f"at {artifact.get('path')}"
+            )
+            if artifact.get("error"):
+                description = f"{description}: {artifact.get('error')}"
+            lines.append(description)
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if not isinstance(diagnostic, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{diagnostic.get('severity', 'note')} "
+                f"{diagnostic.get('code', 'unknown')}: "
+                f"{diagnostic.get('message', '')}"
+            )
+
+    migration = payload.get("migration")
+    actions = migration.get("actions", []) if isinstance(migration, Mapping) else []
+    if actions:
+        lines.append("Migration actions:")
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            lines.append(
+                "- " f"{action.get('kind', 'unknown')}: " f"{action.get('message', '')}"
+            )
+    return "\n".join(lines) + "\n"
+
+
+def _run_inspect_report(args):
+    from .project import inspect_project_report
+
+    payload = inspect_project_report(args.report, run_toolchains=args.run_toolchains)
+    if args.format == "text":
+        text = _format_project_report_inspection(payload)
+        if args.output:
+            path = Path(args.output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            print(f"Wrote {path}")
+        else:
+            print(text, end="")
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(description="CrossGL Shader Translator")
     subparsers = parser.add_subparsers(dest="command")
@@ -370,6 +475,24 @@ def _build_parser():
     )
     validate_parser.set_defaults(func=_run_validate_project)
 
+    inspect_parser = subparsers.add_parser(
+        "inspect-report", help="Inspect an existing project portability report"
+    )
+    inspect_parser.add_argument("report", help="Project portability report JSON")
+    inspect_parser.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help="Inspection output format",
+    )
+    inspect_parser.add_argument("--output", "-o", help="Write inspection output")
+    inspect_parser.add_argument(
+        "--run-toolchains",
+        action="store_true",
+        help="Run lightweight optional toolchain smoke checks when tools exist",
+    )
+    inspect_parser.set_defaults(func=_run_inspect_report)
+
     report_parser = subparsers.add_parser(
         "report", help="Emit a scan-only project portability report"
     )
@@ -386,7 +509,14 @@ def _build_parser():
 
 
 def _use_legacy_cli(argv):
-    commands = {"translate", "scan", "translate-project", "validate-project", "report"}
+    commands = {
+        "translate",
+        "scan",
+        "translate-project",
+        "validate-project",
+        "inspect-report",
+        "report",
+    }
     return argv and argv[0] not in commands and not argv[0].startswith("-")
 
 

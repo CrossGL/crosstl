@@ -4741,7 +4741,7 @@
       "support": {
         "directx": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, exposes inspect-report JSON/text summaries with nonzero status for validation errors, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4763,12 +4763,15 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_writes_json_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics"
           ]
         },
         "opengl": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, exposes inspect-report JSON/text summaries with nonzero status for validation errors, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4790,12 +4793,15 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_writes_json_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics"
           ]
         },
         "metal": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, exposes inspect-report JSON/text summaries with nonzero status for validation errors, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4817,12 +4823,15 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_writes_json_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics"
           ]
         },
         "vulkan": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, exposes inspect-report JSON/text summaries with nonzero status for validation errors, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4844,12 +4853,15 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_writes_json_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics"
           ]
         },
         "cuda": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, exposes inspect-report JSON/text summaries with nonzero status for validation errors, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4871,12 +4883,15 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_writes_json_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics"
           ]
         },
         "hip": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, exposes inspect-report JSON/text summaries with nonzero status for validation errors, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4898,12 +4913,15 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_writes_json_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics"
           ]
         },
         "mojo": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, exposes inspect-report JSON/text summaries with nonzero status for validation errors, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4925,12 +4943,15 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_writes_json_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics"
           ]
         },
         "rust": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, exposes inspect-report JSON/text summaries with nonzero status for validation errors, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4952,12 +4973,15 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_writes_json_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics"
           ]
         },
         "slang": {
           "status": "diagnostic",
-          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, exposes inspect-report JSON/text summaries with nonzero status for validation errors, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
@@ -4979,7 +5003,10 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_writes_json_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics"
           ]
         }
       }

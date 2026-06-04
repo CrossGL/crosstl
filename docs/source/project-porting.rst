@@ -77,6 +77,17 @@ paths resolve outside the repository, or opt-in toolchain smoke checks fail.
 Toolchain smoke checks only run for translated artifacts that still exist inside
 the repository.
 
+Inspect an existing report as a concise JSON or text summary:
+
+.. code-block:: bash
+
+   python -m crosstl._crosstl inspect-report crosstl-out/portability-report.json \
+     --format text
+
+Report inspection includes validation status, project counts, failed artifacts,
+diagnostics, external corpus rollups, and migration actions. It exits nonzero
+when validation finds report errors.
+
 Configuration
 -------------
 
@@ -175,7 +186,7 @@ Project reports are JSON documents with:
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract.
 - ``validation``: report contract checks, generated timestamp and generator
-  metadata checks, failed
+  metadata checks, report inspection summaries, failed
   source artifact checks, project metadata and config count checks, unit and
   skipped record shape checks, artifact record shape checks, source hash and
   provenance checks, source-map record shape and anchor consistency checks,

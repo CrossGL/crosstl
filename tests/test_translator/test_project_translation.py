@@ -9,6 +9,7 @@ import pytest
 
 import crosstl.project.pipeline as project_pipeline
 from crosstl.project import (
+    inspect_project_report,
     load_project_config,
     scan_project,
     translate_project,
@@ -2827,6 +2828,92 @@ def test_project_cli_validate_project_reports_invalid_report_shape(tmp_path):
     assert result.returncode == 1
     assert payload["success"] is False
     assert payload["diagnostics"][0]["code"] == "project.validate.invalid-report"
+
+
+def test_inspect_project_report_summarizes_generated_report(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    payload = inspect_project_report(report_path)
+
+    assert payload["kind"] == "crosstl-project-report-inspection"
+    assert payload["sourceReport"] == str(report_path)
+    assert payload["success"] is True
+    assert payload["report"]["available"] is True
+    assert payload["report"]["summary"]["unitCount"] == 1
+    assert payload["report"]["summary"]["translatedCount"] == 1
+    assert payload["report"]["project"]["targets"] == ["cgl"]
+    assert payload["validation"]["success"] is True
+    assert payload["failedArtifacts"] == []
+    assert payload["migration"]["actions"][0]["kind"] == ("manual-runtime-integration")
+
+
+def test_project_cli_inspect_report_writes_json_summary(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    output = tmp_path / "inspection.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--output",
+            str(output),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert result.returncode == 0
+    assert "Wrote" in result.stdout
+    assert payload["success"] is True
+    assert payload["report"]["summary"]["artifactCount"] == 1
+    assert payload["report"]["generator"]["pipeline"] == "project-porting"
+
+
+def test_project_cli_inspect_report_text_fails_on_error_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = scan_project(repo).to_report(targets=["not-a-backend"])
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Status: failed" in result.stdout
+    assert "Targets: not-a-backend" in result.stdout
+    assert "Validation diagnostics: 1 errors" in result.stdout
+    assert "project.config.unsupported-target" in result.stdout
 
 
 def test_legacy_single_file_cli_still_works(tmp_path):

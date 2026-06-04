@@ -24,6 +24,7 @@ from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
 REPORT_KIND = "crosstl-project-portability-report"
+REPORT_INSPECTION_KIND = "crosstl-project-report-inspection"
 REPORT_SCHEMA_VERSION = 1
 REPORT_GENERATOR_PIPELINE = "project-porting"
 REPORT_MIGRATION_SCOPE = "shader-kernel-translation"
@@ -1581,6 +1582,123 @@ def validate_project_report(
         diagnostic.to_json() for diagnostic in diagnostic_objects
     ]
     return _validation_report_payload(path, diagnostics, validation)
+
+
+def inspect_project_report(
+    report_path: str | os.PathLike[str],
+    *,
+    run_toolchains: bool = False,
+    max_diagnostics: int = 20,
+    max_failed_artifacts: int = 20,
+) -> dict[str, Any]:
+    """Build a concise inspection summary for a project portability report."""
+    path = Path(report_path)
+    validation_report = validate_project_report(path, run_toolchains=run_toolchains)
+    payload: dict[str, Any] = {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": REPORT_INSPECTION_KIND,
+        "sourceReport": str(path),
+        "generatedAt": int(time.time()),
+        "success": bool(validation_report.get("success")),
+        "report": {"available": False},
+        "failedArtifacts": [],
+        "diagnostics": list(validation_report.get("diagnostics", []))[
+            : max(0, max_diagnostics)
+        ],
+        "validation": {
+            "success": bool(validation_report.get("success")),
+            "diagnosticCounts": dict(validation_report.get("diagnosticCounts", {})),
+            "result": dict(validation_report.get("validation", {})),
+        },
+    }
+
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return payload
+    if not isinstance(report, Mapping):
+        return payload
+
+    summary = report.get("summary")
+    project = report.get("project")
+    generator = report.get("generator")
+    payload["report"] = {
+        "available": True,
+        "kind": report.get("kind"),
+        "generatedAt": report.get("generatedAt"),
+        "generator": dict(generator) if isinstance(generator, Mapping) else {},
+        "project": _inspection_project_summary(project),
+        "summary": dict(summary) if isinstance(summary, Mapping) else {},
+    }
+
+    artifacts = report.get("artifacts", [])
+    if isinstance(artifacts, Sequence) and not isinstance(
+        artifacts, (str, bytes, bytearray)
+    ):
+        failed_artifacts = [
+            _inspection_failed_artifact(artifact)
+            for artifact in artifacts
+            if isinstance(artifact, Mapping) and artifact.get("status") == "failed"
+        ]
+        payload["failedArtifacts"] = failed_artifacts[: max(0, max_failed_artifacts)]
+
+    migration = report.get("migration")
+    if isinstance(migration, Mapping):
+        payload["migration"] = {
+            "scope": migration.get("scope"),
+            "actions": (
+                list(migration.get("actions", []))
+                if isinstance(migration.get("actions"), list)
+                else []
+            ),
+        }
+
+    external_corpus = report.get("externalCorpus")
+    if isinstance(external_corpus, Mapping):
+        external_summary = external_corpus.get("summary")
+        payload["externalCorpus"] = {
+            "status": external_corpus.get("status"),
+            "summary": (
+                dict(external_summary) if isinstance(external_summary, Mapping) else {}
+            ),
+        }
+    return payload
+
+
+def _inspection_project_summary(project: Any) -> dict[str, Any]:
+    if not isinstance(project, Mapping):
+        return {}
+    summary = {
+        "root": project.get("root"),
+        "targets": (
+            list(project.get("targets", []))
+            if isinstance(project.get("targets"), list)
+            else []
+        ),
+        "outputDir": project.get("outputDir"),
+    }
+    for field_name in (
+        "sourceOverrideCount",
+        "defineCount",
+        "variantCount",
+        "externalCorpusManifest",
+    ):
+        if field_name in project:
+            summary[field_name] = project[field_name]
+    return summary
+
+
+def _inspection_failed_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    failed = {
+        "source": artifact.get("source"),
+        "target": artifact.get("target"),
+        "path": artifact.get("path"),
+    }
+    if "variant" in artifact:
+        failed["variant"] = artifact.get("variant")
+    if "error" in artifact:
+        failed["error"] = artifact.get("error")
+    return failed
 
 
 def _toolchain_run_diagnostics(
