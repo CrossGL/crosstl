@@ -1940,6 +1940,39 @@ def test_slang_saturate_builtin_lowers_to_crossgl_clamp():
     assert "saturate(" not in generated_code
 
 
+def test_derivative_intrinsics_codegen_from_official_fragment_derivative_tests():
+    # Source: shader-slang/slang tests/hlsl-intrinsic/fragment-derivative.slang
+    # at 85c65f862c045c929814e1abe6b31828d78030ed exercises ddx/ddy,
+    # ddx_fine/ddy_fine, ddx_coarse/ddy_coarse, and fwidth_fine/fwidth_coarse.
+    code = """
+    float4 derivative(float2 uv)
+    {
+        float fine = ddx_fine(uv.x);
+        float coarse = ddy_coarse(uv.y);
+        return float4(ddx(uv.x), ddy(uv.y),
+                      fwidth_fine(fine), fwidth_coarse(coarse));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float fine = dFdxFine(uv.x);" in generated_code
+    assert "float coarse = dFdyCoarse(uv.y);" in generated_code
+    assert (
+        "return vec4(dFdx(uv.x), dFdy(uv.y), "
+        "fwidthFine(fine), fwidthCoarse(coarse));" in generated_code
+    )
+    assert "ddx(" not in generated_code
+    assert "ddy(" not in generated_code
+    assert "ddx_fine" not in generated_code
+    assert "ddy_coarse" not in generated_code
+    assert "fwidth_fine" not in generated_code
+    assert "fwidth_coarse" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_standalone_function_call_statement_codegen():
     code = """
     void helper(float x) {

@@ -39,6 +39,13 @@ CROSSGL_RESERVED_IDENTIFIERS = set(CROSSGL_KEYWORDS) | {"true", "false"}
 SHORT_INTEGER_LITERAL_SUFFIX_RE = re.compile(
     r"^(?P<body>(?:0[xX][0-9a-fA-F]+|\d+))(?P<suffix>[uU][sS]|[sS])$"
 )
+DOUBLE_FLOAT_LITERAL_SUFFIX_RE = re.compile(
+    r"^(?P<body>"
+    r"0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)[pP][+-]?\d+"
+    r"|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?"
+    r"|\d+[eE][+-]?\d+"
+    r")[lL][fF]$"
+)
 
 
 class GLSLToCrossGLConverter:
@@ -2074,6 +2081,9 @@ class GLSLToCrossGLConverter:
 
     def normalize_number_literal(self, value):
         text = str(value)
+        double_float_match = DOUBLE_FLOAT_LITERAL_SUFFIX_RE.match(text)
+        if double_float_match:
+            return double_float_match.group("body")
         match = SHORT_INTEGER_LITERAL_SUFFIX_RE.match(text)
         if not match:
             return text

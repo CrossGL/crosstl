@@ -2000,6 +2000,7 @@ class VulkanParser:
         if dref is not None:
             base_args.append(dref)
         offset = self.spirv_assembly_image_offset_operand(parsed_operands)
+        bias = self.spirv_assembly_image_bias_operand(parsed_operands)
 
         if "Grad" in parsed_operands and len(parsed_operands["Grad"]) >= 2:
             if "Proj" in opcode:
@@ -2032,10 +2033,16 @@ class VulkanParser:
             )
 
         if offset is not None and "Proj" not in opcode:
-            return FunctionCallNode("textureOffset", [*base_args, offset])
+            args = [*base_args, offset]
+            if bias is not None:
+                args.append(bias)
+            return FunctionCallNode("textureOffset", args)
 
         function_name = "textureProj" if "Proj" in opcode else "texture"
-        return FunctionCallNode(function_name, base_args)
+        args = list(base_args)
+        if bias is not None:
+            args.append(bias)
+        return FunctionCallNode(function_name, args)
 
     def spirv_assembly_image_gather_expression(
         self,
@@ -2144,6 +2151,12 @@ class VulkanParser:
             values = parsed_operands.get(operand_name)
             if values:
                 return values[0]
+        return None
+
+    def spirv_assembly_image_bias_operand(self, parsed_operands):
+        values = parsed_operands.get("Bias")
+        if values:
+            return values[0]
         return None
 
     def spirv_assembly_image_const_offsets_operand(self, parsed_operands):
