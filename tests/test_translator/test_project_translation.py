@@ -2267,6 +2267,99 @@ def test_project_cli_translate_project_writes_report(tmp_path):
     assert (repo / "out" / "opengl" / "simple.glsl").exists()
 
 
+def test_project_cli_translate_project_applies_include_dir_and_define_overrides(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir(parents=True)
+    (include_dir / "shared.glsl").write_text(
+        "vec4 project_color() { return vec4(1.0); }\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #ifdef USE_PROJECT_SHARED
+            #include <shared.glsl>
+            #else
+            #error "missing project define"
+            #endif
+
+            layout(location = 0) out vec4 outColor;
+
+            void main()
+            {
+                outColor = project_color();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--target",
+            "cgl",
+            "--output-dir",
+            "translated",
+            "--include-dir",
+            "includes",
+            "--define",
+            "USE_PROJECT_SHARED=1",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    output = repo / "translated" / "cgl" / "shaders" / "main.cgl"
+
+    assert payload["project"]["includeDirs"] == ["includes"]
+    assert payload["project"]["defines"] == {"USE_PROJECT_SHARED": "1"}
+    assert payload["summary"]["translatedCount"] == 1
+    assert "project_color" in output.read_text(encoding="utf-8")
+
+
+def test_project_cli_scan_rejects_empty_define_override(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--define",
+            "=1",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Error: --define entries must use NAME or NAME=VALUE" in result.stdout
+
+
 def test_project_cli_translate_project_fails_on_error_diagnostics(tmp_path):
     repo = tmp_path / "repo"
     outside_dir = tmp_path / "outside"

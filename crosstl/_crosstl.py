@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
@@ -183,10 +184,51 @@ def _write_json_payload(payload, output_path=None):
         print(text, end="")
 
 
+def _parse_project_define_overrides(values):
+    defines = {}
+    for value in values or []:
+        name, separator, define_value = value.partition("=")
+        name = name.strip()
+        if not name:
+            raise ValueError("--define entries must use NAME or NAME=VALUE")
+        defines[name] = define_value.strip() if separator else "1"
+    return defines
+
+
 def _load_project_config_from_args(args):
     from .project import load_project_config
 
-    return load_project_config(args.root, args.config)
+    config = load_project_config(args.root, args.config)
+    include_dirs = tuple(config.include_dirs) + tuple(
+        getattr(args, "include_dir", None) or ()
+    )
+    define_overrides = _parse_project_define_overrides(getattr(args, "define", None))
+    if include_dirs == tuple(config.include_dirs) and not define_overrides:
+        return config
+    return replace(
+        config,
+        include_dirs=include_dirs,
+        defines={**dict(config.defines), **define_overrides},
+    )
+
+
+def _add_project_override_args(parser):
+    parser.add_argument(
+        "--include-dir",
+        action="append",
+        help="Project include directory override; repeatable",
+    )
+    parser.add_argument(
+        "--define",
+        action="append",
+        help="Project preprocessor define override as NAME or NAME=VALUE; repeatable",
+    )
+
+
+def _add_project_scan_args(parser):
+    parser.add_argument("root", help="Repository root to scan")
+    parser.add_argument("--config", help="Path to crosstl.toml")
+    _add_project_override_args(parser)
 
 
 def _run_project_scan(args):
@@ -253,8 +295,7 @@ def _build_parser():
     scan_parser = subparsers.add_parser(
         "scan", help="Scan a repository for supported shader/GPU sources"
     )
-    scan_parser.add_argument("root", help="Repository root to scan")
-    scan_parser.add_argument("--config", help="Path to crosstl.toml")
+    _add_project_scan_args(scan_parser)
     scan_parser.add_argument(
         "--target",
         "-b",
@@ -267,8 +308,7 @@ def _build_parser():
     translate_project_parser = subparsers.add_parser(
         "translate-project", help="Translate all discovered project units"
     )
-    translate_project_parser.add_argument("root", help="Repository root to scan")
-    translate_project_parser.add_argument("--config", help="Path to crosstl.toml")
+    _add_project_scan_args(translate_project_parser)
     translate_project_parser.add_argument(
         "--target",
         "-b",
@@ -308,8 +348,7 @@ def _build_parser():
     report_parser = subparsers.add_parser(
         "report", help="Emit a scan-only project portability report"
     )
-    report_parser.add_argument("root", help="Repository root to scan")
-    report_parser.add_argument("--config", help="Path to crosstl.toml")
+    _add_project_scan_args(report_parser)
     report_parser.add_argument(
         "--target",
         "-b",

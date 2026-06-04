@@ -6,7 +6,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -15,7 +15,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -24,7 +24,7 @@
       "category": "project",
       "feature": "Project include resolution",
       "feature_id": "project.include_resolution",
-      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -33,7 +33,7 @@
       "category": "project",
       "feature": "Macro and define variants",
       "feature_id": "project.macro_variants",
-      "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -42,7 +42,7 @@
       "category": "project",
       "feature": "Macro and define variants",
       "feature_id": "project.macro_variants",
-      "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -51,7 +51,7 @@
       "category": "project",
       "feature": "Macro and define variants",
       "feature_id": "project.macro_variants",
-      "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+      "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
       "status": "partial"
     },
     {
@@ -1834,9 +1834,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "metal": {
@@ -1844,9 +1845,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "opengl": {
@@ -1854,9 +1856,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
           ],
-          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         }
       }
@@ -1873,9 +1876,11 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
           ],
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "metal": {
@@ -1884,9 +1889,11 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
           ],
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         },
         "opengl": {
@@ -1895,9 +1902,11 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override"
           ],
-          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, validates malformed define/variant metadata and undeclared artifact variants in reports, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides. Native preprocessor semantics remain backend-dependent, so this remains partial project support.",
           "status": "partial"
         }
       }

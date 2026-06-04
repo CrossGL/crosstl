@@ -53,6 +53,11 @@ Translate every discovered unit to one or more targets:
 Project translation exits nonzero when the report contains failed artifacts or
 error diagnostics.
 
+Project scan, report, and translation commands also accept repeatable
+``--include-dir`` and ``--define`` overrides. CLI defines use ``NAME`` or
+``NAME=VALUE`` syntax and override matching names loaded from ``crosstl.toml``.
+These overrides are recorded in the emitted project report.
+
 Unsupported target backend names are reported as configuration diagnostics in
 scan, report, and translation output. Translation still records per-artifact
 failures for any artifact attempt that cannot be generated.
@@ -111,15 +116,16 @@ variants are recorded in project reports. Missing include directories are
 reported as configuration diagnostics. Include directories that resolve outside
 the repository are reported as non-blocking configuration diagnostics so reports
 retain portability and provenance context. Include directories and defines are
-passed to source frontends that expose preprocessor options. ``output_dir`` must
-resolve inside the repository root; paths that escape the repository are reported
-as configuration diagnostics and artifacts are not written. When named variants
-are configured, project translation emits one artifact attempt per variant and
-passes base defines merged with the variant's define overrides to the source
-frontend. Variant artifacts are written under a variant path segment inside each
-target output directory, and the original variant name is recorded on the
-artifact and validation records. Native preprocessor behavior remains
-backend-dependent.
+passed to source frontends that expose preprocessor options. CLI include and
+define overrides are merged with this configuration before scan or translation.
+``output_dir`` must resolve inside the repository root; paths that escape the
+repository are reported as configuration diagnostics and artifacts are not
+written. When named variants are configured, project translation emits one
+artifact attempt per variant and passes base defines merged with the variant's
+define overrides to the source frontend. Variant artifacts are written under a
+variant path segment inside each target output directory, and the original
+variant name is recorded on the artifact and validation records. Native
+preprocessor behavior remains backend-dependent.
 
 ``external_corpus_manifest`` points at an optional repository-relative JSON
 manifest of pinned upstream shader or GPU-source reductions. Project reports use
