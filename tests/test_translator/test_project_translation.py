@@ -301,7 +301,6 @@ def test_translate_project_honors_source_backend_overrides(tmp_path):
         textwrap.dedent("""
             [project]
             source_roots = ["gpu"]
-            include = ["**/*"]
             targets = ["opengl"]
             output_dir = "translated"
 
@@ -333,7 +332,6 @@ def test_scan_project_reports_unsupported_source_overrides(tmp_path):
         textwrap.dedent("""
             [project]
             source_roots = ["gpu"]
-            include = ["**/*"]
 
             [project.sources]
             "gpu/*.shader" = "unknown-backend"

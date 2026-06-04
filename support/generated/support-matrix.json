@@ -1216,7 +1216,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1225,7 +1225,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1234,7 +1234,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1243,7 +1243,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1252,7 +1252,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1261,7 +1261,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1270,7 +1270,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1279,7 +1279,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -1288,7 +1288,7 @@
       "category": "project",
       "feature": "Batch project translation",
       "feature_id": "project.batch_translation",
-      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+      "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
       "status": "partial"
     },
     {
@@ -5768,117 +5768,135 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "directx": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "hip": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "metal": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "mojo": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "opengl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "rust": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "slang": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes source override patterns during default discovery, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         }
       }
@@ -6073,9 +6091,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "directx": {
@@ -6084,9 +6103,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "hip": {
@@ -6095,9 +6115,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "metal": {
@@ -6106,9 +6127,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "mojo": {
@@ -6117,9 +6139,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "opengl": {
@@ -6128,9 +6151,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "rust": {
@@ -6139,9 +6163,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "slang": {
@@ -6150,9 +6175,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         },
         "vulkan": {
@@ -6161,9 +6187,10 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides"
           ],
-          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
+          "notes": "The project pipeline batches through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves relative output paths, refuses to write artifacts outside the repository, and records failures per artifact. Full multi-corpus target coverage remains ongoing.",
           "status": "partial"
         }
       }

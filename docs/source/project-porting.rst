@@ -94,8 +94,10 @@ configuration contract is intentionally small:
 ``exclude`` use shell-style patterns against repository-relative paths. Missing
 source roots and roots that resolve outside the repository are reported as scan
 diagnostics. Source overrides allow extensionless or non-standard files to be
-assigned to a registered source backend; invalid override backend names are
-reported as configuration diagnostics. Include directories, defines, and
+assigned to a registered source backend. Override patterns are also considered
+during default discovery, so override-only files do not require broad include
+globs. Invalid override backend names are reported as configuration diagnostics.
+Include directories, defines, and
 variants are recorded in project reports. Missing include directories are
 reported as configuration diagnostics. Include directories that resolve outside
 the repository are reported as non-blocking configuration diagnostics so reports

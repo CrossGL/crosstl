@@ -616,8 +616,10 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
     known_extensions = tuple(SOURCE_REGISTRY.extensions())
     include_patterns = list(config.include_patterns)
     explicit_include_patterns = bool(include_patterns)
+    source_override_patterns = set(config.source_overrides)
     if not explicit_include_patterns:
         include_patterns = [f"**/*{extension}" for extension in known_extensions]
+        include_patterns.extend(source_override_patterns)
 
     candidates: set[Path] = set()
     for source_root in config.source_roots:
@@ -627,7 +629,7 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
         if not absolute_root.exists():
             continue
         for pattern in include_patterns:
-            if explicit_include_patterns:
+            if explicit_include_patterns or pattern in source_override_patterns:
                 candidates.update(
                     path
                     for path in config.root.glob(pattern)
