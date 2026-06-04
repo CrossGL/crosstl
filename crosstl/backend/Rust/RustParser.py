@@ -1670,6 +1670,9 @@ class RustParser:
         fields = []
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            while self.current_token[0] == "POUND":
+                self.parse_attributes()
+
             if self.current_token[0] == "RANGE":
                 self.eat("RANGE")
                 fields.append(("..", self.parse_expression()))

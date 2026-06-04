@@ -721,6 +721,26 @@ EXTERNAL_FIXTURES = [
                     return T(*(thread fp8_e8m0*)(&s));
                 }
             }
+            """
+        ),
+    },
+    {
+        "name": "mlx_fp_quantized_block_scope_typedef_alias",
+        "repo_url": MLX_REPO,
+        "commit": MLX_CURRENT_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/fp_quantized.h",
+        "roundtrip": False,
+        "source": (
+            """
+            void load_quantized() {
+                // Reduced from MLX qmv_quad_impl:
+                // typedef float U;
+                // thread U x_thread[values_per_thread];
+                constexpr int values_per_thread = 4;
+                typedef float U;
+                thread U x_thread[values_per_thread];
+                thread U result[8] = {0};
+            }
         """
         ),
     },

@@ -492,6 +492,30 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_block_scope_typedef_linalg_vector",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenDXIL/hlsl/linalg/api/vectors.hlsl",
+        code=textwrap.dedent("""
+            #include <dx/linalg.h>
+            using namespace dx::linalg;
+
+            ByteAddressBuffer BAB : register(t0);
+
+            [numthreads(4, 4, 4)]
+            void main(uint ID : SV_GroupID) {
+              typedef vector<half, 16> half16;
+              half16 srcF16 = BAB.Load<half16>(128);
+              InterpretedVector<uint, 4, ComponentEnum::F8_E4M3FN> convertedPacked =
+                  Convert<ComponentEnum::F8_E4M3FN, ComponentEnum::F16>(srcF16);
+            }
+        """).strip(),
+        contains=(
+            "half16 srcF16 = buffer_load(BAB, 128);",
+            "convertedPacked = Convert<ComponentEnum::F8_E4M3FN, ComponentEnum::F16>(srcF16);",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_native_16bit_vector_aliases",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

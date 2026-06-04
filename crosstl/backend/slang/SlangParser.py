@@ -42,6 +42,17 @@ class SlangParser:
         "expand",
         "each",
     }
+    DECLARATION_ANNOTATION_PREFIXES = {
+        "KnownBuiltin",
+        "TreatAsDifferentiable",
+        "__FunctionInterface",
+        "__builtin_requirement",
+        "__implicit_conversion",
+        "__intrinsic_op",
+        "__magic_type",
+        "__readNone",
+        "__unsafeForceInlineEarly",
+    }
     OPERATOR_SYMBOL_TOKENS = {
         "PLUS",
         "MINUS",
@@ -473,6 +484,12 @@ class SlangParser:
             if self.is_layout_qualifier_at(current_pos):
                 current_pos = self.skip_layout_qualifier_tokens(current_pos)
                 continue
+            if self.is_declaration_annotation_at(current_pos):
+                current_pos = self.skip_declaration_annotation_tokens(current_pos)
+                continue
+            if self.tokens[current_pos][0] == "LBRACKET":
+                current_pos = self.skip_attribute_list_tokens(current_pos)
+                continue
             if self.is_qualifier_token_at(current_pos):
                 current_pos += 1
             elif include_generic and self.tokens[current_pos][0] == "GENERIC":
@@ -499,6 +516,49 @@ class SlangParser:
             and self.tokens[index] == ("IDENTIFIER", "layout")
             and self.tokens[index + 1][0] == "LPAREN"
         )
+
+    def is_declaration_annotation_at(self, index):
+        return (
+            index < len(self.tokens)
+            and self.tokens[index][0] == "IDENTIFIER"
+            and self.tokens[index][1] in self.DECLARATION_ANNOTATION_PREFIXES
+        )
+
+    def skip_declaration_annotation_tokens(self, current_pos):
+        current_pos += 1
+        if current_pos < len(self.tokens) and self.tokens[current_pos][0] == "LPAREN":
+            return self.skip_parenthesized_tokens_at(current_pos)
+        return current_pos
+
+    def skip_parenthesized_tokens_at(self, current_pos):
+        depth = 0
+        while current_pos < len(self.tokens):
+            token_type = self.tokens[current_pos][0]
+            if token_type == "EOF":
+                raise SyntaxError("Unterminated parenthesized declaration annotation")
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return current_pos + 1
+            current_pos += 1
+        raise SyntaxError("Unterminated parenthesized declaration annotation")
+
+    def skip_attribute_list_tokens(self, current_pos):
+        depth = 0
+        while current_pos < len(self.tokens):
+            token_type = self.tokens[current_pos][0]
+            if token_type == "EOF":
+                raise SyntaxError("Unterminated attribute list")
+            if token_type == "LBRACKET":
+                depth += 1
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    return current_pos + 1
+            current_pos += 1
+        raise SyntaxError("Unterminated attribute list")
 
     def skip_layout_qualifier_tokens(self, current_pos):
         current_pos += 1
@@ -616,6 +676,8 @@ class SlangParser:
         while (
             self.current_token[0] == "GENERIC"
             or self.is_layout_qualifier_at(self.pos)
+            or self.is_declaration_annotation_at(self.pos)
+            or self.current_token[0] == "LBRACKET"
             or self.is_qualifier_token_at(self.pos)
         ):
             if self.current_token[0] == "GENERIC":
@@ -623,12 +685,21 @@ class SlangParser:
                 self.eat("GENERIC")
                 if self.current_token[0] == "LESS_THAN":
                     self.parse_generic_type_suffix()
+            elif self.is_declaration_annotation_at(self.pos):
+                self.parse_declaration_annotation()
+            elif self.current_token[0] == "LBRACKET":
+                self.parse_attribute_list()
             elif self.is_layout_qualifier_at(self.pos):
                 qualifiers.append(self.parse_layout_qualifier())
             else:
                 qualifiers.append(self.current_token[1])
                 self.eat(self.current_token[0])
         return qualifiers, is_generic
+
+    def parse_declaration_annotation(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            self.parse_balanced_parenthesized_tokens("declaration annotation")
 
     def skip_generic_type_suffix_tokens(self, current_pos):
         if self.tokens[current_pos][0] != "LESS_THAN":
@@ -1510,20 +1581,27 @@ class SlangParser:
         return accessors
 
     def is_constructor(self):
-        current_pos = self.skip_declaration_prefix_tokens(self.pos)
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
         if current_pos + 1 >= len(self.tokens):
             return False
-        return (
-            self.tokens[current_pos][0] == "IDENTIFIER"
-            and self.tokens[current_pos][1] == "__init"
-            and self.tokens[current_pos + 1][0] == "LPAREN"
-        )
+        if self.tokens[current_pos] != ("IDENTIFIER", "__init"):
+            return False
+        next_pos = current_pos + 1
+        if self.tokens[next_pos][0] == "LESS_THAN":
+            next_pos = self.skip_generic_type_suffix_tokens(next_pos)
+        return next_pos < len(self.tokens) and self.tokens[next_pos][0] == "LPAREN"
 
     def parse_constructor(self, attributes=None, allow_signature=False):
         attributes = attributes or []
         qualifiers, is_generic = self.parse_declaration_prefixes()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        generic_parameters = None
+        if self.current_token[0] == "LESS_THAN":
+            generic_parameters = self.parse_generic_type_suffix()
+            is_generic = True
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
@@ -1539,7 +1617,7 @@ class SlangParser:
             body = self.parse_block()
             is_declaration = False
 
-        return FunctionNode(
+        node = FunctionNode(
             "void",
             name,
             params,
@@ -1550,6 +1628,8 @@ class SlangParser:
             is_declaration=is_declaration,
             attributes=attributes,
         )
+        node.generic_parameters = generic_parameters
+        return node
 
     def parse_func_keyword_function(
         self, shader_type=None, attributes=None, allow_signature=False
@@ -1707,6 +1787,14 @@ class SlangParser:
             declaration_token = self.peek_declaration_token_type()
             if declaration_token in {"TYPEDEF", "TYPEALIAS"}:
                 typedefs.append(self.parse_typedef())
+                continue
+            if self.is_constructor():
+                methods.append(
+                    self.parse_constructor(
+                        attributes=pending_attributes,
+                        allow_signature=True,
+                    )
+                )
                 continue
             if not self.is_function():
                 raise SyntaxError(
@@ -2023,14 +2111,24 @@ class SlangParser:
             if self.current_token[0] == "COLON":
                 self.eat("COLON")
                 relation = ":"
+                constraint_type = self.parse_type_name()
             elif self.current_token[0] == "EQUAL":
                 self.eat("EQUAL")
                 relation = "=="
+                constraint_type = self.parse_type_name()
+            elif self.current_token[0] == "LPAREN":
+                constraint_type = self.parse_generic_conversion_constraint_operand()
+                relation = "coerce"
+                if self.current_token[0] == "IDENTIFIER" and self.current_token[1] in {
+                    "explicit",
+                    "implicit",
+                }:
+                    relation = self.current_token[1]
+                    self.eat("IDENTIFIER")
             else:
                 raise SyntaxError(
                     "Only simple generic conformance and equality constraints are supported"
                 )
-            constraint_type = self.parse_type_name()
             constraint = GenericConstraintNode(parameter, constraint_type)
             constraint.relation = relation
             constraints.append(constraint)
@@ -2038,6 +2136,15 @@ class SlangParser:
                 break
             self.eat("COMMA")
         return constraints
+
+    def parse_generic_conversion_constraint_operand(self):
+        parts = self.parse_balanced_parenthesized_tokens(
+            "generic conversion constraint"
+        )
+        operand = "".join(parts)
+        if operand.startswith("(") and operand.endswith(")"):
+            return operand[1:-1]
+        return operand
 
     def parse_generic_constraint_clauses(self):
         constraints = []

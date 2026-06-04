@@ -1057,3 +1057,47 @@ def test_generated_type_equality_property_syntax_parse():
     assert function.generic_constraints[0].parameter == "T.PropertyType"
     assert function.generic_constraints[0].relation == "=="
     assert function.generic_constraints[0].constraint_type == "int"
+
+
+def test_core_meta_generic_vector_conversion_constructor_parse():
+    # Source: shader-slang/slang source/slang/core.meta.slang at
+    # 564ac9f050d6569efd773e2f74e7d067a4e54baa.
+    source = """
+        extension vector<ToType,N>
+        {
+            __implicit_conversion(constraint)
+            __intrinsic_op(BuiltinCast)
+            __init<FromType>(vector<FromType,N> value)
+                where ToType(FromType) implicit;
+
+            __implicit_conversion(constraint+)
+            [__unsafeForceInlineEarly]
+            [__readNone]
+            [TreatAsDifferentiable]
+            __init<FromType>(FromType value) where ToType(FromType) implicit
+            {
+                this = __builtin_cast<vector<ToType,N>>(
+                    vector<FromType,N>(value));
+            }
+        }
+    """
+
+    ast = parse_slang(source)
+    extension = ast.extensions[0]
+
+    assert extension.extended_type == "vector<ToType, N>"
+    assert len(extension.methods) == 2
+    assert [method.generic_parameters for method in extension.methods] == [
+        "<FromType>",
+        "<FromType>",
+    ]
+    assert [
+        (
+            constraint.parameter,
+            constraint.relation,
+            constraint.constraint_type,
+        )
+        for constraint in extension.methods[0].generic_constraints
+    ] == [("ToType", "implicit", "FromType")]
+    assert extension.methods[0].is_declaration is True
+    assert extension.methods[1].is_declaration is False

@@ -218,6 +218,19 @@ class MojoParser:
             r"^[A-Za-z_][A-Za-z0-9_]*$", token_value
         )
 
+    def is_dotted_name_token(self):
+        return self.current_token[0] == "BACKTICK_IDENTIFIER" or (
+            self.is_identifier_like_token()
+        )
+
+    def parse_dotted_name(self, context):
+        if not self.is_dotted_name_token():
+            raise SyntaxError(f"Expected {context}, got {self.current_token[0]}")
+
+        name = self.current_token[1]
+        self.eat(self.current_token[0])
+        return name
+
     def parse_import_items(self):
         items = []
         parenthesized = False
@@ -2079,12 +2092,7 @@ class MojoParser:
 
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
-                if not self.is_identifier_like_token():
-                    raise SyntaxError(
-                        f"Expected IDENTIFIER after dot, got {self.current_token[0]}"
-                    )
-                member = self.current_token[1]
-                self.eat(self.current_token[0])
+                member = self.parse_dotted_name("IDENTIFIER after dot")
                 node = MemberAccessNode(node, member)
                 continue
 
@@ -2293,12 +2301,7 @@ class MojoParser:
         while self.current_token[0] in {"DOT", "LBRACKET", "LPAREN"}:
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
-                if not self.is_identifier_like_token():
-                    raise SyntaxError(
-                        f"Expected type name after dot, got {self.current_token[0]}"
-                    )
-                type_name += f".{self.current_token[1]}"
-                self.eat(self.current_token[0])
+                type_name += f".{self.parse_dotted_name('type name after dot')}"
             elif self.current_token[0] == "LBRACKET":
                 type_name += self.parse_generic_type_suffix()
             else:

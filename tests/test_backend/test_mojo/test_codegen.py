@@ -426,6 +426,24 @@ def test_dotted_type_annotation_codegen_from_modular_tiled_matmul_example():
     assert "matrix_c.ElementType accumulator = 0.0;" in generated_code
 
 
+def test_mlir_backtick_type_codegen_from_modular_gpu_globals_reparses_crossgl():
+    # Reduced from https://github.com/modular/modular.git commit
+    # daa47bb846cc213723a54c51844ea4e923eb5e13,
+    # mojo/stdlib/std/gpu/globals.mojo _resolve_max_threads_per_block_metadata.
+    code = """
+    def _resolve_max_threads_per_block_metadata() -> __mlir_type.`!kgen.string`:
+        return "nvvm.maxntid".value
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "String _resolve_max_threads_per_block_metadata()" in generated_code
+    assert 'return "nvvm.maxntid".value;' in generated_code
+    assert "__mlir_type" not in generated_code
+    assert "`" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_adjacent_string_literals_in_call_codegen_from_modular_tiled_matmul_example():
     code = """
     def main():

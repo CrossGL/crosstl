@@ -1963,6 +1963,24 @@ def test_dotted_type_annotation_parse_from_modular_tiled_matmul_example():
     assert accumulator.initial_value == "0.0"
 
 
+def test_mlir_backtick_type_parse_from_modular_gpu_globals():
+    # Reduced from https://github.com/modular/modular.git commit
+    # daa47bb846cc213723a54c51844ea4e923eb5e13,
+    # mojo/stdlib/std/gpu/globals.mojo _resolve_max_threads_per_block_metadata.
+    code = """
+    def _resolve_max_threads_per_block_metadata() -> __mlir_type.`!kgen.string`:
+        return "nvvm.maxntid".value
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "_resolve_max_threads_per_block_metadata")
+    returned = function.body[0].value
+
+    assert function.return_type == "__mlir_type.`!kgen.string`"
+    assert isinstance(returned, MemberAccessNode)
+    assert returned.object == '"nvvm.maxntid"'
+    assert returned.member == "value"
+
+
 def test_adjacent_string_literals_in_call_parse_from_modular_tiled_matmul_example():
     code = """
     def main():

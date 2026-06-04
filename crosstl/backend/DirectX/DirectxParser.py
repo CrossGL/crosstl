@@ -1635,6 +1635,10 @@ class HLSLParser:
             self.parse_using_directive()
             return None
 
+        if self.current_token[0] == "TYPEDEF":
+            self.parse_typedef()
+            return None
+
         if self.looks_like_declaration():
             qualifiers = self.parse_qualifiers()
             var = self.parse_variable_declaration(

@@ -5216,6 +5216,34 @@ def test_rust_gpu_builder_mut_self_receiver_parse():
     assert method.body[-1] == "self"
 
 
+def test_rust_gpu_struct_literal_field_attributes_parse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/difftests/tests/lib/src/scaffold/compute/wgpu.rs init_with_features.
+    code = """
+    fn init() {
+        let descriptor = wgpu::InstanceDescriptor {
+            #[cfg(target_os = "linux")]
+            backends: wgpu::Backends::VULKAN,
+            #[cfg(not(target_os = "linux"))]
+            backends: wgpu::Backends::PRIMARY,
+            flags: Default::default(),
+        };
+    }
+    """
+
+    ast = parse_code(code)
+    descriptor = ast.functions[0].body[0]
+
+    assert isinstance(descriptor.value, StructInitializationNode)
+    assert descriptor.value.struct_name == "wgpu::InstanceDescriptor"
+    assert [field_name for field_name, _ in descriptor.value.fields] == [
+        "backends",
+        "backends",
+        "flags",
+    ]
+
+
 def test_error_handling():
     invalid_codes = [
         "fn incomplete(",

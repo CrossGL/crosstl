@@ -2116,6 +2116,9 @@ class MetalParser:
         if self.current_token[0] == "USING":
             self.parse_using_statement()
             return None
+        if self.current_token[0] == "TYPEDEF":
+            self.parse_typedef()
+            return None
         if self.current_token[0] == "LBRACE":
             return BlockNode(self.parse_block())
         if self.is_declaration_start():
