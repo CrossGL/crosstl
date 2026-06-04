@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
+from importlib import metadata as importlib_metadata
 from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping, Sequence
 
@@ -32,6 +33,8 @@ REPORT_MIGRATION_NON_GOALS = (
     "backend framework integration",
 )
 REPORT_MIGRATION_ACTION_KINDS = ("manual-runtime-integration",)
+REPORT_PACKAGE_NAME = "crosstl"
+UNKNOWN_PACKAGE_VERSION = "unknown"
 EXTERNAL_CORPUS_SCHEMA_VERSION = 1
 DEFAULT_CONFIG_NAME = "crosstl.toml"
 DEFAULT_OUTPUT_DIR = "crosstl-out"
@@ -210,6 +213,13 @@ def _internal_exclude_patterns(config: ProjectConfig) -> tuple[str, ...]:
 def _source_hash(path: Path) -> dict[str, str]:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return {"algorithm": "sha256", "value": digest}
+
+
+def _package_version() -> str:
+    try:
+        return importlib_metadata.version(REPORT_PACKAGE_NAME)
+    except importlib_metadata.PackageNotFoundError:
+        return UNKNOWN_PACKAGE_VERSION
 
 
 def _variant_output_segment(variant: str) -> str:
@@ -931,6 +941,7 @@ class ProjectPortabilityReport:
     diagnostics: Sequence[ProjectDiagnostic]
     validation: Mapping[str, Any]
     migration_actions: Sequence[dict[str, Any]]
+    generated_at: int = field(default_factory=lambda: int(time.time()))
 
     def to_json(self) -> dict[str, Any]:
         artifact_count = len(self.artifacts)
@@ -948,9 +959,11 @@ class ProjectPortabilityReport:
         payload = {
             "schemaVersion": REPORT_SCHEMA_VERSION,
             "kind": REPORT_KIND,
+            "generatedAt": self.generated_at,
             "generator": {
                 "name": "CrossTL",
                 "pipeline": REPORT_GENERATOR_PIPELINE,
+                "packageVersion": _package_version(),
             },
             "project": {
                 "root": str(self.config.root),
@@ -1922,6 +1935,9 @@ def _generator_contract_reasons(
         reasons.append("generator.name must be a string")
     if generator.get("pipeline") != REPORT_GENERATOR_PIPELINE:
         reasons.append(f"generator.pipeline must be {REPORT_GENERATOR_PIPELINE}")
+    if require_generator or "packageVersion" in generator:
+        if not _is_non_empty_string(generator.get("packageVersion")):
+            reasons.append("generator.packageVersion must be a string")
     return reasons
 
 
@@ -2480,6 +2496,9 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         reasons.append(f"expected schemaVersion {REPORT_SCHEMA_VERSION}")
     if report.get("kind") != REPORT_KIND:
         reasons.append(f"expected kind {REPORT_KIND}")
+    if has_summary or "generatedAt" in report:
+        if not _is_non_negative_int(report.get("generatedAt")):
+            reasons.append("generatedAt must be a non-negative integer")
     reasons.extend(_generator_contract_reasons(report, require_generator=has_summary))
 
     project = report.get("project")

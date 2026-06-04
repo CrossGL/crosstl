@@ -153,6 +153,8 @@ Report Shape
 
 Project reports are JSON documents with:
 
+- top-level metadata: report schema version, report kind, generation timestamp,
+  and generator name/pipeline/package-version fields.
 - ``project`` metadata: root, config path, source roots, include/exclude
   patterns, targets, output directory, source override map, include
   directories, define and variant maps, and source override/define/variant
@@ -172,7 +174,8 @@ Project reports are JSON documents with:
 - ``diagnostics``: structured diagnostics using severity, code, message,
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract.
-- ``validation``: report contract checks, generator metadata checks, failed
+- ``validation``: report contract checks, generated timestamp and generator
+  metadata checks, failed
   source artifact checks, project metadata and config count checks, unit and
   skipped record shape checks, artifact record shape checks, source hash and
   provenance checks, source-map record shape and anchor consistency checks,

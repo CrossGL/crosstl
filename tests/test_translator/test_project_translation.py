@@ -747,11 +747,19 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
 
     report = translate_project(repo, targets=["opengl"], output_dir="translated")
     payload = report.to_json()
+    repeated_payload = report.to_json()
 
     output = repo / "translated" / "opengl" / "shaders" / "graphics" / "simple.glsl"
     assert output.exists()
     assert payload["kind"] == "crosstl-project-portability-report"
     assert payload["schemaVersion"] == 1
+    assert isinstance(payload["generatedAt"], int)
+    assert payload["generatedAt"] >= 0
+    assert repeated_payload["generatedAt"] == payload["generatedAt"]
+    assert payload["generator"]["name"] == "CrossTL"
+    assert payload["generator"]["pipeline"] == "project-porting"
+    assert isinstance(payload["generator"]["packageVersion"], str)
+    assert payload["generator"]["packageVersion"]
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
@@ -1287,6 +1295,12 @@ def test_validate_project_report_rejects_malformed_unit_and_skipped_records(tmp_
             {
                 "schemaVersion": 1,
                 "kind": "crosstl-project-portability-report",
+                "generatedAt": 1,
+                "generator": {
+                    "name": "CrossTL",
+                    "pipeline": "project-porting",
+                    "packageVersion": "test",
+                },
                 "project": {
                     "root": str(repo),
                     "targets": ["opengl"],
@@ -1345,9 +1359,11 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
             {
                 "schemaVersion": 1,
                 "kind": "crosstl-project-portability-report",
+                "generatedAt": False,
                 "generator": {
                     "name": "",
                     "pipeline": "single-file-translate",
+                    "packageVersion": [],
                 },
                 "project": {
                     "root": str(repo),
@@ -1419,8 +1435,10 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
     assert payload["validation"] == {"toolchains": [], "artifacts": []}
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "generatedAt must be a non-negative integer" in diagnostic["message"]
     assert "generator.name must be a string" in diagnostic["message"]
     assert "generator.pipeline must be project-porting" in diagnostic["message"]
+    assert "generator.packageVersion must be a string" in diagnostic["message"]
     assert "validation.toolchains[0].target must be a string" in (diagnostic["message"])
     assert (
         "validation.toolchains[0].status must be available, unavailable, or "

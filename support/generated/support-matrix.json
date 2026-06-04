@@ -6324,7 +6324,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
           ],
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "directx": {
@@ -6351,7 +6351,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
           ],
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "hip": {
@@ -6378,7 +6378,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
           ],
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "metal": {
@@ -6405,7 +6405,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
           ],
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "mojo": {
@@ -6432,7 +6432,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
           ],
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "opengl": {
@@ -6459,7 +6459,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
           ],
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "rust": {
@@ -6486,7 +6486,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
           ],
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "slang": {
@@ -6513,7 +6513,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
           ],
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "vulkan": {
@@ -6540,7 +6540,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries"
           ],
-          "notes": "Project validation checks report contract shape, rejects malformed generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed generated timestamp and generator metadata, project/config metadata, unit and skipped records, artifact records, source-map records and anchor consistency, external corpus records and summaries, summary rollups, migration actions and kinds, and preserved diagnostics, accepts reports that skip malformed external corpus manifest entries with warnings, rejects artifacts for targets or variants not declared by the report, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result and toolchain run records, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         }
       }
@@ -6639,7 +6639,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ],
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
           "status": "supported"
         },
         "directx": {
@@ -6650,7 +6650,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ],
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
           "status": "supported"
         },
         "hip": {
@@ -6661,7 +6661,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ],
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
           "status": "supported"
         },
         "metal": {
@@ -6672,7 +6672,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ],
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
           "status": "supported"
         },
         "mojo": {
@@ -6683,7 +6683,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ],
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
           "status": "supported"
         },
         "opengl": {
@@ -6694,7 +6694,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ],
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
           "status": "supported"
         },
         "rust": {
@@ -6705,7 +6705,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ],
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
           "status": "supported"
         },
         "slang": {
@@ -6716,7 +6716,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ],
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
           "status": "supported"
         },
         "vulkan": {
@@ -6727,7 +6727,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ],
-          "notes": "The portability report records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report and malformed source backend, source hash, or provenance metadata.",
           "status": "supported"
         }
       }
