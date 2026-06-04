@@ -8997,6 +8997,10 @@ class RustToCrossGLConverter:
         if not rust_type:
             return "void"
 
+        lifetime_stripped_type = self.strip_lifetime_type_syntax(rust_type)
+        if lifetime_stripped_type != rust_type:
+            return self.map_type(lifetime_stripped_type)
+
         referenced_type = self.strip_reference_type(rust_type)
         if referenced_type != rust_type:
             return self.map_type(referenced_type)
@@ -9451,6 +9455,40 @@ class RustToCrossGLConverter:
         if arg:
             args.append(arg)
         return args
+
+    def strip_lifetime_type_syntax(self, type_name):
+        if not isinstance(type_name, str) or "'" not in type_name:
+            return type_name
+
+        generic = self.parse_generic_type(type_name)
+        if generic is not None:
+            base_name, args = generic
+            stripped_args = []
+            changed = False
+            for arg in args:
+                if self.is_lifetime_type_argument(arg):
+                    changed = True
+                    continue
+                stripped_arg = self.strip_lifetime_type_syntax(arg)
+                changed = changed or stripped_arg != arg
+                stripped_args.append(stripped_arg)
+
+            if changed:
+                if not stripped_args:
+                    return base_name
+                return f"{base_name}<{', '.join(stripped_args)}>"
+
+        return self.strip_reference_lifetime(type_name)
+
+    def is_lifetime_type_argument(self, type_name):
+        return bool(re.fullmatch(r"'[A-Za-z_][A-Za-z0-9_]*", type_name.strip()))
+
+    def strip_reference_lifetime(self, type_name):
+        return re.sub(
+            r"(&\s*)'[A-Za-z_][A-Za-z0-9_]*\s*",
+            r"\1",
+            type_name,
+        )
 
     def substitute_type_parameters(self, alias_type, generics, args):
         substitutions = {

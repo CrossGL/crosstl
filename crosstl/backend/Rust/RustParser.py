@@ -1812,6 +1812,8 @@ class RustParser:
                     self.eat("COMMA")
             elif self.current_token[0] == "AMPERSAND":
                 self.eat("AMPERSAND")
+                if self.current_token[0] == "LIFETIME":
+                    self.eat("LIFETIME")
                 if self.current_token[0] == "MUT":
                     self.eat("MUT")
                     params.append(VariableNode("&mut Self", "self"))

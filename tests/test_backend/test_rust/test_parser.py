@@ -1879,6 +1879,38 @@ def test_lifetime_reference_type_parsing():
         pytest.fail(f"Lifetime reference type parsing failed: {e}")
 
 
+def test_lifetime_receiver_parsing_from_rust_gpu_wgpu_runner():
+    # Reduced from https://github.com/Rust-GPU/rust-gpu.git commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/runners/wgpu/src/lib.rs CompiledShaderModules::spv_module_for_entry_point.
+    code = """
+    struct CompiledShaderModules;
+
+    impl CompiledShaderModules {
+        fn spv_module_for_entry_point<'a>(
+            &'a self,
+            wanted_entry: &str,
+        ) -> wgpu::ShaderModuleDescriptor<'a> {
+            unreachable!();
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        impl_block = ast.impl_blocks[0]
+        method = impl_block.functions[0]
+
+        assert impl_block.struct_name == "CompiledShaderModules"
+        assert method.generics == ["'a"]
+        assert [(param.name, param.vtype) for param in method.params] == [
+            ("self", "&Self"),
+            ("wanted_entry", "&str"),
+        ]
+        assert method.return_type == "wgpu::ShaderModuleDescriptor<'a>"
+    except Exception as e:
+        pytest.fail(f"Lifetime receiver parsing failed: {e}")
+
+
 def test_function_call_parsing():
     code = """
     fn test_call() {
