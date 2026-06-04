@@ -186,8 +186,9 @@ Project reports are JSON documents with:
   optional variant name, output path, status, source hash, generated artifact
   hash, pipeline provenance, and file-granularity source-map anchors for
   successful translations. Full reports require artifact source paths to match
-  declared translation units. Invalid project output directories are recorded as
-  failed artifacts without writing files.
+  declared translation units and artifact source backend names to match those
+  units. Invalid project output directories are recorded as failed artifacts
+  without writing files.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, and translated/failed artifact outcome counts for manifest entries.
@@ -204,8 +205,8 @@ Project reports are JSON documents with:
   anchor consistency checks, external corpus record, per-entry artifact count,
   and summary checks, summary consistency checks, migration action shape checks,
   preserved diagnostic shape checks, validation result and toolchain run record
-  shape checks, artifact source, target, and variant declaration checks,
-  translated artifact existence checks, escaped output directory and
+  shape checks, artifact source, source-backend, target, and variant declaration
+  checks, translated artifact existence checks, escaped output directory and
   artifact-path checks, source artifact existence and hash mismatch checks,
   generated artifact hash mismatch checks, optional external toolchain
   availability, and opt-in toolchain smoke results.

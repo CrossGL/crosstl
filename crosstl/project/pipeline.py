@@ -2169,11 +2169,16 @@ def _payload_artifact_records(artifacts: Sequence[Any]) -> list[Mapping[str, Any
     return [artifact for artifact in artifacts if isinstance(artifact, Mapping)]
 
 
-def _declared_unit_paths(units: Any, *, require_full_metadata: bool) -> set[str] | None:
+UnitDeclaration = Tuple[int, Mapping[str, Any]]
+
+
+def _declared_units_by_path(
+    units: Any, *, require_full_metadata: bool
+) -> dict[str, UnitDeclaration] | None:
     if not require_full_metadata or not isinstance(units, list):
         return None
-    paths = set()
-    for unit in units:
+    declarations = {}
+    for index, unit in enumerate(units):
         if not isinstance(unit, Mapping):
             return None
         path = unit.get("path")
@@ -2181,8 +2186,8 @@ def _declared_unit_paths(units: Any, *, require_full_metadata: bool) -> set[str]
             path
         ):
             return None
-        paths.add(path)
-    return paths
+        declarations.setdefault(path, (index, unit))
+    return declarations
 
 
 ArtifactIdentity = Tuple[str, str, str, Optional[str]]
@@ -3310,7 +3315,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
     if not isinstance(artifacts, list):
         reasons.append("artifacts must be a list")
     else:
-        declared_unit_paths = _declared_unit_paths(
+        declared_units_by_path = _declared_units_by_path(
             units, require_full_metadata=has_summary
         )
         project_targets = (
@@ -3345,15 +3350,26 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             ):
                 reasons.append(f"artifacts[{index}].source must be repository-relative")
             elif (
-                declared_unit_paths is not None
+                declared_units_by_path is not None
                 and _is_non_empty_string(source)
-                and source not in declared_unit_paths
+                and source not in declared_units_by_path
             ):
                 reasons.append(f"artifacts[{index}].source must be listed in units")
-            if "sourceBackend" in artifact and not _is_non_empty_string(
-                artifact.get("sourceBackend")
-            ):
-                reasons.append(f"artifacts[{index}].sourceBackend must be a string")
+            source_backend = artifact.get("sourceBackend")
+            if has_summary or "sourceBackend" in artifact:
+                if not _is_non_empty_string(source_backend):
+                    reasons.append(f"artifacts[{index}].sourceBackend must be a string")
+                elif (
+                    declared_units_by_path is not None
+                    and _is_non_empty_string(source)
+                    and source in declared_units_by_path
+                ):
+                    unit_index, declared_unit = declared_units_by_path[source]
+                    if source_backend != declared_unit.get("sourceBackend"):
+                        reasons.append(
+                            f"artifacts[{index}].sourceBackend must match "
+                            f"units[{unit_index}].sourceBackend"
+                        )
             target = artifact.get("target")
             if _is_non_empty_string(target) and project_targets_valid:
                 normalized_target = _normalized_targets([target])[0]
