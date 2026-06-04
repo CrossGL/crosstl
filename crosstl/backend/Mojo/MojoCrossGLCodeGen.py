@@ -18,10 +18,26 @@ class MojoToCrossGLConverter:
     )
     MATRIX_TYPE_PATTERN = re.compile(r"^Matrix\[(DType\.\w+),\s*(\d+),\s*(\d+)\]$")
     REFERENCE_TYPE_PATTERN = re.compile(r"^ref\[[^\]]*\]\s+(.+)$")
+    MLIR_BACKTICK_TYPE_PATTERN = re.compile(r"^__mlir_type\.`([^`]+)`$")
+    BACKTICK_IDENTIFIER_PATTERN = re.compile(r"^`([^`]+)`$")
     MATRIX_DTYPE_PREFIXES = {
         "DType.float16": "half",
         "DType.float32": "mat",
         "DType.float64": "dmat",
+    }
+    MLIR_TYPE_MAP = {
+        "!kgen.none": "void",
+        "!kgen.string": "String",
+        "bf16": "half",
+        "f16": "half",
+        "f32": "float",
+        "f64": "double",
+        "i1": "bool",
+        "i8": "int8_t",
+        "i16": "int16_t",
+        "i32": "int",
+        "i64": "int64_t",
+        "index": "int",
     }
 
     def __init__(self):
@@ -831,13 +847,14 @@ class MojoToCrossGLConverter:
             if hasattr(expr, "args") and expr.args:
                 args = [self.generate_expression(arg) for arg in expr.args]
             args_str = ", ".join(args)
-            full_name = f"{obj}.{expr.method}"
+            method_name = self.map_member_name(expr.method)
+            full_name = f"{obj}.{method_name}"
             if self.is_scoped_value_name(obj):
-                return f"{obj}.{expr.method}({args_str})"
+                return f"{obj}.{method_name}({args_str})"
             func_name = self.map_function(full_name, len(args))
             if func_name != full_name:
                 return f"{func_name}({args_str})"
-            return f"{obj}.{expr.method}({args_str})"
+            return f"{obj}.{method_name}({args_str})"
         elif isinstance(expr, CallNode):
             callee = self.generate_expression(expr.callee)
             args = []
@@ -847,7 +864,7 @@ class MojoToCrossGLConverter:
             return f"{callee}({args_str})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
-            return f"{obj}.{expr.member}"
+            return f"{obj}.{self.map_member_name(expr.member)}"
         elif isinstance(expr, TernaryOpNode):
             condition = self.generate_nested_expression(expr.condition)
             true_expr = self.generate_nested_expression(expr.true_expr)
@@ -933,6 +950,9 @@ class MojoToCrossGLConverter:
         mapped_type = self.type_map.get(mojo_type)
         if mapped_type:
             return mapped_type
+        mlir_type = self.map_mlir_backtick_type(mojo_type)
+        if mlir_type:
+            return mlir_type
         matrix_type = self.map_matrix_type(mojo_type)
         if matrix_type:
             return matrix_type
@@ -962,6 +982,37 @@ class MojoToCrossGLConverter:
         if columns == rows and prefix in {"mat", "dmat"}:
             return f"{prefix}{columns}"
         return f"{prefix}{columns}x{rows}"
+
+    def map_mlir_backtick_type(self, mojo_type):
+        if not isinstance(mojo_type, str):
+            return None
+
+        match = self.MLIR_BACKTICK_TYPE_PATTERN.match(mojo_type)
+        if not match:
+            return None
+
+        payload = match.group(1)
+        return self.MLIR_TYPE_MAP.get(
+            payload, f"MLIR_{self.sanitize_identifier(payload)}"
+        )
+
+    def map_member_name(self, member):
+        if not isinstance(member, str):
+            return member
+
+        match = self.BACKTICK_IDENTIFIER_PATTERN.match(member)
+        if not match:
+            return member
+
+        return self.sanitize_identifier(match.group(1))
+
+    def sanitize_identifier(self, name):
+        sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_")
+        if not sanitized:
+            return "metadata"
+        if sanitized[0].isdigit():
+            return f"_{sanitized}"
+        return sanitized
 
     def map_semantic(self, attributes):
         """Map Mojo decorators or attributes to CrossGL semantic annotations."""

@@ -8973,6 +8973,31 @@ def test_math_functions_conversion():
         pytest.fail(f"Math functions conversion failed: {e}")
 
 
+def test_rust_gpu_struct_literal_field_attributes_codegen():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/difftests/tests/lib/src/scaffold/compute/wgpu.rs init_with_features.
+    code = """
+    fn init() {
+        let descriptor = wgpu::InstanceDescriptor {
+            #[cfg(target_os = "linux")]
+            backends: wgpu::Backends::VULKAN,
+            #[cfg(not(target_os = "linux"))]
+            backends: wgpu::Backends::PRIMARY,
+            flags: Default::default(),
+        };
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "#[cfg" not in result
+    assert "wgpu::InstanceDescriptor {" in result
+    assert "backends: wgpu::Backends::VULKAN" in result
+    assert "backends: wgpu::Backends::PRIMARY" in result
+    crosstl.translator.parse(result)
+
+
 def test_error_handling():
     edge_cases = [
         "fn empty() {}",

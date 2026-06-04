@@ -924,6 +924,24 @@ def test_parse_using_alias_declarations_from_hlsl_spec():
     assert [function.name for function in ast.functions] == ["main"]
 
 
+def test_parse_block_scope_typedef_from_dxc_linalg_vectors():
+    code = """
+    ByteAddressBuffer BAB : register(t0);
+
+    [numthreads(4, 4, 4)]
+    void main(uint ID : SV_GroupID) {
+      typedef vector<half, 16> half16;
+      half16 srcF16 = BAB.Load<half16>(128);
+    }
+    """
+    ast = parse_code(code)
+
+    assert ast.typedefs == []
+    assert len(ast.functions[0].body) == 1
+    assert ast.functions[0].body[0].vtype == "half16"
+    assert ast.functions[0].body[0].name == "srcF16"
+
+
 def test_parse_enum_underlying_type_from_dxc_sema_enums():
     # Source: https://github.com/microsoft/DirectXShaderCompiler
     # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092

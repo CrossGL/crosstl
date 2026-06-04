@@ -385,6 +385,53 @@ def test_struct_init_method_parsing_from_shader_toy_sample():
     assert isinstance(constructor.body[0], AssignmentNode)
 
 
+def test_core_meta_generic_extension_constructor_constraints_parse():
+    # Reduced from shader-slang/slang@564ac9f050d6569efd773e2f74e7d067a4e54baa
+    # source/slang/core.meta.slang generic vector conversion constructors.
+    code = """
+    extension vector<ToType,N>
+    {
+        __implicit_conversion(constraint)
+        __intrinsic_op(BuiltinCast)
+        __init<FromType>(vector<FromType,N> value)
+            where ToType(FromType) implicit;
+
+        __implicit_conversion(constraint+)
+        [__unsafeForceInlineEarly]
+        [__readNone]
+        [TreatAsDifferentiable]
+        __init<FromType>(FromType value) where ToType(FromType) implicit
+        {
+            this = __builtin_cast<vector<ToType,N>>(
+                vector<FromType,N>(value));
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    extension = ast.extensions[0]
+    signature, definition = extension.methods
+
+    assert extension.extended_type == "vector<ToType, N>"
+    assert [
+        (method.name, method.generic_parameters) for method in extension.methods
+    ] == [
+        ("__init", "<FromType>"),
+        ("__init", "<FromType>"),
+    ]
+    assert [(param.vtype, param.name) for param in signature.params] == [
+        ("vector<FromType, N>", "value")
+    ]
+    assert [
+        (constraint.parameter, constraint.relation, constraint.constraint_type)
+        for constraint in signature.generic_constraints
+    ] == [("ToType", "implicit", "FromType")]
+    assert signature.is_declaration is True
+    assert definition.is_declaration is False
+    assert isinstance(definition.body[0], AssignmentNode)
+
+
 def test_ray_payload_access_semantics_from_ray_tracing_sample():
     code = """
     [raypayload] struct RayPayload

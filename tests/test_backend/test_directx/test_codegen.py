@@ -1480,6 +1480,25 @@ def test_codegen_using_alias_declarations_from_hlsl_spec():
     parse_crossgl(output)
 
 
+def test_codegen_block_scope_typedef_from_dxc_linalg_vectors_reparse():
+    hlsl = textwrap.dedent("""
+        ByteAddressBuffer BAB : register(t0);
+
+        [numthreads(4, 4, 4)]
+        void main(uint ID : SV_GroupID) {
+          typedef vector<half, 16> half16;
+          half16 srcF16 = BAB.Load<half16>(128);
+        }
+    """)
+
+    output = generate_crossgl(hlsl)
+
+    assert "type half16" not in output
+    assert "vec4 srcF16" not in output
+    assert "half16 srcF16 = buffer_load(BAB, 128);" in output
+    parse_crossgl(output)
+
+
 def test_codegen_anonymous_struct_array_typedef_from_dxc_codegen_debug_tests():
     hlsl = textwrap.dedent("""
         typedef struct { int a[4]; float2 b[2]; } type[3];

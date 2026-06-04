@@ -283,6 +283,30 @@ def test_parse_block_scope_using_decltype_alias_from_mlx_steel_attention():
     assert body[2].right.name == "stile_t::kRowsPerThread"
 
 
+def test_parse_block_scope_typedef_alias_from_mlx_fp_quantized():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: b155224b9963cd9476363b464a559232a0868000
+    # Path: mlx/backend/metal/kernels/fp_quantized.h
+    code = """
+    void load_quantized() {
+        constexpr int values_per_thread = 4;
+        typedef float U;
+        thread U x_thread[values_per_thread];
+        thread U result[8] = {0};
+    }
+    """
+    ast = parse_ok(code)
+
+    body = ast.functions[0].body
+    assert body[1].vtype == "U"
+    assert body[1].qualifiers == ["thread"]
+    assert body[1].array_sizes[0].name == "values_per_thread"
+    assert body[2].left.vtype == "U"
+    assert body[2].left.qualifiers == ["thread"]
+    assert body[2].left.array_sizes == ["8"]
+
+
 def test_parse_gnu_attribute_before_global_constant_multiline_initializer():
     code = """
     __attribute__((unused)) constant float VALUES[2] = {
