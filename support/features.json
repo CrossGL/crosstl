@@ -4312,83 +4312,92 @@
       "support": {
         "directx": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, reports missing include directories, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
           ]
         },
         "opengl": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, reports missing include directories, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
           ]
         },
         "metal": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, reports missing include directories, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
           ]
         },
         "vulkan": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, reports missing include directories, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
           ]
         },
         "cuda": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, reports missing include directories, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
           ]
         },
         "hip": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, reports missing include directories, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
           ]
         },
         "mojo": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, reports missing include directories, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
           ]
         },
         "rust": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, reports missing include directories, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
           ]
         },
         "slang": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, reports missing include directories, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, reports missing include directories, reports include directories that resolve outside the repository, and passes resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units"
           ]
         }
       }

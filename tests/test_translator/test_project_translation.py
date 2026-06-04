@@ -244,6 +244,36 @@ def test_scan_project_reports_missing_include_dirs_without_hiding_units(tmp_path
     assert "missing-includes" in diagnostic["message"]
 
 
+def test_scan_project_reports_include_dirs_outside_project_without_hiding_units(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    outside_dir = tmp_path / "outside-includes"
+    shader_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    (shader_dir / "main.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include_dirs = ["../outside-includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report().to_json()
+
+    assert [unit.relative_path for unit in scan.units] == ["shaders/main.cgl"]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.include-dir-outside-project"
+    assert diagnostic["location"]["file"] == "crosstl.toml"
+    assert diagnostic["missingCapabilities"] == ["include.resolution"]
+    assert "../outside-includes" in diagnostic["message"]
+
+
 def test_project_config_rejects_malformed_variant_entries(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

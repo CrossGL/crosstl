@@ -391,6 +391,20 @@ def _include_dir_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     location = _config_location(config)
     for include_dir in config.include_dirs:
         absolute_dir = _resolved_include_dir(config, include_dir)
+        if not _is_relative_to(absolute_dir, config.root):
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="warning",
+                    code="project.config.include-dir-outside-project",
+                    message=(
+                        f"Configured include directory '{include_dir}' resolves "
+                        f"outside the repository: {absolute_dir}"
+                    ),
+                    location=location,
+                    missing_capabilities=["include.resolution"],
+                )
+            )
+            continue
         if not absolute_dir.exists():
             diagnostics.append(
                 ProjectDiagnostic(

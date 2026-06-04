@@ -91,8 +91,10 @@ diagnostics. Source overrides allow extensionless or non-standard files to be
 assigned to a registered source backend; invalid override backend names are
 reported as configuration diagnostics. Include directories, defines, and
 variants are recorded in project reports. Missing include directories are
-reported as configuration diagnostics. Include directories and defines are passed
-to source frontends that expose preprocessor options. ``output_dir`` must
+reported as configuration diagnostics. Include directories that resolve outside
+the repository are reported as non-blocking configuration diagnostics so reports
+retain portability and provenance context. Include directories and defines are
+passed to source frontends that expose preprocessor options. ``output_dir`` must
 resolve inside the repository root; paths that escape the repository are reported
 as configuration diagnostics and artifacts are not written. Named variant
 expansion through every native preprocessor remains a tracked project-porting
