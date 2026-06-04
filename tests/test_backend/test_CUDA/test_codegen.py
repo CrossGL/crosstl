@@ -40,6 +40,24 @@ class TestCudaCodeGen:
         assert "// CUDA launch bounds: (128)" in result
         assert "// Kernel: bounded" in result
 
+    def test_public_cuda_samples_tile_global_kernel_conversion(self):
+        code = """
+        __tile_global__ void matmul_naive(float* C) {
+            C[0] = 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Kernel: matmul_naive" in result
+        assert "// Function: matmul_naive" not in result
+        assert "@compute" in result
+
     def test_cuda_function_attributes_and_inline_asm_conversion(self):
         code = r"""
         __cluster_dims__(2, 1, 1) __block_size__(128) __global__ void clustered(

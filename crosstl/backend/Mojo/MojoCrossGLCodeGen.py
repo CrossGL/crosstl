@@ -753,6 +753,8 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, ListLiteralNode):
             elements = ", ".join(self.generate_expression(e) for e in expr.elements)
             return f"[{elements}]"
+        elif isinstance(expr, SliceNode):
+            return self.generate_slice_index(expr)
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, BinaryOpNode):
@@ -819,11 +821,23 @@ class MojoToCrossGLConverter:
             return f"/* Unhandled expression: {type(expr).__name__} */"
 
     def generate_array_index(self, index):
+        if isinstance(index, SliceNode):
+            return self.generate_slice_index(index)
         if isinstance(index, TupleNode):
             return ", ".join(
                 self.generate_expression(element) for element in index.elements
             )
         return self.generate_expression(index)
+
+    def generate_slice_index(self, index):
+        start = self.generate_expression(index.start) if index.start is not None else ""
+        stop = self.generate_expression(index.stop) if index.stop is not None else ""
+        if index.has_step:
+            step = (
+                self.generate_expression(index.step) if index.step is not None else ""
+            )
+            return f"{start}:{stop}:{step}"
+        return f"{start}:{stop}"
 
     def map_type(self, mojo_type):
         """Map a Mojo type name to the closest CrossGL type name."""

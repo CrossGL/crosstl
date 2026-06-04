@@ -721,11 +721,12 @@ def test_rust_gpu_reduce_subgroup_builtins_codegen_from_upstream_example():
     assert "uint num_subgroups @ gl_NumSubgroups" in result
     assert "uint input[] @ set(0) @ binding(0)" in result
     assert "uint output[] @ set(0) @ binding(1)" in result
-    assert "uint shared_[256] @ workgroup" in result
+    assert "uint shared_[256] @ groupshared" in result
     assert "@numthreads(256, 1, 1)" in result
     assert "sum = subgroup_add(sum);" in result
     assert "spirv_std::arch::workgroup_memory_barrier_with_group_sync();" in result
     assert "output[workgroup_id_x] = sum_;" in result
+    crosstl.translator.parse(result)
 
 
 def test_rust_gpu_compute_collatz_option_chain_codegen_from_upstream_example():
@@ -8242,7 +8243,8 @@ def test_spirv_specialization_and_workgroup_attribute_codegen_from_dev_guide():
     assert "uint x_u64_hi @ constant_id(101)" in result
     assert "let x_u64 = (((uint64_t)x_u64_hi << 32) | (uint64_t)x_u64_lo);" in result
     assert "compute shared_" in result
-    assert "void main(vec4 tile[4] @ workgroup) @numthreads(32, 1, 1)" in result
+    assert "void main(vec4 tile[4] @ groupshared) @numthreads(32, 1, 1)" in result
+    crosstl.translator.parse(result)
 
 
 def test_rust_gpu_sky_shader_hex_default_spec_constant_codegen():

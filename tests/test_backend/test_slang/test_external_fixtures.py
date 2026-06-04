@@ -8,6 +8,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "adc996670ec281aa8a4ee131f30b324648cbbe60",
     },
+    "shader-slang/slang-current": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "726e0973b3f547c7729b86f122ff7aef8322bace",
+    },
     "shader-slang/slang-examples": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "bbc4b02787d427065d713c1820a33b66dc6c4117",
@@ -111,6 +115,26 @@ EXTERNAL_FIXTURES = [
             "T genericCalc(T val, T x)",
             "let result = fwd_diff(genericCalc<float>)",
             'printf("%f\\n", result.d);',
+        ],
+    },
+    {
+        "id": "slang_generated_sizeof_type_operand",
+        "repo": "shader-slang/slang-current",
+        "path": (
+            "docs/generated/tests/syntax-reference/keywords-and-builtins/"
+            "expr-sizeof-int.slang"
+        ),
+        "source": (
+            """
+            void main()
+            {
+                printf("s=%d\\n", int(sizeof(int)));
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            'printf("s=%d\\n", int(sizeof(int)));',
         ],
     },
     {

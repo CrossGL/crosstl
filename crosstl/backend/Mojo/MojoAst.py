@@ -95,6 +95,23 @@ class ListLiteralNode(ASTNode):
         return f"ListLiteralNode(elements={self.elements})"
 
 
+class SliceNode(ASTNode):
+    """Node representing a Mojo slice index."""
+
+    def __init__(self, start=None, stop=None, step=None, has_step=False):
+        self.start = start
+        self.stop = stop
+        self.step = step
+        self.has_step = has_step
+
+    def __repr__(self):
+        return (
+            "SliceNode("
+            f"start={self.start}, stop={self.stop}, step={self.step}, "
+            f"has_step={self.has_step})"
+        )
+
+
 class WithNode(ASTNode):
     """Node representing a Mojo with/as block."""
 

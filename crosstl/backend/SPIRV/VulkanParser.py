@@ -206,6 +206,17 @@ class VulkanParser:
         "Not": "~",
         "SNegate": "-",
     }
+    SPIRV_DERIVATIVE_FUNCTIONS = {
+        "DPdx": "dFdx",
+        "DPdy": "dFdy",
+        "Fwidth": "fwidth",
+        "DPdxCoarse": "dFdxCoarse",
+        "DPdyCoarse": "dFdyCoarse",
+        "FwidthCoarse": "fwidthCoarse",
+        "DPdxFine": "dFdxFine",
+        "DPdyFine": "dFdyFine",
+        "FwidthFine": "fwidthFine",
+    }
     CROSSGL_RESERVED_IDENTIFIERS = {
         "as",
         "async",
@@ -1386,6 +1397,26 @@ class VulkanParser:
                 continue
 
             operation = opcode[2:] if opcode.startswith("Op") else opcode
+            if (
+                result_id
+                and operation in self.SPIRV_DERIVATIVE_FUNCTIONS
+                and len(operands) >= 2
+            ):
+                expressions[result_id] = FunctionCallNode(
+                    self.SPIRV_DERIVATIVE_FUNCTIONS[operation],
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             if (
                 result_id
                 and operation in self.SPIRV_SPEC_CONSTANT_BINARY_OPS

@@ -9251,7 +9251,7 @@ class RustToCrossGLConverter:
                     if spec_constant_id is not None:
                         semantics.append(f"constant_id({spec_constant_id})")
                     if "workgroup" in attr.args:
-                        semantics.append("workgroup")
+                        semantics.append("groupshared")
                     if semantics:
                         return "".join(f" @ {semantic}" for semantic in semantics)
                 elif attr.name == "location" and attr.args:

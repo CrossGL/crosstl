@@ -182,6 +182,7 @@ class CudaParser:
     FUNCTION_ATTRIBUTE_TOKENS = {"LAUNCH_BOUNDS", "CLUSTER_DIMS", "BLOCK_SIZE"}
     FUNCTION_SPECIFIER_TOKENS = {
         "GLOBAL",
+        "TILE_GLOBAL",
         "DEVICE",
         "HOST",
         "INLINE",
@@ -438,7 +439,7 @@ class CudaParser:
                     kernels.append(func)
                 else:
                     functions.append(func)
-            elif self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]:
+            elif self.current_token[0] in ["GLOBAL", "TILE_GLOBAL", "DEVICE", "HOST"]:
                 if self.current_token[0] == "DEVICE" and self.peek_variable():
                     self.append_parsed_global_variable(
                         global_variables, self.parse_global_variable()
@@ -1107,7 +1108,7 @@ class CudaParser:
                 func = self.parse_function()
                 if func is not None:
                     items.append(func)
-            elif self.current_token[0] in ["GLOBAL", "DEVICE", "HOST"]:
+            elif self.current_token[0] in ["GLOBAL", "TILE_GLOBAL", "DEVICE", "HOST"]:
                 if self.current_token[0] == "DEVICE" and self.peek_variable():
                     self.append_parsed_global_variable(
                         items, self.parse_global_variable()
@@ -1962,7 +1963,7 @@ class CudaParser:
         else:
             self.eat("LBRACE")
 
-        if "__global__" in qualifiers:
+        if "__global__" in qualifiers or "__tile_global__" in qualifiers:
             return KernelNode(
                 return_type,
                 name,

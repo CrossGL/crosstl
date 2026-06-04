@@ -22,6 +22,7 @@ from crosstl.backend.Mojo.MojoAst import (
     PassNode,
     RangeForNode,
     ReturnNode,
+    SliceNode,
     StructNode,
     SwitchNode,
     TernaryOpNode,
@@ -1509,6 +1510,44 @@ def test_empty_index_access_parse_from_layout_tensor_iterator_docs():
     assert expression.array.name == "iter"
     assert isinstance(expression.index, TupleNode)
     assert expression.index.elements == []
+
+
+def test_slice_index_access_parse_from_modular_stdlib_slice_tests():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # mojo/stdlib/test/builtin/test_slice.mojo test_sliceable/test_slice_stringable.
+    code = """
+    def main():
+        var new_slice = sliceable[1:"hello":4.0]
+        var reverse = s[2::-1]
+        var open_slice = s[::]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    new_slice = function.body[0].initial_value
+    reverse = function.body[1].initial_value
+    open_slice = function.body[2].initial_value
+
+    assert isinstance(new_slice, ArrayAccessNode)
+    assert isinstance(new_slice.index, SliceNode)
+    assert new_slice.index.start == "1"
+    assert new_slice.index.stop == '"hello"'
+    assert new_slice.index.step == "4.0"
+    assert new_slice.index.has_step
+
+    assert isinstance(reverse.index, SliceNode)
+    assert reverse.index.start == "2"
+    assert reverse.index.stop is None
+    assert isinstance(reverse.index.step, UnaryOpNode)
+    assert reverse.index.step.op == "-"
+    assert reverse.index.step.operand == "1"
+    assert reverse.index.has_step
+
+    assert isinstance(open_slice.index, SliceNode)
+    assert open_slice.index.start is None
+    assert open_slice.index.stop is None
+    assert open_slice.index.step is None
+    assert open_slice.index.has_step
 
 
 def test_member_access_parsing():
