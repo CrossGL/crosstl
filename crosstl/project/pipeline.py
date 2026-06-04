@@ -2303,6 +2303,33 @@ def _diagnostic_location_contract_reasons(prefix: str, value: Any) -> list[str]:
     ):
         if not _is_non_negative_int(value.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a non-negative integer")
+    if reasons:
+        return reasons
+
+    reasons.extend(_span_consistency_contract_reasons(prefix, value))
+    return reasons
+
+
+def _span_consistency_contract_reasons(
+    prefix: str, value: Mapping[str, Any]
+) -> list[str]:
+    reasons = []
+    line = value["line"]
+    column = value["column"]
+    offset = value["offset"]
+    length = value["length"]
+    end_line = value["endLine"]
+    end_column = value["endColumn"]
+    end_offset = value["endOffset"]
+    if end_offset != offset + length:
+        reasons.append(f"{prefix}.endOffset must equal {prefix}.offset plus length")
+    if end_line < line:
+        reasons.append(f"{prefix}.endLine must be after or equal to {prefix}.line")
+    elif end_line == line and end_column < column:
+        reasons.append(
+            f"{prefix}.endColumn must be greater than or equal to "
+            f"{prefix}.column when endLine equals line"
+        )
     return reasons
 
 
@@ -3188,22 +3215,7 @@ def _source_map_span_reasons(prefix: str, value: Any) -> list[str]:
     if reasons:
         return reasons
 
-    line = value["line"]
-    column = value["column"]
-    offset = value["offset"]
-    length = value["length"]
-    end_line = value["endLine"]
-    end_column = value["endColumn"]
-    end_offset = value["endOffset"]
-    if end_offset != offset + length:
-        reasons.append(f"{prefix}.endOffset must equal {prefix}.offset plus length")
-    if end_line < line:
-        reasons.append(f"{prefix}.endLine must be after or equal to {prefix}.line")
-    elif end_line == line and end_column < column:
-        reasons.append(
-            f"{prefix}.endColumn must be greater than or equal to "
-            f"{prefix}.column when endLine equals line"
-        )
+    reasons.extend(_span_consistency_contract_reasons(prefix, value))
     return reasons
 
 

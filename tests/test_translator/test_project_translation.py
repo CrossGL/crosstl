@@ -3102,6 +3102,82 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
     )
 
 
+def test_validate_project_report_rejects_inconsistent_diagnostic_location_spans(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "inconsistent-diagnostic-span-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": [],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "diagnostics": [
+                    {
+                        "severity": "warning",
+                        "code": "project.scan.missing-source-root",
+                        "message": "Configured source root does not exist.",
+                        "location": {
+                            "file": "crosstl.toml",
+                            "line": 2,
+                            "column": 1,
+                            "offset": 10,
+                            "length": 3,
+                            "endLine": 1,
+                            "endColumn": 4,
+                            "endOffset": 12,
+                        },
+                        "missingCapabilities": ["repo.scan"],
+                    },
+                    {
+                        "severity": "note",
+                        "code": "project.scan.empty",
+                        "message": "No shader sources were discovered.",
+                        "location": {
+                            "file": "crosstl.toml",
+                            "line": 1,
+                            "column": 4,
+                            "offset": 0,
+                            "length": 2,
+                            "endLine": 1,
+                            "endColumn": 3,
+                            "endOffset": 2,
+                        },
+                        "missingCapabilities": ["repo.scan"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "diagnostics[0].location.endOffset must equal "
+        "diagnostics[0].location.offset plus length"
+    ) in diagnostic["message"]
+    assert (
+        "diagnostics[0].location.endLine must be after or equal to "
+        "diagnostics[0].location.line"
+    ) in diagnostic["message"]
+    assert (
+        "diagnostics[1].location.endColumn must be greater than or equal to "
+        "diagnostics[1].location.column when endLine equals line"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_diagnostics_with_undeclared_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
