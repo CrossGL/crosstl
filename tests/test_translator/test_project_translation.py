@@ -1197,6 +1197,88 @@ def test_project_cli_translate_project_fails_on_error_diagnostics(tmp_path):
     )
 
 
+def test_project_cli_scan_fails_on_error_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    outside_dir = tmp_path / "outside"
+    repo.mkdir()
+    outside_dir.mkdir()
+    (outside_dir / "external.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["../outside"]
+            include = ["**/*"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--target",
+            "opengl",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert payload["summary"]["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.config.source-root-outside-project"
+    )
+
+
+def test_project_cli_report_writes_output_and_fails_on_error_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    outside_dir = tmp_path / "outside"
+    output = tmp_path / "report.json"
+    repo.mkdir()
+    outside_dir.mkdir()
+    (outside_dir / "external.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["../outside"]
+            include = ["**/*"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "report",
+            str(repo),
+            "--target",
+            "opengl",
+            "--output",
+            str(output),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert result.returncode == 1
+    assert "Wrote" in result.stdout
+    assert payload["summary"]["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.config.source-root-outside-project"
+    )
+
+
 def test_project_cli_translate_project_rejects_output_dir_outside_project(tmp_path):
     repo = tmp_path / "repo"
     outside = tmp_path / "outside"

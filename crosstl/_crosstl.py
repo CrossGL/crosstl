@@ -194,8 +194,9 @@ def _run_project_scan(args):
 
     config = _load_project_config_from_args(args)
     report = scan_project(config).to_report(targets=args.target)
-    _write_json_payload(report.to_json(), args.output)
-    return 0
+    payload = report.to_json()
+    _write_json_payload(payload, args.output)
+    return 1 if payload["summary"]["diagnosticCounts"]["error"] else 0
 
 
 def _run_translate_project(args):

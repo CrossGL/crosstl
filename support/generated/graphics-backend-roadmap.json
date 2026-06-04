@@ -1776,9 +1776,11 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "metal": {
@@ -1787,9 +1789,11 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         },
         "opengl": {
@@ -1798,9 +1802,11 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "The project scanner uses the source registry to discover supported extensions, honors source roots and excludes, reports missing or out-of-repository source roots, records unsupported explicitly included files as diagnostics, excludes the configured output directory, reports output directories that resolve outside the repository, and keeps generated output under a separate directory.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, records unsupported explicit includes, reports invalid roots without hiding valid units, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "status": "supported"
         }
       }
@@ -2063,9 +2069,11 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "status": "supported"
         },
         "metal": {
@@ -2077,9 +2085,11 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "status": "supported"
         },
         "opengl": {
@@ -2091,9 +2101,11 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, and validation rejects malformed preserved diagnostics before copying them into validation output.",
           "status": "supported"
         }
       }

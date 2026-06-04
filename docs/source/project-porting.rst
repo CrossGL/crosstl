@@ -36,6 +36,10 @@ Scan a repository and print a JSON report:
 
    python -m crosstl._crosstl scan /path/to/repo --target metal
 
+Scan and report commands exit nonzero when the generated report contains error
+diagnostics, while still writing the JSON report to stdout or the requested
+output file.
+
 Translate every discovered unit to one or more targets:
 
 .. code-block:: bash
