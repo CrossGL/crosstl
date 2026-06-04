@@ -1697,6 +1697,53 @@ def test_validate_project_report_rejects_malformed_unit_and_skipped_records(tmp_
     assert "skipped[1] must be an object" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_duplicate_unit_and_skipped_paths(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "duplicate-scan-record-report.json"
+    unit = {
+        "id": "simple.cgl",
+        "path": "simple.cgl",
+        "sourceBackend": "cgl",
+        "extension": ".cgl",
+    }
+    skipped = {
+        "path": "ignored.shader",
+        "reason": "unsupported-extension",
+    }
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "units": [unit, dict(unit)],
+                "skipped": [
+                    {"path": "simple.cgl", "reason": "unsupported-extension"},
+                    skipped,
+                    dict(skipped),
+                ],
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[1].path duplicates units[0].path" in diagnostic["message"]
+    assert "skipped[2].path duplicates skipped[1].path" in diagnostic["message"]
+    assert "skipped[0].path duplicates units[0].path" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_malformed_generator_and_validation_records(
     tmp_path,
 ):

@@ -2172,6 +2172,53 @@ def _payload_artifact_records(artifacts: Sequence[Any]) -> list[Mapping[str, Any
 UnitDeclaration = Tuple[int, Mapping[str, Any]]
 
 
+def _record_path(record: Any) -> str | None:
+    if not isinstance(record, Mapping):
+        return None
+    path = record.get("path")
+    if not _is_non_empty_string(path):
+        return None
+    if not _is_repository_relative_report_path(path):
+        return None
+    return path
+
+
+def _duplicate_path_contract_reasons(prefix: str, records: Sequence[Any]) -> list[str]:
+    reasons = []
+    paths: dict[str, int] = {}
+    for index, record in enumerate(records):
+        path = _record_path(record)
+        if path is None:
+            continue
+        previous_index = paths.get(path)
+        if previous_index is None:
+            paths[path] = index
+            continue
+        reasons.append(
+            f"{prefix}[{index}].path duplicates {prefix}[{previous_index}].path"
+        )
+    return reasons
+
+
+def _unit_skipped_path_contract_reasons(
+    units: Sequence[Any], skipped: Sequence[Any]
+) -> list[str]:
+    unit_paths: dict[str, int] = {}
+    for index, unit in enumerate(units):
+        path = _record_path(unit)
+        if path is not None and path not in unit_paths:
+            unit_paths[path] = index
+    reasons = []
+    for index, skipped_record in enumerate(skipped):
+        path = _record_path(skipped_record)
+        if path is None:
+            continue
+        unit_index = unit_paths.get(path)
+        if unit_index is not None:
+            reasons.append(f"skipped[{index}].path duplicates units[{unit_index}].path")
+    return reasons
+
+
 def _declared_units_by_path(
     units: Any, *, require_full_metadata: bool
 ) -> dict[str, UnitDeclaration] | None:
@@ -3484,6 +3531,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         else:
             for index, unit in enumerate(units):
                 reasons.extend(_unit_contract_reasons(index, unit))
+            reasons.extend(_duplicate_path_contract_reasons("units", units))
 
     skipped = report.get("skipped", [])
     if has_summary and "skipped" not in report:
@@ -3494,6 +3542,9 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         else:
             for index, skipped_record in enumerate(skipped):
                 reasons.extend(_skipped_contract_reasons(index, skipped_record))
+            reasons.extend(_duplicate_path_contract_reasons("skipped", skipped))
+            if isinstance(units, list):
+                reasons.extend(_unit_skipped_path_contract_reasons(units, skipped))
 
     project_targets = project.get("targets", []) if isinstance(project, Mapping) else []
     project_targets_valid = isinstance(project_targets, list) and all(
