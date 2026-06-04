@@ -375,6 +375,43 @@ def test_vulkan_shader_examples_emboss_2d_compute_image_macro_codegen():
     assert "imageStore(result_image, coord, res);" in result
 
 
+def test_vulkan_shader_examples_helper_parameter_keyword_codegen_reparse():
+    # Reduced from https://github.com/Rust-GPU/VulkanShaderExamples commit
+    # b29a37eb46802b5ea6882af4808d6887fc184581,
+    # shaders/rust/computeshader/emboss/src/lib.rs.
+    code = """
+    fn conv(kernel: &[f32; 9], data: &[f32; 9], denom: f32, offset: f32) -> f32 {
+        let mut res = 0.0;
+        for i in 0..9 {
+            res += kernel[i] * data[i];
+        }
+        (res / denom + offset).clamp(0.0, 1.0)
+    }
+
+    #[spirv(compute(threads(16, 16)))]
+    pub fn main_cs() {
+        let kernel = [-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 2.0];
+        let avg = [0.0; 9];
+        let gray = conv(&kernel, &avg, 1.0, 0.50);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "float conv(float kernel_[9], float data[9], float denom, float offset)"
+        in result
+    )
+    assert "res += (kernel_[i] * data[i]);" in result
+    assert (
+        "let kernel_ = {(-1.0), 0.0, 0.0, 0.0, (-1.0), 0.0, 0.0, "
+        "0.0, 2.0};" in result
+    )
+    assert "let gray = conv(kernel_, avg, 1.0, 0.50);" in result
+    assert "float kernel[9]" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_final_parenthesized_binary_expression_codegen():
     code = """
     fn total_rayleigh(lambda: Vec3) -> Vec3 {
@@ -1295,7 +1332,7 @@ def test_type_alias_conversion():
         assert "Buffer" not in result
         assert "Vector" not in result
         assert (
-            "Real sample(Real x, Weights weights, float buffer[4], vec3 normal)"
+            "Real sample(Real x, Weights weights, float buffer_[4], vec3 normal)"
             in result
         )
         assert "Color color;" in result
@@ -3875,7 +3912,7 @@ def test_unary_operations_conversion():
         result = parse_and_generate(code)
         assert "(-5)" in result
         assert "(!true)" in result
-        assert "shared = value;" in result
+        assert "shared_ = value;" in result
         assert "writable = value;" in result
         assert "pointed = ptr;" in result
         assert "&value" not in result
@@ -8007,7 +8044,7 @@ def test_await_postfix_conversion():
         result = parse_and_generate(code)
 
         assert "raw = compute();" in result
-        assert "field = object.value;" in result
+        assert "field = object_.value;" in result
         assert "auto _rust_try_subject_0 = future;" in result
         assert "if (is_Err(_rust_try_subject_0))" in result
         assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result

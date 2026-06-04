@@ -653,6 +653,32 @@ def test_external_rocm_hip_tests_brev_intrinsics_codegen_reparse():
     assert "__brevll" not in crossgl
 
 
+def test_rocm_hip_math_api_sad_intrinsics_codegen_reparse():
+    # Upstream source:
+    # ROCm HIP math API 6.2.41133, Integer intrinsics.
+    source = """
+    __global__ void sad_kernel(unsigned int *out,
+                               int x,
+                               int y,
+                               unsigned int ux,
+                               unsigned int uy,
+                               unsigned int bias) {
+        out[0] = __sad(x, y, bias);
+        out[1] = __usad(ux, uy, bias);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert body[0].right.name == "__sad"
+    assert body[1].right.name == "__usad"
+    assert "out[0] = (abs(x - y) + bias);" in crossgl
+    assert "out[1] = (((ux > uy) ? (ux - uy) : (uy - ux)) + bias);" in crossgl
+    assert "__sad" not in crossgl
+    assert "__usad" not in crossgl
+
+
 def test_external_rocm_hip_complex_math_codegen_reparse():
     # Upstream: ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
     # HIP-Doc/Reference/HIP-Complex-Math-API/complex_math/main.hip.

@@ -1632,6 +1632,9 @@ class MetalParser:
                 self.skip_template_declaration()
                 continue
             member_alignas = self.parse_alignas_specifiers()
+            if self.is_struct_conversion_operator_start():
+                self.skip_struct_method()
+                continue
             vtype, qualifiers = self.parse_type_specifier()
             if self.current_token[0] == "OPERATOR":
                 self.skip_struct_method()
@@ -1662,6 +1665,14 @@ class MetalParser:
             var_node.default_value = default_value
             members.append(var_node)
         return members
+
+    def is_struct_conversion_operator_start(self):
+        idx = self.pos
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
+        while idx < len(self.tokens) and self.tokens[idx] == ("IDENTIFIER", "explicit"):
+            idx += 1
+        return idx < len(self.tokens) and self.tokens[idx] == ("IDENTIFIER", "operator")
 
     def is_access_specifier_label(self):
         return (

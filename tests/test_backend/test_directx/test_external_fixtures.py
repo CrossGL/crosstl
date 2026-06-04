@@ -476,6 +476,24 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_center_modifier_identifier",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/modifiers/center/center_kwd.hlsl",
+        code=textwrap.dedent("""
+            float main(center float t : T) : SV_TARGET
+            {
+                float center = 10.0f;
+                return center * 2;
+            }
+        """).strip(),
+        contains=(
+            "float main(float t @ T) @ gl_FragColor",
+            "float center = 10.0;",
+            "return center * 2;",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_non_uniform_dynamic_resource_heap",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

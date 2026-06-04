@@ -213,7 +213,14 @@ class SlangParser:
             elif self.is_using_declaration_start():
                 self.skip_semicolon_terminated_declaration()
             elif self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS:
-                if self.is_function():
+                if self.is_func_keyword_declaration_start():
+                    functions.append(
+                        self.parse_func_keyword_function(
+                            attributes=pending_attributes,
+                            allow_signature=True,
+                        )
+                    )
+                elif self.is_function():
                     functions.append(
                         self.parse_function(
                             attributes=pending_attributes,
@@ -245,6 +252,9 @@ class SlangParser:
         )
 
     def is_function(self):
+        if self.is_func_keyword_declaration_start():
+            return True
+
         if self.is_function_extension_declaration_start():
             return True
 
@@ -278,6 +288,17 @@ class SlangParser:
             self.tokens[current_pos][0] == "IDENTIFIER"
             and self.tokens[current_pos][1] in {"__apply", "fwd_diff", "bwd_diff"}
             and self.tokens[current_pos + 1][0] == "LPAREN"
+        )
+
+    def is_func_keyword_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
+        return (
+            current_pos + 2 < len(self.tokens)
+            and self.tokens[current_pos] == ("IDENTIFIER", "func")
+            and self.tokens[current_pos + 1][0] == "IDENTIFIER"
+            and self.tokens[current_pos + 2][0] in {"LESS_THAN", "LPAREN"}
         )
 
     def is_operator_identifier_at(self, index):
@@ -1087,6 +1108,8 @@ class SlangParser:
             exported_item = self.parse_struct()
         elif declaration_token == "EXTENSION":
             exported_item = self.parse_extension()
+        elif self.is_func_keyword_declaration_start():
+            exported_item = self.parse_func_keyword_function(attributes=attributes)
         elif self.is_function():
             exported_item = self.parse_function(attributes=attributes)
         elif self.is_variable_declaration_start():
@@ -1130,6 +1153,14 @@ class SlangParser:
                 raise SyntaxError(
                     f"Unsupported interface member: {self.current_token[0]}"
                 )
+            if self.is_func_keyword_declaration_start():
+                methods.append(
+                    self.parse_func_keyword_function(
+                        attributes=pending_attributes,
+                        allow_signature=True,
+                    )
+                )
+                continue
             methods.append(
                 self.parse_function(attributes=pending_attributes, allow_signature=True)
             )
@@ -1196,6 +1227,14 @@ class SlangParser:
                 )
                 continue
             if self.is_function():
+                if self.is_func_keyword_declaration_start():
+                    methods.append(
+                        self.parse_func_keyword_function(
+                            attributes=pending_attributes,
+                            allow_signature=True,
+                        )
+                    )
+                    continue
                 methods.append(
                     self.parse_function(
                         attributes=pending_attributes,
@@ -1364,6 +1403,136 @@ class SlangParser:
             attributes=attributes,
         )
 
+    def parse_func_keyword_function(
+        self, shader_type=None, attributes=None, allow_signature=False
+    ):
+        attributes = attributes or []
+        shader_type = shader_type or self.get_shader_attribute(attributes)
+        attributes = self.filter_function_attributes(attributes)
+        qualifiers, is_generic = self.parse_declaration_prefixes()
+        self.eat("IDENTIFIER")
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        generic_parameters = None
+        if self.current_token[0] == "LESS_THAN":
+            generic_parameters = self.parse_generic_type_suffix()
+            is_generic = True
+
+        self.eat("LPAREN")
+        params = self.parse_func_keyword_parameters()
+        self.eat("RPAREN")
+
+        return_type = "void"
+        if self.current_token[0] == "MINUS" and (
+            self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "GREATER_THAN"
+        ):
+            self.eat("MINUS")
+            self.eat("GREATER_THAN")
+            return_type = self.parse_type_name(allow_array_suffix=True)
+            return_type += self.parse_pointer_suffix()
+
+        generic_constraints = self.parse_generic_constraint_clauses()
+        semantic = None
+        if self.current_token[0] == "COLON":
+            semantic = self.parse_semantic_annotations()
+        generic_constraints.extend(self.parse_generic_constraint_clauses())
+
+        if self.current_token[0] == "SEMICOLON":
+            if not allow_signature:
+                raise SyntaxError("Expected function body, got SEMICOLON")
+            self.eat("SEMICOLON")
+            body = []
+            is_declaration = True
+        else:
+            body = self.parse_block()
+            is_declaration = False
+
+        return FunctionNode(
+            return_type,
+            name,
+            params,
+            body,
+            qualifiers=qualifiers,
+            qualifier=shader_type,
+            semantic=semantic,
+            is_generic=is_generic,
+            generic_parameters=generic_parameters,
+            generic_constraints=generic_constraints,
+            is_declaration=is_declaration,
+            attributes=attributes,
+            numthreads=self.get_numthreads_attribute(attributes),
+        )
+
+    def parse_func_keyword_parameters(self):
+        params = []
+        if self.current_token[0] == "VOID" and self.tokens[self.pos + 1][0] == "RPAREN":
+            self.eat("VOID")
+            return params
+
+        while self.current_token[0] != "RPAREN":
+            attributes = []
+            while self.current_token[0] == "LBRACKET":
+                attributes.extend(self.parse_attribute_list())
+            qualifiers = self.parse_parameter_qualifiers()
+            vtype, name = self.parse_func_keyword_parameter_declarator()
+            array_sizes = self.parse_array_suffixes()
+            default_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_value = self.parse_expression()
+            semantic = None
+            if self.current_token[0] == "COLON":
+                semantic = self.parse_semantic_annotations()
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_value = self.parse_expression()
+            params.append(
+                VariableNode(
+                    vtype,
+                    name,
+                    qualifiers=qualifiers,
+                    attributes=attributes,
+                    semantic=semantic,
+                    array_sizes=array_sizes,
+                    value=default_value,
+                )
+            )
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+        return params
+
+    def parse_func_keyword_parameter_declarator(self):
+        if self.is_func_keyword_name_first_parameter_start():
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            self.eat("COLON")
+            vtype = self.parse_type_name(allow_array_suffix=True)
+            vtype += self.parse_pointer_suffix()
+            return vtype, name
+
+        vtype = self.parse_type_name(allow_array_suffix=True)
+        vtype += self.parse_pointer_suffix()
+        name = ""
+        if self.current_token[0] == "IDENTIFIER":
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+        if name and self.current_token[0] == "IDENTIFIER":
+            vtype += f" {self.current_token[1]}"
+            self.eat("IDENTIFIER")
+        return vtype, name
+
+    def is_func_keyword_name_first_parameter_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "COLON"
+            and not (
+                self.pos + 2 < len(self.tokens)
+                and self.tokens[self.pos + 2][0] == "COLON"
+            )
+        )
+
     def parse_extension(self):
         qualifiers = self.parse_qualifiers()
         self.eat("EXTENSION")
@@ -1395,6 +1564,14 @@ class SlangParser:
                 raise SyntaxError(
                     f"Unsupported extension member: {self.current_token[0]}"
                 )
+            if self.is_func_keyword_declaration_start():
+                methods.append(
+                    self.parse_func_keyword_function(
+                        attributes=pending_attributes,
+                        allow_signature=True,
+                    )
+                )
+                continue
             methods.append(
                 self.parse_function(attributes=pending_attributes, allow_signature=True)
             )

@@ -172,6 +172,7 @@ MESH_STORAGE_QUALIFIERS = {
 IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS
 IDENTIFIER_QUALIFIERS |= {"nonuniformEXT"}
 CONTEXTUAL_QUALIFIERS = {"static"}
+TEMPLATE_TYPE_NAMES = {"vector"}
 
 NAME_TOKENS = {"IDENTIFIER", "SAMPLE", "BUFFER", "PATCH", "PRECISE"}
 CONTEXTUAL_NAME_TOKENS = (
@@ -1365,6 +1366,12 @@ class GLSLParser:
             return False
 
         index = self.skip_newline_index(self.index + 1)
+        if (
+            self.current_token[1] in TEMPLATE_TYPE_NAMES
+            and self.token_at(index)[0] == "LESS_THAN"
+        ):
+            index = self.skip_type_template_suffix_index(index)
+
         if self.is_name_token_at(index):
             return True
         if self.token_at(index)[0] != "LBRACKET":
@@ -2001,6 +2008,8 @@ class GLSLParser:
         if self.current_token[0] in TYPE_TOKENS or self.is_name_token():
             name = self.current_token[1]
             self.advance()
+            if name in TEMPLATE_TYPE_NAMES:
+                name += self.parse_type_template_suffix()
             return VariableNode("", name)
         if self.current_token[0] in ("STRING", "CHAR_LITERAL"):
             value = self.current_token[1]

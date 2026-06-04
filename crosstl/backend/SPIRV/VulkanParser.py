@@ -2174,8 +2174,15 @@ class VulkanParser:
             image_operands, expressions, names, decorations, constants
         )
         args = [image, coordinate]
-        if "Sample" in parsed_operands and parsed_operands["Sample"]:
-            args.append(parsed_operands["Sample"][0])
+        sample = self.spirv_assembly_image_sample_operand(parsed_operands)
+        lod = self.spirv_assembly_image_lod_operand(parsed_operands)
+        if lod is not None:
+            args.append(lod)
+            if sample is not None:
+                args.append(sample)
+            return FunctionCallNode("spirvImageLoadLod", args)
+        if sample is not None:
+            args.append(sample)
         return FunctionCallNode("imageLoad", args)
 
     def spirv_assembly_image_write_statement(
@@ -2202,10 +2209,30 @@ class VulkanParser:
             image_operands, expressions, names, decorations, constants
         )
         args = [image, coordinate]
-        if "Sample" in parsed_operands and parsed_operands["Sample"]:
-            args.append(parsed_operands["Sample"][0])
+        sample = self.spirv_assembly_image_sample_operand(parsed_operands)
+        lod = self.spirv_assembly_image_lod_operand(parsed_operands)
+        if lod is not None:
+            args.append(lod)
+            if sample is not None:
+                args.append(sample)
+            args.append(texel)
+            return FunctionCallNode("spirvImageStoreLod", args)
+        if sample is not None:
+            args.append(sample)
         args.append(texel)
         return FunctionCallNode("imageStore", args)
+
+    def spirv_assembly_image_sample_operand(self, parsed_operands):
+        values = parsed_operands.get("Sample")
+        if values:
+            return values[0]
+        return None
+
+    def spirv_assembly_image_lod_operand(self, parsed_operands):
+        values = parsed_operands.get("Lod")
+        if values:
+            return values[0]
+        return None
 
     def spirv_assembly_image_offset_operand(self, parsed_operands):
         for operand_name in ("ConstOffset", "Offset"):

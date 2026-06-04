@@ -31,6 +31,7 @@ BOOK_OF_SHADERS_METAL_REPO = "https://github.com/metal-by-example/book-of-shader
 BOOK_OF_SHADERS_METAL_COMMIT = "12bb2366697cba9c5f660d54fead7bdcd73b6b8a"
 MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
+MLX_CURRENT_COMMIT = "b155224b9963cd9476363b464a559232a0868000"
 MLX_FP_QUANTIZED_COMMIT = "c52b04b650be06291e3a6ff6e98b0ef1af3ff56b"
 PYTORCH_REPO = "https://github.com/pytorch/pytorch"
 PYTORCH_BUCKETIZATION_COMMIT = "5ee1f788c7098ae5e50e49543ee7822f73cd8990"
@@ -718,6 +719,39 @@ EXTERNAL_FIXTURES = [
                     return T(*(thread fp8_e8m0*)(&s));
                 }
             }
+        """
+        ),
+    },
+    {
+        "name": "mlx_fp4_builtin_conversion_operators",
+        "repo_url": MLX_REPO,
+        "commit": MLX_CURRENT_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/fp4.h",
+        "roundtrip": True,
+        "struct_names": ["fp4_e2m1"],
+        "contains": [
+            "struct fp4_e2m1",
+            "uint8 bits;",
+        ],
+        "not_contains": ["operator float"],
+        "source": (
+            """
+            struct fp4_e2m1 {
+                operator float16_t() {
+                    half converted = as_type<half>(ushort((bits & 7) << 9));
+                    return bits & 8 ? -converted : converted;
+                }
+
+                operator float() {
+                    return static_cast<float>(this->operator float16_t());
+                }
+
+                operator bfloat16_t() {
+                    return static_cast<bfloat16_t>(this->operator float16_t());
+                }
+
+                uint8_t bits;
+            };
         """
         ),
     },
