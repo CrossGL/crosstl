@@ -1112,6 +1112,30 @@ def test_external_cccl_bit_reverse_brevll_codegen_reparse():
     assert "__brevll" not in crossgl
 
 
+def test_cuda_math_api_sad_intrinsics_codegen_reparse():
+    # Upstream source:
+    # NVIDIA CUDA Math API 12.6.1, Integer Intrinsics.
+    source = """
+    __global__ void sad_kernel(unsigned int *out,
+                               int x,
+                               int y,
+                               unsigned int ux,
+                               unsigned int uy,
+                               unsigned int bias) {
+        out[0] = __sad(x, y, bias);
+        out[1] = __usad(ux, uy, bias);
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "out[0] = (abs(x - y) + bias);" in crossgl
+    assert "out[1] = (((ux > uy) ? (ux - uy) : (uy - ux)) + bias);" in crossgl
+    assert "__sad" not in crossgl
+    assert "__usad" not in crossgl
+
+
 def test_cuda_samples_reduction_reduce_add_sync_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cuda-samples

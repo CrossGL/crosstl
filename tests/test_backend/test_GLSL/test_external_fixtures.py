@@ -7,10 +7,12 @@ from crosstl.backend.GLSL.OpenglAst import (
     AssignmentNode,
     DoWhileNode,
     ForNode,
+    FunctionCallNode,
     IfNode,
     InitializerListNode,
     SwitchNode,
     UnaryOpNode,
+    VariableNode,
     WhileNode,
 )
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
@@ -169,6 +171,34 @@ EXTERNAL_FIXTURES = [
                 }
                 [[branch]] if (cond) cond = false;
                 [ [ dont_flatten , branch ] ] switch(3) { case 3: break; }
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/spv.longVectorLiteral234.comp.
+    # Reduced from GL_EXT_long_vector local template-type declarations.
+    ExternalFixture(
+        name="glslang-long-vector-local-template-declarations",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.longVectorLiteral234.comp",
+        shader_type="compute",
+        code=textwrap.dedent("""
+            #version 450 core
+            #extension GL_EXT_long_vector : enable
+
+            layout (local_size_x = 1) in;
+
+            void main()
+            {
+                vector<float, 2> v2 = vector<float, 2>(1.0, 2.0);
+                vector<float, 3> v3 = vector<float, 3>(1.0, 2.0, 3.0);
+                vector<float, 4> v4 = vector<float, 4>(1.0, 2.0, 3.0, 4.0);
+
+                v2 += v2;
+                v3 = v3 * 2.0;
+                v4 = v4 + vector<float, 4>(0.0);
+
+                int n2 = v2.length();
             }
         """).strip(),
     ),
@@ -884,6 +914,48 @@ def test_parse_glslang_control_flow_statement_attributes_fixture():
         IfNode,
         SwitchNode,
     ]
+
+
+def test_parse_glslang_long_vector_template_declarations_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-long-vector-local-template-declarations"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    main = next(function for function in ast.functions if function.name == "main")
+    declarations = [
+        statement for statement in main.body if isinstance(statement, VariableNode)
+    ]
+
+    assert [(decl.vtype, decl.name) for decl in declarations[:3]] == [
+        ("vector<float, 2>", "v2"),
+        ("vector<float, 3>", "v3"),
+        ("vector<float, 4>", "v4"),
+    ]
+    assert all(isinstance(decl.value, FunctionCallNode) for decl in declarations[:3])
+    assert [decl.value.name.name for decl in declarations[:3]] == [
+        "vector<float, 2>",
+        "vector<float, 3>",
+        "vector<float, 4>",
+    ]
+
+
+def test_codegen_glslang_long_vector_template_declarations_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-long-vector-local-template-declarations"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "vector<float, 2> v2 = vector<float, 2>(1.0, 2.0);" in crossgl
+    assert "vector<float, 3> v3 = vector<float, 3>(1.0, 2.0, 3.0);" in crossgl
+    assert "vector<float, 4> v4 = vector<float, 4>(1.0, 2.0, 3.0, 4.0);" in crossgl
+    assert "v4 = (v4 + vector<float, 4>(0.0));" in crossgl
+    parse_crossgl(crossgl)
 
 
 def test_parse_glslang_patch_contextual_identifier_fixture():

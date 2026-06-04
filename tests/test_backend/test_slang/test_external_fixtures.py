@@ -12,6 +12,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "726e0973b3f547c7729b86f122ff7aef8322bace",
     },
+    "shader-slang/slang-current-2026-06-04": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "8c4e02e4021d73091a4f1d4eba842c0dd986997e",
+    },
     "shader-slang/slang-gfx-tools-2026": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "c6f104ca76a54ca1565dac54363ea763dd906de6",
@@ -173,6 +177,35 @@ EXTERNAL_FIXTURES = [
             "cbuffer tbuf2 @register(t1)",
             "sampler2D texture2D;",
         ],
+    },
+    {
+        "id": "slang_func_keyword_default_parameter_from_current_docs",
+        "repo": "shader-slang/slang-current-2026-06-04",
+        "path": (
+            "docs/generated/tests/conformance/declarations/"
+            "func-default-param-functional.slang"
+        ),
+        "source": (
+            """
+            func add(x: int, y: float = 1.0f) -> float
+            {
+                return float(x) + y;
+            }
+
+            void main()
+            {
+                printf("%g\\n", add(5));
+                printf("%g\\n", add(5, 2.0));
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "float add(int x, float y)",
+            'printf("%g\\n", add(5));',
+            'printf("%g\\n", add(5, 2.0));',
+        ],
+        "not_contains": ["func add", "float y = 1.0"],
     },
     {
         "id": "falcor_texture_load",

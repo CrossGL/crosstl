@@ -550,6 +550,29 @@ def test_parse_noperspective_interpolation_modifier_from_hlsl_docs():
     assert param.qualifiers == ["noperspective"]
 
 
+def test_parse_center_interpolation_modifier_from_dxc_center_keyword():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/HLSLFileCheck/hlsl/types/modifiers/center/center_kwd.hlsl
+    ast = parse_code("""
+    float main(center float t : T) : SV_TARGET
+    {
+        float center = 10.0f;
+        return center * 2;
+    }
+    """)
+
+    param = ast.functions[0].params[0]
+    local = ast.functions[0].body[0]
+
+    assert param.vtype == "float"
+    assert param.name == "t"
+    assert param.semantic == "T"
+    assert param.qualifiers == ["center"]
+    assert local.vtype == "float"
+    assert local.name == "center"
+    assert local.qualifiers == []
+
+
 def test_parse_contextual_shared_storage_modifier_from_hlsl_docs():
     ast = parse_code("""
     shared float cachedWeight;

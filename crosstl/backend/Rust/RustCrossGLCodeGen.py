@@ -945,10 +945,10 @@ class RustToCrossGLConverter:
             semantic = self.get_semantic_from_attributes(
                 getattr(param, "attributes", [])
             )
-            declarations.append(
-                f"{self.format_typed_declarator(param.vtype, name)}{semantic}"
-            )
             param_type = self.normalize_receiver_type(param.vtype, struct_name)
+            declarations.append(
+                f"{self.format_typed_declarator(param_type, name)}{semantic}"
+            )
             param_types.append((name, param_type))
 
         return ", ".join(declarations), param_types, aliases
@@ -2033,14 +2033,12 @@ class RustToCrossGLConverter:
         code = ""
         indent_str = "    " * indent
 
-        params = []
-        param_types = []
-        for param in func.params:
-            param_type = self.normalize_receiver_type(param.vtype, struct_name)
-            params.append(self.format_typed_declarator(param_type, param.name))
-            param_types.append((param.name, param_type))
-
-        params_str = ", ".join(params)
+        local_binding_names = self.collect_simple_local_binding_names(func.body)
+        params_str, param_types, name_aliases = self.prepare_function_parameters(
+            func.params,
+            struct_name=struct_name,
+            extra_forbidden=local_binding_names,
+        )
         display_return_type = self.normalize_receiver_type(
             func.return_type, struct_name
         )
@@ -2057,6 +2055,8 @@ class RustToCrossGLConverter:
         self.current_function_return_type = func.return_type
         self.push_value_type_scope(param_types)
         self.push_local_callable_scope()
+        self.push_name_alias_scope(name_aliases)
+        self.local_binding_name_scopes.append(local_binding_names)
         try:
             body_code = self.generate_function_body(
                 func.body,
@@ -2071,6 +2071,8 @@ class RustToCrossGLConverter:
         finally:
             self.current_function_return_type = previous_return_type
             self.current_closure_helpers = previous_helpers
+            self.local_binding_name_scopes.pop()
+            self.pop_name_alias_scope()
             self.pop_local_callable_scope()
             self.pop_value_type_scope()
 

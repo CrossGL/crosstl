@@ -4999,6 +4999,13 @@ class HipToCrossGLConverter:
             return f"countLeadingZeros({args[0]})"
         if function_name in {"__brev", "__brevll"} and len(args) == 1:
             return f"reverseBits({args[0]})"
+        if function_name == "__sad" and len(args) == 3:
+            return f"(abs({args[0]} - {args[1]}) + {args[2]})"
+        if function_name == "__usad" and len(args) == 3:
+            return (
+                f"((({args[0]} > {args[1]}) ? ({args[0]} - {args[1]}) : "
+                f"({args[1]} - {args[0]})) + {args[2]})"
+            )
         if function_name in {"__popc", "__popcll"} and len(args) == 1:
             return f"bitCount({args[0]})"
         return None

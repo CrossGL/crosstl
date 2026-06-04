@@ -1372,6 +1372,50 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_IMAGE_READ_WRITE_LOD_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/val/val_image_test.cpp
+; Reduced from ValidateImage::ReadLodAMDSuccess1 and WriteLodAMDSuccess1,
+; where SPV_AMD_shader_image_load_store_lod allows OpImageRead/OpImageWrite
+; with ImageOperands.Lod.
+OpCapability Shader
+OpCapability StorageImageReadWithoutFormat
+OpCapability StorageImageWriteWithoutFormat
+OpCapability ImageReadWriteLodAMD
+OpExtension "SPV_AMD_shader_image_load_store_lod"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color %storage_image
+OpExecutionMode %main OriginUpperLeft
+OpName %out_color "outColor"
+OpName %storage_image "storageImage"
+OpDecorate %out_color Location 0
+OpDecorate %storage_image DescriptorSet 0
+OpDecorate %storage_image Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%v2uint = OpTypeVector %uint 2
+%v4uint = OpTypeVector %uint 4
+%image_type = OpTypeImage %uint 2D 0 0 0 2 Unknown
+%ptr_image = OpTypePointer UniformConstant %image_type
+%ptr_output_v4uint = OpTypePointer Output %v4uint
+%zero = OpConstant %uint 0
+%one = OpConstant %uint 1
+%coord = OpConstantComposite %v2uint %zero %one
+%texel = OpConstantComposite %v4uint %one %zero %zero %one
+%storage_image = OpVariable %ptr_image UniformConstant
+%out_color = OpVariable %ptr_output_v4uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%img = OpLoad %image_type %storage_image
+%read = OpImageRead %v4uint %img %coord Lod %zero
+OpStore %out_color %read
+OpImageWrite %img %coord %texel Lod %zero
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_STORE_BODY_ASSEMBLY = """
 ; Reduced from a fragment output store.
 OpCapability Shader
@@ -2852,6 +2896,29 @@ def test_glslang_image_write_sample_operand_codegen_reparse():
     )
     assert (
         "imageStore(image, int2(0, 1), float4(1.0, 0.0, 0.0, 1.0));"
+        not in generated_code
+    )
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_image_read_write_lod_operand_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_IMAGE_READ_WRITE_LOD_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "RWTexture2D<uint> storageImage @set(0) @binding(0);" in generated_code
+    assert "uint4 outColor @output @location(0);" in generated_code
+    assert (
+        "outColor = spirvImageLoadLod(storageImage, uint2(0, 1), 0);" in generated_code
+    )
+    assert (
+        "spirvImageStoreLod(storageImage, uint2(0, 1), 0, uint4(1, 0, 0, 1));"
+        in generated_code
+    )
+    assert "outColor = imageLoad(storageImage, uint2(0, 1));" not in generated_code
+    assert (
+        "imageStore(storageImage, uint2(0, 1), uint4(1, 0, 0, 1));"
         not in generated_code
     )
     assert "Unhandled statement type" not in generated_code

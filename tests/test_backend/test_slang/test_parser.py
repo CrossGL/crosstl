@@ -1409,6 +1409,27 @@ def test_unnamed_signature_parameters_and_void_parameter_list_parse():
     assert reset_method.params == []
 
 
+def test_func_keyword_name_first_parameters_from_current_docs_parse():
+    code = """
+    func add(x: int, y: float = 1.0f) -> float
+    {
+        return float(x) + y;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    add = ast.functions[0]
+
+    assert add.name == "add"
+    assert add.return_type == "float"
+    assert [(param.vtype, param.name) for param in add.params] == [
+        ("int", "x"),
+        ("float", "y"),
+    ]
+    assert add.params[1].value == "1.0f"
+
+
 def test_top_level_function_prototypes_from_slang_shaders_parse():
     code = """
     SceneResult Scene_GetDistance(vec3 vPos);

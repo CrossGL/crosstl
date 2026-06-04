@@ -915,6 +915,38 @@ def test_parse_class_helper_with_access_labels_from_public_metal_shader():
     assert ast.functions[0].body[0].vtype == "FpMersenne31"
 
 
+def test_skip_struct_builtin_conversion_operators_from_mlx_fp4_header():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: b155224b9963cd9476363b464a559232a0868000
+    # Path: mlx/backend/metal/kernels/fp4.h
+    code = """
+    struct fp4_e2m1 {
+        operator float16_t() {
+            half converted = as_type<half>(ushort((bits & 7) << 9));
+            return bits & 8 ? -converted : converted;
+        }
+
+        operator float() {
+            return static_cast<float>(this->operator float16_t());
+        }
+
+        operator bfloat16_t() {
+            return static_cast<bfloat16_t>(this->operator float16_t());
+        }
+
+        uint8_t bits;
+    };
+    """
+    ast = parse_ok(code)
+    struct = ast.structs[0]
+
+    assert struct.name == "fp4_e2m1"
+    assert [(member.vtype, member.name) for member in struct.members] == [
+        ("uint8_t", "bits")
+    ]
+
+
 def test_parse_unscoped_enum_with_underlying_type_from_metal_splatter():
     code = """
     enum BufferIndex: int32_t
