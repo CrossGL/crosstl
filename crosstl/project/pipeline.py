@@ -2202,6 +2202,28 @@ def _duplicate_path_contract_reasons(prefix: str, records: Sequence[Any]) -> lis
     return reasons
 
 
+def _duplicate_field_contract_reasons(
+    prefix: str, records: Sequence[Any], field_name: str
+) -> list[str]:
+    reasons = []
+    values: dict[str, int] = {}
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            continue
+        value = record.get(field_name)
+        if not _is_non_empty_string(value):
+            continue
+        previous_index = values.get(value)
+        if previous_index is None:
+            values[value] = index
+            continue
+        reasons.append(
+            f"{prefix}[{index}].{field_name} duplicates "
+            f"{prefix}[{previous_index}].{field_name}"
+        )
+    return reasons
+
+
 def _unit_skipped_path_contract_reasons(
     units: Sequence[Any], skipped: Sequence[Any]
 ) -> list[str]:
@@ -3161,6 +3183,12 @@ def _external_corpus_contract_reasons(
                     index, entry, artifacts=artifact_records
                 )
             )
+        reasons.extend(
+            _duplicate_field_contract_reasons("externalCorpus.entries", entries, "id")
+        )
+        reasons.extend(
+            _duplicate_path_contract_reasons("externalCorpus.entries", entries)
+        )
     reasons.extend(
         _external_corpus_summary_contract_reasons(
             external_corpus.get("summary"), entries, artifacts

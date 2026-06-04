@@ -2876,6 +2876,84 @@ def test_validate_project_report_rejects_drive_relative_external_corpus_paths(
     )
 
 
+def test_validate_project_report_rejects_duplicate_external_corpus_entries(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "duplicate-external-corpus-entry-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "externalCorpusManifest": "corpus.json",
+                },
+                "artifacts": [],
+                "externalCorpus": {
+                    "schemaVersion": 1,
+                    "manifest": "corpus.json",
+                    "status": "ok",
+                    "entries": [
+                        {
+                            "id": "repo/simple",
+                            "path": "shaders/simple.glsl",
+                            "sourceBackend": "opengl",
+                            "targets": ["opengl"],
+                            "present": False,
+                            "discovered": False,
+                            "artifactCount": 0,
+                            "translatedCount": 0,
+                            "failedCount": 0,
+                        },
+                        {
+                            "id": "repo/simple",
+                            "path": "shaders/simple.glsl",
+                            "sourceBackend": "opengl",
+                            "targets": ["opengl"],
+                            "present": False,
+                            "discovered": False,
+                            "artifactCount": 0,
+                            "translatedCount": 0,
+                            "failedCount": 0,
+                        },
+                    ],
+                    "summary": {
+                        "entryCount": 2,
+                        "presentCount": 0,
+                        "missingCount": 2,
+                        "discoveredUnitCount": 0,
+                        "undiscoveredPresentCount": 0,
+                        "entriesBySourceBackend": {"opengl": 2},
+                        "entriesByTarget": {"opengl": 2},
+                        "artifactsByTarget": {},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "externalCorpus.entries[1].id duplicates externalCorpus.entries[0].id"
+        in diagnostic["message"]
+    )
+    assert (
+        "externalCorpus.entries[1].path duplicates externalCorpus.entries[0].path"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_mismatched_external_corpus_manifest(
     tmp_path,
 ):
