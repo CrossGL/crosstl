@@ -1187,6 +1187,42 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     f"artifacts[{index}].status must be translated or failed"
                 )
 
+    diagnostics = report.get("diagnostics", [])
+    if not isinstance(diagnostics, list):
+        reasons.append("diagnostics must be a list")
+    else:
+        for index, diagnostic in enumerate(diagnostics):
+            if not isinstance(diagnostic, Mapping):
+                reasons.append(f"diagnostics[{index}] must be an object")
+                continue
+            severity = diagnostic.get("severity")
+            if severity not in {"note", "warning", "error"}:
+                reasons.append(
+                    f"diagnostics[{index}].severity must be note, warning, or error"
+                )
+            for field_name in ("code", "message"):
+                if not _is_non_empty_string(diagnostic.get(field_name)):
+                    reasons.append(
+                        f"diagnostics[{index}].{field_name} must be a string"
+                    )
+            location = diagnostic.get("location")
+            if not isinstance(location, Mapping):
+                reasons.append(f"diagnostics[{index}].location must be an object")
+            elif not _is_non_empty_string(location.get("file")):
+                reasons.append(f"diagnostics[{index}].location.file must be a string")
+            if "target" in diagnostic and not _is_non_empty_string(
+                diagnostic.get("target")
+            ):
+                reasons.append(f"diagnostics[{index}].target must be a string")
+            missing_capabilities = diagnostic.get("missingCapabilities", [])
+            if not isinstance(missing_capabilities, list) or any(
+                not _is_non_empty_string(capability)
+                for capability in missing_capabilities
+            ):
+                reasons.append(
+                    f"diagnostics[{index}].missingCapabilities must be a list of strings"
+                )
+
     return [_invalid_report_diagnostic(path, reasons)] if reasons else []
 
 

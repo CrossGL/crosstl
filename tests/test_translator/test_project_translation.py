@@ -758,6 +758,53 @@ def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
     assert "artifacts[0].status must be translated or failed" in (diagnostic["message"])
 
 
+def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-diagnostics-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": [],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "diagnostics": [
+                    {
+                        "severity": "fatal",
+                        "code": "",
+                        "message": "bad diagnostic",
+                        "location": {},
+                        "target": "",
+                        "missingCapabilities": "repo.scan",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "diagnostics[0].severity must be note, warning, or error" in (
+        diagnostic["message"]
+    )
+    assert "diagnostics[0].code must be a string" in diagnostic["message"]
+    assert "diagnostics[0].location.file must be a string" in diagnostic["message"]
+    assert "diagnostics[0].target must be a string" in diagnostic["message"]
+    assert "diagnostics[0].missingCapabilities must be a list of strings" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
