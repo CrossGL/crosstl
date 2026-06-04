@@ -942,6 +942,37 @@ def test_roundtrip_scalar_thread_position_in_grid_from_apple_compute_sample():
     assert "result[index] = inA[index];" in metal
 
 
+def test_roundtrip_threads_per_threadgroup_from_apple_threadgroups_doc():
+    # Reduced from Apple's "Creating threads and threadgroups" documentation.
+    # https://developer.apple.com/documentation/metal/compute_passes/creating_threads_and_threadgroups
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void myKernel(
+        uint2 threadgroupPositionInGrid [[ threadgroup_position_in_grid ]],
+        uint2 threadPositionInThreadgroup [[ thread_position_in_threadgroup ]],
+        uint2 threadsPerThreadgroup [[ threads_per_threadgroup ]]) {
+        uint2 threadPositionInGrid =
+            (threadgroupPositionInGrid * threadsPerThreadgroup) +
+            threadPositionInThreadgroup;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "uvec2 threadsPerThreadgroup @gl_WorkGroupSize" in crossgl
+    assert "@threads_per_threadgroup" not in crossgl
+    assert (
+        "uvec2 threadPositionInGrid = "
+        "threadgroupPositionInGrid * threadsPerThreadgroup "
+        "+ threadPositionInThreadgroup;"
+    ) in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "uint2 threadsPerThreadgroup [[threads_per_threadgroup]]" in metal
+
+
 def test_codegen_preserves_literals_and_swizzles():
     code = """
     #include <metal_stdlib>

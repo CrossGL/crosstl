@@ -99,6 +99,46 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
 
 
+def test_cuda_programming_guide_syncthreads_predicate_variants_codegen_reparse():
+    # Upstream source:
+    # NVIDIA CUDA Programming Guide v13.3, section 5.4.4.1
+    # Thread Block Synchronization Functions.
+    source = """
+    __global__ void vote_block(int *out, int limit) {
+        int pred = threadIdx.x < limit;
+        int count = __syncthreads_count(pred);
+        int all_set = __syncthreads_and(pred);
+        int any_set = __syncthreads_or(pred);
+        out[threadIdx.x] = count + all_set + any_set;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.kernels[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(body[1].value, FunctionCallNode)
+    assert body[1].value.name == "__syncthreads_count"
+    assert body[2].value.name == "__syncthreads_and"
+    assert body[3].value.name == "__syncthreads_or"
+    assert (
+        "var count: i32 = (/* cuda thread block sync vote "
+        "__syncthreads_count(pred) not directly supported in CrossGL */ 0);"
+    ) in crossgl
+    assert (
+        "var all_set: i32 = (/* cuda thread block sync vote "
+        "__syncthreads_and(pred) not directly supported in CrossGL */ 0);"
+    ) in crossgl
+    assert (
+        "var any_set: i32 = (/* cuda thread block sync vote "
+        "__syncthreads_or(pred) not directly supported in CrossGL */ 0);"
+    ) in crossgl
+    assert "__syncthreads_count(pred);" not in crossgl
+    assert "__syncthreads_and(pred);" not in crossgl
+    assert "__syncthreads_or(pred);" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_simple_vote_intrinsics_warp_vote_codegen_reparse():
     source = """
     __global__ void VoteAnyKernel1(unsigned int *input,

@@ -1169,6 +1169,36 @@ def test_codegen_texture_sample_mapping():
     assert "texture_sample" not in output
 
 
+def test_codegen_texture2dms_operator_index_from_microsoft_docs():
+    # Source: Microsoft Texture2DMS::Operator docs.
+    output = generate_crossgl("""
+        Texture2DMS<float4> texMs : register(t0);
+
+        float4 main(uint2 pos : TEXCOORD0) : SV_Target0 {
+            return texMs[pos];
+        }
+    """)
+
+    assert "return texelFetch(texMs, pos, 0);" in output
+    assert "texMs[pos]" not in output
+    parse_crossgl(output)
+
+
+def test_codegen_texture2dms_sample_operator_from_microsoft_docs():
+    # Source: Microsoft Texture2DMS::sample.Operator docs.
+    output = generate_crossgl("""
+        Texture2DMS<float4, 8> texMs : register(t0);
+
+        float4 main(uint2 pos : TEXCOORD0) : SV_Target0 {
+            return texMs.sample[2][pos];
+        }
+    """)
+
+    assert "return texelFetch(texMs, pos, 2);" in output
+    assert "texMs.sample[2][pos]" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_sv_target_index_roundtrips_to_hlsl_semantic():
     output = generate_crossgl("""
         float4 PSMain(float2 uv : TEXCOORD0) : SV_Target1 {

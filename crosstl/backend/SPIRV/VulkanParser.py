@@ -223,6 +223,13 @@ class VulkanParser:
         "IsInf": "isinf",
         "IsNan": "isnan",
     }
+    SPIRV_CORE_FUNCTIONS = {
+        "BitCount": "bitCount",
+        "BitFieldInsert": "bitfieldInsert",
+        "BitFieldSExtract": "bitfieldExtract",
+        "BitFieldUExtract": "bitfieldExtract",
+        "BitReverse": "bitfieldReverse",
+    }
     CROSSGL_RESERVED_IDENTIFIERS = {
         "as",
         "async",
@@ -1476,6 +1483,27 @@ class VulkanParser:
                 continue
 
             operation = opcode[2:] if opcode.startswith("Op") else opcode
+            if (
+                result_id
+                and operation in self.SPIRV_CORE_FUNCTIONS
+                and len(operands) >= 2
+            ):
+                expressions[result_id] = FunctionCallNode(
+                    self.SPIRV_CORE_FUNCTIONS[operation],
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operand,
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                        for operand in operands[1:]
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             if (
                 result_id
                 and operation in self.SPIRV_DERIVATIVE_FUNCTIONS

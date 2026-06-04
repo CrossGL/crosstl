@@ -121,6 +121,30 @@ class RustToCrossGLConverter:
         "sample_depth_reference_with": "textureCompare",
         "sample_depth_reference_with_project_coordinate_with": "textureCompareProj",
     }
+    VECTOR_EXTEND_CONSTRUCTOR_MAP = {
+        "vec2": "vec3",
+        "vec3": "vec4",
+        "ivec2": "ivec3",
+        "ivec3": "ivec4",
+        "uvec2": "uvec3",
+        "uvec3": "uvec4",
+        "bvec2": "bvec3",
+        "bvec3": "bvec4",
+    }
+    VECTOR_CONSTRUCTOR_RETURN_TYPES = {
+        "vec2": "vec2",
+        "vec3": "vec3",
+        "vec4": "vec4",
+        "ivec2": "ivec2",
+        "ivec3": "ivec3",
+        "ivec4": "ivec4",
+        "uvec2": "uvec2",
+        "uvec3": "uvec3",
+        "uvec4": "uvec4",
+        "bvec2": "bvec2",
+        "bvec3": "bvec3",
+        "bvec4": "bvec4",
+    }
 
     def __init__(self):
         self.type_map = {
@@ -1121,6 +1145,8 @@ class RustToCrossGLConverter:
     def infer_value_type(self, expression):
         if isinstance(expression, StructInitializationNode):
             return expression.struct_name
+        if isinstance(expression, BinaryOpNode):
+            return self.infer_binary_expression_value_type(expression)
         if isinstance(expression, FunctionCallNode):
             return self.infer_function_call_return_type(expression)
         if isinstance(expression, TernaryOpNode):
@@ -1146,11 +1172,36 @@ class RustToCrossGLConverter:
             )
         if self.is_block_expression_node(expression):
             return self.infer_block_expression_value_type(expression)
+        if isinstance(expression, str):
+            path_type = self.infer_path_value_type(expression)
+            if path_type is not None:
+                return path_type
         if isinstance(
             expression, (str, VariableNode, MemberAccessNode, ArrayAccessNode)
         ):
             return self.lookup_value_type(self.generate_expression(expression))
         return None
+
+    def infer_binary_expression_value_type(self, expression):
+        if expression.op in {"==", "!=", "<", ">", "<=", ">=", "&&", "||"}:
+            return "bool"
+
+        left_type = self.infer_value_type(expression.left)
+        right_type = self.infer_value_type(expression.right)
+        if left_type and right_type:
+            return self.common_inferred_value_type([left_type, right_type])
+        return left_type or right_type
+
+    def infer_path_value_type(self, expression):
+        if not isinstance(expression, str) or "::" not in expression:
+            return None
+
+        path = self.resolve_imported_module_path(expression)
+        type_name = path.rsplit("::", 1)[0]
+        mapped_type = self.map_type(type_name)
+        if mapped_type == type_name:
+            return None
+        return mapped_type
 
     def infer_branch_body_value_type(self, body):
         if body is None:
@@ -1207,6 +1258,9 @@ class RustToCrossGLConverter:
         raw_function_name = self.function_call_name(expression.name)
         if raw_function_name is None:
             return None
+        builtin_return_type = self.infer_builtin_function_return_type(raw_function_name)
+        if builtin_return_type is not None:
+            return builtin_return_type
         associated_return_type = self.infer_impl_associated_function_call_return_type(
             raw_function_name,
             expression.args,
@@ -1236,12 +1290,41 @@ class RustToCrossGLConverter:
     def infer_impl_method_call_return_type(self, expression):
         member_access = expression.name
         method_name = getattr(member_access, "member", None)
+        builtin_return_type = self.infer_builtin_method_return_type(
+            method_name,
+            self.infer_value_type(member_access.object),
+            expression.args,
+        )
+        if builtin_return_type is not None:
+            return builtin_return_type
+
         obj = self.generate_expression(member_access.object)
         match = self.lookup_impl_method_receiver_match(obj, method_name)
         if match is None:
             return None
 
         return self.infer_impl_method_return_type(match, expression.args)
+
+    def infer_builtin_function_return_type(self, function_name):
+        if not isinstance(function_name, str):
+            return None
+
+        function_name = self.resolve_imported_module_path(function_name)
+        if "::" in function_name:
+            type_name, method_name = function_name.rsplit("::", 1)
+            if method_name in {"new", "splat", "from"}:
+                mapped_type = self.map_type(type_name)
+                if mapped_type != type_name:
+                    return mapped_type
+
+        return self.VECTOR_CONSTRUCTOR_RETURN_TYPES.get(
+            function_name.rsplit("::", 1)[-1]
+        )
+
+    def infer_builtin_method_return_type(self, method_name, receiver_type, args):
+        if method_name == "extend" and len(args) == 1:
+            return self.extended_vector_constructor(receiver_type)
+        return None
 
     def infer_impl_method_return_type(self, match, arg_values):
         method = match["method"]
@@ -3799,6 +3882,11 @@ class RustToCrossGLConverter:
         if method_name == "is_multiple_of" and len(args) == 1:
             return f"(({obj} % {args[0]}) == 0)"
 
+        if method_name == "extend" and len(args) == 1:
+            constructor = self.extended_vector_constructor(receiver_type)
+            if constructor is not None:
+                return f"{constructor}({obj}, {args[0]})"
+
         if method_name == "length" and not args:
             return f"length({obj})"
 
@@ -3838,6 +3926,13 @@ class RustToCrossGLConverter:
             return f"{obj}.{method_name}"
 
         return None
+
+    def extended_vector_constructor(self, receiver_type):
+        if not receiver_type:
+            return None
+
+        mapped_type = self.map_type(receiver_type)
+        return self.VECTOR_EXTEND_CONSTRUCTOR_MAP.get(mapped_type)
 
     def format_resource_method_call(self, method_name, obj, args, receiver_type=None):
         if not self.is_resource_method_name(method_name):

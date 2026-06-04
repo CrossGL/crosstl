@@ -1610,6 +1610,47 @@ class HLSLToCrossGLConverter:
             return False
         return self.array_access_depth(expr) > self.expression_resource_array_dims(expr)
 
+    def is_sampled_multisample_texture_type(self, type_name):
+        return self.raw_type_base(type_name) in {"Texture2DMS", "Texture2DMSArray"}
+
+    def generate_multisample_texture_operator_fetch(self, expr, is_main=False):
+        if not isinstance(expr, ArrayAccessNode):
+            return None
+
+        if (
+            isinstance(expr.array, ArrayAccessNode)
+            and isinstance(expr.array.array, MemberAccessNode)
+            and str(expr.array.array.member).lower() == "sample"
+            and self.is_sampled_multisample_texture_type(
+                self.expression_raw_type(expr.array.array.object)
+            )
+        ):
+            texture = self.generate_expression(expr.array.array.object, is_main)
+            sample_index = self.generate_expression(expr.array.index, is_main)
+            coord = self.generate_expression(expr.index, is_main)
+            return f"texelFetch({texture}, {coord}, {sample_index})"
+
+        if (
+            isinstance(expr.array, MemberAccessNode)
+            and str(expr.array.member).lower() == "sample"
+        ):
+            return None
+
+        if not self.is_sampled_multisample_texture_type(
+            self.expression_raw_type(expr.array)
+        ):
+            return None
+
+        if (
+            self.array_access_depth(expr)
+            != self.expression_resource_array_dims(expr) + 1
+        ):
+            return None
+
+        texture = self.generate_expression(expr.array, is_main)
+        coord = self.generate_expression(expr.index, is_main)
+        return f"texelFetch({texture}, {coord}, 0)"
+
     def generate_typed_buffer_atomic_value(self, arg, component_type, is_main):
         if (
             component_type == "uint"
@@ -2842,6 +2883,11 @@ class HLSLToCrossGLConverter:
             obj = self.generate_expression(expr.object, is_main)
             return f"{obj}.{expr.member}"
         elif isinstance(expr, ArrayAccessNode):
+            multisample_fetch = self.generate_multisample_texture_operator_fetch(
+                expr, is_main
+            )
+            if multisample_fetch is not None:
+                return multisample_fetch
             if (
                 not self.suppress_storage_image_index_lowering
                 and self.is_storage_image_texel_access(expr)
