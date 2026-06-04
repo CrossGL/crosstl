@@ -84,6 +84,7 @@ class SlangParser:
         "triangleadj",
     }
     MESH_OUTPUT_PARAMETER_QUALIFIERS = {"indices", "vertices", "primitives"}
+    STANDALONE_LAYOUT_DECLARATION_QUALIFIERS = {"buffer"}
     BUILTIN_IDENTIFIER_TYPES = {
         "double",
         "double2",
@@ -198,6 +199,8 @@ class SlangParser:
                 cbuffers.append(
                     self.parse_glsl_uniform_block(attributes=pending_attributes)
                 )
+            elif self.is_standalone_layout_declaration_start():
+                self.skip_semicolon_terminated_declaration()
             elif declaration_token == "ENUM":
                 enums.append(self.parse_enum())
             elif declaration_token in {"TYPEDEF", "TYPEALIAS"}:
@@ -349,6 +352,31 @@ class SlangParser:
         self.eat("IDENTIFIER")
         self.parse_type_name()
         self.eat("SEMICOLON")
+
+    def is_standalone_layout_declaration_start(self):
+        current_pos = self.pos
+        saw_layout = False
+        while current_pos < len(self.tokens):
+            if self.is_layout_qualifier_at(current_pos):
+                saw_layout = True
+                current_pos = self.skip_layout_qualifier_tokens(current_pos)
+                continue
+
+            token_type, token_value = self.tokens[current_pos]
+            if self.is_qualifier_token_at(current_pos) or (
+                token_type == "IDENTIFIER"
+                and token_value in self.STANDALONE_LAYOUT_DECLARATION_QUALIFIERS
+            ):
+                current_pos += 1
+                continue
+
+            break
+
+        return (
+            saw_layout
+            and current_pos < len(self.tokens)
+            and self.tokens[current_pos][0] == "SEMICOLON"
+        )
 
     def skip_balanced_block(self):
         self.eat("LBRACE")

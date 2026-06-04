@@ -1945,6 +1945,32 @@ class TestHipParser:
             {"type": "__half *", "name": "d_in2"},
         ]
 
+    def test_public_rocm_fp16_pointer_declaration_list_parsing(self):
+        # Upstream: ROCm/rocm-examples@cf369da,
+        # HIP-Doc/Reference/Low-Precision-Floating-Point-Types/low_precision_float_fp16/main.hip.
+        code = """
+        int main() {
+            __half *d_in1, *d_in2;
+            std::vector<__half> in1_half(size), in2_half(size);
+        }
+        """
+
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert [declaration.vtype for declaration in body] == [
+            "__half *",
+            "__half *",
+            "std::vector<__half>",
+            "std::vector<__half>",
+        ]
+        assert [declaration.name for declaration in body] == [
+            "d_in1",
+            "d_in2",
+            "in1_half",
+            "in2_half",
+        ]
+
     def test_public_rocm_vulkan_qualified_constructor_parameters_parsing(self):
         code = """
         base_dispatch::base_dispatch(PFN_vkGetInstanceProcAddr loader)

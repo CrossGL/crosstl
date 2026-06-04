@@ -658,6 +658,60 @@ def test_parse_vulkan_extension_types_suffixes_and_qualifiers():
     assert in_color.is_array is True
 
 
+def test_parse_nonuniform_ext_declaration_qualifier_from_glslang():
+    # Reduced from KhronosGroup/glslang Test/spv.nonuniform.frag.
+    code = textwrap.dedent("""
+        #version 450
+        #extension GL_EXT_nonuniform_qualifier : enable
+
+        layout(location=0) nonuniformEXT in vec4 nu_inv4;
+        nonuniformEXT float nu_gf;
+        layout(location=1) in nonuniformEXT flat int nu_ii;
+
+        nonuniformEXT int foo(nonuniformEXT int nupi, nonuniformEXT out int f)
+        {
+            return nupi;
+        }
+
+        void main()
+        {
+            nonuniformEXT int nu_li;
+            nonuniformEXT ivec4 v;
+            nonuniformEXT mat4 m;
+            nonuniformEXT struct S { int a; } s;
+            nonuniformEXT int arr[10];
+            int a = foo(nu_li, nu_li);
+            nu_li = nonuniformEXT(a) + nonuniformEXT(a * 2);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    nu_inv4 = next(var for var in ast.io_variables if var.name == "nu_inv4")
+    nu_ii = next(var for var in ast.io_variables if var.name == "nu_ii")
+    nu_gf = next(var for var in ast.global_variables if var.name == "nu_gf")
+    foo = next(function for function in ast.functions if function.name == "foo")
+    main = next(function for function in ast.functions if function.name == "main")
+    local_declarations = [stmt for stmt in main.body if isinstance(stmt, VariableNode)]
+    local_struct = next(stmt for stmt in main.body if isinstance(stmt, StructNode))
+
+    assert nu_inv4.qualifiers == ["nonuniformEXT", "in"]
+    assert nu_inv4.layout == {"location": "0"}
+    assert nu_ii.qualifiers == ["in", "nonuniformEXT", "flat"]
+    assert nu_gf.qualifiers == ["nonuniformEXT"]
+    assert [param.qualifiers for param in foo.params] == [
+        ["nonuniformEXT"],
+        ["nonuniformEXT", "out"],
+    ]
+    assert [decl.name for decl in local_declarations[:4]] == [
+        "nu_li",
+        "v",
+        "m",
+        "s",
+    ]
+    assert all("nonuniformEXT" in decl.qualifiers for decl in local_declarations[:5])
+    assert local_struct.name == "S"
+
+
 def test_parse_repeated_layout_qualifiers_from_slang_glsl():
     code = textwrap.dedent("""
         #version 450

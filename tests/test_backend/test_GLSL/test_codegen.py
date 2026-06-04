@@ -437,6 +437,40 @@ def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
     assert "cbuffer Uniforms" not in crossgl
 
 
+def test_codegen_nonuniform_ext_qualifier_from_glslang_is_preserved():
+    # Reduced from KhronosGroup/glslang Test/spv.nonuniform.frag.
+    code = textwrap.dedent("""
+        #version 450
+        #extension GL_EXT_nonuniform_qualifier : enable
+
+        layout(location=0) nonuniformEXT in vec4 nu_inv4;
+        nonuniformEXT float nu_gf;
+        layout(location=1) in nonuniformEXT flat int nu_ii;
+
+        nonuniformEXT int foo(nonuniformEXT int nupi, nonuniformEXT out int f)
+        {
+            return nupi;
+        }
+
+        void main()
+        {
+            nonuniformEXT int nu_li;
+            int a = foo(nu_li, nu_li);
+            nu_li = nonuniformEXT(a) + nonuniformEXT(a * 2);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "vec4 nu_inv4 @location(0) @nonuniformEXT;" in crossgl
+    assert "flat int nu_ii @location(1) @nonuniformEXT;" in crossgl
+    assert "float nu_gf @nonuniformEXT;" in crossgl
+    assert "int foo(int nupi @nonuniformEXT, out int f @nonuniformEXT)" in crossgl
+    assert "int nu_li @nonuniformEXT;" in crossgl
+    assert "nonuniformEXT(a)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_vulkan_subpass_inputs_are_resources():
     code = textwrap.dedent("""
         #version 450

@@ -170,6 +170,7 @@ MESH_STORAGE_QUALIFIERS = {
 }
 
 IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS
+IDENTIFIER_QUALIFIERS |= {"nonuniformEXT"}
 CONTEXTUAL_QUALIFIERS = {"static"}
 
 NAME_TOKENS = {"IDENTIFIER", "SAMPLE", "BUFFER", "PATCH", "PRECISE"}
@@ -891,11 +892,25 @@ class GLSLParser:
     def is_declaration_start(self):
         if self.current_token[0] in TYPE_TOKENS:
             return True
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in IDENTIFIER_QUALIFIERS | CONTEXTUAL_QUALIFIERS
+        ):
+            next_token = self.peek_non_newline()
+            return (
+                next_token[0] in QUALIFIER_TOKENS | TYPE_TOKENS
+                or next_token[0] == "STRUCT"
+                or next_token[0] == "IDENTIFIER"
+            )
         if self.current_token[0] not in QUALIFIER_TOKENS:
             return False
         if self.current_token[0] in NAME_TOKENS:
             next_token = self.peek_non_newline()
-            return next_token[0] in QUALIFIER_TOKENS or next_token[0] in TYPE_TOKENS
+            return (
+                next_token[0] in QUALIFIER_TOKENS
+                or next_token[0] in TYPE_TOKENS
+                or next_token[0] == "STRUCT"
+            )
         return True
 
     def is_constructor_expression_start(self):
@@ -1455,6 +1470,9 @@ class GLSLParser:
 
         if self.is_declaration_start() and not self.is_constructor_expression_start():
             qualifiers = self.parse_qualifiers()
+            if self.current_token[0] == "STRUCT":
+                struct_node, extra_vars = self.parse_struct(qualifiers=qualifiers)
+                return [struct_node, *extra_vars]
             type_name = self.parse_type()
             self.skip_newlines()
             return self.parse_variable_declarations(type_name, qualifiers=qualifiers)

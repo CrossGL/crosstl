@@ -3182,6 +3182,25 @@ def test_glsl_precision_qualifiers_from_corpus_parse():
     assert shade.body[0].left.vtype == "vec4"
 
 
+def test_standalone_layout_declarations_from_first_slang_shader_docs():
+    code = """
+    layout(row_major) uniform;
+    layout(row_major) buffer;
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+    void main()
+    {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.global_vars == []
+    assert ast.cbuffers == []
+    assert find_function(ast, "main").name == "main"
+
+
 def test_comma_separated_expression_statement_from_slang_shaders():
     code = """
     float4 shade(float wf1)

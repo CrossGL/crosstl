@@ -449,17 +449,35 @@ def test_numeric_literals_tokenization():
     code = """
     fn main():
         let decimal: Int = 42
+        let grouped: Int = 1_000_000
+        let relaxed: Int = 1__000_
         let hex: Int = 0x2A
+        let hex_grouped: Int = 0xFF_FF
         let binary: Int = 0b101010
+        let binary_grouped: Int = 0b1010_
         let octal: Int = 0o52
+        let octal_grouped: Int = 0o52_
         let float_val: Float32 = 3.14159
+        let fraction_only: Float32 = .5
+        let trailing_point: Float32 = 2.
+        let grouped_float: Float32 = 1_000.000_5
         let scientific: Float32 = 1.23e-4
+        let exponent_only: Float32 = 1E10
     """
     try:
         tokens = tokenize_code(code)
         numbers = [token[1] for token in tokens if token[0] == "NUMBER"]
         assert "42" in numbers, "Decimal literal not tokenized correctly"
+        assert "1_000_000" in numbers, "Grouped decimal literal not tokenized correctly"
+        assert "1__000_" in numbers, "Relaxed decimal literal not tokenized correctly"
+        assert "0xFF_FF" in numbers, "Grouped hex literal not tokenized correctly"
+        assert "0b1010_" in numbers, "Grouped binary literal not tokenized correctly"
+        assert "0o52_" in numbers, "Grouped octal literal not tokenized correctly"
         assert "3.14159" in numbers, "Float literal not tokenized correctly"
+        assert ".5" in numbers, "Fraction-only float literal not tokenized correctly"
+        assert "2." in numbers, "Trailing-point float literal not tokenized correctly"
+        assert "1_000.000_5" in numbers, "Grouped float literal not tokenized correctly"
+        assert "1E10" in numbers, "Exponent float literal not tokenized correctly"
     except SyntaxError:
         pytest.fail("Numeric literals tokenization not implemented.")
 
