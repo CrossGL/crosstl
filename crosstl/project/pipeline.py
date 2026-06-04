@@ -2424,7 +2424,12 @@ def _tool_status_contract_reasons(
     return reasons
 
 
-def _validation_artifact_contract_reasons(index: int, artifact: Any) -> list[str]:
+def _validation_artifact_contract_reasons(
+    index: int,
+    artifact: Any,
+    *,
+    declared_variants: set[str] | None = None,
+) -> list[str]:
     prefix = f"validation.artifacts[{index}]"
     if not isinstance(artifact, Mapping):
         return [f"{prefix} must be an object"]
@@ -2437,8 +2442,12 @@ def _validation_artifact_contract_reasons(index: int, artifact: Any) -> list[str
         reasons.append(f"{prefix}.exists must be a boolean")
     if artifact.get("status") not in {"ok", "failed"}:
         reasons.append(f"{prefix}.status must be ok or failed")
-    if "variant" in artifact and not _is_non_empty_string(artifact.get("variant")):
-        reasons.append(f"{prefix}.variant must be a string")
+    variant = artifact.get("variant")
+    if "variant" in artifact:
+        if not _is_non_empty_string(variant):
+            reasons.append(f"{prefix}.variant must be a string")
+        elif declared_variants is not None and variant not in declared_variants:
+            reasons.append(f"{prefix}.variant must be listed in project.variants")
     source_hash_status = artifact.get("sourceHashStatus")
     if (
         "sourceHashStatus" in artifact
@@ -2494,6 +2503,7 @@ def _toolchain_run_contract_reasons(
     run: Any,
     *,
     declared_targets: set[str] | None = None,
+    declared_variants: set[str] | None = None,
 ) -> list[str]:
     prefix = f"validation.toolchainRuns[{index}]"
     if not isinstance(run, Mapping):
@@ -2508,8 +2518,12 @@ def _toolchain_run_contract_reasons(
         normalized_target = _normalized_targets([target])[0]
         if normalized_target not in declared_targets:
             reasons.append(f"{prefix}.target must be listed in project.targets")
-    if "variant" in run and not _is_non_empty_string(run.get("variant")):
-        reasons.append(f"{prefix}.variant must be a string")
+    variant = run.get("variant")
+    if "variant" in run:
+        if not _is_non_empty_string(variant):
+            reasons.append(f"{prefix}.variant must be a string")
+        elif declared_variants is not None and variant not in declared_variants:
+            reasons.append(f"{prefix}.variant must be listed in project.variants")
 
     command = run.get("command")
     if not isinstance(command, list) or any(
@@ -2554,6 +2568,18 @@ def _validation_contract_reasons(
     declared_targets = (
         set(_normalized_targets(project_targets)) if project_targets_valid else None
     )
+    project_has_variants = isinstance(project, Mapping) and "variants" in project
+    project_variants = (
+        project.get("variants", {}) if isinstance(project, Mapping) else {}
+    )
+    project_variants_valid = isinstance(project_variants, Mapping) and all(
+        _is_non_empty_string(name) for name in project_variants
+    )
+    declared_variants = (
+        set(project_variants)
+        if project_has_variants and project_variants_valid
+        else None
+    )
     toolchains = validation.get("toolchains")
     if not isinstance(toolchains, list):
         reasons.append("validation.toolchains must be a list")
@@ -2572,7 +2598,13 @@ def _validation_contract_reasons(
         reasons.append("validation.artifacts must be a list")
     else:
         for index, artifact in enumerate(artifact_checks):
-            reasons.extend(_validation_artifact_contract_reasons(index, artifact))
+            reasons.extend(
+                _validation_artifact_contract_reasons(
+                    index,
+                    artifact,
+                    declared_variants=declared_variants,
+                )
+            )
 
     if "summary" in validation:
         reasons.extend(
@@ -2593,6 +2625,7 @@ def _validation_contract_reasons(
                         index,
                         run,
                         declared_targets=declared_targets,
+                        declared_variants=declared_variants,
                     )
                 )
     return reasons
