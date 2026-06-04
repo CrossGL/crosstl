@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from importlib import metadata as importlib_metadata
 from pathlib import Path, PureWindowsPath
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
 from crosstl.translator.codegen import (
@@ -2154,7 +2154,7 @@ def _payload_artifact_records(artifacts: Sequence[Any]) -> list[Mapping[str, Any
     return [artifact for artifact in artifacts if isinstance(artifact, Mapping)]
 
 
-ArtifactIdentity = tuple[str, str, str, str | None]
+ArtifactIdentity = Tuple[str, str, str, Optional[str]]
 
 
 def _artifact_identity(record: Mapping[str, Any]) -> ArtifactIdentity | None:
