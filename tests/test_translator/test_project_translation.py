@@ -1695,6 +1695,64 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
     assert "validation.toolchainRuns[2] must be an object" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_validation_records_with_undeclared_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "undeclared-validation-target-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "validation": {
+                    "toolchains": [
+                        {
+                            "target": "metal",
+                            "status": "not-configured",
+                            "tools": [],
+                        }
+                    ],
+                    "artifacts": [],
+                    "toolchainRuns": [
+                        {
+                            "source": "simple.cgl",
+                            "target": "metal",
+                            "path": "out/metal/simple.metal",
+                            "command": ["xcrun", "metal"],
+                            "returncode": 0,
+                            "status": "ok",
+                            "stdout": "",
+                            "stderr": "",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "validation.toolchains[0].target must be listed in project.targets" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].target must be listed in project.targets" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_accepts_legacy_validation_without_summary(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

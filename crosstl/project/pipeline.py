@@ -2331,14 +2331,24 @@ def _generator_contract_reasons(
     return reasons
 
 
-def _tool_status_contract_reasons(index: int, toolchain: Any) -> list[str]:
+def _tool_status_contract_reasons(
+    index: int,
+    toolchain: Any,
+    *,
+    declared_targets: set[str] | None = None,
+) -> list[str]:
     prefix = f"validation.toolchains[{index}]"
     if not isinstance(toolchain, Mapping):
         return [f"{prefix} must be an object"]
 
     reasons = []
-    if not _is_non_empty_string(toolchain.get("target")):
+    target = toolchain.get("target")
+    if not _is_non_empty_string(target):
         reasons.append(f"{prefix}.target must be a string")
+    elif declared_targets is not None:
+        normalized_target = _normalized_targets([target])[0]
+        if normalized_target not in declared_targets:
+            reasons.append(f"{prefix}.target must be listed in project.targets")
     if toolchain.get("status") not in {"available", "unavailable", "not-configured"}:
         reasons.append(
             f"{prefix}.status must be available, unavailable, or not-configured"
@@ -2429,7 +2439,12 @@ def _validation_summary_contract_reasons(
     return reasons
 
 
-def _toolchain_run_contract_reasons(index: int, run: Any) -> list[str]:
+def _toolchain_run_contract_reasons(
+    index: int,
+    run: Any,
+    *,
+    declared_targets: set[str] | None = None,
+) -> list[str]:
     prefix = f"validation.toolchainRuns[{index}]"
     if not isinstance(run, Mapping):
         return [f"{prefix} must be an object"]
@@ -2438,6 +2453,11 @@ def _toolchain_run_contract_reasons(index: int, run: Any) -> list[str]:
     for field_name in ("source", "target", "path"):
         if not _is_non_empty_string(run.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
+    target = run.get("target")
+    if _is_non_empty_string(target) and declared_targets is not None:
+        normalized_target = _normalized_targets([target])[0]
+        if normalized_target not in declared_targets:
+            reasons.append(f"{prefix}.target must be listed in project.targets")
     if "variant" in run and not _is_non_empty_string(run.get("variant")):
         reasons.append(f"{prefix}.variant must be a string")
 
@@ -2476,12 +2496,26 @@ def _validation_contract_reasons(
         return ["validation must be an object"]
 
     reasons = []
+    project = report.get("project")
+    project_targets = project.get("targets", []) if isinstance(project, Mapping) else []
+    project_targets_valid = isinstance(project_targets, list) and all(
+        _is_non_empty_string(target) for target in project_targets
+    )
+    declared_targets = (
+        set(_normalized_targets(project_targets)) if project_targets_valid else None
+    )
     toolchains = validation.get("toolchains")
     if not isinstance(toolchains, list):
         reasons.append("validation.toolchains must be a list")
     else:
         for index, toolchain in enumerate(toolchains):
-            reasons.extend(_tool_status_contract_reasons(index, toolchain))
+            reasons.extend(
+                _tool_status_contract_reasons(
+                    index,
+                    toolchain,
+                    declared_targets=declared_targets,
+                )
+            )
 
     artifact_checks = validation.get("artifacts")
     if not isinstance(artifact_checks, list):
@@ -2504,7 +2538,13 @@ def _validation_contract_reasons(
             reasons.append("validation.toolchainRuns must be a list")
         else:
             for index, run in enumerate(toolchain_runs):
-                reasons.extend(_toolchain_run_contract_reasons(index, run))
+                reasons.extend(
+                    _toolchain_run_contract_reasons(
+                        index,
+                        run,
+                        declared_targets=declared_targets,
+                    )
+                )
     return reasons
 
 
