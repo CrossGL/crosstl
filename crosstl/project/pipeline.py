@@ -1118,6 +1118,10 @@ def _invalid_report_diagnostic(path: Path, reasons: Sequence[str]) -> ProjectDia
     )
 
 
+def _is_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnostic]:
     if not isinstance(report, Mapping):
         return [_invalid_report_diagnostic(path, ["expected a JSON object"])]
@@ -1133,8 +1137,41 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         reasons.append("missing project object")
     else:
         root = project.get("root")
-        if not isinstance(root, str) or not root:
+        if not _is_non_empty_string(root):
             reasons.append("missing project.root")
+        else:
+            root_path = Path(root)
+            if not root_path.is_absolute():
+                reasons.append("project.root must be an absolute path")
+            elif not root_path.exists():
+                reasons.append("project.root does not exist")
+            elif not root_path.is_dir():
+                reasons.append("project.root must be a directory")
+        targets = project.get("targets", [])
+        if not isinstance(targets, list) or any(
+            not _is_non_empty_string(target) for target in targets
+        ):
+            reasons.append("project.targets must be a list of backend names")
+        output_dir = project.get("outputDir", DEFAULT_OUTPUT_DIR)
+        if not _is_non_empty_string(output_dir):
+            reasons.append("project.outputDir must be a string")
+
+    artifacts = report.get("artifacts", [])
+    if not isinstance(artifacts, list):
+        reasons.append("artifacts must be a list")
+    else:
+        for index, artifact in enumerate(artifacts):
+            if not isinstance(artifact, Mapping):
+                reasons.append(f"artifacts[{index}] must be an object")
+                continue
+            for field_name in ("source", "target", "path", "status"):
+                if not _is_non_empty_string(artifact.get(field_name)):
+                    reasons.append(f"artifacts[{index}].{field_name} must be a string")
+            status = artifact.get("status")
+            if isinstance(status, str) and status not in {"translated", "failed"}:
+                reasons.append(
+                    f"artifacts[{index}].status must be translated or failed"
+                )
 
     return [_invalid_report_diagnostic(path, reasons)] if reasons else []
 

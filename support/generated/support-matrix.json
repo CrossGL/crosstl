@@ -6143,7 +6143,7 @@
     },
     {
       "category": "project",
-      "description": "Record failed artifacts, translated artifact existence, optional external toolchain availability, and opt-in toolchain smoke failures for project outputs.",
+      "description": "Validate report metadata, artifact records, failed artifacts, translated artifact existence, optional external toolchain availability, and opt-in toolchain smoke failures for project outputs.",
       "id": "project.validation_hooks",
       "name": "Optional validation hooks",
       "support": {
@@ -6154,9 +6154,11 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_returns_structured_invalid_report_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_reports_invalid_report_shape",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records"
           ],
-          "notes": "Project validation checks report contract shape, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata and artifact records, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "directx": {
@@ -6166,9 +6168,11 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_returns_structured_invalid_report_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_reports_invalid_report_shape",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records"
           ],
-          "notes": "Project validation checks report contract shape, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata and artifact records, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "hip": {
@@ -6178,9 +6182,11 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_returns_structured_invalid_report_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_reports_invalid_report_shape",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records"
           ],
-          "notes": "Project validation checks report contract shape, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata and artifact records, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "metal": {
@@ -6190,9 +6196,11 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_returns_structured_invalid_report_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_reports_invalid_report_shape",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records"
           ],
-          "notes": "Project validation checks report contract shape, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata and artifact records, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "mojo": {
@@ -6202,9 +6210,11 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_returns_structured_invalid_report_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_reports_invalid_report_shape",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records"
           ],
-          "notes": "Project validation checks report contract shape, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata and artifact records, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "opengl": {
@@ -6214,9 +6224,11 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_returns_structured_invalid_report_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_reports_invalid_report_shape",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records"
           ],
-          "notes": "Project validation checks report contract shape, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata and artifact records, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "rust": {
@@ -6226,9 +6238,11 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_returns_structured_invalid_report_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_reports_invalid_report_shape",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records"
           ],
-          "notes": "Project validation checks report contract shape, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata and artifact records, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "slang": {
@@ -6238,9 +6252,11 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_returns_structured_invalid_report_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_reports_invalid_report_shape",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records"
           ],
-          "notes": "Project validation checks report contract shape, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata and artifact records, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         },
         "vulkan": {
@@ -6250,9 +6266,11 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_returns_structured_invalid_report_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_reports_invalid_report_shape",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records"
           ],
-          "notes": "Project validation checks report contract shape, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
+          "notes": "Project validation checks report contract shape, rejects malformed project metadata and artifact records, records failed artifacts, checks translated artifact existence, rejects artifact paths that resolve outside the repository, reports unavailable optional tools deterministically, and turns opt-in toolchain smoke failures into structured diagnostics. Full target compiler invocation remains opt-in and is not required for basic translation.",
           "status": "diagnostic"
         }
       }

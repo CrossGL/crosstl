@@ -663,6 +663,71 @@ def test_validate_project_report_returns_structured_invalid_report_diagnostics(
     assert "missing project object" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_invalid_project_metadata(tmp_path):
+    report_path = tmp_path / "invalid-project-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": "relative/repo",
+                    "targets": "opengl",
+                    "outputDir": [],
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.root must be an absolute path" in diagnostic["message"]
+    assert "project.targets must be a list of backend names" in diagnostic["message"]
+    assert "project.outputDir must be a string" in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-artifact-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "opengl",
+                        "status": "unknown",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].path must be a string" in diagnostic["message"]
+    assert "artifacts[0].status must be translated or failed" in (diagnostic["message"])
+
+
 def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
