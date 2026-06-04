@@ -2626,15 +2626,25 @@ def _tool_status_contract_reasons(
         reasons.append(f"{prefix}.tools must be a list")
         tools_are_valid = False
     else:
+        tool_name_indexes: dict[str, int] = {}
         for tool_index, tool in enumerate(tools):
             tool_prefix = f"{prefix}.tools[{tool_index}]"
             if not isinstance(tool, Mapping):
                 reasons.append(f"{tool_prefix} must be an object")
                 tools_are_valid = False
                 continue
-            if not _is_non_empty_string(tool.get("name")):
+            name = tool.get("name")
+            if not _is_non_empty_string(name):
                 reasons.append(f"{tool_prefix}.name must be a string")
                 tools_are_valid = False
+            elif name in tool_name_indexes:
+                reasons.append(
+                    f"{tool_prefix}.name duplicates "
+                    f"{prefix}.tools[{tool_name_indexes[name]}].name"
+                )
+                tools_are_valid = False
+            else:
+                tool_name_indexes[name] = tool_index
             path = tool.get("path")
             if path is not None and not _is_non_empty_string(path):
                 reasons.append(f"{tool_prefix}.path must be a string or null")
