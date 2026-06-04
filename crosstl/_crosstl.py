@@ -301,6 +301,12 @@ def _format_project_report_inspection(payload):
     project = report.get("project", {}) if isinstance(report, Mapping) else {}
     diagnostic_counts = summary.get("diagnosticCounts", {})
     validation_counts = payload.get("validation", {}).get("diagnosticCounts", {})
+    validation_result = payload.get("validation", {}).get("result", {})
+    validation_summary = (
+        validation_result.get("summary")
+        if isinstance(validation_result, Mapping)
+        else {}
+    )
     targets = project.get("targets", [])
     target_names = (
         [str(target) for target in targets] if isinstance(targets, list) else []
@@ -329,6 +335,12 @@ def _format_project_report_inspection(payload):
             f"{validation_counts.get('note', 0)} notes"
         ),
     ]
+    if isinstance(validation_summary, Mapping):
+        lines.append(
+            "Validation artifacts: "
+            f"{validation_summary.get('okCount', 0)} ok, "
+            f"{validation_summary.get('failedCount', 0)} failed"
+        )
 
     external_corpus = payload.get("externalCorpus")
     if isinstance(external_corpus, Mapping):

@@ -40,6 +40,31 @@ SIMPLE_CROSSL = textwrap.dedent("""
     """).strip()
 
 
+def _source_hash_status_counts(**overrides):
+    counts = {
+        "missing": 0,
+        "mismatch": 0,
+        "not-recorded": 0,
+        "ok": 0,
+        "outside-project": 0,
+    }
+    counts.update(overrides)
+    return counts
+
+
+def _generated_hash_status_counts(**overrides):
+    counts = {
+        "missing": 0,
+        "mismatch": 0,
+        "not-applicable": 0,
+        "not-recorded": 0,
+        "ok": 0,
+        "outside-project": 0,
+    }
+    counts.update(overrides)
+    return counts
+
+
 def test_support_external_corpus_manifest_documents_pinned_reductions():
     manifest = json.loads(
         (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
@@ -699,6 +724,13 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "variant": "release",
         },
     ]
+    assert validation["validation"]["summary"] == {
+        "artifactCount": 2,
+        "okCount": 2,
+        "failedCount": 0,
+        "sourceHashStatusCounts": _source_hash_status_counts(ok=2),
+        "generatedHashStatusCounts": _generated_hash_status_counts(ok=2),
+    }
     assert json.loads(
         (repo / "translated" / "opengl" / "debug" / "simple.glsl").read_text(
             encoding="utf-8"
@@ -992,6 +1024,13 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
             "generatedHashStatus": "ok",
         }
     ]
+    assert payload["validation"]["summary"] == {
+        "artifactCount": 1,
+        "okCount": 1,
+        "failedCount": 0,
+        "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
+        "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+    }
 
 
 def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
@@ -1013,6 +1052,13 @@ def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
     assert payload["validation"]["artifacts"][0]["status"] == "failed"
     assert payload["validation"]["artifacts"][0]["sourceHashStatus"] == "ok"
     assert payload["validation"]["artifacts"][0]["generatedHashStatus"] == "mismatch"
+    assert payload["validation"]["summary"] == {
+        "artifactCount": 1,
+        "okCount": 0,
+        "failedCount": 1,
+        "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
+        "generatedHashStatusCounts": _generated_hash_status_counts(mismatch=1),
+    }
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.generated-hash-mismatch"
     assert diagnostic["location"]["file"] == "simple.cgl"
@@ -1038,6 +1084,13 @@ def test_validate_project_report_detects_modified_source_artifacts(tmp_path):
     assert payload["validation"]["artifacts"][0]["status"] == "failed"
     assert payload["validation"]["artifacts"][0]["sourceHashStatus"] == "mismatch"
     assert payload["validation"]["artifacts"][0]["generatedHashStatus"] == "ok"
+    assert payload["validation"]["summary"] == {
+        "artifactCount": 1,
+        "okCount": 0,
+        "failedCount": 1,
+        "sourceHashStatusCounts": _source_hash_status_counts(mismatch=1),
+        "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+    }
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.source-hash-mismatch"
     assert diagnostic["location"]["file"] == "simple.cgl"
@@ -1063,6 +1116,13 @@ def test_validate_project_report_detects_missing_source_artifacts(tmp_path):
     assert payload["validation"]["artifacts"][0]["status"] == "failed"
     assert payload["validation"]["artifacts"][0]["sourceHashStatus"] == "missing"
     assert payload["validation"]["artifacts"][0]["generatedHashStatus"] == "ok"
+    assert payload["validation"]["summary"] == {
+        "artifactCount": 1,
+        "okCount": 0,
+        "failedCount": 1,
+        "sourceHashStatusCounts": _source_hash_status_counts(missing=1),
+        "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+    }
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.missing-source"
     assert diagnostic["location"]["file"] == "simple.cgl"
@@ -1196,6 +1256,13 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
             "generatedHashStatus": "ok",
         }
     ]
+    assert payload["validation"]["summary"] == {
+        "artifactCount": 1,
+        "okCount": 1,
+        "failedCount": 0,
+        "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
+        "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+    }
     assert payload["validation"]["toolchains"][0]["target"] == "opengl"
     assert payload["validation"]["toolchains"][0]["status"] in {
         "available",
@@ -1489,6 +1556,13 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
                         },
                         "not an artifact check",
                     ],
+                    "summary": {
+                        "artifactCount": "2",
+                        "okCount": 2,
+                        "failedCount": 0,
+                        "sourceHashStatusCounts": {"ok": 2},
+                        "generatedHashStatusCounts": [],
+                    },
                     "toolchainRuns": [
                         {
                             "source": "",
@@ -1565,6 +1639,19 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
         diagnostic["message"]
     )
     assert "validation.artifacts[1] must be an object" in diagnostic["message"]
+    assert "validation.summary.artifactCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "validation.summary.okCount must match validation.artifacts" in (
+        diagnostic["message"]
+    )
+    assert (
+        "validation.summary.sourceHashStatusCounts must match validation.artifacts"
+        in diagnostic["message"]
+    )
+    assert "validation.summary.generatedHashStatusCounts must be an object" in (
+        diagnostic["message"]
+    )
     assert "validation.toolchainRuns[0].source must be a string" in (
         diagnostic["message"]
     )
@@ -1593,6 +1680,75 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
         diagnostic["message"]
     )
     assert "validation.toolchainRuns[2] must be an object" in diagnostic["message"]
+
+
+def test_validate_project_report_accepts_legacy_validation_without_summary(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "legacy-validation-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "validation": {
+                    "toolchains": [],
+                    "artifacts": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is True
+    assert payload["validation"]["summary"] == {
+        "artifactCount": 0,
+        "okCount": 0,
+        "failedCount": 0,
+        "sourceHashStatusCounts": _source_hash_status_counts(),
+        "generatedHashStatusCounts": _generated_hash_status_counts(),
+    }
+
+
+def test_validate_project_report_rejects_malformed_validation_summary(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-validation-summary-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "validation": {
+                    "toolchains": [],
+                    "artifacts": [],
+                    "summary": "not a summary",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "validation.summary must be an object" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_malformed_external_corpus_records(tmp_path):
@@ -2323,6 +2479,13 @@ def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts(
             "generatedHashStatus": "missing",
         }
     ]
+    assert payload["validation"]["summary"] == {
+        "artifactCount": 1,
+        "okCount": 0,
+        "failedCount": 1,
+        "sourceHashStatusCounts": _source_hash_status_counts(**{"not-recorded": 1}),
+        "generatedHashStatusCounts": _generated_hash_status_counts(missing=1),
+    }
     assert payload["validation"]["toolchainRuns"] == []
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.missing-artifact"
@@ -2372,6 +2535,15 @@ def test_validate_project_report_records_failed_artifacts(tmp_path):
             "generatedHashStatus": "not-applicable",
         }
     ]
+    assert payload["validation"]["summary"] == {
+        "artifactCount": 1,
+        "okCount": 0,
+        "failedCount": 1,
+        "sourceHashStatusCounts": _source_hash_status_counts(**{"not-recorded": 1}),
+        "generatedHashStatusCounts": _generated_hash_status_counts(
+            **{"not-applicable": 1}
+        ),
+    }
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.failed-artifact"
     assert diagnostic["location"]["file"] == "simple.cgl"
@@ -2441,6 +2613,15 @@ def test_validate_project_report_rejects_artifacts_outside_project(
             "generatedHashStatus": "outside-project",
         }
     ]
+    assert payload["validation"]["summary"] == {
+        "artifactCount": 1,
+        "okCount": 0,
+        "failedCount": 1,
+        "sourceHashStatusCounts": _source_hash_status_counts(**{"not-recorded": 1}),
+        "generatedHashStatusCounts": _generated_hash_status_counts(
+            **{"outside-project": 1}
+        ),
+    }
     assert payload["validation"]["toolchainRuns"] == []
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.artifact-outside-project"
@@ -2960,6 +3141,13 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     assert payload["report"]["summary"]["translatedCount"] == 1
     assert payload["report"]["project"]["targets"] == ["cgl"]
     assert payload["validation"]["success"] is True
+    assert payload["validation"]["result"]["summary"] == {
+        "artifactCount": 1,
+        "okCount": 1,
+        "failedCount": 0,
+        "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
+        "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+    }
     assert payload["failedArtifacts"] == []
     assert payload["migration"]["actions"][0]["kind"] == ("manual-runtime-integration")
 
@@ -3025,6 +3213,7 @@ def test_project_cli_inspect_report_text_fails_on_error_diagnostics(tmp_path):
     assert "Status: failed" in result.stdout
     assert "Targets: not-a-backend" in result.stdout
     assert "Validation diagnostics: 1 errors" in result.stdout
+    assert "Validation artifacts: 0 ok, 0 failed" in result.stdout
     assert "project.config.unsupported-target" in result.stdout
 
 

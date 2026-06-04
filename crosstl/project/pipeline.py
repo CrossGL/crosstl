@@ -68,6 +68,7 @@ TOOLCHAIN_BY_BACKEND = {
 CROSSL_TARGETS = {"cgl", "crossgl"}
 SHA256_HEX_LENGTH = 64
 LOWERCASE_HEX_DIGITS = frozenset("0123456789abcdef")
+VALIDATION_ARTIFACT_STATUSES = frozenset(("ok", "failed"))
 SOURCE_HASH_VALIDATION_STATUSES = frozenset(
     ("ok", "missing", "mismatch", "not-recorded", "outside-project")
 )
@@ -1460,6 +1461,38 @@ def _tool_status(target: str) -> dict[str, Any]:
     }
 
 
+def _status_counts(
+    records: Sequence[Any], field_name: str, statuses: frozenset[str]
+) -> dict[str, int]:
+    counts = {status: 0 for status in sorted(statuses)}
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        status = record.get(field_name)
+        if isinstance(status, str) and status in counts:
+            counts[status] += 1
+    return counts
+
+
+def _validation_summary(artifact_checks: Sequence[Any]) -> dict[str, Any]:
+    status_counts = _status_counts(
+        artifact_checks, "status", VALIDATION_ARTIFACT_STATUSES
+    )
+    return {
+        "artifactCount": len(artifact_checks),
+        "okCount": status_counts["ok"],
+        "failedCount": status_counts["failed"],
+        "sourceHashStatusCounts": _status_counts(
+            artifact_checks, "sourceHashStatus", SOURCE_HASH_VALIDATION_STATUSES
+        ),
+        "generatedHashStatusCounts": _status_counts(
+            artifact_checks,
+            "generatedHashStatus",
+            GENERATED_HASH_VALIDATION_STATUSES,
+        ),
+    }
+
+
 def _validate_artifacts(
     artifacts: Sequence[Mapping[str, Any]],
     targets: Sequence[str],
@@ -1640,6 +1673,7 @@ def _validate_artifacts(
     return {
         "toolchains": toolchains,
         "artifacts": artifact_checks,
+        "summary": _validation_summary(artifact_checks),
         "_diagnostics": diagnostics,
     }
 
@@ -2249,6 +2283,35 @@ def _validation_artifact_contract_reasons(index: int, artifact: Any) -> list[str
     return reasons
 
 
+def _validation_summary_contract_reasons(
+    summary: Any, artifact_checks: Sequence[Any]
+) -> list[str]:
+    if not isinstance(summary, Mapping):
+        return ["validation.summary must be an object"]
+
+    expected = _validation_summary(artifact_checks)
+    reasons = []
+    for field_name in ("artifactCount", "okCount", "failedCount"):
+        reasons.extend(
+            _count_field_contract_reasons(
+                f"validation.summary.{field_name}",
+                summary.get(field_name),
+                expected[field_name],
+                "validation.artifacts",
+            )
+        )
+    for field_name in ("sourceHashStatusCounts", "generatedHashStatusCounts"):
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                f"validation.summary.{field_name}",
+                summary.get(field_name),
+                expected[field_name],
+                "validation.artifacts",
+            )
+        )
+    return reasons
+
+
 def _toolchain_run_contract_reasons(index: int, run: Any) -> list[str]:
     prefix = f"validation.toolchainRuns[{index}]"
     if not isinstance(run, Mapping):
@@ -2309,6 +2372,14 @@ def _validation_contract_reasons(
     else:
         for index, artifact in enumerate(artifact_checks):
             reasons.extend(_validation_artifact_contract_reasons(index, artifact))
+
+    if "summary" in validation:
+        reasons.extend(
+            _validation_summary_contract_reasons(
+                validation.get("summary"),
+                artifact_checks if isinstance(artifact_checks, list) else [],
+            )
+        )
 
     if "toolchainRuns" in validation:
         toolchain_runs = validation.get("toolchainRuns")
