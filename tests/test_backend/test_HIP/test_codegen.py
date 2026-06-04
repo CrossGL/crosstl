@@ -2292,6 +2292,36 @@ class TestHipCodeGen:
         assert "// Arguments: data, 2.0f" in result
         assert "hipLaunchKernelGGL" not in result
 
+    def test_rocm_rocprim_hip_kernel_name_ggl_conversion(self):
+        # Reduced from ROCm/rocPRIM commit
+        # 14cd5e3c27a4b9ae7d510823a450723a03985ac0,
+        # example/example_temporary_storage.cpp.
+        code = """
+        void host(float* device_input, float* device_output) {
+            hipLaunchKernelGGL(
+                HIP_KERNEL_NAME(example_union_storage_types<block_size, items_per_thread, int>),
+                dim3(grid_size), dim3(block_size),
+                0, 0,
+                device_input, device_output
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// Kernel launch: "
+            "example_union_storage_types<block_size, items_per_thread, int>"
+            "<<<vec3<u32>(grid_size), vec3<u32>(block_size), 0, 0>>>()" in result
+        )
+        assert "// Arguments: device_input, device_output" in result
+        assert "HIP_KERNEL_NAME" not in result
+
     def test_hip_launch_kernel_casted_packed_args_conversion(self):
         code = """
         void host(float* data, int n, int stream) {

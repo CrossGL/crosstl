@@ -321,6 +321,13 @@ class RustToCrossGLConverter:
             "world_ray_origin": "gl_WorldRayOriginEXT",
             "world_to_object": "gl_WorldToObjectEXT",
         }
+        self.interpolation_semantic_map = {
+            "flat": "flat",
+            "noperspective": "noperspective",
+            "no_perspective": "noperspective",
+            "centroid": "centroid",
+            "sample": "sample",
+        }
         self.spirv_stage_map = {
             "vertex": "vertex",
             "fragment": "fragment",
@@ -9262,9 +9269,12 @@ class RustToCrossGLConverter:
                 if attr.name in self.semantic_map:
                     return f" @ {self.semantic_map[attr.name]}"
                 if attr.name == "spirv":
+                    semantics = []
                     for arg in attr.args:
                         if arg in self.semantic_map:
-                            return f" @ {self.semantic_map[arg]}"
+                            semantics.append(self.semantic_map[arg])
+                        elif arg in self.interpolation_semantic_map:
+                            semantics.append(self.interpolation_semantic_map[arg])
 
                     location = self.attribute_arg_value(attr.args, "location")
                     binding_index = self.attribute_arg_value(attr.args, "binding")
@@ -9275,7 +9285,6 @@ class RustToCrossGLConverter:
                     if "spec_constant" in attr.args:
                         spec_constant_id = self.attribute_arg_value(attr.args, "id")
 
-                    semantics = []
                     if location is not None:
                         semantics.append(f"location({location})")
                     if descriptor_set is not None:

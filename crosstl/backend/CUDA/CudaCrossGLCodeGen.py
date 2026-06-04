@@ -4196,6 +4196,8 @@ class CudaToCrossGLConverter:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
         if function_name == "__ffs" and len(args) == 1:
             return f"(findLSB({args[0]}) + 1)"
+        if function_name == "__clz" and len(args) == 1:
+            return f"countLeadingZeros({args[0]})"
         return None
 
     def format_vector_component_access(self, expression, component):

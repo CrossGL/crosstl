@@ -218,6 +218,8 @@ class VulkanParser:
         "FwidthFine": "fwidthFine",
     }
     SPIRV_UNARY_FUNCTIONS = {
+        "All": "all",
+        "Any": "any",
         "IsInf": "isinf",
         "IsNan": "isnan",
     }

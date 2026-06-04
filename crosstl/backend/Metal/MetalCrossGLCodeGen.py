@@ -662,6 +662,29 @@ class MetalToCrossGLConverter:
             return option.args
         return None
 
+    def sampled_array_coordinate_constructor(self, texture_expr):
+        mapped_type = self.expression_mapped_type(texture_expr)
+        return {
+            "sampler1DArray": "vec2",
+            "isampler1DArray": "vec2",
+            "usampler1DArray": "vec2",
+            "sampler2DArray": "vec3",
+            "isampler2DArray": "vec3",
+            "usampler2DArray": "vec3",
+            "samplerCubeArray": "vec4",
+        }.get(mapped_type)
+
+    def texture_sample_coordinate_and_options(
+        self, texture_expr, coords_expr, options, is_main=False
+    ):
+        coords = self.generate_expression(coords_expr, is_main)
+        remaining_options = list(options)
+        constructor = self.sampled_array_coordinate_constructor(texture_expr)
+        if constructor and remaining_options:
+            layer = self.generate_expression(remaining_options.pop(0), is_main)
+            coords = f"{constructor}({coords}, {layer})"
+        return coords, remaining_options
+
     def texture_compare_method_base_arguments(
         self, obj_expr, method_args, is_main=False
     ):
@@ -1644,14 +1667,18 @@ class MetalToCrossGLConverter:
                 if sampler_name in self.global_sampler_names
                 else self.generate_expression(sampler_expr, is_main)
             )
-            coords = self.generate_expression(coords_expr, is_main)
             sample_args = [texture]
             if sampler:
                 sample_args.append(sampler)
+            options = getattr(expr, "options", None)
+            if options is None:
+                options = [expr.lod] if getattr(expr, "lod", None) is not None else []
+            coords, options = self.texture_sample_coordinate_and_options(
+                expr.texture, coords_expr, options, is_main
+            )
             sample_args.append(coords)
 
-            if hasattr(expr, "lod") and expr.lod is not None:
-                options = getattr(expr, "options", None) or [expr.lod]
+            if options:
                 option_call = self.texture_sample_options_call(
                     options, sample_args, is_main
                 )

@@ -1172,6 +1172,15 @@ class HLSLToCrossGLConverter:
                 ordered.append("const")
         return f"{' '.join(ordered)} " if ordered else ""
 
+    def format_local_storage_qualifier_prefix(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        ordered = []
+        if "static" in qualifiers:
+            ordered.append("static")
+        if "const" in qualifiers:
+            ordered.append("const")
+        return f"{' '.join(ordered)} " if ordered else ""
+
     def format_precise_qualifier_prefix(self, node):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         return "precise " if "precise" in qualifiers else ""
@@ -2254,7 +2263,9 @@ class HLSLToCrossGLConverter:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
                 array_suffix = self.format_array_suffixes(stmt, is_main)
-                qualifier_prefix = self.format_precise_qualifier_prefix(stmt)
+                qualifier_prefix = self.format_local_storage_qualifier_prefix(
+                    stmt
+                ) + self.format_precise_qualifier_prefix(stmt)
                 if stmt.value is not None:
                     value = self.generate_expression(stmt.value, is_main)
                     self.record_variable_type(stmt)
@@ -2577,8 +2588,11 @@ class HLSLToCrossGLConverter:
         def render_initializer(initializer):
             if isinstance(initializer, VariableNode):
                 array_suffix = self.format_array_suffixes(initializer, is_main)
+                qualifier_prefix = self.format_local_storage_qualifier_prefix(
+                    initializer
+                ) + self.format_precise_qualifier_prefix(initializer)
                 text = (
-                    f"{self.map_variable_type(initializer)} "
+                    f"{qualifier_prefix}{self.map_variable_type(initializer)} "
                     f"{self.render_identifier(initializer.name)}{array_suffix}"
                 )
                 if initializer.value is not None:

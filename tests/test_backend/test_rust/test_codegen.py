@@ -629,15 +629,17 @@ def test_rust_gpu_all_builtins_compiletest_semantic_aliases_codegen():
     assert "float clip_distance[1] @ gl_ClipDistance" in result
     assert "float cull_distance[1] @ gl_CullDistance" in result
     assert "float frag_depth @ gl_FragDepth" in result
-    assert "uint frag_invocation_count_ext @ gl_FragInvocationCountEXT" in result
-    assert "uvec2 frag_size_ext @ gl_FragSizeEXT" in result
+    assert "uint frag_invocation_count_ext @ gl_FragInvocationCountEXT @ flat" in result
+    assert "uvec2 frag_size_ext @ gl_FragSizeEXT @ flat" in result
     assert "bool fully_covered_ext @ gl_FullyCoveredEXT" in result
     assert "bool helper_invocation @ gl_HelperInvocation" in result
-    assert "uint layer @ gl_Layer" in result
-    assert "uint sample_id @ gl_SampleID" in result
-    assert "uint sample_mask[1] @ gl_SampleMask" in result
+    assert "uint layer @ gl_Layer @ flat" in result
+    assert "uint sample_id @ gl_SampleID @ flat" in result
+    assert "uint sample_mask[1] @ gl_SampleMask @ flat" in result
     assert "vec2 sample_position @ gl_SamplePosition" in result
+    assert "uint viewport_index @ gl_ViewportIndex @ flat" in result
     assert result.count("uint viewport_index @ gl_ViewportIndex") == 2
+    crosstl.translator.parse(result)
 
 
 def test_rust_gpu_tessellation_control_stage_codegen_from_upstream_compiletest():

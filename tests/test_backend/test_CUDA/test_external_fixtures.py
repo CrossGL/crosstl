@@ -17,6 +17,7 @@ EXTERNAL_SAMPLES = [
         "commit": "b7c5481c556c3fe98db060207ecaa41a4b9a9abc",
         "paths": [
             "cpp/0_Introduction/simpleAtomicIntrinsics/simpleAtomicIntrinsics_kernel.cuh",
+            "cpp/0_Introduction/mergeSort/mergeSort.cu",
             "cpp/0_Introduction/simpleSurfaceWrite/simpleSurfaceWrite.cu",
             "cpp/0_Introduction/simpleTexture3D/simpleTexture3D_kernel.cu",
             "cpp/0_Introduction/simpleVoteIntrinsics/simpleVote_kernel.cuh",
@@ -671,6 +672,25 @@ def test_cuda_samples_sobol_qrng_ffs_codegen_reparse():
     assert "(k < ((findLSB(stride) + 1) - 1))" in crossgl
     assert "v[((findLSB(stride) + 1) - 2)]" in crossgl
     assert "__ffs" not in crossgl
+
+
+def test_cuda_samples_merge_sort_clz_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/0_Introduction/mergeSort/mergeSort.cu
+    source = """
+    template <uint W>
+    __device__ uint factorRadix2(uint x) {
+        return 1U << (W - __clz(x - 1));
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "return (1U << (W - countLeadingZeros((x - 1))));" in crossgl
+    assert "__clz" not in crossgl
 
 
 def test_cuda_samples_reduction_reduce_add_sync_codegen_reparse():
