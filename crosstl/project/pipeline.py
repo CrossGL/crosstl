@@ -291,6 +291,25 @@ def _diagnostic_counts(diagnostics: Sequence[ProjectDiagnostic]) -> dict[str, in
     return counts
 
 
+def _diagnostic_counts_by_code(
+    diagnostics: Sequence[ProjectDiagnostic],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for diagnostic in diagnostics:
+        counts[diagnostic.code] = counts.get(diagnostic.code, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _missing_capability_counts(
+    diagnostics: Sequence[ProjectDiagnostic],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for diagnostic in diagnostics:
+        for capability in diagnostic.missing_capabilities:
+            counts[capability] = counts.get(capability, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _diagnostic_payload_counts(
     diagnostics: Sequence[Mapping[str, Any]],
 ) -> dict[str, int]:
@@ -1019,6 +1038,8 @@ class ProjectPortabilityReport:
                 "translatedCount": translated_count,
                 "failedCount": failed_count,
                 "diagnosticCounts": _diagnostic_counts(self.diagnostics),
+                "diagnosticsByCode": _diagnostic_counts_by_code(self.diagnostics),
+                "missingCapabilityCounts": _missing_capability_counts(self.diagnostics),
                 "unitsBySourceBackend": _unit_counts_by_source_backend(self.units),
                 "artifactsByTarget": _artifact_counts_by_target(self.artifacts),
                 **source_map_counts,
@@ -1989,6 +2010,37 @@ def _payload_diagnostic_counts(
     return _diagnostic_payload_counts(diagnostics)
 
 
+def _payload_diagnostic_counts_by_code(
+    diagnostics: Sequence[Any],
+) -> dict[str, int] | None:
+    if not all(isinstance(diagnostic, Mapping) for diagnostic in diagnostics):
+        return None
+
+    counts: dict[str, int] = {}
+    for diagnostic in diagnostics:
+        code = diagnostic.get("code")
+        if _is_non_empty_string(code):
+            counts[code] = counts.get(code, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _payload_missing_capability_counts(
+    diagnostics: Sequence[Any],
+) -> dict[str, int] | None:
+    if not all(isinstance(diagnostic, Mapping) for diagnostic in diagnostics):
+        return None
+
+    counts: dict[str, int] = {}
+    for diagnostic in diagnostics:
+        missing_capabilities = diagnostic.get("missingCapabilities", [])
+        if not isinstance(missing_capabilities, list):
+            continue
+        for capability in missing_capabilities:
+            if _is_non_empty_string(capability):
+                counts[capability] = counts.get(capability, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _payload_unit_counts_by_source_backend(units: Sequence[Any]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for unit in units:
@@ -2009,6 +2061,24 @@ def _diagnostic_counts_contract_reasons(
     prefix: str, value: Any, diagnostics: Sequence[Any]
 ) -> list[str]:
     expected = _payload_diagnostic_counts(diagnostics)
+    if expected is None:
+        return []
+    return _mapping_field_contract_reasons(prefix, value, expected, "diagnostics")
+
+
+def _diagnostic_code_counts_contract_reasons(
+    prefix: str, value: Any, diagnostics: Sequence[Any]
+) -> list[str]:
+    expected = _payload_diagnostic_counts_by_code(diagnostics)
+    if expected is None:
+        return []
+    return _mapping_field_contract_reasons(prefix, value, expected, "diagnostics")
+
+
+def _missing_capability_counts_contract_reasons(
+    prefix: str, value: Any, diagnostics: Sequence[Any]
+) -> list[str]:
+    expected = _payload_missing_capability_counts(diagnostics)
     if expected is None:
         return []
     return _mapping_field_contract_reasons(prefix, value, expected, "diagnostics")
@@ -2694,6 +2764,22 @@ def _summary_contract_reasons(
                 diagnostics,
             )
         )
+        if "diagnosticsByCode" in summary:
+            reasons.extend(
+                _diagnostic_code_counts_contract_reasons(
+                    "summary.diagnosticsByCode",
+                    summary.get("diagnosticsByCode"),
+                    diagnostics,
+                )
+            )
+        if "missingCapabilityCounts" in summary:
+            reasons.extend(
+                _missing_capability_counts_contract_reasons(
+                    "summary.missingCapabilityCounts",
+                    summary.get("missingCapabilityCounts"),
+                    diagnostics,
+                )
+            )
     return reasons
 
 

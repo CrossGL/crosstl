@@ -6959,9 +6959,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability.",
           "status": "supported"
         },
         "directx": {
@@ -6979,9 +6980,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability.",
           "status": "supported"
         },
         "hip": {
@@ -6999,9 +7001,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability.",
           "status": "supported"
         },
         "metal": {
@@ -7019,9 +7022,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability.",
           "status": "supported"
         },
         "mojo": {
@@ -7039,9 +7043,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability.",
           "status": "supported"
         },
         "opengl": {
@@ -7059,9 +7064,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability.",
           "status": "supported"
         },
         "rust": {
@@ -7079,9 +7085,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability.",
           "status": "supported"
         },
         "slang": {
@@ -7099,9 +7106,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability.",
           "status": "supported"
         },
         "vulkan": {
@@ -7119,9 +7127,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
-            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project"
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names and non-repository-relative scan patterns are reported before validation, and validation rejects malformed preserved diagnostics before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability.",
           "status": "supported"
         }
       }

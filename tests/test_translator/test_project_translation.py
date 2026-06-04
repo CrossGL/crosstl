@@ -162,6 +162,11 @@ def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tm
         "project.scan.missing-source-root",
     }
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 1}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.config.source-root-outside-project": 1,
+        "project.scan.missing-source-root": 1,
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"repo.scan": 2}
     assert diagnostics["project.scan.missing-source-root"]["location"]["file"] == (
         "crosstl.toml"
     )
@@ -281,6 +286,10 @@ def test_scan_report_records_unsupported_targets(tmp_path):
 
     assert payload["project"]["targets"] == ["not-a-backend"]
     assert payload["summary"]["diagnosticCounts"]["error"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.config.unsupported-target": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"target.backend": 1}
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.config.unsupported-target"
     assert diagnostic["target"] == "not-a-backend"
@@ -800,6 +809,8 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
     assert payload["summary"]["unitsBySourceBackend"] == {"cgl": 1}
     assert payload["summary"]["artifactsByTarget"] == {
         "opengl": {
@@ -1718,6 +1729,22 @@ def test_validate_project_report_accepts_legacy_validation_without_summary(tmp_p
     }
 
 
+def test_validate_project_report_accepts_summary_without_diagnostic_rollups(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+    payload["summary"].pop("diagnosticsByCode")
+    payload["summary"].pop("missingCapabilityCounts")
+    report_path = repo / "report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+
+
 def test_validate_project_report_rejects_malformed_validation_summary(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -2132,6 +2159,8 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     "translatedCount": 0,
                     "failedCount": 1,
                     "diagnosticCounts": {"note": 0, "warning": 0, "error": 0},
+                    "diagnosticsByCode": {},
+                    "missingCapabilityCounts": {},
                     "unitsBySourceBackend": {"metal": 1},
                     "artifactsByTarget": {
                         "metal": {
@@ -2202,6 +2231,10 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
         diagnostic["message"]
     )
     assert "summary.diagnosticCounts must match diagnostics" in diagnostic["message"]
+    assert "summary.diagnosticsByCode must match diagnostics" in diagnostic["message"]
+    assert "summary.missingCapabilityCounts must match diagnostics" in (
+        diagnostic["message"]
+    )
     assert "summary.unitsBySourceBackend must match units" in diagnostic["message"]
     assert "summary.artifactsByTarget must match artifacts" in diagnostic["message"]
     assert "summary.sourceMapCount must match artifact source maps" in (
