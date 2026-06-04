@@ -260,6 +260,29 @@ def test_parse_gnu_attribute_before_global_constant_declaration():
     assert constant.right == "0"
 
 
+def test_parse_block_scope_using_decltype_alias_from_mlx_steel_attention():
+    code = """
+    void resolve_mask() {
+        // Reduced from MLX Steel attention mask handling:
+        // using stile_t = decltype(Stile);
+        // constexpr auto neg_inf = Limits<selem_t>::finite_min;
+        int Stile;
+        using stile_t = decltype(Stile);
+        using selem_t = typename stile_t::elem_type;
+        constexpr auto neg_inf = Limits<selem_t>::finite_min;
+        constexpr short kRowsPT = stile_t::kRowsPerThread;
+    }
+    """
+    ast = parse_ok(code)
+
+    body = ast.functions[0].body
+    assert body[1].left.name == "neg_inf"
+    assert body[1].left.vtype == "auto"
+    assert body[1].right.name == "Limits<selem_t>::finite_min"
+    assert body[2].left.name == "kRowsPT"
+    assert body[2].right.name == "stile_t::kRowsPerThread"
+
+
 def test_parse_gnu_attribute_before_global_constant_multiline_initializer():
     code = """
     __attribute__((unused)) constant float VALUES[2] = {

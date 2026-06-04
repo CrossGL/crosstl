@@ -7,6 +7,7 @@ from crosstl.backend.GLSL.OpenglAst import (
     BinaryOpNode,
     DoWhileNode,
     ForNode,
+    FunctionCallNode,
     InitializerListNode,
     ReturnNode,
     StructNode,
@@ -1296,6 +1297,49 @@ def test_parse_macro_declaration_prefixes_from_filament_sources():
     assert ast.global_variables[1].vtype == "vec2"
     assert ast.structs[0].members[0].vtype == "COLOR"
     assert ast.structs[0].members[1].vtype == "vec4"
+
+
+def test_parse_explicit_typecast_from_glslang_nv_extension():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/spv.nv.explicittypecast.frag, which uses GL_NV_explicit_typecast.
+    code = textwrap.dedent("""
+        #version 460
+        #extension GL_NV_explicit_typecast : enable
+
+        float func(float a, vec2 b)
+        {
+            return dot(b, vec2(a));
+        }
+
+        void main()
+        {
+            float f_0;
+            uint u_0;
+            vec4 v4_0;
+            uvec4 u4_0;
+
+            f_0 = (float) u_0;
+            v4_0 = (vec4) u4_0;
+            func((float)u_0, (vec2)v4_0);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    main = next(function for function in ast.functions if function.name == "main")
+    scalar_cast = main.body[4].right
+    vector_cast = main.body[5].right
+    call = main.body[6]
+
+    assert isinstance(scalar_cast, FunctionCallNode)
+    assert scalar_cast.name.name == "float"
+    assert scalar_cast.args[0].name == "u_0"
+    assert isinstance(vector_cast, FunctionCallNode)
+    assert vector_cast.name.name == "vec4"
+    assert vector_cast.args[0].name == "u4_0"
+    assert isinstance(call.args[0], FunctionCallNode)
+    assert call.args[0].name.name == "float"
+    assert isinstance(call.args[1], FunctionCallNode)
+    assert call.args[1].name.name == "vec2"
 
 
 @pytest.mark.parametrize(

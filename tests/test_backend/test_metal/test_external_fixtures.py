@@ -787,6 +787,33 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "mlx_steel_attention_block_scope_decltype_alias",
+        "repo_url": MLX_REPO,
+        "commit": MLX_STEEL_DEPENDENT_TEMPLATE_COMMIT,
+        "source_path": (
+            "mlx/backend/metal/kernels/steel/attn/kernels/" "steel_attention.h"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "const auto neg_inf = Limits_u3cselem_t_u3e_u3a_u3afinite_min;",
+            "const int16 kRowsPT = stile_t_u3a_u3akRowsPerThread;",
+        ],
+        "source": (
+            """
+            void resolve_mask() {
+                // Reduced from MLX Steel attention mask handling:
+                // using stile_t = decltype(Stile);
+                // constexpr auto neg_inf = Limits<selem_t>::finite_min;
+                int Stile;
+                using stile_t = decltype(Stile);
+                using selem_t = typename stile_t::elem_type;
+                constexpr auto neg_inf = Limits<selem_t>::finite_min;
+                constexpr short kRowsPT = stile_t::kRowsPerThread;
+            }
+        """
+        ),
+    },
+    {
         "name": "pytorch_bucketization_threadgroups_per_grid",
         "repo_url": PYTORCH_REPO,
         "commit": PYTORCH_BUCKETIZATION_COMMIT,

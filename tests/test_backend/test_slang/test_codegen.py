@@ -222,6 +222,30 @@ def test_reserved_function_name_and_register_space_from_parameter_block_sample()
     cgl_translator.parse(generated_code)
 
 
+def test_entry_point_parameter_block_parameter_unwraps_to_struct_codegen():
+    # Source: shader-slang/slang tests/bindings/entrypoint-parameter-block.slang
+    # at 564ac9f050d6569efd773e2f74e7d067a4e54baa.
+    code = """
+    struct Params {
+        Sampler2D<float4> tex;
+    }
+
+    [shader("pixel")]
+    float4 main(float2 uv, ParameterBlock<Params> params) {
+        return params.tex.Sample(uv);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 main(vec2 uv, Params params)" in generated_code
+    assert "ParameterBlock<Params> params" not in generated_code
+    assert "return texture(params.tex, uv);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_struct_methods_do_not_break_field_codegen():
     code = """
     struct Primitive {

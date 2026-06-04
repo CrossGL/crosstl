@@ -296,6 +296,38 @@ def test_codegen_macro_declaration_prefixes_from_filament_sources():
     assert "vec4 material" in output
 
 
+def test_codegen_explicit_typecast_from_glslang_nv_extension():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/spv.nv.explicittypecast.frag, which uses GL_NV_explicit_typecast.
+    code = textwrap.dedent("""
+        #version 460
+        #extension GL_NV_explicit_typecast : enable
+
+        float func(float a, vec2 b)
+        {
+            return dot(b, vec2(a));
+        }
+
+        void main()
+        {
+            float f_0;
+            uint u_0;
+            vec4 v4_0;
+            uvec4 u4_0;
+
+            f_0 = (float) u_0;
+            v4_0 = (vec4) u4_0;
+            func((float)u_0, (vec2)v4_0);
+        }
+    """).strip()
+
+    output = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "f_0 = float(u_0);" in output
+    assert "v4_0 = vec4(u4_0);" in output
+    assert "func(float(u_0), vec2(v4_0));" in output
+
+
 def test_codegen_resource_function_descriptors():
     converter = GLSLToCrossGLConverter(shader_type="fragment")
 

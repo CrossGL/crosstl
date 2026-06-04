@@ -1206,6 +1206,11 @@ class MetalParser:
             self.eat("STRUCT")
             base_type = self.current_token[1]
             self.eat("IDENTIFIER")
+        elif (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "decltype"
+        ):
+            base_type = self.parse_decltype_type()
         elif self.current_token[0] not in TYPE_TOKENS:
             raise SyntaxError(f"Expected type, got {self.current_token[0]}")
         elif (

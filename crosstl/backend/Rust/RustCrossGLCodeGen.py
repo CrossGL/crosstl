@@ -9001,6 +9001,10 @@ class RustToCrossGLConverter:
         if referenced_type != rust_type:
             return self.map_type(referenced_type)
 
+        trait_object_type = self.strip_trait_object_type(rust_type)
+        if trait_object_type != rust_type:
+            return self.map_type(trait_object_type)
+
         expanded_type = self.resolve_imported_module_path(rust_type)
         if expanded_type != rust_type:
             return self.map_type(expanded_type)
@@ -9492,6 +9496,12 @@ class RustToCrossGLConverter:
             return type_name[5:].strip()
         if type_name.startswith("&"):
             return type_name[1:].strip()
+        return type_name
+
+    def strip_trait_object_type(self, type_name):
+        for prefix in ("impl ", "dyn "):
+            if type_name.startswith(prefix):
+                return type_name[len(prefix) :].strip()
         return type_name
 
     def split_array_type(self, type_name):

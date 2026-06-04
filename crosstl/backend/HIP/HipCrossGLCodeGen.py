@@ -5013,6 +5013,12 @@ class HipToCrossGLConverter:
         if isinstance(function_name, str) and function_name.startswith("::"):
             function_name = function_name[2:]
 
+        if function_name == "__mul24" and len(args) == 2:
+            left = self.format_hip_signed_24_bit_operand(args[0])
+            right = self.format_hip_signed_24_bit_operand(args[1])
+            return f"({left} * {right})"
+        if function_name == "__umul24" and len(args) == 2:
+            return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
         if function_name == "__ffs" and len(args) == 1:
             return f"(findLSB({args[0]}) + 1)"
         if function_name in {"__clz", "__clzll"} and len(args) == 1:
@@ -5039,6 +5045,9 @@ class HipToCrossGLConverter:
 
     def format_integer_average_rounded(self, left, right):
         return f"(({left} | {right}) - (({left} ^ {right}) >> 1))"
+
+    def format_hip_signed_24_bit_operand(self, arg):
+        return f"(({arg} << 8) >> 8)"
 
     def format_hip_sync_vote_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):

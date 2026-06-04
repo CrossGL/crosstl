@@ -8825,6 +8825,35 @@ def test_rust_gpu_mouse_shader_tuple_struct_destructure_codegen():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_mouse_shader_impl_trait_parameter_codegen():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/mouse-shader/src/lib.rs Painter::fill.
+    code = """
+    trait Shape {
+        fn distance(self, p: Vec2) -> f32;
+    }
+
+    struct Painter {
+        frag_coord: Vec2,
+        color: Vec3,
+    }
+
+    impl Painter {
+        fn fill(&mut self, shape: impl Shape, color: Vec4) {
+            let alpha = smoothstep(2.0, 0.0, shape.distance(self.frag_coord));
+            self.color = self.color.lerp(color.xyz(), alpha * color.w);
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void Painter_fill(Painter self, Shape shape, vec4 color)" in result
+    assert "impl Shape shape" not in result
+    crosstl.translator.parse(result)
+
+
 def test_complex_shader_conversion():
     code = """
     #[repr(C)]

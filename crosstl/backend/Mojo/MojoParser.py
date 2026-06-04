@@ -13,6 +13,7 @@ class MojoParser:
     ATTRIBUTE_START_TOKENS = {"ATTRIBUTE", "AT"}
     FUNCTION_TOKENS = {"FN", "DEF"}
     ASYNC_FUNCTION_MODIFIER = "async"
+    AWAIT_EXPRESSION_IDENTIFIER = "await"
     TYPE_START_TOKENS = {"IDENTIFIER", "INT", "FLOAT", "BOOL", "STRING"}
     FUNCTION_TYPE_TOKENS = {"FN", "DEF"}
     PARAMETER_CONVENTION_TOKENS = {"VAR"}
@@ -1803,6 +1804,13 @@ class MojoParser:
         return left
 
     def parse_unary(self):
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == self.AWAIT_EXPRESSION_IDENTIFIER
+        ):
+            self.eat("IDENTIFIER")
+            operand = self.parse_unary()
+            return UnaryOpNode("await", operand)
         if self.current_token[0] == "COMPTIME":
             self.eat("COMPTIME")
             operand = self.parse_unary()

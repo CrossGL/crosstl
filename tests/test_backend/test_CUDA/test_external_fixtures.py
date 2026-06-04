@@ -76,6 +76,11 @@ EXTERNAL_SAMPLES = [
         "paths": ["ggml/src/ggml-cuda/fattn-vec.cuh"],
     },
     {
+        "repo": "https://github.com/ggml-org/llama.cpp",
+        "commit": "7c158fbb4aec1bdc9c81d6ca0e785139f4826fae",
+        "paths": ["ggml/src/ggml-cuda/common.cuh"],
+    },
+    {
         "repo": "https://github.com/LLNL/RAJA",
         "commit": "2b575f125fd37fdbd6dafdd84cd6c97a025321a1",
         "paths": ["include/RAJA/policy/cuda/intrinsics.hpp"],
@@ -733,6 +738,29 @@ def test_cuda_samples_simple_texture3d_umul24_codegen_reparse():
     assert "(gl_WorkGroupID.x & 0x00ffffffu)" in crossgl
     assert "(gl_WorkGroupSize.x & 0x00ffffffu)" in crossgl
     assert "__umul24" not in crossgl
+
+
+def test_llama_cpp_dp4a_integer_dot_product_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/ggml-org/llama.cpp
+    # commit: 7c158fbb4aec1bdc9c81d6ca0e785139f4826fae
+    # path: ggml/src/ggml-cuda/common.cuh
+    # Reduced from ggml_cuda_dp4a, which returns __dp4a(a, b, c)
+    # when the CUDA architecture supports packed int8 dot products.
+    source = """
+    __device__ int ggml_cuda_dp4a(int a, int b, int c) {
+        return __dp4a(a, b, c);
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].value.name == "__dp4a"
+    assert_crossgl_reparse(crossgl)
+    assert "return (dot4I8Packed(a, b) + c);" in crossgl
+    assert "__dp4a" not in crossgl
 
 
 def test_cuda_samples_box_filter_saturatef_codegen_reparse():

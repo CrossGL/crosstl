@@ -1,5 +1,7 @@
 """Parser for GLSL source AST construction."""
 
+import re
+
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -182,6 +184,14 @@ IDENTIFIER_QUALIFIERS |= VULKAN_MEMORY_MODEL_QUALIFIERS
 IDENTIFIER_QUALIFIERS |= {"nonuniformEXT"}
 CONTEXTUAL_QUALIFIERS = {"static"}
 TEMPLATE_TYPE_NAMES = {"vector"}
+EXPLICIT_ARITHMETIC_TYPE_RE = re.compile(
+    r"^(?:"
+    r"(?:float|int|uint)(?:8|16|32|64)_t|"
+    r"(?:f|i|u)(?:8|16|32|64)vec[234]|"
+    r"f(?:16|32|64)mat[234](?:x[234])?|"
+    r"dmat[234](?:x[234])?"
+    r")$"
+)
 
 NAME_TOKENS = {"IDENTIFIER", "SAMPLE", "BUFFER", "PATCH", "PRECISE"}
 CONTEXTUAL_NAME_TOKENS = (
@@ -313,6 +323,7 @@ class GLSLParser:
         self.index = 0
         self.current_token = self.tokens[self.index]
         self.anonymous_struct_count = 0
+        self.known_type_names = set()
 
     def is_auto_shader_type(self, shader_type):
         return shader_type in AUTO_SHADER_TYPES
@@ -1039,6 +1050,7 @@ class GLSLParser:
             self.eat("IDENTIFIER")
         else:
             name = self.next_anonymous_struct_name()
+        self.known_type_names.add(name)
         self.skip_newlines()
         self.eat("LBRACE")
 
@@ -1078,6 +1090,7 @@ class GLSLParser:
     def parse_interface_block(self, qualifiers, layout):
         block_name = self.current_token[1]
         self.eat("IDENTIFIER")
+        self.known_type_names.add(block_name)
         self.skip_newlines()
         self.eat("LBRACE")
 
@@ -1905,6 +1918,8 @@ class GLSLParser:
         return expr
 
     def parse_unary(self):
+        if self.is_c_style_cast_start():
+            return self.parse_c_style_cast()
         if self.current_token[0] in ("PLUS", "MINUS", "LOGICAL_NOT", "BITWISE_NOT"):
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -1916,6 +1931,80 @@ class GLSLParser:
             operand = self.parse_unary()
             return UnaryOpNode(op, operand)
         return self.parse_postfix()
+
+    def is_c_style_cast_start(self):
+        if self.current_token[0] != "LPAREN":
+            return False
+
+        index = self.skip_newline_index(self.index + 1)
+        if not self.is_cast_type_token_at(index):
+            return False
+
+        index = self.skip_cast_type_index(index)
+        index = self.skip_array_suffixes_index(index)
+        index = self.skip_newline_index(index)
+        if self.token_at(index)[0] != "RPAREN":
+            return False
+
+        next_index = self.skip_newline_index(index + 1)
+        return self.can_start_cast_operand(self.token_at(next_index))
+
+    def is_cast_type_token_at(self, index):
+        token_type, token_value = self.token_at(index)
+        if token_type in TYPE_TOKENS:
+            return True
+        if token_type != "IDENTIFIER":
+            return False
+        return (
+            token_value in self.known_type_names
+            or token_value in TEMPLATE_TYPE_NAMES
+            or self.is_explicit_arithmetic_type_name(token_value)
+        )
+
+    def is_explicit_arithmetic_type_name(self, value):
+        return bool(EXPLICIT_ARITHMETIC_TYPE_RE.match(str(value)))
+
+    def skip_cast_type_index(self, index):
+        index = self.skip_newline_index(index + 1)
+        return self.skip_type_template_suffix_index(index)
+
+    def can_start_cast_operand(self, token):
+        token_type, token_value = token
+        if token_type in (
+            "LPAREN",
+            "LBRACE",
+            "NUMBER",
+            "TRUE",
+            "FALSE",
+            "STRING",
+            "CHAR_LITERAL",
+            "PLUS",
+            "MINUS",
+            "LOGICAL_NOT",
+            "BITWISE_NOT",
+            "INCREMENT",
+            "DECREMENT",
+        ):
+            return True
+        if token_type in TYPE_TOKENS or self.is_name_token_at_token(token):
+            return True
+        return token_type == "IDENTIFIER" and token_value in self.known_type_names
+
+    def is_name_token_at_token(self, token):
+        return token[0] in NAME_TOKENS | CONTEXTUAL_NAME_TOKENS
+
+    def parse_c_style_cast(self):
+        self.eat("LPAREN")
+        type_name = self.parse_type()
+        self.skip_newlines()
+        if self.current_token[0] == "LBRACKET":
+            type_name = self.type_name_with_array_suffixes(
+                type_name, self.parse_array_suffixes()
+            )
+            self.skip_newlines()
+        self.eat("RPAREN")
+        operand = self.parse_unary()
+        return FunctionCallNode(VariableNode("", type_name), [operand])
 
     def parse_postfix(self):
         expr = self.parse_primary()
