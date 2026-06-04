@@ -72,6 +72,7 @@ PLANNED_ACTION_SAMPLE_LIMIT = 12
 
 FRONTEND_ID = "frontend"
 FRONTEND_NAME = "Frontend / IR / Parser"
+PROJECT_FEATURE_PREFIX = "project."
 
 BACKLOG_STATUSES = {
     "partial",
@@ -843,6 +844,33 @@ def compact_label_part(value: str) -> str:
     return value.strip("-") or "unknown"
 
 
+def is_project_feature_id(feature_id: str) -> bool:
+    return feature_id.startswith(PROJECT_FEATURE_PREFIX)
+
+
+def backlog_issue_key(item: Mapping[str, Any]) -> str:
+    backend_id = (
+        FRONTEND_ID
+        if is_project_feature_id(str(item["feature_id"]))
+        else str(item["backend_id"])
+    )
+    return "backlog:{}:{}".format(backend_id, item["feature_id"])
+
+
+def backlog_parent_key(item: Mapping[str, Any]) -> str:
+    backend_id = (
+        FRONTEND_ID
+        if is_project_feature_id(str(item["feature_id"]))
+        else str(item["backend_id"])
+    )
+    return f"parent:{backend_id}"
+
+
+def shared_backlog_status(rows: list[dict[str, Any]]) -> str:
+    statuses = sorted({str(row["status"]) for row in rows})
+    return statuses[0] if len(statuses) == 1 else "mixed"
+
+
 def markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
     lines = [
         "| " + " | ".join(headers) + " |",
@@ -887,6 +915,8 @@ def backlog_by_backend(matrix: dict[str, Any]) -> dict[str, list[dict[str, Any]]
         backend["id"]: [] for backend in matrix.get("backends", [])
     }
     for item in matrix.get("backlog", []):
+        if is_project_feature_id(str(item["feature_id"])):
+            continue
         rows.setdefault(item["backend_id"], []).append(item)
     for backend_rows in rows.values():
         backend_rows.sort(key=lambda item: (item["category"], item["feature_id"]))
@@ -943,14 +973,44 @@ def parent_body(
     )
 
 
-def frontend_parent_body() -> str:
+def frontend_parent_body(
+    project_backlog_groups: list[list[dict[str, Any]]] | None = None,
+) -> str:
+    project_backlog_groups = project_backlog_groups or []
+    if project_backlog_groups:
+        rows = []
+        for group in project_backlog_groups[:80]:
+            item = group[0]
+            rows.append(
+                [
+                    item["category"],
+                    item["feature"],
+                    shared_backlog_status(group),
+                    len(group),
+                ]
+            )
+        backlog_text = markdown_table(
+            ["Category", "Feature", "Status", "Affected Backends"], rows
+        )
+        if len(project_backlog_groups) > len(rows):
+            backlog_text += (
+                "\n\nAdditional shared backlog rows omitted from this summary: "
+                "{}".format(len(project_backlog_groups) - len(rows))
+            )
+    else:
+        backlog_text = (
+            "No current shared frontend or project backlog rows are present in the "
+            "support matrix."
+        )
+
     return "\n\n".join(
         [
             marker_for(f"parent:{FRONTEND_ID}"),
             f"# {FRONTEND_NAME} Support Coverage",
             "This issue is managed by `tools/sync_support_issues.py`.",
-            "The current support matrix is backend-oriented, so there are no frontend-specific backlog sub-issues to create yet.",
-            "Frontend, parser, IR, validation, and shared source-language work should be added to the support catalog before it can produce generated child issues here.",
+            f"Open shared backlog rows: **{len(project_backlog_groups)}**",
+            f"## Current Shared Backlog\n\n{backlog_text}",
+            "Shared project, parser, IR, validation, and source-language rows are tracked here when the support catalog models them across multiple target backends.",
         ]
     )
 
@@ -995,6 +1055,67 @@ def child_body(
             f"## Recorded Evidence\n\n{evidence_text}",
             f"## Extracted Signals\n\n{signal_text}",
             "## Completion Rule\n\nWhen this matrix row becomes `supported`, the next sync will close this managed sub-issue as completed.",
+        ]
+    )
+
+
+def shared_project_child_body(
+    rows: list[dict[str, Any]],
+    lookup: dict[tuple[str, str], dict[str, Any]],
+    signals_lookup: dict[tuple[str, str], dict[str, Any]] | None = None,
+) -> str:
+    rows = sorted(rows, key=lambda item: (item["backend"], item["backend_id"]))
+    item = rows[0]
+    feature_id = item["feature_id"]
+    entry = lookup.get((item["backend_id"], feature_id), {})
+    feature = entry.get("feature", {})
+    evidence = []
+    seen_evidence = set()
+    affected_rows = []
+    for row in rows:
+        support = lookup.get((row["backend_id"], feature_id), {}).get("support", {})
+        for value in support.get("evidence") or []:
+            if value not in seen_evidence:
+                evidence.append(value)
+                seen_evidence.add(value)
+        notes = row.get("notes") or support.get("notes") or "No notes recorded."
+        affected_rows.append([row["backend"], row["status"], notes])
+
+    evidence_text = "\n".join(f"- `{value}`" for value in evidence)
+    if not evidence_text:
+        evidence_text = "- No evidence is recorded for this shared non-supported row."
+
+    signal_text = "No generated support-signal data was provided for this shared row."
+    if signals_lookup:
+        for row in rows:
+            signal = signals_lookup.get((row["backend_id"], feature_id))
+            if signal:
+                signal_text = format_signal_section(signal)
+                break
+
+    return "\n\n".join(
+        [
+            marker_for(f"backlog:{FRONTEND_ID}:{feature_id}"),
+            "# Shared Project: {}".format(item["feature"]),
+            "This sub-issue is managed from `support/generated/support-matrix.json` by `tools/sync_support_issues.py`.",
+            markdown_table(
+                ["Field", "Value"],
+                [
+                    ["Feature ID", feature_id],
+                    ["Category", item["category"]],
+                    ["Status", shared_backlog_status(rows)],
+                    ["Affected Backends", len(rows)],
+                ],
+            ),
+            "## Feature Description\n\n{}".format(
+                feature.get("description", "No feature description recorded.")
+            ),
+            "## Affected Backends\n\n{}".format(
+                markdown_table(["Backend", "Status", "Current Gap"], affected_rows)
+            ),
+            f"## Recorded Evidence\n\n{evidence_text}",
+            f"## Extracted Signals\n\n{signal_text}",
+            "## Completion Rule\n\nWhen this shared matrix row becomes `supported` for every affected backend, the next sync will close this managed sub-issue as completed.",
         ]
     )
 
@@ -1084,11 +1205,15 @@ def build_desired_issues(
     known_parent_backend_ids = {backend["id"] for backend in matrix.get("backends", [])}
     known_parent_backend_ids.add(FRONTEND_ID)
     parent_backend_ids: set[str] = set()
+    project_backlog_rows: dict[str, list[dict[str, Any]]] = {}
 
     for item in matrix.get("backlog", []):
         backend_id = item["backend_id"]
         feature_id = item["feature_id"]
-        key = f"backlog:{backend_id}:{feature_id}"
+        if is_project_feature_id(str(feature_id)):
+            project_backlog_rows.setdefault(feature_id, []).append(item)
+            continue
+        key = backlog_issue_key(item)
         labels = (
             LABEL_MANAGED,
             LABEL_BACKLOG,
@@ -1104,12 +1229,42 @@ def build_desired_issues(
                 ),
                 body=child_body(item, lookup, signals_by_row),
                 labels=labels,
-                parent_key=f"parent:{backend_id}",
+                parent_key=backlog_parent_key(item),
             )
         )
         child_keys.add(key)
         if backend_id in known_parent_backend_ids:
             parent_backend_ids.add(backend_id)
+
+    project_backlog_groups = [
+        sorted(rows, key=lambda row: (row["backend"], row["backend_id"]))
+        for _feature_id, rows in sorted(project_backlog_rows.items())
+    ]
+    for rows in project_backlog_groups:
+        item = rows[0]
+        feature_id = item["feature_id"]
+        key = backlog_issue_key(item)
+        status = shared_backlog_status(rows)
+        labels = (
+            LABEL_MANAGED,
+            LABEL_BACKLOG,
+            LABEL_PREFIX_BACKEND + FRONTEND_ID,
+            LABEL_PREFIX_CATEGORY + compact_label_part(item["category"]),
+            LABEL_PREFIX_STATUS + compact_label_part(status),
+        )
+        child_issues.append(
+            DesiredIssue(
+                key=key,
+                title="[Support Matrix][{}] {} ({})".format(
+                    FRONTEND_NAME, item["feature"], status
+                ),
+                body=shared_project_child_body(rows, lookup, signals_by_row),
+                labels=labels,
+                parent_key=f"parent:{FRONTEND_ID}",
+            )
+        )
+        child_keys.add(key)
+        parent_backend_ids.add(FRONTEND_ID)
 
     for issue in (signals or {}).get("issues", []):
         if issue["backend_id"] not in known_parent_backend_ids:
@@ -1160,7 +1315,7 @@ def build_desired_issues(
         desired[frontend_key] = DesiredIssue(
             key=frontend_key,
             title=f"[Support Matrix] {FRONTEND_NAME} coverage",
-            body=frontend_parent_body(),
+            body=frontend_parent_body(project_backlog_groups),
             labels=(
                 LABEL_MANAGED,
                 LABEL_PARENT,
@@ -1207,7 +1362,7 @@ def validate_desired_issues(
                     item.get("status"),
                 )
             )
-        key = "backlog:{}:{}".format(item["backend_id"], item["feature_id"])
+        key = backlog_issue_key(item)
         if key not in desired:
             errors.append(f"missing desired backlog issue: {key}")
 

@@ -321,6 +321,81 @@ def test_build_desired_issues_creates_parent_and_backlog_entries():
     assert "`tests/example.py::def test_gather`" in child.body
 
 
+def test_build_desired_issues_routes_project_backlog_to_frontend_parent():
+    module = load_sync_module()
+    matrix = sample_matrix()
+    matrix["summary"]["status_counts"]["opengl"] = {
+        "supported": 1,
+        "partial": 1,
+        "diagnostic": 0,
+        "validated_rejection": 0,
+        "unsupported": 0,
+        "unknown": 0,
+    }
+    matrix["backends"].append({"id": "opengl", "name": "OpenGL / GLSL", "docs": []})
+    matrix["features"].append(
+        {
+            "id": "project.source_provenance",
+            "name": "Source provenance",
+            "category": "project",
+            "description": "Track project source provenance.",
+            "support": {
+                "directx": {
+                    "status": "partial",
+                    "notes": "DirectX provenance is incomplete.",
+                    "evidence": ["tests/project.py::def test_directx_provenance"],
+                },
+                "opengl": {
+                    "status": "partial",
+                    "notes": "OpenGL provenance is incomplete.",
+                    "evidence": ["tests/project.py::def test_opengl_provenance"],
+                },
+            },
+        }
+    )
+    matrix["backlog"] = [
+        {
+            "backend_id": "directx",
+            "backend": "DirectX / HLSL",
+            "feature_id": "project.source_provenance",
+            "feature": "Source provenance",
+            "category": "project",
+            "status": "partial",
+            "notes": "DirectX provenance is incomplete.",
+        },
+        {
+            "backend_id": "opengl",
+            "backend": "OpenGL / GLSL",
+            "feature_id": "project.source_provenance",
+            "feature": "Source provenance",
+            "category": "project",
+            "status": "partial",
+            "notes": "OpenGL provenance is incomplete.",
+        },
+    ]
+
+    desired = module.build_desired_issues(matrix)
+
+    assert set(desired) == {
+        "parent:frontend",
+        "backlog:frontend:project.source_provenance",
+    }
+    child = desired["backlog:frontend:project.source_provenance"]
+    assert child.parent_key == "parent:frontend"
+    assert module.LABEL_BACKLOG in child.labels
+    assert module.LABEL_PREFIX_BACKEND + module.FRONTEND_ID in child.labels
+    assert "DirectX / HLSL" in child.body
+    assert "OpenGL / GLSL" in child.body
+    assert "`tests/project.py::def test_directx_provenance`" in child.body
+    assert "`tests/project.py::def test_opengl_provenance`" in child.body
+    assert "backlog:directx:project.source_provenance" not in desired
+    assert "backlog:opengl:project.source_provenance" not in desired
+    assert (
+        module.validate_desired_issues(matrix, None, desired, min_desired_issues=2)
+        == []
+    )
+
+
 def test_build_desired_issues_skips_empty_parent_trackers():
     module = load_sync_module()
     matrix = sample_matrix()
