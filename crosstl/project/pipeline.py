@@ -2236,6 +2236,27 @@ def _duplicate_identity_contract_reasons(
     return reasons
 
 
+def _duplicate_toolchain_target_contract_reasons(records: Sequence[Any]) -> list[str]:
+    reasons = []
+    targets: dict[str, int] = {}
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            continue
+        target = record.get("target")
+        if not _is_non_empty_string(target):
+            continue
+        normalized_target = _normalized_targets([target])[0]
+        previous_index = targets.get(normalized_target)
+        if previous_index is None:
+            targets[normalized_target] = index
+            continue
+        reasons.append(
+            "validation.toolchains[{}] duplicates "
+            "validation.toolchains[{}].target".format(index, previous_index)
+        )
+    return reasons
+
+
 def _diagnostic_counts_contract_reasons(
     prefix: str, value: Any, diagnostics: Sequence[Any]
 ) -> list[str]:
@@ -2841,6 +2862,7 @@ def _validation_contract_reasons(
                     declared_targets=declared_targets,
                 )
             )
+        reasons.extend(_duplicate_toolchain_target_contract_reasons(toolchains))
 
     artifact_checks = validation.get("artifacts")
     if not isinstance(artifact_checks, list):

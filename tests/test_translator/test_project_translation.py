@@ -1924,6 +1924,53 @@ def test_validate_project_report_rejects_inconsistent_toolchain_status(tmp_path)
     )
 
 
+def test_validate_project_report_rejects_duplicate_toolchain_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "duplicate-toolchain-target-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "validation": {
+                    "toolchains": [
+                        {
+                            "target": "opengl",
+                            "status": "not-configured",
+                            "tools": [],
+                        },
+                        {
+                            "target": "opengl",
+                            "status": "not-configured",
+                            "tools": [],
+                        },
+                    ],
+                    "artifacts": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.toolchains[1] duplicates validation.toolchains[0].target"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_inconsistent_validation_artifact_status(
     tmp_path,
 ):
