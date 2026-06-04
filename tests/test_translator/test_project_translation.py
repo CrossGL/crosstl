@@ -206,6 +206,28 @@ def test_scan_report_normalizes_and_deduplicates_targets(tmp_path):
     assert payload["migration"]["actions"][0]["targets"] == ["opengl"]
 
 
+def test_scan_report_records_documented_migration_actions(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["scope"] == "shader-kernel-translation"
+    assert payload["migration"]["actions"] == [
+        {
+            "kind": "manual-runtime-integration",
+            "severity": "note",
+            "message": (
+                "CrossTL translated shader/kernel source artifacts only; review "
+                "host runtime API calls, resource binding setup, build scripts, "
+                "and backend framework integration separately."
+            ),
+            "targets": ["opengl"],
+        }
+    ]
+
+
 def test_scan_report_records_unsupported_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1228,6 +1250,12 @@ def test_validate_project_report_rejects_malformed_migration_actions(tmp_path):
                             "message": "",
                             "targets": "opengl",
                         },
+                        {
+                            "kind": "runtime-porting",
+                            "severity": "note",
+                            "message": "Review host runtime integration.",
+                            "targets": ["opengl"],
+                        },
                         "not an action",
                     ],
                 },
@@ -1254,7 +1282,10 @@ def test_validate_project_report_rejects_malformed_migration_actions(tmp_path):
     assert "migration.actions[0].targets must be a list of strings" in (
         diagnostic["message"]
     )
-    assert "migration.actions[1] must be an object" in diagnostic["message"]
+    assert "migration.actions[1].kind must be one of manual-runtime-integration" in (
+        diagnostic["message"]
+    )
+    assert "migration.actions[2] must be an object" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_artifacts_with_undeclared_targets(tmp_path):

@@ -30,6 +30,7 @@ REPORT_MIGRATION_NON_GOALS = (
     "application build-system rewrites",
     "backend framework integration",
 )
+REPORT_MIGRATION_ACTION_KINDS = ("manual-runtime-integration",)
 DEFAULT_CONFIG_NAME = "crosstl.toml"
 DEFAULT_OUTPUT_DIR = "crosstl-out"
 OUTPUT_DIR_OUTSIDE_PROJECT_CODE = "project.config.output-dir-outside-project"
@@ -1511,9 +1512,17 @@ def _migration_contract_reasons(
             if not isinstance(action, Mapping):
                 reasons.append(f"{prefix} must be an object")
                 continue
-            for field_name in ("kind", "message"):
-                if not _is_non_empty_string(action.get(field_name)):
-                    reasons.append(f"{prefix}.{field_name} must be a string")
+            kind = action.get("kind")
+            if not _is_non_empty_string(kind):
+                reasons.append(f"{prefix}.kind must be a string")
+            elif kind not in REPORT_MIGRATION_ACTION_KINDS:
+                reasons.append(
+                    "{}.kind must be one of {}".format(
+                        prefix, ", ".join(REPORT_MIGRATION_ACTION_KINDS)
+                    )
+                )
+            if not _is_non_empty_string(action.get("message")):
+                reasons.append(f"{prefix}.message must be a string")
             severity = action.get("severity")
             if severity not in {"note", "warning", "error"}:
                 reasons.append(f"{prefix}.severity must be note, warning, or error")
