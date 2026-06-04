@@ -477,6 +477,20 @@ def _format_project_report_inspection(payload):
                         f"({'; '.join(validation_details)})"
                     )
             lines.append(description)
+    truncated_failed_artifacts = payload.get("truncatedFailedArtifactCount", 0)
+    if (
+        isinstance(truncated_failed_artifacts, int)
+        and not isinstance(truncated_failed_artifacts, bool)
+        and truncated_failed_artifacts > 0
+    ):
+        failed_artifact_count = payload.get("failedArtifactCount", 0)
+        displayed_count = (
+            len(failed_artifacts) if isinstance(failed_artifacts, list) else 0
+        )
+        lines.append(
+            "Failed artifacts truncated: "
+            f"showing {displayed_count} of {failed_artifact_count}"
+        )
 
     diagnostics = payload.get("diagnostics", [])
     if diagnostics:
@@ -490,6 +504,17 @@ def _format_project_report_inspection(payload):
                 f"{diagnostic.get('code', 'unknown')}: "
                 f"{diagnostic.get('message', '')}"
             )
+    truncated_diagnostics = payload.get("truncatedDiagnosticCount", 0)
+    if (
+        isinstance(truncated_diagnostics, int)
+        and not isinstance(truncated_diagnostics, bool)
+        and truncated_diagnostics > 0
+    ):
+        diagnostic_count = payload.get("diagnosticCount", 0)
+        displayed_count = len(diagnostics) if isinstance(diagnostics, list) else 0
+        lines.append(
+            f"Diagnostics truncated: showing {displayed_count} of {diagnostic_count}"
+        )
 
     migration = payload.get("migration")
     actions = migration.get("actions", []) if isinstance(migration, Mapping) else []

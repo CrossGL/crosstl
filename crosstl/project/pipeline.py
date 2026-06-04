@@ -1784,6 +1784,9 @@ def inspect_project_report(
     """Build a concise inspection summary for a project portability report."""
     path = Path(report_path)
     validation_report = validate_project_report(path, run_toolchains=run_toolchains)
+    diagnostic_limit = max(0, max_diagnostics)
+    failed_artifact_limit = max(0, max_failed_artifacts)
+    diagnostics = list(validation_report.get("diagnostics", []))
     payload: dict[str, Any] = {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": REPORT_INSPECTION_KIND,
@@ -1791,10 +1794,12 @@ def inspect_project_report(
         "generatedAt": int(time.time()),
         "success": bool(validation_report.get("success")),
         "report": {"available": False},
+        "diagnosticCount": len(diagnostics),
+        "truncatedDiagnosticCount": max(0, len(diagnostics) - diagnostic_limit),
+        "failedArtifactCount": 0,
+        "truncatedFailedArtifactCount": 0,
         "failedArtifacts": [],
-        "diagnostics": list(validation_report.get("diagnostics", []))[
-            : max(0, max_diagnostics)
-        ],
+        "diagnostics": diagnostics[:diagnostic_limit],
         "validation": {
             "success": bool(validation_report.get("success")),
             "diagnosticCounts": dict(validation_report.get("diagnosticCounts", {})),
@@ -1863,9 +1868,12 @@ def inspect_project_report(
                 )
             else:
                 failed_artifacts_by_key[key] = failed
-    payload["failedArtifacts"] = list(failed_artifacts_by_key.values())[
-        : max(0, max_failed_artifacts)
-    ]
+    failed_artifacts = list(failed_artifacts_by_key.values())
+    payload["failedArtifactCount"] = len(failed_artifacts)
+    payload["truncatedFailedArtifactCount"] = max(
+        0, len(failed_artifacts) - failed_artifact_limit
+    )
+    payload["failedArtifacts"] = failed_artifacts[:failed_artifact_limit]
 
     migration = report.get("migration")
     if isinstance(migration, Mapping):

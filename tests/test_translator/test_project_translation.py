@@ -3396,6 +3396,56 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     assert payload["migration"]["actions"][0]["kind"] == ("manual-runtime-integration")
 
 
+def test_inspect_project_report_records_truncation_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": f"shader-{index}.cgl",
+                        "target": "opengl",
+                        "path": f"out/opengl/shader-{index}.glsl",
+                        "status": "failed",
+                        "error": "translation failed",
+                    }
+                    for index in range(3)
+                ],
+                "diagnostics": [
+                    {
+                        "severity": "error",
+                        "code": f"project.test.diagnostic-{index}",
+                        "message": "Synthetic diagnostic",
+                        "location": {"file": f"shader-{index}.cgl"},
+                    }
+                    for index in range(4)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = inspect_project_report(
+        report_path, max_diagnostics=2, max_failed_artifacts=1
+    )
+
+    assert payload["diagnosticCount"] == 7
+    assert payload["truncatedDiagnosticCount"] == 5
+    assert len(payload["diagnostics"]) == 2
+    assert payload["failedArtifactCount"] == 3
+    assert payload["truncatedFailedArtifactCount"] == 2
+    assert len(payload["failedArtifacts"]) == 1
+
+
 def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -3577,6 +3627,65 @@ def test_project_cli_inspect_report_text_fails_on_error_diagnostics(tmp_path):
     assert "Validation diagnostics: 1 errors" in result.stdout
     assert "Validation artifacts: 0 ok, 0 failed" in result.stdout
     assert "project.config.unsupported-target" in result.stdout
+
+
+def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": f"shader-{index}.cgl",
+                        "target": "opengl",
+                        "path": f"out/opengl/shader-{index}.glsl",
+                        "status": "failed",
+                        "error": "translation failed",
+                    }
+                    for index in range(21)
+                ],
+                "diagnostics": [
+                    {
+                        "severity": "error",
+                        "code": f"project.test.diagnostic-{index}",
+                        "message": "Synthetic diagnostic",
+                        "location": {"file": f"shader-{index}.cgl"},
+                    }
+                    for index in range(21)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Failed artifacts truncated: showing 20 of 21" in result.stdout
+    assert "Diagnostics truncated: showing 20 of 42" in result.stdout
 
 
 def test_legacy_single_file_cli_still_works(tmp_path):
