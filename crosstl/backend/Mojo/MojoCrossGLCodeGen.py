@@ -28,6 +28,7 @@ class MojoToCrossGLConverter:
         self.user_function_names = set()
         self.user_function_arities = {}
         self.scoped_value_names = []
+        self.function_body_depth = 0
         self.type_map = {
             # Scalar Types
             "void": "void",
@@ -392,12 +393,15 @@ class MojoToCrossGLConverter:
             f"{indent_str}{return_type} {func.name}({params_str}){func_attributes} {{\n"
         )
 
+        saved_body_depth = self.function_body_depth
+        self.function_body_depth = 0
         self.push_value_scope(param_names)
         try:
             if hasattr(func, "body") and func.body:
                 code += self.generate_function_body(func.body, indent + 1)
         finally:
             self.pop_value_scope()
+            self.function_body_depth = saved_body_depth
 
         code += f"{indent_str}}}\n\n"
         return code
@@ -406,6 +410,7 @@ class MojoToCrossGLConverter:
         code = ""
         indent_str = "    " * indent
 
+        self.function_body_depth += 1
         self.push_value_scope()
         try:
             for stmt in body:
@@ -431,7 +436,13 @@ class MojoToCrossGLConverter:
                         code += f"{stmt.name};\n"
                     self.add_scoped_value_name(stmt.name)
                 elif isinstance(stmt, AssignmentNode):
-                    code += self.generate_assignment(stmt) + ";\n"
+                    if self.is_implicit_assignment_declaration(stmt):
+                        code += (
+                            self.generate_implicit_assignment_declaration(stmt) + ";\n"
+                        )
+                        self.add_scoped_value_name(stmt.left.name)
+                    else:
+                        code += self.generate_assignment(stmt) + ";\n"
                 elif isinstance(stmt, ReturnNode):
                     if stmt.value is None:
                         code += "return;\n"
@@ -471,8 +482,24 @@ class MojoToCrossGLConverter:
                     code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         finally:
             self.pop_value_scope()
+            self.function_body_depth -= 1
 
         return code
+
+    def is_implicit_assignment_declaration(self, node):
+        if self.function_body_depth != 1:
+            return False
+        if getattr(node, "operator", "=") != "=":
+            return False
+        if not isinstance(node.left, VariableNode):
+            return False
+        if getattr(node.left, "vtype", ""):
+            return False
+        return node.left.name != "_" and not self.is_scoped_value_name(node.left.name)
+
+    def generate_implicit_assignment_declaration(self, node):
+        value = self.generate_expression(node.right)
+        return f"var {node.left.name} = {value}"
 
     def generate_import_comment(self, node):
         if getattr(node, "items", None):

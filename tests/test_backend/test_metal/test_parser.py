@@ -1900,6 +1900,36 @@ def test_parse_union_declaration_from_mlx_random():
     assert loop.name == "r"
 
 
+def test_parse_using_union_alias_from_mlx_cexpf_header():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: b155224b9963cd9476363b464a559232a0868000
+    # Path: mlx/backend/metal/kernels/cexpf.h
+    code = """
+    using ieee_float_shape_type = union {
+      float value;
+      uint32_t word;
+    };
+
+    inline void get_float_word(thread uint32_t& i, float d) {
+      ieee_float_shape_type gf_u;
+      gf_u.value = (d);
+      (i) = gf_u.word;
+    }
+    """
+    ast = parse_ok(code)
+
+    union = ast.structs[0]
+    assert union.name == "ieee_float_shape_type"
+    assert getattr(union, "aggregate_kind", None) == "union"
+    assert getattr(union, "using_alias", False) is True
+    assert [(member.vtype, member.name) for member in union.members] == [
+        ("float", "value"),
+        ("uint32_t", "word"),
+    ]
+    assert ast.functions[0].body[0].vtype == "ieee_float_shape_type"
+
+
 def test_parse_if_constexpr_from_mlx_fp_quantized():
     code = """
     template <typename T, int group_size>

@@ -913,6 +913,12 @@ class MetalToCrossGLConverter:
                     code += "    };\n\n"
         for struct_node in structs:
             if isinstance(struct_node, StructNode):
+                if getattr(struct_node, "aggregate_kind", None) == "union":
+                    union_name = struct_node.name or "anonymous"
+                    code += (
+                        f"    // Metal union {union_name} represented as "
+                        "struct-like layout; overlapping storage is not modeled\n"
+                    )
                 if struct_node.name in self.constant_struct_name:
                     code += "    // cbuffers\n"
                     code += f"    cbuffer {struct_node.name} {{\n"

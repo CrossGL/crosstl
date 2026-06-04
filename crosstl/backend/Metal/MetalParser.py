@@ -309,7 +309,9 @@ class MetalParser:
                 self.parse_namespace_start()
             elif self.current_token[0] == "USING":
                 alias = self.parse_using_statement()
-                if alias is not None:
+                if isinstance(alias, StructNode):
+                    structs.append(alias)
+                elif alias is not None:
                     typedefs.append(alias)
             elif self.is_union_declaration_start():
                 union = self.parse_union()
@@ -866,10 +868,30 @@ class MetalParser:
         alias_name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("EQUALS")
+        if self.is_union_alias_start():
+            return self.parse_using_union_alias(alias_name)
         alias_type, _qualifiers = self.parse_type_specifier()
         self.eat("SEMICOLON")
         self.known_types.add(alias_name)
         return TypeAliasNode(alias_type, alias_name)
+
+    def is_union_alias_start(self):
+        return self.current_token == ("IDENTIFIER", "union")
+
+    def parse_using_union_alias(self, alias_name):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] != "LBRACE":
+            raise SyntaxError("Expected anonymous union body in using alias")
+        self.eat("LBRACE")
+        members = self.parse_struct_members()
+        self.eat("RBRACE")
+        self.eat("SEMICOLON")
+
+        self.known_types.add(alias_name)
+        union_node = StructNode(alias_name, members)
+        union_node.aggregate_kind = "union"
+        union_node.using_alias = True
+        return union_node
 
     def parse_enum(self):
         name, is_scoped, underlying_type = self.parse_enum_header()

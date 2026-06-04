@@ -4074,6 +4074,10 @@ class CudaToCrossGLConverter:
         if self.is_user_defined_function(raw_name):
             return f"{raw_name}({args_str})"
 
+        time_function = self.format_cuda_time_function_call(raw_name, args)
+        if time_function is not None:
+            return time_function
+
         warp_intrinsic = self.format_cuda_warp_intrinsic_call(raw_name, args)
         if warp_intrinsic is not None:
             return warp_intrinsic
@@ -4104,6 +4108,26 @@ class CudaToCrossGLConverter:
 
         func_name = self.convert_cuda_builtin_function(raw_name)
         return f"{func_name}({args_str})"
+
+    def format_cuda_time_function_call(self, function_name, args):
+        if not isinstance(function_name, str):
+            return None
+
+        normalized_name = (
+            function_name[2:] if function_name.startswith("::") else function_name
+        )
+        if normalized_name not in {"clock", "clock64", "cuda::std::clock"}:
+            return None
+
+        display_name = normalized_name.rsplit("::", 1)[-1]
+        return self.format_cuda_time_function_diagnostic(display_name, args)
+
+    def format_cuda_time_function_diagnostic(self, function_name, args):
+        args_text = ", ".join(args)
+        return (
+            f"(/* cuda time function {function_name}({args_text}) "
+            "not directly supported in CrossGL */ 0)"
+        )
 
     def format_cuda_warp_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):

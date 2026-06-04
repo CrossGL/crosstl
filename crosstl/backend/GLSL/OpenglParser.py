@@ -174,6 +174,20 @@ IDENTIFIER_QUALIFIERS |= {"nonuniformEXT"}
 CONTEXTUAL_QUALIFIERS = {"static"}
 
 NAME_TOKENS = {"IDENTIFIER", "SAMPLE", "BUFFER", "PATCH", "PRECISE"}
+CONTEXTUAL_NAME_TOKENS = (
+    TYPE_TOKENS
+    | {
+        "CENTROID",
+        "FLAT",
+        "HIGHP",
+        "LAYOUT",
+        "LOWP",
+        "MEDIUMP",
+        "NOPERSPECTIVE",
+        "PRECISION",
+        "SMOOTH",
+    }
+) - {"VOID"}
 BRACKETED_STAGE_MARKERS = {
     "vertex",
     "fragment",
@@ -886,7 +900,10 @@ class GLSLParser:
         return f"{type_name}{self.format_type_array_suffixes(array_sizes)}"
 
     def is_name_token(self):
-        return self.current_token[0] in NAME_TOKENS
+        return self.is_name_token_at(self.index)
+
+    def is_name_token_at(self, index):
+        return self.token_at(index)[0] in NAME_TOKENS | CONTEXTUAL_NAME_TOKENS
 
     def parse_identifier_name(self, context="identifier"):
         if self.is_name_token():
@@ -897,7 +914,9 @@ class GLSLParser:
 
     def is_declaration_start(self):
         if self.current_token[0] in TYPE_TOKENS:
-            return True
+            index = self.skip_type_template_suffix_index(self.index + 1)
+            index = self.skip_array_suffixes_index(index)
+            return self.is_name_token_at(index)
         if (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] in IDENTIFIER_QUALIFIERS | CONTEXTUAL_QUALIFIERS
@@ -910,7 +929,7 @@ class GLSLParser:
             )
         if self.current_token[0] not in QUALIFIER_TOKENS:
             return False
-        if self.current_token[0] in NAME_TOKENS:
+        if self.is_name_token_at(self.index):
             next_token = self.peek_non_newline()
             return (
                 next_token[0] in QUALIFIER_TOKENS
@@ -1283,7 +1302,7 @@ class GLSLParser:
         index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)
 
-        if self.token_at(index)[0] not in NAME_TOKENS:
+        if not self.is_name_token_at(index):
             return False
         index = self.skip_array_suffixes_index(index + 1)
 
@@ -1307,7 +1326,7 @@ class GLSLParser:
         index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)
 
-        if self.token_at(index)[0] not in NAME_TOKENS:
+        if not self.is_name_token_at(index):
             return False
         index = self.skip_array_suffixes_index(index + 1)
 
@@ -1331,7 +1350,7 @@ class GLSLParser:
         index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)
 
-        if self.token_at(index)[0] not in NAME_TOKENS:
+        if not self.is_name_token_at(index):
             return False
         index = self.skip_newline_index(index + 1)
 
@@ -1346,26 +1365,26 @@ class GLSLParser:
             return False
 
         index = self.skip_newline_index(self.index + 1)
-        if self.token_at(index)[0] == "IDENTIFIER":
+        if self.is_name_token_at(index):
             return True
         if self.token_at(index)[0] != "LBRACKET":
             return False
 
         index = self.skip_array_suffixes_index(index)
-        return self.token_at(index)[0] in NAME_TOKENS
+        return self.is_name_token_at(index)
 
     def is_qualifier_only_declaration_start(self, qualifiers, layout):
         if not qualifiers and layout is None:
             return False
 
         index = self.skip_newline_index(self.index)
-        if self.token_at(index)[0] not in NAME_TOKENS:
+        if not self.is_name_token_at(index):
             return False
         index = self.skip_newline_index(index + 1)
 
         while self.token_at(index)[0] == "COMMA":
             index = self.skip_newline_index(index + 1)
-            if self.token_at(index)[0] not in NAME_TOKENS:
+            if not self.is_name_token_at(index):
                 return False
             index = self.skip_newline_index(index + 1)
 
@@ -1979,7 +1998,7 @@ class GLSLParser:
             value = self.current_token[1]
             self.advance()
             return value
-        if self.current_token[0] in TYPE_TOKENS or self.current_token[0] in NAME_TOKENS:
+        if self.current_token[0] in TYPE_TOKENS or self.is_name_token():
             name = self.current_token[1]
             self.advance()
             return VariableNode("", name)

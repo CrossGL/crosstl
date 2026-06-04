@@ -4997,6 +4997,8 @@ class HipToCrossGLConverter:
             return f"(findLSB({args[0]}) + 1)"
         if function_name in {"__clz", "__clzll"} and len(args) == 1:
             return f"countLeadingZeros({args[0]})"
+        if function_name in {"__brev", "__brevll"} and len(args) == 1:
+            return f"reverseBits({args[0]})"
         if function_name in {"__popc", "__popcll"} and len(args) == 1:
             return f"bitCount({args[0]})"
         return None

@@ -1081,6 +1081,44 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_IMAGE_WRITE_SAMPLE_ASSEMBLY = """
+; Reduced from glslangValidator 16.3.0 stdin output for
+; imageStore(image2DMS, coord, sample, texel), where glslang emits
+; OpImageWrite Image Coordinate Texel Sample SampleId.
+; SPIRV-Headers unified1 grammar declares OpImageWrite's optional
+; ImageOperands and ImageOperands.Sample's single IdRef parameter.
+OpCapability Shader
+OpCapability StorageImageMultisample
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %image
+OpExecutionMode %main LocalSize 1 1 1
+OpName %image "image"
+OpDecorate %image DescriptorSet 0
+OpDecorate %image Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2int = OpTypeVector %int 2
+%v4float = OpTypeVector %float 4
+%image_type = OpTypeImage %float 2D 0 0 1 2 Rgba16f
+%ptr_image = OpTypePointer UniformConstant %image_type
+%zero_i = OpConstant %int 0
+%one_i = OpConstant %int 1
+%sample = OpConstant %int 2
+%one_f = OpConstant %float 1.0
+%zero_f = OpConstant %float 0.0
+%coord = OpConstantComposite %v2int %zero_i %one_i
+%texel = OpConstantComposite %v4float %one_f %zero_f %zero_f %one_f
+%image = OpVariable %ptr_image UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_image = OpLoad %image_type %image
+OpImageWrite %loaded_image %coord %texel Sample %sample
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_FLAT_LOCATION_ASSEMBLY = """
 ; Reduced from Khronos SPIRV-Tools test/val/val_image_test.cpp CommonTypes.
 OpCapability Shader
@@ -1681,6 +1719,26 @@ def test_spirv_assembly_storage_image_format_parse():
     ]
     assert storage_image.declaration_qualifiers == ["readonly"]
     assert storage_image.spirv_storage_class == "UniformConstant"
+
+
+def test_glslang_image_write_sample_operand_parse():
+    tokens = tokenize_code(SPIRV_GLSLANG_IMAGE_WRITE_SAMPLE_ASSEMBLY)
+    ast = parse_code(tokens)
+    store = ast.functions[0].body[0]
+
+    assert ast.spirv_assembly is True
+    assert isinstance(store, FunctionCallNode)
+    assert store.name == "imageStore"
+    assert len(store.args) == 4
+    assert isinstance(store.args[0], VariableNode)
+    assert store.args[0].name == "image"
+    assert isinstance(store.args[1], FunctionCallNode)
+    assert store.args[1].name == "ivec2"
+    assert store.args[1].args == ["0", "1"]
+    assert store.args[2] == "2"
+    assert isinstance(store.args[3], FunctionCallNode)
+    assert store.args[3].name == "vec4"
+    assert store.args[3].args == ["1.0", "0.0", "0.0", "1.0"]
 
 
 def test_spirv_assembly_flat_location_interface_parse():

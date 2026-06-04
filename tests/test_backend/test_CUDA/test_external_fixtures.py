@@ -751,6 +751,50 @@ def test_cuda_samples_black_scholes_fdividef_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_samples_device_time_functions_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # paths:
+    # cpp/0_Introduction/clock/clock.cu
+    # cpp/6_Performance/cudaGraphsPerfScaling/cudaGraphPerfScaling.cu
+    # Semantics source:
+    # NVIDIA CUDA C++ Programming Guide v13.1.1, section 5.3.6.1.
+    source = """
+    __global__ void timedReduction(clock_t *timer, long long ticks) {
+        int tid = threadIdx.x;
+        long long endTime = ::clock64() + ticks;
+        while (clock64() < endTime) {
+        }
+        if (tid == 0) {
+            timer[blockIdx.x] = clock();
+        }
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.kernels[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[1].value.left.name == "::clock64"
+    assert body[2].condition.left.name == "clock64"
+    assert body[3].if_body[0].right.name == "clock"
+    assert (
+        "var endTime: i64 = ((/* cuda time function clock64() "
+        "not directly supported in CrossGL */ 0) + ticks);"
+    ) in crossgl
+    assert (
+        "while (((/* cuda time function clock64() not directly supported in CrossGL "
+        "*/ 0) < endTime)) {"
+    ) in crossgl
+    assert (
+        "timer[gl_WorkGroupID.x] = (/* cuda time function clock() "
+        "not directly supported in CrossGL */ 0);"
+    ) in crossgl
+    assert "clock64() + ticks" not in crossgl
+    assert "= clock();" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():
     source = """
     __global__ void compute_gemm(const half *A) {

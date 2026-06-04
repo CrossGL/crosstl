@@ -1382,6 +1382,26 @@ def test_multiline_function_call_codegen():
     assert "let result = add(1.0, 2.0);" in generated_code
 
 
+def test_implicit_assignment_declaration_codegen_from_current_variables_docs():
+    # Reduced from https://mojolang.org/docs/manual/variables/
+    code = """
+    def main():
+        name = "Sam"
+        user_id = 0
+        user_id = user_id + 1
+        _ = sink(user_id)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert 'var name = "Sam";' in generated_code
+    assert "var user_id = 0;" in generated_code
+    assert "user_id = (user_id + 1);" in generated_code
+    assert "_ = sink(user_id);" in generated_code
+    assert "var user_id = (user_id + 1);" not in generated_code
+    assert "var _ =" not in generated_code
+
+
 def test_multiline_expression_layout_codegen_from_modular_examples():
     code = """
     fn main():
