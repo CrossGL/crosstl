@@ -1460,6 +1460,51 @@ def test_nested_enum_class_in_generic_struct_parses():
     assert struct.enums[0].kind == "class"
 
 
+def test_public_enum_qualifiers_from_slang_gfx_tool_parse():
+    code = """
+    public enum AccelerationStructureBuildFlags
+    {
+        None,
+        AllowUpdate = 1
+    };
+
+    public enum class GeometryType
+    {
+        Triangles,
+        ProcedurePrimitives
+    };
+
+    public struct GeometryFlags
+    {
+        public enum Enum
+        {
+            None,
+            Opaque = 1
+        };
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    build_flags = ast.enums[0]
+    geometry_type = ast.enums[1]
+    nested_enum = ast.structs[0].enums[0]
+
+    assert build_flags.name == "AccelerationStructureBuildFlags"
+    assert build_flags.qualifiers == ["public"]
+    assert build_flags.members[1][0] == "AllowUpdate"
+    assert build_flags.members[1][1] == "1"
+
+    assert geometry_type.name == "GeometryType"
+    assert geometry_type.kind == "class"
+    assert geometry_type.qualifiers == ["public"]
+
+    assert nested_enum.name == "Enum"
+    assert nested_enum.qualifiers == ["public"]
+    assert nested_enum.members[1][0] == "Opaque"
+
+
 def test_nested_struct_declaration_in_struct_parses():
     code = """
     interface IAssoc

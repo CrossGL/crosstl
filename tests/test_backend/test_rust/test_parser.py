@@ -5062,6 +5062,32 @@ def test_rust_gpu_mouse_shader_tuple_struct_destructure_parse():
     assert method.body[1].value.op == "-"
 
 
+def test_rust_gpu_reduce_shader_inferred_cast_target_parse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/reduce/src/lib.rs subgroup_add EXECUTION const.
+    code = """
+    use spirv_std::memory::Scope;
+
+    pub unsafe fn subgroup_add(value: u32) -> u32 {
+        const EXECUTION: u32 = Scope::Subgroup as _;
+        let mut result = 0;
+        result
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+    execution = function.body[0]
+
+    assert isinstance(execution, ConstNode)
+    assert execution.name == "EXECUTION"
+    assert execution.vtype == "u32"
+    assert isinstance(execution.value, CastNode)
+    assert execution.value.target_type == "_"
+    assert execution.value.expression == "Scope::Subgroup"
+
+
 def test_rust_gpu_builder_mut_self_receiver_parse():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

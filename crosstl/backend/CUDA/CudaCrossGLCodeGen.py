@@ -4242,6 +4242,8 @@ class CudaToCrossGLConverter:
 
         if function_name == "__saturatef" and len(args) == 1:
             return f"clamp({args[0]}, 0.0f, 1.0f)"
+        if function_name == "__fdividef" and len(args) == 2:
+            return f"({args[0]} / {args[1]})"
 
         return None
 

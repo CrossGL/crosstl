@@ -3608,8 +3608,7 @@ class RustToCrossGLConverter:
                 indent,
                 loop_contexts,
             )
-            target_type = self.map_type(expression.target_type)
-            return code, f"({target_type}){value}"
+            return code, self.format_cast_expression(expression.target_type, value)
 
         if isinstance(expression, ReferenceNode):
             return self.generate_try_expression(
@@ -7672,8 +7671,7 @@ class RustToCrossGLConverter:
                 indent,
                 loop_contexts,
             )
-            target_type = self.map_type(expression.target_type)
-            return code, f"({target_type}){value}"
+            return code, self.format_cast_expression(expression.target_type, value)
 
         if isinstance(expression, ReferenceNode):
             return self.generate_materialized_expression(
@@ -7990,8 +7988,7 @@ class RustToCrossGLConverter:
             return self.generate_try_unwrap(self.generate_expression(expr.expression))
         elif isinstance(expr, CastNode):
             expression = self.generate_expression(expr.expression)
-            target_type = self.map_type(expr.target_type)
-            return f"({target_type}){expression}"
+            return self.format_cast_expression(expr.target_type, expression)
         elif isinstance(expr, ReferenceNode):
             # References are handled differently in CrossGL
             return self.generate_expression(expr.expression)
@@ -8031,6 +8028,15 @@ class RustToCrossGLConverter:
         if isinstance(arg, str):
             return self.normalize_macro_body(arg)
         return self.generate_expression(arg)
+
+    def format_cast_expression(self, target_type, expression):
+        if target_type == "_":
+            return expression
+
+        mapped_type = self.map_type(target_type)
+        if mapped_type == "_":
+            return expression
+        return f"({mapped_type}){expression}"
 
     def normalize_macro_body(self, body):
         return body.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
