@@ -1276,6 +1276,180 @@ def _provenance_contract_reasons(index: int, artifact: Mapping[str, Any]) -> lis
     return reasons
 
 
+def _count_field_contract_reasons(
+    prefix: str, value: Any, expected: int, source_name: str
+) -> list[str]:
+    if not _is_non_negative_int(value):
+        return [f"{prefix} must be a non-negative integer"]
+    if value != expected:
+        return [f"{prefix} must match {source_name}"]
+    return []
+
+
+def _mapping_field_contract_reasons(
+    prefix: str, value: Any, expected: Mapping[str, Any], source_name: str
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    if dict(value) != dict(expected):
+        return [f"{prefix} must match {source_name}"]
+    return []
+
+
+def _payload_diagnostic_counts(
+    diagnostics: Sequence[Any],
+) -> dict[str, int] | None:
+    if not all(isinstance(diagnostic, Mapping) for diagnostic in diagnostics):
+        return None
+    return _diagnostic_payload_counts(diagnostics)
+
+
+def _payload_unit_counts_by_source_backend(units: Sequence[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            continue
+        source_backend = unit.get("sourceBackend")
+        if not _is_non_empty_string(source_backend):
+            continue
+        counts[source_backend] = counts.get(source_backend, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _payload_artifact_records(artifacts: Sequence[Any]) -> list[Mapping[str, Any]]:
+    return [artifact for artifact in artifacts if isinstance(artifact, Mapping)]
+
+
+def _diagnostic_counts_contract_reasons(
+    prefix: str, value: Any, diagnostics: Sequence[Any]
+) -> list[str]:
+    expected = _payload_diagnostic_counts(diagnostics)
+    if expected is None:
+        return []
+    return _mapping_field_contract_reasons(prefix, value, expected, "diagnostics")
+
+
+def _summary_contract_reasons(
+    report: Mapping[str, Any],
+    project: Any,
+    units: Any,
+    skipped: Any,
+    artifacts: Any,
+    diagnostics: Any,
+) -> list[str]:
+    if "summary" not in report:
+        return []
+
+    summary = report.get("summary")
+    if not isinstance(summary, Mapping):
+        return ["summary must be an object"]
+
+    reasons = []
+    if isinstance(units, list):
+        reasons.extend(
+            _count_field_contract_reasons(
+                "summary.unitCount",
+                summary.get("unitCount"),
+                len(units),
+                "units length",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.unitsBySourceBackend",
+                summary.get("unitsBySourceBackend"),
+                _payload_unit_counts_by_source_backend(units),
+                "units",
+            )
+        )
+    if isinstance(skipped, list):
+        reasons.extend(
+            _count_field_contract_reasons(
+                "summary.skippedCount",
+                summary.get("skippedCount"),
+                len(skipped),
+                "skipped length",
+            )
+        )
+    if isinstance(project, Mapping):
+        targets = project.get("targets", [])
+        if isinstance(targets, list):
+            reasons.extend(
+                _count_field_contract_reasons(
+                    "summary.targetCount",
+                    summary.get("targetCount"),
+                    len(targets),
+                    "project.targets length",
+                )
+            )
+    if isinstance(artifacts, list):
+        artifact_records = _payload_artifact_records(artifacts)
+        translated_count = sum(
+            1 for artifact in artifact_records if artifact.get("status") == "translated"
+        )
+        failed_count = sum(
+            1 for artifact in artifact_records if artifact.get("status") == "failed"
+        )
+        reasons.extend(
+            _count_field_contract_reasons(
+                "summary.artifactCount",
+                summary.get("artifactCount"),
+                len(artifacts),
+                "artifacts length",
+            )
+        )
+        reasons.extend(
+            _count_field_contract_reasons(
+                "summary.translatedCount",
+                summary.get("translatedCount"),
+                translated_count,
+                "translated artifacts",
+            )
+        )
+        reasons.extend(
+            _count_field_contract_reasons(
+                "summary.failedCount",
+                summary.get("failedCount"),
+                failed_count,
+                "failed artifacts",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.artifactsByTarget",
+                summary.get("artifactsByTarget"),
+                _artifact_counts_by_target(artifact_records),
+                "artifacts",
+            )
+        )
+        source_map_counts = _source_map_counts(artifact_records)
+        reasons.extend(
+            _count_field_contract_reasons(
+                "summary.sourceMapCount",
+                summary.get("sourceMapCount"),
+                source_map_counts["sourceMapCount"],
+                "artifact source maps",
+            )
+        )
+        reasons.extend(
+            _count_field_contract_reasons(
+                "summary.fineGrainedSourceMapCount",
+                summary.get("fineGrainedSourceMapCount"),
+                source_map_counts["fineGrainedSourceMapCount"],
+                "artifact source maps",
+            )
+        )
+    if isinstance(diagnostics, list):
+        reasons.extend(
+            _diagnostic_counts_contract_reasons(
+                "summary.diagnosticCounts",
+                summary.get("diagnosticCounts"),
+                diagnostics,
+            )
+        )
+    return reasons
+
+
 def _source_map_span_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
@@ -1355,6 +1529,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         return [_invalid_report_diagnostic(path, ["expected a JSON object"])]
 
     reasons = []
+    has_summary = "summary" in report
     if report.get("schemaVersion") != REPORT_SCHEMA_VERSION:
         reasons.append(f"expected schemaVersion {REPORT_SCHEMA_VERSION}")
     if report.get("kind") != REPORT_KIND:
@@ -1384,7 +1559,23 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         if not _is_non_empty_string(output_dir):
             reasons.append("project.outputDir must be a string")
 
+    units = report.get("units", [])
+    if has_summary and "units" not in report:
+        reasons.append("units must be a list")
+    if has_summary or "units" in report:
+        if not isinstance(units, list):
+            reasons.append("units must be a list")
+
+    skipped = report.get("skipped", [])
+    if has_summary and "skipped" not in report:
+        reasons.append("skipped must be a list")
+    if has_summary or "skipped" in report:
+        if not isinstance(skipped, list):
+            reasons.append("skipped must be a list")
+
     artifacts = report.get("artifacts", [])
+    if has_summary and "artifacts" not in report:
+        reasons.append("artifacts must be a list")
     if not isinstance(artifacts, list):
         reasons.append("artifacts must be a list")
     else:
@@ -1427,6 +1618,8 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             reasons.extend(_source_map_contract_reasons(index, artifact))
 
     diagnostics = report.get("diagnostics", [])
+    if has_summary and "diagnostics" not in report:
+        reasons.append("diagnostics must be a list")
     if not isinstance(diagnostics, list):
         reasons.append("diagnostics must be a list")
     else:
@@ -1461,6 +1654,18 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"diagnostics[{index}].missingCapabilities must be a list of strings"
                 )
+
+    if "diagnosticCounts" in report and isinstance(diagnostics, list):
+        reasons.extend(
+            _diagnostic_counts_contract_reasons(
+                "diagnosticCounts", report.get("diagnosticCounts"), diagnostics
+            )
+        )
+    reasons.extend(
+        _summary_contract_reasons(
+            report, project, units, skipped, artifacts, diagnostics
+        )
+    )
 
     return [_invalid_report_diagnostic(path, reasons)] if reasons else []
 

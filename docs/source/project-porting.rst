@@ -142,9 +142,9 @@ Project reports are JSON documents with:
   diagnostic contract.
 - ``validation``: report contract checks, failed source artifact checks,
   project metadata checks, artifact record shape checks, source hash and
-  provenance checks, source-map record shape checks, preserved diagnostic shape
-  checks, artifact target declaration checks, translated artifact existence
-  checks, escaped artifact-path checks, optional external toolchain
-  availability, and opt-in toolchain smoke results.
+  provenance checks, source-map record shape checks, summary consistency checks,
+  preserved diagnostic shape checks, artifact target declaration checks,
+  translated artifact existence checks, escaped artifact-path checks, optional
+  external toolchain availability, and opt-in toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation.

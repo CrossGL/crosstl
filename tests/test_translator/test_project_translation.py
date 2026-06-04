@@ -992,6 +992,109 @@ def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
     )
 
 
+def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-summary-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "summary": {
+                    "unitCount": 2,
+                    "skippedCount": 1,
+                    "targetCount": 2,
+                    "artifactCount": 2,
+                    "translatedCount": 0,
+                    "failedCount": 1,
+                    "diagnosticCounts": {"note": 0, "warning": 0, "error": 0},
+                    "unitsBySourceBackend": {"metal": 1},
+                    "artifactsByTarget": {
+                        "metal": {
+                            "artifactCount": 1,
+                            "translatedCount": 1,
+                            "failedCount": 0,
+                        }
+                    },
+                    "sourceMapCount": 1,
+                    "fineGrainedSourceMapCount": 1,
+                },
+                "units": [
+                    {
+                        "id": "simple.cgl",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "extension": ".cgl",
+                    }
+                ],
+                "skipped": [],
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "opengl",
+                        "path": "out/opengl/simple.glsl",
+                        "status": "translated",
+                    }
+                ],
+                "diagnosticCounts": {"note": 1, "warning": 0, "error": 0},
+                "diagnostics": [
+                    {
+                        "severity": "warning",
+                        "code": "project.scan.missing-source-root",
+                        "message": "Configured source root does not exist.",
+                        "location": {
+                            "file": "crosstl.toml",
+                            "line": 1,
+                            "column": 1,
+                            "offset": 0,
+                            "length": 0,
+                            "endLine": 1,
+                            "endColumn": 1,
+                            "endOffset": 0,
+                        },
+                        "missingCapabilities": ["repo.scan"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "summary.unitCount must match units length" in diagnostic["message"]
+    assert "summary.skippedCount must match skipped length" in diagnostic["message"]
+    assert "summary.targetCount must match project.targets length" in (
+        diagnostic["message"]
+    )
+    assert "summary.artifactCount must match artifacts length" in (
+        diagnostic["message"]
+    )
+    assert "summary.translatedCount must match translated artifacts" in (
+        diagnostic["message"]
+    )
+    assert "summary.diagnosticCounts must match diagnostics" in diagnostic["message"]
+    assert "summary.unitsBySourceBackend must match units" in diagnostic["message"]
+    assert "summary.artifactsByTarget must match artifacts" in diagnostic["message"]
+    assert "summary.sourceMapCount must match artifact source maps" in (
+        diagnostic["message"]
+    )
+    assert "summary.fineGrainedSourceMapCount must match artifact source maps" in (
+        diagnostic["message"]
+    )
+    assert "diagnosticCounts must match diagnostics" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_artifacts_with_undeclared_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
