@@ -8572,6 +8572,30 @@ def test_rust_gpu_sky_shader_hex_default_spec_constant_codegen():
     )
 
 
+def test_rust_gpu_spec_constant_numeric_separator_metadata_codegen():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/dis/spec_constant-attr.rs max spec constant id.
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(spec_constant(id = 0xffff_ffff, default = 0xffff_ffff))]
+        max_id_and_default: u32,
+        out: &mut u32,
+    ) {
+        *out = max_id_and_default;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint max_id_and_default @ constant_id(0xffffffff)" in result
+    assert "0xffff_ffff" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_sky_shader_cfg_test_module_is_not_emitted_to_crossgl():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

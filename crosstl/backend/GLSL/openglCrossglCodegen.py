@@ -202,6 +202,10 @@ class GLSLToCrossGLConverter:
         "rayQueryGetIntersectionObjectToWorldEXT",
         "rayQueryGetIntersectionWorldToObjectEXT",
     }
+    VERTEX_BUILTIN_OUTPUT_TYPES = {
+        "gl_Position": "vec4",
+        "gl_PointSize": "float",
+    }
     DEFAULT_SHADER_TYPE = "vertex"
 
     def __init__(self, shader_type="vertex"):
@@ -884,6 +888,45 @@ class GLSLToCrossGLConverter:
         ]
         return f" {' '.join(attributes)}" if attributes else ""
 
+    def is_qualifier_only_builtin_declaration(self, var):
+        if not isinstance(var, VariableNode):
+            return False
+        if getattr(var, "vtype", ""):
+            return False
+        name = getattr(var, "name", "")
+        if name not in self.VERTEX_BUILTIN_OUTPUT_TYPES:
+            return False
+        return bool(getattr(var, "qualifiers", None) or getattr(var, "layout", None))
+
+    def qualifier_only_builtin_qualifiers(self, node):
+        qualifiers_by_name = {}
+        for var in getattr(node, "global_variables", []) or []:
+            if not self.is_qualifier_only_builtin_declaration(var):
+                continue
+            builtin_qualifiers = qualifiers_by_name.setdefault(var.name, [])
+            for qualifier in getattr(var, "qualifiers", []) or []:
+                if qualifier not in builtin_qualifiers:
+                    builtin_qualifiers.append(qualifier)
+        return qualifiers_by_name
+
+    def apply_builtin_redeclaration_qualifiers(self, vars_, qualifiers_by_name):
+        for var in vars_:
+            qualifiers = qualifiers_by_name.get(getattr(var, "name", None))
+            if not qualifiers:
+                continue
+            var_qualifiers = list(getattr(var, "qualifiers", None) or [])
+            for qualifier in qualifiers:
+                if qualifier not in var_qualifiers:
+                    var_qualifiers.append(qualifier)
+            var.qualifiers = var_qualifiers
+
+    def builtin_output_qualifiers(self, name, qualifiers_by_name):
+        qualifiers = ["out"]
+        for qualifier in qualifiers_by_name.get(name, []):
+            if qualifier not in qualifiers:
+                qualifiers.append(qualifier)
+        return qualifiers
+
     def interface_qualifier_attribute_suffix(self, var):
         block_qualifiers = {"in", "out", "inout"}
         qualifiers = [str(q).lower() for q in getattr(var, "qualifiers", []) or []]
@@ -1187,6 +1230,11 @@ class GLSLToCrossGLConverter:
                 if self._is_output_var(var):
                     self.outputs.append(var)
 
+        builtin_redeclaration_qualifiers = self.qualifier_only_builtin_qualifiers(node)
+        self.apply_builtin_redeclaration_qualifiers(
+            [*self.inputs, *self.outputs], builtin_redeclaration_qualifiers
+        )
+
         fragment_writes_depth = self.fragment_main_writes_name(node, "gl_FragDepth")
         fragment_writes_sample_mask = self.fragment_main_writes_name(
             node, "gl_SampleMask"
@@ -1194,15 +1242,40 @@ class GLSLToCrossGLConverter:
 
         # Ensure vertex stages include gl_Position
         if self.shader_type == "vertex":
-            has_position = any(
-                isinstance(var, VariableNode) and var.name == "gl_Position"
-                for var in self.outputs
-            )
-            if not has_position:
+            output_names = {
+                var.name for var in self.outputs if isinstance(var, VariableNode)
+            }
+            if "gl_Position" not in output_names:
                 builtin = VariableNode(
-                    "vec4", "gl_Position", qualifiers=["out"], semantic="gl_Position"
+                    "vec4",
+                    "gl_Position",
+                    qualifiers=self.builtin_output_qualifiers(
+                        "gl_Position", builtin_redeclaration_qualifiers
+                    ),
+                    semantic="gl_Position",
                 )
                 self.outputs.append(builtin)
+                output_names.add("gl_Position")
+
+            for name, vtype in self.VERTEX_BUILTIN_OUTPUT_TYPES.items():
+                if (
+                    name == "gl_Position"
+                    or name not in builtin_redeclaration_qualifiers
+                ):
+                    continue
+                if name in output_names:
+                    continue
+                self.outputs.append(
+                    VariableNode(
+                        vtype,
+                        name,
+                        qualifiers=self.builtin_output_qualifiers(
+                            name, builtin_redeclaration_qualifiers
+                        ),
+                        semantic=name,
+                    )
+                )
+                output_names.add(name)
 
         # Ensure fragment outputs include gl_FragColor if no outputs declared
         if (
@@ -1316,6 +1389,8 @@ class GLSLToCrossGLConverter:
 
         # Generate global variables
         for global_var in getattr(node, "global_variables", []) or []:
+            if self.is_qualifier_only_builtin_declaration(global_var):
+                continue
             if self.is_buffer_reference_forward_declaration(global_var):
                 continue
             structured_buffer_decl = self.structured_buffer_declaration(global_var)

@@ -2937,6 +2937,9 @@ class HLSLToCrossGLConverter:
         if not hlsl_type:
             return hlsl_type
         type_name = self.canonical_composite_type(str(hlsl_type))
+        matrix_alias_type = self.map_hlsl_matrix_alias_type(type_name)
+        if matrix_alias_type:
+            return matrix_alias_type
         if "<" in type_name and type_name.endswith(">"):
             base, generic_args = type_name.split("<", 1)
             base = base.strip()
@@ -3004,14 +3007,44 @@ class HLSLToCrossGLConverter:
                 return "uint"
             if re.fullmatch(r"int[2-4]", base):
                 return "u" + base
+            int_matrix_match = re.fullmatch(r"int([1-4])x([1-4])", base)
+            if int_matrix_match:
+                rows, cols = int_matrix_match.groups()
+                return f"uint{rows}x{cols}"
             if base in {"uint", "dword"} or re.fullmatch(r"uint[2-4]", base):
+                return base
+            if re.fullmatch(r"uint[1-4]x[1-4]", base):
                 return base
 
         if signedness == "signed":
-            if base == "int" or re.fullmatch(r"int[2-4]", base):
+            if (
+                base == "int"
+                or re.fullmatch(r"int[2-4]", base)
+                or re.fullmatch(r"int[1-4]x[1-4]", base)
+            ):
                 return base
 
         return text
+
+    def map_hlsl_matrix_alias_type(self, type_name):
+        matrix_match = re.fullmatch(
+            r"(float|half|double|min16float|min10float|float16_t|int|uint|bool|"
+            r"min16int|min12int|int16_t|min16uint|uint16_t)([1-4])x([1-4])",
+            str(type_name).strip(),
+        )
+        if not matrix_match:
+            return None
+
+        scalar_type, rows_text, cols_text = matrix_match.groups()
+        rows = int(rows_text)
+        cols = int(cols_text)
+        if rows == 1 and cols == 1:
+            return self.map_template_vector_type(scalar_type, 1)
+        if rows == 1:
+            return self.map_template_vector_type(scalar_type, cols)
+        if cols == 1:
+            return self.map_template_vector_type(scalar_type, rows)
+        return None
 
     def sanitize_type_name(self, type_name):
         """Convert HLSL scoped type paths into CrossGL identifier-safe names."""
@@ -3082,8 +3115,14 @@ class HLSLToCrossGLConverter:
         return f"{prefix}{components}"
 
     def map_template_matrix_type(self, scalar_type, rows, cols):
-        if rows is None or cols is None or rows < 2 or rows > 4 or cols < 2 or cols > 4:
+        if rows is None or cols is None or rows < 1 or rows > 4 or cols < 1 or cols > 4:
             return None
+        if rows == 1 and cols == 1:
+            return self.map_template_vector_type(scalar_type, 1)
+        if rows == 1:
+            return self.map_template_vector_type(scalar_type, cols)
+        if cols == 1:
+            return self.map_template_vector_type(scalar_type, rows)
         scalar_type = self.canonical_composite_type(scalar_type)
         prefixes = {
             "float": "mat",

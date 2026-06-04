@@ -1148,8 +1148,10 @@ def test_codegen_glslang_invariant_builtin_list_fixture_snippet():
 
     crossgl = generate_crossgl(fixture.code, fixture.shader_type)
 
-    assert "gl_Position @invariant;" in crossgl
-    assert "gl_PointSize @invariant;" in crossgl
+    assert "vec4 gl_Position @invariant @ gl_Position;" in crossgl
+    assert "float gl_PointSize @invariant @ gl_PointSize;" in crossgl
+    assert " gl_Position @invariant;" not in crossgl
+    assert " gl_PointSize @invariant;" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

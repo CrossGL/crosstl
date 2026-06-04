@@ -16,6 +16,7 @@ EXTERNAL_FIXTURE_SOURCES = {
         "url": "https://github.com/ROCm/rocm-examples",
         "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
         "paths": [
+            "Applications/convolution/main.hip",
             "HIP-Basic/bit_extract/main.hip",
             "HIP-Basic/cooperative_groups/main.hip",
             "HIP-Basic/device_globals/main.hip",
@@ -239,6 +240,41 @@ def test_external_rocm_saxpy_kernel_launch_crossgl_reparse():
     assert launch.kernel_name == "saxpy_kernel"
     assert "fn saxpy_kernel(" in crossgl
     assert "Kernel launch: saxpy_kernel<<<" in crossgl
+
+
+def test_external_rocm_convolution_std_array_template_extent_codegen():
+    source = """
+    const constexpr std::array<float, 5 * 5> convolution_filter_5x5 = {
+        1.0f, 3.0f, 0.0f, -2.0f, -0.0f
+    };
+
+    __constant__ float d_mask[5 * 5];
+
+    template<size_t MaskWidth = 5>
+    __global__ void convolution(const float* input,
+                                float* output,
+                                const uint2 input_dimensions) {
+        const size_t x = blockDim.x * blockIdx.x + threadIdx.x;
+        const size_t width = input_dimensions.x;
+        if(x < width) {
+            output[x] = input[x] * d_mask[x % MaskWidth];
+        }
+    }
+    """
+
+    ast, crossgl = generate_crossgl_from_hip(source)
+
+    host_filter = ast.statements[0]
+    assert isinstance(host_filter, VariableNode)
+    assert host_filter.vtype == "const std::array<float, 5*5>"
+    assert set(host_filter.qualifiers) == {"constexpr"}
+    assert (
+        "var convolution_filter_5x5: std::array<float, 5*5> = "
+        "{1.0f, 3.0f, 0.0f, (-2.0f), (-0.0f)};"
+    ) in crossgl
+    assert "ptr<std::array" not in crossgl
+    assert "@group(0) @binding(0) var<uniform> d_mask: array<f32, (5 * 5)>;" in crossgl
+    assert "fn convolution(" in crossgl
 
 
 def test_external_rocm_inline_assembly_kernel_codegen_reparse():

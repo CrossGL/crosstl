@@ -19,6 +19,8 @@ BOOK_OF_SHADERS_METAL_COMMIT = "12bb2366697cba9c5f660d54fead7bdcd73b6b8a"
 MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
 MLX_FP_QUANTIZED_COMMIT = "c52b04b650be06291e3a6ff6e98b0ef1af3ff56b"
+PYTORCH_REPO = "https://github.com/pytorch/pytorch"
+PYTORCH_BUCKETIZATION_COMMIT = "5ee1f788c7098ae5e50e49543ee7822f73cd8990"
 CANDLE_REPO = "https://github.com/huggingface/candle"
 CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
@@ -628,6 +630,39 @@ EXTERNAL_FIXTURES = [
                     return T(*(thread fp8_e4m3*)(&s));
                 } else {
                     return T(*(thread fp8_e8m0*)(&s));
+                }
+            }
+        """
+        ),
+    },
+    {
+        "name": "pytorch_bucketization_threadgroups_per_grid",
+        "repo_url": PYTORCH_REPO,
+        "commit": PYTORCH_BUCKETIZATION_COMMIT,
+        "source_path": "aten/src/ATen/native/mps/kernels/Bucketization.metal",
+        "roundtrip": True,
+        "contains": [
+            "uvec2 tgpg @gl_NumWorkGroups",
+            "tid += tptg.x * tgpg.x",
+        ],
+        "not_contains": ["@threadgroups_per_grid"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename input_t, typename output_t>
+            kernel void searchsorted(
+                constant input_t* data_in [[buffer(0)]],
+                device output_t* data_out [[buffer(2)]],
+                constant int64_t& numel_in [[buffer(5)]],
+                uint2 tgid [[threadgroup_position_in_grid]],
+                uint2 tid2 [[thread_position_in_threadgroup]],
+                uint2 tptg [[threads_per_threadgroup]],
+                uint2 tgpg [[threadgroups_per_grid]]) {
+                for (int64_t tid = tgid.x * tptg.x + tid2.x; tid < numel_in;
+                     tid += tptg.x * tgpg.x) {
+                    data_out[tid] = output_t(data_in[tid]);
                 }
             }
         """
