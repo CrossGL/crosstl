@@ -2249,6 +2249,21 @@ def _string_list_contract_reasons(prefix: str, value: Any) -> list[str]:
     return []
 
 
+def _target_list_contract_reasons(
+    prefix: str, value: Any, *, require_canonical: bool
+) -> list[str]:
+    if not isinstance(value, list) or any(
+        not _is_non_empty_string(item) for item in value
+    ):
+        return [f"{prefix} must be a list of backend names"]
+    if not require_canonical:
+        return []
+
+    if _normalized_targets(value) != value:
+        return [f"{prefix} must use normalized backend names without duplicates"]
+    return []
+
+
 def _diagnostic_location_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
@@ -3270,10 +3285,10 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             elif not root_path.is_dir():
                 reasons.append("project.root must be a directory")
         targets = project.get("targets", [])
-        if not isinstance(targets, list) or any(
-            not _is_non_empty_string(target) for target in targets
-        ):
-            reasons.append("project.targets must be a list of backend names")
+        target_reasons = _target_list_contract_reasons(
+            "project.targets", targets, require_canonical=has_summary
+        )
+        reasons.extend(target_reasons)
         output_dir = project.get("outputDir", DEFAULT_OUTPUT_DIR)
         if not _is_non_empty_string(output_dir):
             reasons.append("project.outputDir must be a string")

@@ -1994,6 +1994,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_project_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_sources",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_mismatched_source_backend",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
@@ -2039,6 +2040,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_project_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_sources",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_mismatched_source_backend",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
@@ -2084,6 +2086,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_project_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_sources",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_mismatched_source_backend",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
@@ -2166,6 +2169,7 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_project_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_sources",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_mismatched_source_backend",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_escaped_source_paths",
@@ -2177,7 +2181,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_artifact_identities",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_output_dir_outside_project"
           ],
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects report output directories that resolve outside the project root, artifact source paths that are not repository-relative, artifact records whose sources are not declared translation units, artifact source backend names that do not match declared units, duplicate artifact identities, artifact records whose targets are not declared by the report, current translated artifacts without source or generated hashes, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report. Validation artifact checks also expose source and generated hash status fields plus aggregate summary counts.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects report output directories that resolve outside the project root, artifact source paths that are not repository-relative, artifact records whose sources are not declared translation units, artifact source backend names that do not match declared units, duplicate artifact identities, artifact records whose targets are not declared by the report, full reports whose project target lists are not normalized and deduplicated, current translated artifacts without source or generated hashes, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report. Validation artifact checks also expose source and generated hash status fields plus aggregate summary counts.",
           "status": "supported"
         },
         "metal": {
@@ -2186,6 +2190,7 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_project_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_sources",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_mismatched_source_backend",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_escaped_source_paths",
@@ -2197,7 +2202,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_artifact_identities",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_output_dir_outside_project"
           ],
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects report output directories that resolve outside the project root, artifact source paths that are not repository-relative, artifact records whose sources are not declared translation units, artifact source backend names that do not match declared units, duplicate artifact identities, artifact records whose targets are not declared by the report, current translated artifacts without source or generated hashes, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report. Validation artifact checks also expose source and generated hash status fields plus aggregate summary counts.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects report output directories that resolve outside the project root, artifact source paths that are not repository-relative, artifact records whose sources are not declared translation units, artifact source backend names that do not match declared units, duplicate artifact identities, artifact records whose targets are not declared by the report, full reports whose project target lists are not normalized and deduplicated, current translated artifacts without source or generated hashes, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report. Validation artifact checks also expose source and generated hash status fields plus aggregate summary counts.",
           "status": "supported"
         },
         "opengl": {
@@ -2206,6 +2211,7 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_project_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_sources",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_mismatched_source_backend",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_escaped_source_paths",
@@ -2217,7 +2223,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_artifact_identities",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_output_dir_outside_project"
           ],
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects report output directories that resolve outside the project root, artifact source paths that are not repository-relative, artifact records whose sources are not declared translation units, artifact source backend names that do not match declared units, duplicate artifact identities, artifact records whose targets are not declared by the report, current translated artifacts without source or generated hashes, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report. Validation artifact checks also expose source and generated hash status fields plus aggregate summary counts.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects report output directories that resolve outside the project root, artifact source paths that are not repository-relative, artifact records whose sources are not declared translation units, artifact source backend names that do not match declared units, duplicate artifact identities, artifact records whose targets are not declared by the report, full reports whose project target lists are not normalized and deduplicated, current translated artifacts without source or generated hashes, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report. Validation artifact checks also expose source and generated hash status fields plus aggregate summary counts.",
           "status": "supported"
         }
       }

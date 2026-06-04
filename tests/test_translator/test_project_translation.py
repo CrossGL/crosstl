@@ -904,6 +904,29 @@ def test_validate_project_report_rejects_artifacts_with_mismatched_source_backen
     )
 
 
+def test_validate_project_report_rejects_noncanonical_project_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+    payload["project"]["targets"] = ["OpenGL", "opengl"]
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "project.targets must use normalized backend names without duplicates"
+        in diagnostic["message"]
+    )
+
+
 def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders" / "graphics"

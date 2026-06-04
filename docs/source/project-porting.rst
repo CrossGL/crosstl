@@ -72,14 +72,14 @@ Validate artifacts referenced by a report:
 
 Validation exits nonzero when the report metadata is malformed, artifact
 records, source-map records, or preserved diagnostics are malformed, artifact
-source paths are not repository-relative, artifact targets are not declared by
-the report, artifact sources are not declared translation units, embedded
-validation records reference artifacts not declared by the report, translated
-outputs are missing, artifact paths resolve outside the repository, generated
-artifact hashes no longer match the files on disk, source files with recorded
-hashes are missing or changed, or opt-in toolchain smoke checks fail. Toolchain
-smoke checks only run for translated artifacts that still exist inside the
-repository.
+source paths are not repository-relative, project target lists are not
+normalized and deduplicated, artifact targets are not declared by the report,
+artifact sources are not declared translation units, embedded validation records
+reference artifacts not declared by the report, translated outputs are missing,
+artifact paths resolve outside the repository, generated artifact hashes no
+longer match the files on disk, source files with recorded hashes are missing or
+changed, or opt-in toolchain smoke checks fail. Toolchain smoke checks only run
+for translated artifacts that still exist inside the repository.
 
 Inspect an existing report as a concise JSON or text summary:
 
@@ -197,8 +197,9 @@ Project reports are JSON documents with:
   diagnostic contract.
 - ``validation``: report contract checks, generated timestamp and generator
   metadata checks, report inspection summaries, failed
-  source artifact checks, project metadata and config count checks, unit and
-  skipped record shape checks, artifact record shape checks, source and
+  source artifact checks, project metadata, target normalization, and config
+  count checks, unit and skipped record shape checks, artifact record shape
+  checks, source and
   generated hash checks, duplicate artifact identity checks, per-artifact
   source/generated hash status fields, aggregate validation artifact and
   hash-status summary counts, provenance checks, source-map record shape and
