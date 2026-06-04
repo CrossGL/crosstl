@@ -355,6 +355,47 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_ANY_ALL_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/web.operations.frag.out
+; Reduced from OpAny/OpAll boolean-vector reductions in the fragment main body.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %value %any_out %all_out
+OpExecutionMode %main OriginUpperLeft
+OpName %value "value"
+OpName %any_out "anyOut"
+OpName %all_out "allOut"
+OpName %has_any "hasAny"
+OpName %has_all "hasAll"
+OpDecorate %value Location 0
+OpDecorate %any_out Location 0
+OpDecorate %all_out Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%bool = OpTypeBool
+%v4float = OpTypeVector %float 4
+%v4bool = OpTypeVector %bool 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_bool = OpTypePointer Output %bool
+%value = OpVariable %ptr_input_v4float Input
+%any_out = OpVariable %ptr_output_bool Output
+%all_out = OpVariable %ptr_output_bool Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %value
+%neq = OpFUnordNotEqual %v4bool %loaded %loaded
+%has_any = OpAny %bool %neq
+OpStore %any_out %has_any
+%eq = OpFOrdEqual %v4bool %loaded %loaded
+%has_all = OpAll %bool %eq
+OpStore %all_out %has_all
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_PUSH_CONSTANT_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -1759,6 +1800,21 @@ def test_glslang_opselect_codegen_reparse():
     assert "selected_mat" not in generated_code
     assert "selected_struct" not in generated_code
     assert "fv[0]" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_any_all_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_ANY_ALL_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "bool anyOut @output @location(0);" in generated_code
+    assert "bool allOut @output @location(1);" in generated_code
+    assert "anyOut = any((value != value));" in generated_code
+    assert "allOut = all((value == value));" in generated_code
+    assert "anyOut = hasAny;" not in generated_code
+    assert "allOut = hasAll;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

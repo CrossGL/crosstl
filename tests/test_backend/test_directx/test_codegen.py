@@ -764,6 +764,27 @@ def test_global_static_const_array_initializer_generates_crossgl():
     ] == [0.25, 0.75]
 
 
+def test_codegen_local_static_const_array_from_dxc_bc6hdecode():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/CodeGenHLSL/Samples/DX11/BC6HDecode.hlsl
+    output = generate_crossgl("""
+        void generate_palette_unquantized8(int i) {
+            static const int aWeight3[] = {0, 9, 18, 27, 37, 46, 55, 64};
+            int weight = aWeight3[i];
+        }
+    """)
+
+    assert "static const int aWeight3[] = {0, 9, 18, 27, 37, 46, 55, 64};" in output
+
+    shader_ast = parse_crossgl(output)
+    local_weights = shader_ast.functions[0].body.statements[0]
+    assert local_weights.name == "aWeight3"
+    assert local_weights.qualifiers == ["static", "const"]
+    assert isinstance(local_weights.var_type, ArrayType)
+    assert local_weights.var_type.size is None
+    assert isinstance(local_weights.initial_value, ArrayLiteralNode)
+
+
 def test_codegen_vertex_fragment_roundtrip():
     output = generate_crossgl(VERTEX_PIXEL_HLSL)
     assert isinstance(output, str)

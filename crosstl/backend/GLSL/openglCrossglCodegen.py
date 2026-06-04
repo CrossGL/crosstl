@@ -1781,7 +1781,13 @@ class GLSLToCrossGLConverter:
 
     def generate_for(self, node):
         init = self.generate_for_clause(node.init)
-        condition = self.generate_expression(node.condition) if node.condition else ""
+        condition_node = node.condition
+        wraps_condition_declaration = self.is_condition_declaration(condition_node)
+        condition = (
+            ""
+            if wraps_condition_declaration
+            else self.generate_expression(condition_node) if condition_node else ""
+        )
         update_node = getattr(node, "update", None) or getattr(node, "iteration", None)
         if isinstance(update_node, list):
             iteration = ", ".join(
@@ -1795,6 +1801,18 @@ class GLSLToCrossGLConverter:
 
         result = f"for ({init}; {condition}; {iteration}) {{\n"
         self.increase_indent()
+        if wraps_condition_declaration:
+            self.register_variable_type(condition_node)
+            result += (
+                self.indent()
+                + self.generate_variable_declaration(condition_node)
+                + ";\n"
+            )
+            result += self.indent() + f"if (!{condition_node.name}) {{\n"
+            self.increase_indent()
+            result += self.indent() + "break;\n"
+            self.decrease_indent()
+            result += self.indent() + "}\n"
         for statement in node.body:
             result += self.indent() + self.generate_statement(statement) + "\n"
         self.decrease_indent()

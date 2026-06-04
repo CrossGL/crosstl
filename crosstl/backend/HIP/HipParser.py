@@ -3101,7 +3101,7 @@ class HipParser:
             and function_name not in self.user_function_names
         ):
             return KernelLaunchNode(
-                args[0],
+                self.unwrap_hip_kernel_function_arg(args[0]),
                 args[1],
                 args[2],
                 args[3],
@@ -3138,7 +3138,13 @@ class HipParser:
 
     def unwrap_hip_kernel_function_arg(self, function_arg):
         if isinstance(function_arg, CastNode):
-            return function_arg.expression
+            return self.unwrap_hip_kernel_function_arg(function_arg.expression)
+        if (
+            isinstance(function_arg, FunctionCallNode)
+            and function_arg.name == "HIP_KERNEL_NAME"
+            and len(function_arg.args) == 1
+        ):
+            return function_arg.args[0]
         return function_arg
 
     def parse_kernel_launch(self, kernel_name):

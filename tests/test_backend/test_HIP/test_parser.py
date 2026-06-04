@@ -1508,6 +1508,37 @@ class TestHipParser:
         assert launch.stream == "0"
         assert launch.args == ["data", "2.0f"]
 
+    def test_rocm_rocprim_hip_kernel_name_ggl_parsing(self):
+        # Reduced from ROCm/rocPRIM commit
+        # 14cd5e3c27a4b9ae7d510823a450723a03985ac0,
+        # example/example_temporary_storage.cpp.
+        code = """
+        void host(float* device_input, float* device_output) {
+            hipLaunchKernelGGL(
+                HIP_KERNEL_NAME(example_union_storage_types<block_size, items_per_thread, int>),
+                dim3(grid_size), dim3(block_size),
+                0, 0,
+                device_input, device_output
+            );
+        }
+        """
+        ast = self.parse_code(code)
+
+        launch = ast.statements[0].body[0]
+        assert isinstance(launch, KernelLaunchNode)
+        assert launch.kernel_name == (
+            "example_union_storage_types<block_size, items_per_thread, int>"
+        )
+        assert isinstance(launch.blocks, FunctionCallNode)
+        assert launch.blocks.name == "dim3"
+        assert launch.blocks.args == ["grid_size"]
+        assert isinstance(launch.threads, FunctionCallNode)
+        assert launch.threads.name == "dim3"
+        assert launch.threads.args == ["block_size"]
+        assert launch.shared_mem == "0"
+        assert launch.stream == "0"
+        assert launch.args == ["device_input", "device_output"]
+
     def test_hip_launch_kernel_casted_packed_args_parsing(self):
         code = """
         void host(float* data, int n, int stream) {

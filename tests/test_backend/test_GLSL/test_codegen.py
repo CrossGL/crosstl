@@ -476,6 +476,32 @@ def test_codegen_comma_separated_for_updates():
     assert "for (uint i = 0; (i < 3); (++i), (++plane_index))" in crossgl
 
 
+def test_codegen_for_condition_declaration_from_glslang_debuginfo_declaration():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/spv.debuginfo.declaration.glsl.frag.
+    code = textwrap.dedent("""
+        #version 460
+
+        out vec4 outColor;
+
+        void main() {
+            int y = 0;
+            for (int x = 50; bool test = x < 53; ) {
+                y += x;
+                x += 1;
+            }
+            outColor = vec4(y);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "for (int x = 50; ; )" in crossgl
+    assert "bool test = (x < 53);" in crossgl
+    assert "if (!test)" in crossgl
+    assert "for (int x = 50; test; )" not in crossgl
+
+
 def test_codegen_logical_xor_normalizes_to_boolean_inequality():
     code = textwrap.dedent("""
         #version 450 core

@@ -250,6 +250,43 @@ def test_codegen_texture_sample_preserves_explicit_sampler_roundtrip():
     assert "albedo.sample(linearSampler, uv, level(lod))" in metal
 
 
+def test_codegen_texture2d_array_sample_preserves_array_slice_from_filament_sdl():
+    # Reduced from:
+    # Repo: https://github.com/google/filament
+    # Commit: 48881c840bca50da515f0df82b61c9a5b996b19a
+    # Path: third_party/libsdl2/src/render/metal/SDL_shaders_metal.metal
+    code = """
+    struct CopyVertexOutput {
+        float4 position [[position]];
+        float2 texcoord;
+    };
+
+    fragment float4 SDL_YUV_fragment(CopyVertexOutput vert [[stage_in]],
+                                     texture2d<float> texY [[texture(0)]],
+                                     texture2d_array<float> texUV [[texture(1)]],
+                                     sampler s [[sampler(0)]]) {
+        float3 yuv;
+        yuv.x = texY.sample(s, vert.texcoord).r;
+        yuv.y = texUV.sample(s, vert.texcoord, 0).r;
+        yuv.z = texUV.sample(s, vert.texcoord, 1).r;
+        return float4(yuv, 1.0);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "texture(texUV, s, vec3(vert.texcoord, 0)).r" in crossgl
+    assert "texture(texUV, s, vec3(vert.texcoord, 1)).r" in crossgl
+    assert "textureLod(texUV, s, vert.texcoord, 0)" not in crossgl
+    assert "textureLod(texUV, s, vert.texcoord, 1)" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "texUV.sample(s, (float3(vert.texcoord, 0)).xy" in metal
+    assert "uint((float3(vert.texcoord, 0)).z)" in metal
+    assert "texUV.sample(s, (float3(vert.texcoord, 1)).xy" in metal
+    assert "uint((float3(vert.texcoord, 1)).z)" in metal
+
+
 def test_codegen_return_type_before_stage_qualifier_from_metal_cpp_sample():
     code = """
     #include <metal_stdlib>
