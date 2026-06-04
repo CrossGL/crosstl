@@ -1011,6 +1011,50 @@ def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
     assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
 
 
+def test_validate_project_report_detects_modified_source_artifacts(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "simple.cgl"
+    source.write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report_path = repo / "portability-report.json"
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report.write_json(report_path)
+    source.write_text(SIMPLE_CROSSL + "\n// edited after report\n", encoding="utf-8")
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.source-hash-mismatch"
+    assert diagnostic["location"]["file"] == "simple.cgl"
+    assert diagnostic["target"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["source.provenance"]
+
+
+def test_validate_project_report_detects_missing_source_artifacts(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "simple.cgl"
+    source.write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report_path = repo / "portability-report.json"
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report.write_json(report_path)
+    source.unlink()
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.missing-source"
+    assert diagnostic["location"]["file"] == "simple.cgl"
+    assert diagnostic["target"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["source.provenance"]
+
+
 def test_translate_project_normalizes_and_deduplicates_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

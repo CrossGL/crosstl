@@ -74,8 +74,9 @@ Validation exits nonzero when the report metadata is malformed, artifact
 records, source-map records, or preserved diagnostics are malformed, artifact
 targets are not declared by the report, translated outputs are missing, artifact
 paths resolve outside the repository, generated artifact hashes no longer match
-the files on disk, or opt-in toolchain smoke checks fail. Toolchain smoke checks
-only run for translated artifacts that still exist inside the repository.
+the files on disk, source files with recorded hashes are missing or changed, or
+opt-in toolchain smoke checks fail. Toolchain smoke checks only run for
+translated artifacts that still exist inside the repository.
 
 Inspect an existing report as a concise JSON or text summary:
 
@@ -194,8 +195,9 @@ Project reports are JSON documents with:
   consistency checks, migration action shape checks, preserved diagnostic shape
   checks, validation result and toolchain run record shape checks, artifact
   target and variant declaration checks, translated artifact existence checks,
-  escaped artifact-path checks, generated artifact hash mismatch checks,
-  optional external toolchain availability, and opt-in toolchain smoke results.
+  escaped artifact-path checks, source artifact existence and hash mismatch
+  checks, generated artifact hash mismatch checks, optional external toolchain
+  availability, and opt-in toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. Each action has a documented kind, severity, message, and target
   list; the current project pipeline emits ``manual-runtime-integration`` for

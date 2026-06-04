@@ -5099,108 +5099,126 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "cuda": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "hip": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "mojo": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
         },
         "slang": {
           "status": "supported",
-          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, and generated artifacts whose current file hash no longer matches the report.",
+          "notes": "The portability report records report generation time and generator package version, and records every attempted artifact with source backend, target backend, output path, translation status, source hash, generated artifact hash, basic pipeline provenance, and failed records for artifact writes blocked by invalid project output paths. Validation rejects artifact records whose targets are not declared by the report, malformed source backend, source hash, generated hash, or provenance metadata, source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata"
           ]
@@ -5215,12 +5233,14 @@
       "support": {
         "directx": {
           "status": "partial",
-          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, source artifacts whose current file hash does not match the report, missing source artifacts with recorded hashes, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
@@ -5229,12 +5249,14 @@
         },
         "opengl": {
           "status": "partial",
-          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, source artifacts whose current file hash does not match the report, missing source artifacts with recorded hashes, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
@@ -5243,12 +5265,14 @@
         },
         "metal": {
           "status": "partial",
-          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, source artifacts whose current file hash does not match the report, missing source artifacts with recorded hashes, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
@@ -5257,12 +5281,14 @@
         },
         "vulkan": {
           "status": "partial",
-          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, source artifacts whose current file hash does not match the report, missing source artifacts with recorded hashes, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
@@ -5271,12 +5297,14 @@
         },
         "cuda": {
           "status": "partial",
-          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, source artifacts whose current file hash does not match the report, missing source artifacts with recorded hashes, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
@@ -5285,12 +5313,14 @@
         },
         "hip": {
           "status": "partial",
-          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, source artifacts whose current file hash does not match the report, missing source artifacts with recorded hashes, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
@@ -5299,12 +5329,14 @@
         },
         "mojo": {
           "status": "partial",
-          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, source artifacts whose current file hash does not match the report, missing source artifacts with recorded hashes, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
@@ -5313,12 +5345,14 @@
         },
         "rust": {
           "status": "partial",
-          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, source artifacts whose current file hash does not match the report, missing source artifacts with recorded hashes, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
@@ -5327,12 +5361,14 @@
         },
         "slang": {
           "status": "partial",
-          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
+          "notes": "Project reports include configured source override maps, source hashes, relative paths, source backend names, intermediate CrossGL provenance, and file-granularity artifact source-map anchors. Report validation accepts generated source maps and rejects malformed project source override metadata, source-map records, inconsistent source-map anchors, source hash records, source artifacts whose current file hash does not match the report, missing source artifacts with recorded hashes, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_file_granularity_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",

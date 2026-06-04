@@ -225,6 +225,13 @@ def _hash_matches_report(
     )
 
 
+def _resolve_report_path(config: ProjectConfig, path_value: Any) -> Path:
+    path = Path(str(path_value))
+    if not path.is_absolute():
+        path = config.root / path
+    return path.resolve()
+
+
 def _package_version() -> str:
     try:
         return importlib_metadata.version(REPORT_PACKAGE_NAME)
@@ -1457,10 +1464,7 @@ def _validate_artifacts(
     artifact_checks = []
 
     for artifact in artifacts:
-        artifact_path = Path(str(artifact["path"]))
-        if not artifact_path.is_absolute():
-            artifact_path = config.root / artifact_path
-        artifact_path = artifact_path.resolve()
+        artifact_path = _resolve_report_path(config, artifact["path"])
         artifact_inside_project = _is_relative_to(artifact_path, config.root)
         if not artifact_inside_project:
             diagnostics.append(
@@ -1493,6 +1497,54 @@ def _validate_artifacts(
         if artifact.get("variant") is not None:
             artifact_check["variant"] = artifact["variant"]
         artifact_checks.append(artifact_check)
+        source_hash = artifact.get("sourceHash")
+        if isinstance(source_hash, Mapping):
+            source_path = _resolve_report_path(config, artifact["source"])
+            source_inside_project = _is_relative_to(source_path, config.root)
+            if not source_inside_project:
+                diagnostics.append(
+                    ProjectDiagnostic(
+                        severity="error",
+                        code="project.validate.source-outside-project",
+                        message=(
+                            "Source path resolves outside the repository: "
+                            f"{artifact['source']}"
+                        ),
+                        location=SourceLocation(file=str(artifact["source"])),
+                        target=str(artifact["target"]),
+                        missing_capabilities=["source.provenance"],
+                    )
+                )
+            elif not source_path.exists():
+                diagnostics.append(
+                    ProjectDiagnostic(
+                        severity="error",
+                        code="project.validate.missing-source",
+                        message=(
+                            "Expected source artifact is missing: "
+                            f"{artifact['source']}"
+                        ),
+                        location=SourceLocation(file=str(artifact["source"])),
+                        target=str(artifact["target"]),
+                        missing_capabilities=["source.provenance"],
+                    )
+                )
+            else:
+                actual_source_hash = _source_hash(source_path)
+                if not _hash_matches_report(actual_source_hash, source_hash):
+                    diagnostics.append(
+                        ProjectDiagnostic(
+                            severity="error",
+                            code="project.validate.source-hash-mismatch",
+                            message=(
+                                "Source artifact hash does not match report: "
+                                f"{artifact['source']}"
+                            ),
+                            location=SourceLocation(file=str(artifact["source"])),
+                            target=str(artifact["target"]),
+                            missing_capabilities=["source.provenance"],
+                        )
+                    )
         if (
             artifact_inside_project
             and not exists
