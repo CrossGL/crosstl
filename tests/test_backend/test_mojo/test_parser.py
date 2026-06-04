@@ -1677,6 +1677,30 @@ def test_comptime_declarations_and_raises_function_parse():
     assert function.body[3].else_body[0].name == "raise"
 
 
+def test_multiple_with_context_managers_parse_from_mojo_gpu_puzzles():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # solutions/p02/p02.mojo main host-buffer initialization.
+    code = """
+    def main():
+        with a.map_to_host() as a_host, b.map_to_host() as b_host:
+            a_host[0] = Scalar[dtype](0)
+            b_host[0] = Scalar[dtype](1)
+    """
+    ast = parse_code(tokenize_code(code))
+    with_node = find_function(ast, "main").body[0]
+
+    assert isinstance(with_node, WithNode)
+    assert with_node.alias == "a_host"
+    assert len(with_node.contexts) == 2
+    assert [alias for _, alias in with_node.contexts] == ["a_host", "b_host"]
+    assert [context.method for context, _ in with_node.contexts] == [
+        "map_to_host",
+        "map_to_host",
+    ]
+    assert [context.object.name for context, _ in with_node.contexts] == ["a", "b"]
+
+
 def test_comptime_expression_prefix_parse_from_modular_gpu_examples():
     code = """
     def main():

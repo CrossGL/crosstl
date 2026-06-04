@@ -343,6 +343,21 @@ def test_tokenizes_attribute_with_multiple_args():
     assert_contains(values, ["color"])
 
 
+def test_tokenizes_multiline_attribute_from_apple_msl_spec():
+    code = """
+    struct FragmentIn {
+        float3 barycentric_coords [[barycentric_coord,
+                                    center_no_perspective]];
+    };
+    """
+    tokens = tokenize_code(code)
+    attributes = [value for token_type, value in tokens if token_type == "ATTRIBUTE"]
+
+    assert attributes == [
+        "[[barycentric_coord,\n                                    center_no_perspective]]"
+    ]
+
+
 def test_tokenizes_raytracing_types():
     code = """
     acceleration_structure accel;

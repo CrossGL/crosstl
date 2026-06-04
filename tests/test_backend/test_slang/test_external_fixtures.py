@@ -12,6 +12,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "726e0973b3f547c7729b86f122ff7aef8322bace",
     },
+    "shader-slang/slang-gfx-tools-2026": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "c6f104ca76a54ca1565dac54363ea763dd906de6",
+    },
     "shader-slang/slang-examples": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "bbc4b02787d427065d713c1820a33b66dc6c4117",
@@ -217,6 +221,35 @@ EXTERNAL_FIXTURES = [
             "Grey,",
             "Inferno,",
         ],
+    },
+    {
+        "id": "slang_gfx_tool_public_enums",
+        "repo": "shader-slang/slang-gfx-tools-2026",
+        "path": "tools/gfx/gfx.slang",
+        "source": (
+            """
+            public enum AccelerationStructureBuildFlags
+            {
+                None,
+                AllowUpdate = 1,
+                AllowCompaction = 2,
+            };
+
+            public enum class GeometryType
+            {
+                Triangles,
+                ProcedurePrimitives
+            };
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "enum AccelerationStructureBuildFlags {",
+            "AllowUpdate = 1,",
+            "enum GeometryType {",
+            "ProcedurePrimitives,",
+        ],
+        "not_contains": ["public enum"],
     },
     {
         "id": "falcor_texture_brace_vector_initializer",

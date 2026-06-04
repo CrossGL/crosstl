@@ -775,6 +775,11 @@ class VulkanParser:
                     )
                     if opcode.startswith("OpSpecConstant"):
                         spec_constant_ids.append(result_id)
+            elif result_id and opcode == "OpUndef" and operands:
+                constant_types[result_id] = operands[0]
+                constants[result_id] = self.spirv_assembly_undef_expression(
+                    operands[0], types
+                )
             elif result_id and opcode in {
                 "OpConstantComposite",
                 "OpSpecConstantComposite",
@@ -1311,6 +1316,13 @@ class VulkanParser:
                     names,
                     decorations,
                     constants,
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode == "OpUndef" and operands:
+                expressions[result_id] = self.spirv_assembly_undef_expression(
+                    operands[0], types
                 )
                 expression_type_ids[result_id] = operands[0]
                 continue
@@ -2165,6 +2177,20 @@ class VulkanParser:
             ("uint", "float"): "uintBitsToFloat",
         }.get((source_family, result_family))
 
+    def spirv_assembly_undef_expression(self, result_type_id, types):
+        type_name = self.spirv_type_name(result_type_id, types)
+        fallback_type = self.spirv_fallback_identifier(
+            type_name or result_type_id, "type"
+        )
+        return FunctionCallNode(f"spirvUndef_{fallback_type}", [])
+
+    def spirv_is_undef_expression(self, value):
+        return (
+            isinstance(value, FunctionCallNode)
+            and value.name.startswith("spirvUndef_")
+            and not value.args
+        )
+
     def spirv_assembly_composite_insert_expression(
         self,
         result_type_id,
@@ -2826,9 +2852,11 @@ class VulkanParser:
         return FunctionCallNode(f"spirv_{operation}", args)
 
     def spirv_constant_operand_expression(self, operand, names, constants):
+        value = constants.get(operand)
+        if self.spirv_is_undef_expression(value):
+            return value
         if names and operand in names:
             return names[operand]
-        value = constants.get(operand)
         if value is not None:
             return value
         if isinstance(operand, str) and operand.startswith("%"):

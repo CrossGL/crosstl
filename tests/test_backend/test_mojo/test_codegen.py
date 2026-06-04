@@ -510,6 +510,28 @@ def test_modular_trait_codegen_omits_abstract_contract_methods():
     assert "..." not in generated_code
 
 
+def test_multiple_with_context_managers_codegen_from_mojo_gpu_puzzles():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # solutions/p02/p02.mojo main host-buffer initialization.
+    code = """
+    def main():
+        with a.map_to_host() as a_host, b.map_to_host() as b_host:
+            a_host[0] = Scalar[dtype](0)
+            b_host[0] = Scalar[dtype](1)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "{ // with a.map_to_host() as a_host, b.map_to_host() as b_host"
+        in generated_code
+    )
+    assert "a_host[0] = Scalar[dtype](0);" in generated_code
+    assert "b_host[0] = Scalar[dtype](1);" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
 def test_function_local_imports_codegen_from_layout_tensor_gpu_docs():
     code = """
     def simd_width_example():

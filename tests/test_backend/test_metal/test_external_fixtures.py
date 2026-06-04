@@ -8,6 +8,10 @@ from crosstl.translator.parser import Parser as CrossGLParser
 
 APPLE_SAMPLE_REPO = "https://github.com/donaldwuid/apple_metal_sample_code"
 APPLE_SAMPLE_COMMIT = "0bc50e5b3670b3169855ab260e8da5ff07b53749"
+APPLE_MSL_SPEC_URL = (
+    "https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf"
+)
+APPLE_MSL_SPEC_VERSION = "2025-10-23"
 FILAMENT_REPO = "https://github.com/google/filament"
 FILAMENT_COMMIT = "48881c840bca50da515f0df82b61c9a5b996b19a"
 MOLTENVK_REPO = "https://github.com/KhronosGroup/MoltenVK"
@@ -40,6 +44,30 @@ METAL_RIPPLE_COMMIT = "125274960b1bf0184b6570afa97f097ee3d2c6b1"
 
 
 EXTERNAL_FIXTURES = [
+    {
+        "name": "apple_msl_spec_multiline_barycentric_attribute",
+        "repo_url": APPLE_MSL_SPEC_URL,
+        "commit": APPLE_MSL_SPEC_VERSION,
+        "source_path": (
+            "Metal Shading Language Specification, section 2.19 Per-Vertex Values"
+        ),
+        "roundtrip": False,
+        "contains": [
+            "vec3 barycentric_coords @barycentric_coord @center_no_perspective;"
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct fragment_in {
+                float4 position [[position]];
+                float3 barycentric_coords [[barycentric_coord,
+                                            center_no_perspective]];
+            };
+        """
+        ),
+    },
     {
         "name": "apple_modern_rendering_imported_typedef_cast",
         "repo_url": APPLE_SAMPLE_REPO,

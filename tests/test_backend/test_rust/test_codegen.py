@@ -1022,6 +1022,28 @@ def test_rust_gpu_reduce_subgroup_builtins_codegen_from_upstream_example():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_reduce_shader_inferred_cast_target_codegen():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/reduce/src/lib.rs subgroup_add EXECUTION const.
+    code = """
+    use spirv_std::memory::Scope;
+
+    pub unsafe fn subgroup_add(value: u32) -> u32 {
+        const EXECUTION: u32 = Scope::Subgroup as _;
+        let mut result = 0;
+        result
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint subgroup_add(uint value)" in result
+    assert "const uint EXECUTION = Scope::Subgroup;" in result
+    assert "(_)Scope::Subgroup" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_compute_collatz_option_chain_codegen_from_upstream_example():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

@@ -129,13 +129,17 @@ class SliceNode(ASTNode):
 class WithNode(ASTNode):
     """Node representing a Mojo with/as block."""
 
-    def __init__(self, context_expr, alias, body):
+    def __init__(self, context_expr, alias, body, contexts=None):
         self.context_expr = context_expr
         self.alias = alias
         self.body = body
+        self.contexts = contexts or [(context_expr, alias)]
 
     def __repr__(self):
-        return f"WithNode(alias={self.alias}, body={len(self.body)})"
+        return (
+            f"WithNode(contexts={len(self.contexts)}, "
+            f"alias={self.alias}, body={len(self.body)})"
+        )
 
 
 class TryExceptNode(ASTNode):

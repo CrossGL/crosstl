@@ -541,9 +541,14 @@ class MojoToCrossGLConverter:
 
     def generate_with_block(self, node, indent):
         indent_str = "    " * indent
-        context = self.generate_expression(node.context_expr)
-        alias = f" as {node.alias}" if node.alias else ""
-        code = f"{{ // with {context}{alias}\n"
+        contexts = getattr(node, "contexts", None) or [(node.context_expr, node.alias)]
+        context_items = []
+        for context_expr, alias in contexts:
+            context = self.generate_expression(context_expr)
+            if alias:
+                context += f" as {alias}"
+            context_items.append(context)
+        code = f"{{ // with {', '.join(context_items)}\n"
         if getattr(node, "body", None):
             code += self.generate_function_body(node.body, indent + 1)
         code += indent_str + "}\n"

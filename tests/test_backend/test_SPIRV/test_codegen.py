@@ -362,6 +362,34 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_UNDEF_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
+; Reduced from the core OpUndef instruction definition.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_vec
+OpExecutionMode %main OriginUpperLeft
+OpName %undef "undefValue"
+OpName %body_undef "bodyUndef"
+OpName %out_vec "outVec"
+OpDecorate %out_vec Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%undef = OpUndef %v4float
+%out_vec = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%body_undef = OpUndef %v4float
+OpStore %out_vec %undef
+OpStore %out_vec %body_undef
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SPEC_FRAGMENT_TERMINATION_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
@@ -2328,6 +2356,20 @@ def test_spirv_spec_vector_insert_dynamic_codegen_reparse():
     )
     assert "outVec = inserted;" not in generated_code
     assert "OpVectorInsertDynamic" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_spec_undef_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SPEC_UNDEF_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 outVec @output @location(0);" in generated_code
+    assert generated_code.count("outVec = spirvUndef_vec4();") == 2
+    assert "outVec = undefValue;" not in generated_code
+    assert "outVec = bodyUndef;" not in generated_code
+    assert "OpUndef" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

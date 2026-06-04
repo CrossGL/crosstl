@@ -17,7 +17,7 @@ TOKENS = tuple(
         # Preprocessor directives
         ("PREPROCESSOR", r"#[^\n]*"),
         # Metal attributes (must come before LBRACKET)
-        ("ATTRIBUTE", r"\[\[.*?\]\]"),
+        ("ATTRIBUTE", r"\[\[[\s\S]*?\]\]"),
         # Keywords - struct and type qualifiers
         ("STRUCT", r"\bstruct\b"),
         ("CONSTANT", r"\bconstant\b"),

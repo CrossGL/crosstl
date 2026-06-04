@@ -1391,18 +1391,34 @@ class MojoParser:
 
     def parse_with_statement(self):
         self.eat("WITH")
-        context_expr = self.parse_expression()
-        alias = None
-        if isinstance(context_expr, CastNode) and self.current_token[0] == "COLON":
-            alias = context_expr.target_type
-            context_expr = context_expr.expression
-        elif self.current_token[0] == "AS":
-            self.eat("AS")
-            alias = self.current_token[1]
-            self.eat("IDENTIFIER")
+        self.skip_layout_tokens()
+
+        contexts = []
+        while True:
+            context_expr = self.parse_expression()
+            alias = None
+            if isinstance(context_expr, CastNode) and self.current_token[0] in {
+                "COLON",
+                "COMMA",
+            }:
+                alias = context_expr.target_type
+                context_expr = context_expr.expression
+            elif self.current_token[0] == "AS":
+                self.eat("AS")
+                alias = self.current_token[1]
+                self.eat("IDENTIFIER")
+
+            contexts.append((context_expr, alias))
+            self.skip_layout_tokens()
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+            self.skip_layout_tokens()
+
         self.eat("COLON")
         body = self.parse_block()
-        return WithNode(context_expr, alias, body)
+        context_expr, alias = contexts[0]
+        return WithNode(context_expr, alias, body, contexts=contexts)
 
     def parse_try_except_statement(self):
         self.eat("IDENTIFIER")

@@ -1423,6 +1423,7 @@ class SlangParser:
         return conformances
 
     def parse_enum(self):
+        qualifiers = self.parse_qualifiers()
         self.eat("ENUM")
         enum_kind = None
         if self.current_token == ("IDENTIFIER", "class"):
@@ -1459,6 +1460,7 @@ class SlangParser:
         enum = EnumNode(name, members)
         enum.kind = enum_kind
         enum.underlying_type = underlying_type
+        enum.qualifiers = qualifiers
         return enum
 
     def parse_typedef(self):

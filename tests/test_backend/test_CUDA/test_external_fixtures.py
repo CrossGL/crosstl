@@ -31,6 +31,7 @@ EXTERNAL_SAMPLES = [
             "cpp/3_CUDA_Features/cdpAdvancedQuicksort/cdpAdvancedQuicksort.cu",
             "cpp/3_CUDA_Features/simpleCudaGraphs/simpleCudaGraphs.cu",
             "cpp/3_CUDA_Features/cudaTensorCoreGemm/cudaTensorCoreGemm.cu",
+            "cpp/5_Domain_Specific/BlackScholes/BlackScholes_kernel.cuh",
             "cpp/6_Performance/transpose/transpose.cu",
         ],
     },
@@ -679,6 +680,29 @@ def test_cuda_samples_box_filter_saturatef_codegen_reparse():
     assert "rgba.x = clamp(rgba.x, 0.0f, 1.0f);" in crossgl
     assert "rgba.y = clamp(rgba.y, 0.0f, 1.0f);" in crossgl
     assert "__saturatef" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_black_scholes_fdividef_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/5_Domain_Specific/BlackScholes/BlackScholes_kernel.cuh
+    source = """
+    __device__ float cndGPU(float d) {
+        float K = __fdividef(1.0f, (1.0f + 0.2316419f * fabsf(d)));
+        return K;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(body[0].value, FunctionCallNode)
+    assert body[0].value.name == "__fdividef"
+    assert "var K: f32 = (1.0f / (1.0f + (0.2316419f * abs(d))));" in crossgl
+    assert "__fdividef" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 
