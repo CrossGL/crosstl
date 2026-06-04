@@ -2062,6 +2062,34 @@ def test_keyword_style_comptime_assert_statement_parse():
     assert size_assert.args[1] == '"bad size"'
 
 
+def test_keyword_style_runtime_assert_statement_parse_from_modular_packing_kernel():
+    # Reduced from modular/modular commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # max/kernels/src/linalg/packing.mojo PackMatrixCols.run.
+    code = """
+    def run(pack_tile_dim: IndexList[2]):
+        assert (
+            pack_tile_dim[1] % Self.column_inner_size == 0
+        ), "Unimplemented tile pattern."
+        assert False, "unreachable"
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "run")
+    shape_assert = function.body[0]
+    unreachable_assert = function.body[1]
+
+    assert isinstance(shape_assert, FunctionCallNode)
+    assert not getattr(shape_assert, "is_comptime", False)
+    assert shape_assert.name == "assert"
+    assert isinstance(shape_assert.args[0], BinaryOpNode)
+    assert shape_assert.args[0].op == "=="
+    assert shape_assert.args[1] == '"Unimplemented tile pattern."'
+
+    assert isinstance(unreachable_assert, FunctionCallNode)
+    assert unreachable_assert.args == ["false", '"unreachable"']
+
+
 def test_comptime_in_expression_and_parameterized_declaration_parse():
     code = """
     def main():

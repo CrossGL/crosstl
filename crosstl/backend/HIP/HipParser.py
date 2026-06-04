@@ -250,7 +250,7 @@ class HipParser:
         "ULONGLONG4",
     }
     RESOURCE_TYPE_TOKENS = {"TEXTURE", "SURFACE", "HIPARRAY", "HIPARRAYT"}
-    ELABORATED_TYPE_TOKENS = {"STRUCT", "CLASS", "ENUM"}
+    ELABORATED_TYPE_TOKENS = {"STRUCT", "CLASS", "ENUM", "UNION"}
     CONTEXTUAL_IDENTIFIER_TOKENS = RESOURCE_TYPE_TOKENS
     HIP_IDENTIFIER_TYPE_NAMES = {
         "hipComplex",
@@ -608,6 +608,7 @@ class HipParser:
                 "STRUCT",
                 "CLASS",
                 "ENUM",
+                "UNION",
             }
         ):
             self.advance()
@@ -615,6 +616,8 @@ class HipParser:
                 return self.parse_struct()
             if self.match("CLASS"):
                 return self.parse_class()
+            if self.match("UNION"):
+                return self.parse_union()
             return self.parse_enum()
 
         if (
@@ -639,6 +642,9 @@ class HipParser:
 
         if self.match("STRUCT"):
             return self.parse_struct()
+
+        if self.match("UNION"):
+            return self.parse_union()
 
         if self.match("ENUM"):
             return self.parse_enum()
@@ -729,6 +735,8 @@ class HipParser:
             return self.parse_function_with_qualifier()
         if self.match("STRUCT"):
             return self.parse_struct()
+        if self.match("UNION"):
+            return self.parse_union()
         if self.match("ENUM"):
             return self.parse_enum()
         if self.match("CLASS"):
@@ -1395,6 +1403,61 @@ class HipParser:
 
         return StructNode(name, members)
 
+    def parse_union(self):
+        self.consume("UNION")
+
+        name = None
+        if self.match("IDENTIFIER"):
+            name = self.current_token.value
+            self.advance()
+            self.type_aliases.add(name)
+            if self.match("LT"):
+                name += self.parse_template_suffix()
+
+        self.skip_newlines()
+        members = []
+        if self.match("LBRACE"):
+            self.consume("LBRACE")
+            members = self.parse_struct_members()
+            self.consume("RBRACE")
+
+        union_node = StructNode(name, members)
+        union_node.is_union = True
+
+        self.skip_newlines()
+        declarations = self.parse_record_trailing_declarators("union", name)
+        if declarations:
+            return [union_node, *declarations]
+
+        if self.match("SEMICOLON"):
+            self.advance()
+
+        return union_node
+
+    def parse_record_trailing_declarators(self, keyword, name):
+        if not (
+            self.is_declarator_name_token()
+            or self.match("ASTERISK", "STAR", *self.TYPE_REFERENCE_TOKENS)
+        ):
+            return []
+
+        record_type = f"{keyword} {name}" if name else f"{keyword} <anonymous>"
+        declarations = [
+            self.parse_variable_declarator(record_type, [], allow_prefix=True)
+        ]
+
+        while self.match("COMMA"):
+            self.advance()
+            declarations.append(
+                self.parse_variable_declarator(record_type, [], allow_prefix=True)
+            )
+
+        self.skip_newlines()
+        if self.match("SEMICOLON"):
+            self.advance()
+
+        return declarations
+
     def parse_enum(self):
         self.consume("ENUM")
         is_scoped = False
@@ -1462,6 +1525,11 @@ class HipParser:
         while self.current_token and not self.match("RBRACE"):
             if self.match("NEWLINE", "SEMICOLON"):
                 self.advance()
+                continue
+
+            if self.match("UNION"):
+                member = self.parse_union()
+                members.extend(member if isinstance(member, list) else [member])
                 continue
 
             saved_pos = self.pos
@@ -1551,6 +1619,10 @@ class HipParser:
 
                 if self.match("STRUCT"):
                     members.append(self.parse_struct())
+                    continue
+                if self.match("UNION"):
+                    member = self.parse_union()
+                    members.extend(member if isinstance(member, list) else [member])
                     continue
                 if self.match("CLASS"):
                     members.append(self.parse_class())
@@ -2848,6 +2920,9 @@ class HipParser:
         return expr
 
     def parse_member_name(self):
+        if self.match("TEMPLATE"):
+            self.advance()
+            return self.consume_function_name()
         if self.match(*self.MEMBER_NAME_TOKENS):
             member = self.current_token.value
             self.advance()

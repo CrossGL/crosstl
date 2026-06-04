@@ -1,5 +1,7 @@
 """Reverse code generator that emits CrossGL from GLSL AST nodes."""
 
+import re
+
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -34,6 +36,9 @@ except ImportError:
     CROSSGL_KEYWORDS = {}
 
 CROSSGL_RESERVED_IDENTIFIERS = set(CROSSGL_KEYWORDS) | {"true", "false"}
+SHORT_INTEGER_LITERAL_SUFFIX_RE = re.compile(
+    r"^(?P<body>(?:0[xX][0-9a-fA-F]+|\d+))(?P<suffix>[uU][sS]|[sS])$"
+)
 
 
 class GLSLToCrossGLConverter:
@@ -1932,7 +1937,7 @@ class GLSLToCrossGLConverter:
         if isinstance(node, str):
             return node
         elif isinstance(node, NumberNode):
-            return str(node.value)
+            return self.normalize_number_literal(node.value)
         elif isinstance(node, (int, float)):
             return str(node)
         elif isinstance(node, VariableNode):
@@ -1983,6 +1988,16 @@ class GLSLToCrossGLConverter:
             return f"{{ {elements} }}"
         else:
             return str(node)
+
+    def normalize_number_literal(self, value):
+        text = str(value)
+        match = SHORT_INTEGER_LITERAL_SUFFIX_RE.match(text)
+        if not match:
+            return text
+        suffix = match.group("suffix")
+        if suffix[0].lower() == "u":
+            return f"{match.group('body')}u"
+        return match.group("body")
 
     def generate_function_call(self, node):
         structured_length = self.structured_buffer_length_call(node)

@@ -370,9 +370,9 @@ def test_vulkan_shader_examples_emboss_2d_compute_image_macro_codegen():
     assert "image2D result_image @ set(0) @ binding(1)" in result
     assert "@numthreads(16, 16, 1)" in result
     assert "let coord = ivec2((int)global_id.x, (int)global_id.y);" in result
-    assert "vec4 rgb = input_image.read(coord);" in result
+    assert "vec4 rgb = imageLoad(input_image, coord);" in result
     assert "let gray = (((rgb.x + rgb.y) + rgb.z) / 3.0);" in result
-    assert "result_image.write(coord, res);" in result
+    assert "imageStore(result_image, coord, res);" in result
 
 
 def test_rust_gpu_final_parenthesized_binary_expression_codegen():
@@ -519,8 +519,63 @@ def test_vulkan_shader_examples_oit_block_scoped_use_codegen():
     assert "fragment main_fs {" in result
     assert "// use spirv_std::memory::{Scope, Semantics}" in result
     assert "// use spirv_std::arch::atomic_exchange" in result
-    assert "current = head_index_image.read(coord).x;" in result
+    assert "current = imageLoad(head_index_image, coord).x;" in result
     assert "prev_head_idx = current;" in result
+
+
+def test_rust_gpu_image_query_and_fetch_methods_codegen_from_upstream_compiletests():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/image/{fetch.rs,query/query_size*.rs,query_levels.rs,query_samples.rs}.
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::{Image, Sampler};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] sampled_image: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 1)] storage_image: &Image!(2D, type=f32, sampled=false),
+        #[spirv(descriptor_set = 0, binding = 2)] ms_image: &Image!(2D, type=f32, sampled, multisampled),
+        #[spirv(descriptor_set = 0, binding = 3)] sampler: &Sampler,
+        output: &mut Vec4,
+        size_out: &mut UVec2,
+        storage_size_out: &mut UVec2,
+        levels_out: &mut u32,
+        samples_out: &mut u32,
+    ) {
+        let texel = sampled_image.fetch(IVec2::new(0, 1));
+        let sampled = sampled_image.sample(*sampler, Vec2::new(0.0, 1.0));
+        let stored = storage_image.read(IVec2::new(0, 1));
+        storage_image.write(UVec2::new(0, 1), stored);
+        *size_out = sampled_image.query_size_lod(0);
+        *storage_size_out = storage_image.query_size();
+        *levels_out = sampled_image.query_levels();
+        *samples_out = ms_image.query_samples();
+        *output = texel + sampled + stored;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "sampler2D sampled_image @ set(0) @ binding(0)" in result
+    assert "image2D storage_image @ set(0) @ binding(1)" in result
+    assert "sampler2DMS ms_image @ set(0) @ binding(2)" in result
+    assert "let texel = texelFetch(sampled_image, ivec2(0, 1));" in result
+    assert "let sampled = texture(sampled_image, sampler_, vec2(0.0, 1.0));" in result
+    assert "let stored = imageLoad(storage_image, ivec2(0, 1));" in result
+    assert "imageStore(storage_image, uvec2(0, 1), stored);" in result
+    assert "size_out = textureSize(sampled_image, 0);" in result
+    assert "storage_size_out = imageSize(storage_image);" in result
+    assert "levels_out = textureQueryLevels(sampled_image);" in result
+    assert "samples_out = textureSamples(ms_image);" in result
+    assert ".fetch(" not in result
+    assert ".read(" not in result
+    assert ".write(" not in result
+    assert ".query_size(" not in result
+    assert ".query_size_lod(" not in result
+    assert ".query_levels(" not in result
+    assert ".query_samples(" not in result
+    crosstl.translator.parse(result)
 
 
 def test_rust_gpu_sampled_image_generic_type_drives_resource_parameter():

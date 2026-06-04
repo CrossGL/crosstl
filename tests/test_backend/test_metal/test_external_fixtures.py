@@ -18,6 +18,7 @@ BOOK_OF_SHADERS_METAL_REPO = "https://github.com/metal-by-example/book-of-shader
 BOOK_OF_SHADERS_METAL_COMMIT = "12bb2366697cba9c5f660d54fead7bdcd73b6b8a"
 MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
+MLX_FP_QUANTIZED_COMMIT = "c52b04b650be06291e3a6ff6e98b0ef1af3ff56b"
 CANDLE_REPO = "https://github.com/huggingface/candle"
 CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
@@ -572,6 +573,33 @@ EXTERNAL_FIXTURES = [
                 float sintheta = metal::fast::sin(theta);
                 float inv_freq = metal::exp2(-d * base);
                 return float2(costheta, sintheta + inv_freq);
+            }
+        """
+        ),
+    },
+    {
+        "name": "mlx_fp_quantized_if_constexpr_dequantize_scale",
+        "repo_url": MLX_REPO,
+        "commit": MLX_FP_QUANTIZED_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/fp_quantized.h",
+        "roundtrip": True,
+        "contains": [
+            "T dequantize_scale(uint8 s)",
+            "if (group_size == 16)",
+        ],
+        "not_contains": ["if constexpr"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, int group_size>
+            static inline T dequantize_scale(uint8_t s) {
+                if constexpr (group_size == 16) {
+                    return T(*(thread fp8_e4m3*)(&s));
+                } else {
+                    return T(*(thread fp8_e8m0*)(&s));
+                }
             }
         """
         ),

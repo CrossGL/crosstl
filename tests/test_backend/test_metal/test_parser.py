@@ -1747,6 +1747,28 @@ def test_parse_union_declaration_from_mlx_random():
     assert loop.name == "r"
 
 
+def test_parse_if_constexpr_from_mlx_fp_quantized():
+    code = """
+    template <typename T, int group_size>
+    static inline T dequantize_scale(uint8_t s) {
+        if constexpr (group_size == 16) {
+            return T(*(thread fp8_e4m3*)(&s));
+        } else if constexpr (group_size == 32) {
+            return T(*(thread fp8_e8m0*)(&s));
+        } else {
+            return T(s);
+        }
+    }
+    """
+    ast = parse_ok(code)
+    if_node = ast.functions[0].body[0]
+
+    assert isinstance(if_node, IfNode)
+    assert isinstance(if_node.condition, BinaryOpNode)
+    assert len(if_node.else_if_chain) == 1
+    assert if_node.else_body
+
+
 def test_parse_preprocessor_define():
     code = """
     #define FOO 1

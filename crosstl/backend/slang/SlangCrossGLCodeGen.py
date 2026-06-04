@@ -52,6 +52,13 @@ class SlangToCrossGLConverter:
         "SampleGrad": "textureGrad",
         "Load": "texelFetch",
     }
+    GATHER_METHOD_COMPONENTS = {
+        "Gather": None,
+        "GatherRed": "0",
+        "GatherGreen": "1",
+        "GatherBlue": "2",
+        "GatherAlpha": "3",
+    }
     SAMPLEABLE_RESOURCE_TYPES = {
         "Texture1D",
         "Texture1DArray",
@@ -1368,7 +1375,10 @@ class SlangToCrossGLConverter:
         return f"imageLoad({', '.join([obj] + args)})"
 
     def generate_texture_method_call(self, expr, obj, is_main=False):
-        if expr.method not in self.SAMPLE_METHOD_MAP:
+        if (
+            expr.method not in self.SAMPLE_METHOD_MAP
+            and expr.method not in self.GATHER_METHOD_COMPONENTS
+        ):
             return None
         if not self.is_sampleable_resource_expression(expr.object):
             return None
@@ -1386,6 +1396,9 @@ class SlangToCrossGLConverter:
                 "texelFetchOffset" if len(expr.args or []) > 1 else "texelFetch"
             )
             return texture_func, args
+
+        if expr.method in self.GATHER_METHOD_COMPONENTS:
+            return self.crossgl_texture_gather_call_parts(expr, is_main)
 
         prefix, coord, extra_args = self.split_texture_sample_args(expr, is_main)
         if coord is None:
@@ -1448,6 +1461,26 @@ class SlangToCrossGLConverter:
             return "textureCompareGrad", prefix + [coord, *extra_args]
 
         return self.SAMPLE_METHOD_MAP[expr.method], prefix + [coord, *extra_args]
+
+    def crossgl_texture_gather_call_parts(self, expr, is_main=False):
+        prefix, coord, extra_args = self.split_texture_sample_args(expr, is_main)
+        if coord is None:
+            return "textureGather", prefix + extra_args
+
+        component = self.GATHER_METHOD_COMPONENTS[expr.method]
+        args = prefix + [coord]
+
+        if extra_args:
+            offset, *rest = extra_args
+            args.append(offset)
+            if component is not None:
+                args.append(component)
+            args.extend(rest)
+            return "textureGatherOffset", args
+
+        if component is not None:
+            args.append(component)
+        return "textureGather", args
 
     def format_texture_method_args(self, expr, is_main=False):
         if expr.method == "Load":

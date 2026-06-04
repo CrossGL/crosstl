@@ -141,6 +141,30 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_groupshared_array_parameter_reserved_fn",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenHLSL/groupsharedArgs/ArrTest.hlsl",
+        code=textwrap.dedent("""
+            groupshared float4 SharedArr[64];
+
+            void fn(groupshared float4 Arr[64], float F) {
+              float4 tmp = F.xxxx;
+              Arr[5] = tmp;
+            }
+
+            [numthreads(4,1,1)]
+            void main() {
+              fn(SharedArr, 6.0);
+            }
+        """).strip(),
+        contains=(
+            "groupshared vec4 SharedArr[64];",
+            "void fn_(vec4 Arr[64], float F)",
+            "fn_(SharedArr, 6.0);",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_precise_struct_member",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

@@ -779,6 +779,35 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_WEB_COMP_BARRIER_ASSEMBLY = """
+; Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Test/baseResults/web.comp.out OpControlBarrier/OpMemoryBarrier.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %outColor
+OpExecutionMode %main LocalSize 2 5 7
+OpName %outColor "outColor"
+OpDecorate %outColor Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%uint_1 = OpConstant %uint 1
+%uint_2 = OpConstant %uint 2
+%uint_264 = OpConstant %uint 264
+%uint_3400 = OpConstant %uint 3400
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_out_v4float = OpTypePointer Output %v4float
+%outColor = OpVariable %ptr_out_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpControlBarrier %uint_2 %uint_2 %uint_264
+OpMemoryBarrier %uint_1 %uint_3400
+OpMemoryBarrier %uint_2 %uint_3400
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
 ; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
 OpCapability Shader
@@ -1241,6 +1270,23 @@ def test_spirv_assembly_specialization_constant_composite_and_op_parse():
         "WORKGROUP_HEIGHT",
         "1",
     ]
+
+
+def test_glslang_web_comp_barrier_instructions_parse():
+    tokens = tokenize_code(SPIRV_GLSLANG_WEB_COMP_BARRIER_ASSEMBLY)
+    ast = parse_code(tokens)
+    body = ast.functions[0].body
+
+    assert ast.spirv_assembly is True
+    assert [stmt.name for stmt in body[:3]] == [
+        "spirvControlBarrier",
+        "spirvMemoryBarrier",
+        "spirvMemoryBarrier",
+    ]
+    assert body[0].args == ["2", "2", "264"]
+    assert body[1].args == ["1", "3400"]
+    assert body[2].args == ["2", "3400"]
+    assert isinstance(body[3], ReturnNode)
 
 
 def test_spirv_assembly_uniform_constant_resources_parse():

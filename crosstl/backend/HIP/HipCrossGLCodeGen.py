@@ -4224,6 +4224,15 @@ class HipToCrossGLConverter:
             self.pop_resource_object_hint_scope()
 
     def visit_StructNode(self, node):
+        if getattr(node, "is_union", False):
+            name = node.name or "anonymous"
+            self.emit(
+                f"// HIP union {name} represented as struct-like layout; "
+                "overlapping storage is not modeled"
+            )
+            if not node.name:
+                return
+
         self.emit(f"struct {node.name} {{")
         self.indent_level += 1
 
@@ -5870,6 +5879,7 @@ class HipToCrossGLConverter:
             hip_type = str(hip_type)
 
         hip_type = self.strip_type_qualifiers(hip_type)
+        hip_type = self.strip_union_type_keyword(hip_type)
         cooperative_group_type = self.convert_cooperative_group_type(hip_type)
         if cooperative_group_type is not None:
             return cooperative_group_type
@@ -5933,6 +5943,15 @@ class HipToCrossGLConverter:
             return self.convert_hip_pointer_type(hip_type)
 
         return type_mapping.get(hip_type, hip_type)
+
+    def strip_union_type_keyword(self, hip_type):
+        if not isinstance(hip_type, str) or not hip_type.startswith("union "):
+            return hip_type
+
+        union_type = hip_type[len("union ") :].strip()
+        if union_type.startswith("<anonymous>"):
+            union_type = f"hip_anonymous_union{union_type[len('<anonymous>') :]}"
+        return union_type
 
     def convert_hip_resource_type(self, hip_type):
         base_name, template_args = self.parse_cpp_template(hip_type)

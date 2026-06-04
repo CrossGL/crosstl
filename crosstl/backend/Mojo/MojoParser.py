@@ -947,6 +947,8 @@ class MojoParser:
         self.skip_newlines()
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "try":
             return self.parse_try_except_statement()
+        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "assert":
+            return self.parse_assert_statement()
         if self.current_token[0] in ["IMPORT", "FROM"]:
             return self.parse_import_statement()
 
@@ -1159,7 +1161,7 @@ class MojoParser:
             node.is_comptime = True
             return node
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "assert":
-            return self.parse_keyword_comptime_assert_statement()
+            return self.parse_assert_statement(is_comptime=True)
         if self.is_comptime_declaration_start():
             return self.parse_comptime_declaration(after_keyword=True)
         if self.is_comptime_expression_statement():
@@ -1195,7 +1197,7 @@ class MojoParser:
             index += 1
         return False
 
-    def parse_keyword_comptime_assert_statement(self):
+    def parse_assert_statement(self, is_comptime=False):
         self.eat("IDENTIFIER")
         if self.current_token[0] == "LPAREN":
             node = self.parse_call(VariableNode("", "assert"))
@@ -1205,11 +1207,13 @@ class MojoParser:
 
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
+            self.skip_layout_tokens()
             args.append(self.parse_expression())
 
         self.consume_statement_terminator()
         node = FunctionCallNode("assert", args)
-        node.is_comptime = True
+        if is_comptime:
+            node.is_comptime = True
         return node
 
     def is_comptime_expression_statement(self):

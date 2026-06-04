@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from crosstl.backend.GLSL.OpenglAst import ForNode, InitializerListNode
+from crosstl.backend.GLSL.OpenglAst import ForNode, InitializerListNode, UnaryOpNode
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
@@ -83,6 +83,45 @@ EXTERNAL_FIXTURES = [
                 case 2:  color = vec4(0.5); break;
                 default: color = vec4(0.0); break;
                 }
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/spv.int16.amd.frag.
+    # Reduced from AMD int16 literal and specialization-constant coverage.
+    ExternalFixture(
+        name="glslang-spv-int16-amd-short-literal-suffixes",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.int16.amd.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 450
+            #extension GL_AMD_gpu_shader_int16 : require
+
+            layout(location = 0) in flat int16_t ii16;
+            layout(location = 0) out vec4 color;
+
+            layout(constant_id = 105) const int16_t si16 = -5S;
+            layout(constant_id = 106) const uint16_t su16 = 4US;
+
+            void main()
+            {
+                const int16_t i16c[3] =
+                {
+                    0x111S,
+                    -2s,
+                    0400s,
+                };
+                const uint16_t u16c[] =
+                {
+                    0xFFFFus,
+                    65535US,
+                    0177777us,
+                };
+                int16_t signed_value = min(i16c[1], int16_t(-1s));
+                uint16_t unsigned_value = max(u16c[2], uint16_t(0us));
+                color = vec4(float(signed_value + int16_t(unsigned_value)
+                    + si16 + int16_t(su16) + ii16));
             }
         """).strip(),
     ),
@@ -667,6 +706,38 @@ def test_parse_glslang_anonymous_struct_declarator_fixture():
     assert isinstance(value.value, InitializerListNode)
 
 
+def test_parse_glslang_int16_short_literal_suffix_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-int16-amd-short-literal-suffixes"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    si16 = next(var for var in ast.constant if var.name == "si16")
+    su16 = next(var for var in ast.constant if var.name == "su16")
+    main = next(function for function in ast.functions if function.name == "main")
+    i16c = next(var for var in main.body if getattr(var, "name", None) == "i16c")
+    u16c = next(var for var in main.body if getattr(var, "name", None) == "u16c")
+
+    assert isinstance(si16.value, UnaryOpNode)
+    assert si16.value.operand.value == "5S"
+    assert si16.layout == {"constant_id": "105"}
+    assert su16.value.value == "4US"
+    assert su16.layout == {"constant_id": "106"}
+    assert [element.value for element in i16c.value.elements[0::2]] == [
+        "0x111S",
+        "0400s",
+    ]
+    assert isinstance(i16c.value.elements[1], UnaryOpNode)
+    assert i16c.value.elements[1].operand.value == "2s"
+    assert [element.value for element in u16c.value.elements] == [
+        "0xFFFFus",
+        "65535US",
+        "0177777us",
+    ]
+
+
 def test_parse_glslang_patch_contextual_identifier_fixture():
     fixture = next(
         item
@@ -927,6 +998,30 @@ def test_codegen_glslang_anonymous_struct_fixture_snippet():
 
     assert "struct AnonymousStruct0 {" in crossgl
     assert "AnonymousStruct0 e = { 1.2, 2 };" in crossgl
+
+
+def test_codegen_glslang_int16_short_literal_suffix_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-int16-amd-short-literal-suffixes"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "0x111S" not in crossgl
+    assert "0x111" in crossgl
+    assert "(-2s)" not in crossgl
+    assert "(-2)" in crossgl
+    assert "0400s" not in crossgl
+    assert "0400" in crossgl
+    assert "0xFFFFus" not in crossgl
+    assert "0xFFFFu" in crossgl
+    assert "65535US" not in crossgl
+    assert "65535u" in crossgl
+    assert "0177777us" not in crossgl
+    assert "0177777u" in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_glslang_patch_contextual_identifier_fixture_snippet():

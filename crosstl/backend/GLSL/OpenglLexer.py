@@ -13,7 +13,17 @@ HEX_NUMBER = r"0[xX][0-9a-fA-F]+"
 DECIMAL_FLOAT = r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?"
 DECIMAL_EXP = r"\d+[eE][+-]?\d+"
 DECIMAL_INT = r"\d+"
-NUMBER_SUFFIX = r"(?:[fF]|[hH][fF]|[lL][fF]|[uU](?:[lL]{1,2})?|[lL]{1,2}[uU]?)?"
+NUMBER_SUFFIX = (
+    r"(?:"
+    r"[uU][sS]|"
+    r"[sS]|"
+    r"[fF]|"
+    r"[hH][fF]|"
+    r"[lL][fF]|"
+    r"[uU](?:[lL]{1,2})?|"
+    r"[lL]{1,2}[uU]?"
+    r")?"
+)
 NUMBER_PATTERN = (
     rf"(?:{HEX_FLOAT}|{HEX_NUMBER}|{DECIMAL_FLOAT}|{DECIMAL_EXP}|{DECIMAL_INT})"
     rf"{NUMBER_SUFFIX}"

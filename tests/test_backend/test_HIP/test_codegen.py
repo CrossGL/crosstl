@@ -518,6 +518,70 @@ class TestHipCodeGen:
         assert "float3{" not in result
         assert "float3(" not in result
 
+    def test_public_rocm_hipblaslt_and_math_union_conversion(self):
+        """Covers rocm-examples hipblaslt_utils.hpp and HIP math union declarations."""
+        code = """
+        union compute_type_interface
+        {
+            float   f32;
+            double  f64;
+            int32_t i32;
+        };
+
+        void host(float a) {
+            union
+            {
+                float f;
+                int32_t i;
+            } ua{a};
+            consume(ua.i);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP union compute_type_interface represented as struct-like layout; "
+            "overlapping storage is not modeled"
+        ) in result
+        assert "struct compute_type_interface {" in result
+        assert "f32 f32;" in result
+        assert "f64 f64;" in result
+        assert "i32 i32;" in result
+        assert (
+            "// HIP union anonymous represented as struct-like layout; "
+            "overlapping storage is not modeled"
+        ) in result
+        assert "var ua: hip_anonymous_union = {a};" in result
+        assert "consume(ua.i);" in result
+        assert "union compute_type_interface {" not in result
+        assert "struct None" not in result
+
+    def test_public_rocm_hipdnn_dependent_member_template_call_conversion(self):
+        """Covers rocm-examples hipdnn_utils.hpp f.template operator()<...> calls."""
+        code = """
+        template <typename F>
+        bool run(F&& f)
+        {
+            bool allPassed = true;
+            allPassed &= f.template operator()<float, float>(TensorLayout::NCHW);
+            return allPassed;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "allPassed &= f.operator()<float, float>(TensorLayout::NCHW);" in result
+        assert ".template" not in result
+
     def test_hip_fp16_half2_types_and_intrinsics_convert_to_crossgl(self):
         code = """
         __device__ half2 fp16_ops(half2 a, half2 b, float x) {
