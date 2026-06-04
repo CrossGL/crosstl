@@ -431,6 +431,40 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_struct_bitfield_members",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/operators/swizzle/swizzleBitfield.hlsl",
+        code=textwrap.dedent("""
+            struct MyStruct
+            {
+                uint v0: 5;
+                uint v1: 15;
+                uint v2: 12;
+            };
+
+            ConstantBuffer<MyStruct> myConstBuff;
+            StructuredBuffer<MyStruct> myStructBuff;
+
+            [RootSignature("RootFlags(0), DescriptorTable(CBV(b0), SRV(t0))")]
+            float4 main(uint addr: TEXCOORD): SV_Target
+            {
+                float4 temp1 = myStructBuff[0].v2.xxxx;
+                float4 temp2 = myConstBuff.v2.xxxx;
+                return temp1 + temp2;
+            }
+        """).strip(),
+        contains=(
+            "uint v0;",
+            "uint v1;",
+            "uint v2;",
+            "ConstantBuffer<MyStruct> myConstBuff;",
+            "StructuredBuffer<MyStruct> myStructBuff;",
+            "vec4 temp1 = myStructBuff[0].v2.xxxx;",
+            "vec4 temp2 = myConstBuff.v2.xxxx;",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_block_scope_using_linalg_aliases",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

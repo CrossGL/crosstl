@@ -1856,6 +1856,7 @@ class HLSLParser:
         attributes = attributes or []
 
         array_sizes = self.parse_array_suffixes()
+        bit_width = self.parse_bitfield_width()
         semantic = None
         register = None
         packoffset = None
@@ -1893,11 +1894,26 @@ class HLSLParser:
             semantic=semantic,
         )
         var.array_sizes = array_sizes
+        var.bit_width = bit_width
         var.register = register
         var.packoffset = packoffset
         if sampler_state is not None:
             var.sampler_state = sampler_state
         return var
+
+    def parse_bitfield_width(self):
+        if self.current_token[0] != "COLON":
+            return None
+        if self.peek()[0] not in {
+            "NUMBER",
+            "HEX_NUMBER",
+            "BINARY_NUMBER",
+            "OCT_NUMBER",
+        }:
+            return None
+
+        self.eat("COLON")
+        return self.parse_expression()
 
     def skip_effect_declaration_suffixes(self):
         while self.current_token[0] == "LESS_THAN":

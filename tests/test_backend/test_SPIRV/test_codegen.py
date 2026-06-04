@@ -885,6 +885,45 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_WEB_COMP_ATOMIC_IADD_ASSEMBLY = """
+; Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Test/baseResults/web.comp.out OpAtomicIAdd on a buffer-block member.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %old_value
+OpExecutionMode %main OriginUpperLeft
+OpName %CounterBlock "CounterBlock"
+OpMemberName %CounterBlock 0 "counter"
+OpName %counter_block "counterBlock"
+OpName %old_value "oldValue"
+OpDecorate %CounterBlock Block
+OpDecorate %counter_block DescriptorSet 0
+OpDecorate %counter_block Binding 0
+OpDecorate %old_value Location 0
+OpMemberDecorate %CounterBlock 0 Offset 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%uint = OpTypeInt 32 0
+%uint_0 = OpConstant %uint 0
+%uint_1 = OpConstant %uint 1
+%int_0 = OpConstant %int 0
+%int_2 = OpConstant %int 2
+%CounterBlock = OpTypeStruct %int
+%ptr_storage_counter_block = OpTypePointer StorageBuffer %CounterBlock
+%ptr_storage_int = OpTypePointer StorageBuffer %int
+%ptr_output_int = OpTypePointer Output %int
+%counter_block = OpVariable %ptr_storage_counter_block StorageBuffer
+%old_value = OpVariable %ptr_output_int Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%counter_ptr = OpAccessChain %ptr_storage_int %counter_block %int_0
+%old = OpAtomicIAdd %int %counter_ptr %uint_1 %uint_0 %int_2
+OpStore %old_value %old
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
 ; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
 OpCapability Shader
@@ -2985,6 +3024,23 @@ def test_glslang_web_comp_barrier_instructions_codegen_reparse():
     assert "spirvControlBarrier(2, 2, 264);" in generated_code
     assert "spirvMemoryBarrier(1, 3400);" in generated_code
     assert "spirvMemoryBarrier(2, 3400);" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_web_comp_atomic_iadd_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_WEB_COMP_ATOMIC_IADD_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert (
+        "RWStructuredBuffer<CounterBlock> counterBlock @set(0) @binding(0);"
+        in generated_code
+    )
+    assert "int oldValue @output @location(0);" in generated_code
+    assert "oldValue = atomicAdd(counterBlock[0], 2);" in generated_code
+    assert "oldValue = old;" not in generated_code
+    assert "OpAtomicIAdd" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

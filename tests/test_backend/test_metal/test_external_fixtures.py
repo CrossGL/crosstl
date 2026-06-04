@@ -839,6 +839,35 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "mlx_atomic_variable_template_expression",
+        "repo_url": MLX_REPO,
+        "commit": MLX_STEEL_DEPENDENT_TEMPLATE_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/atomic.h",
+        "roundtrip": True,
+        "contains": [
+            "uint64 pack_offset = offset / packing_size_u3cT_u3e;",
+            "uint64 elem_offset = offset % packing_size_u3cT_u3e;",
+            "out_[0] = uint(pack_offset + elem_offset);",
+        ],
+        "not_contains": ["packing_size<T>"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            constexpr constant uint packing_size = sizeof(uint) / sizeof(T);
+
+            template <typename T>
+            void update_atomic_offsets(size_t offset, device uint* out) {
+                size_t pack_offset = offset / packing_size<T>;
+                size_t elem_offset = offset % packing_size<T>;
+                out[0] = uint(pack_offset + elem_offset);
+            }
+        """
+        ),
+    },
+    {
         "name": "pytorch_bucketization_threadgroups_per_grid",
         "repo_url": PYTORCH_REPO,
         "commit": PYTORCH_BUCKETIZATION_COMMIT,

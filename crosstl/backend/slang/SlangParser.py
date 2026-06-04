@@ -32,6 +32,8 @@ class SlangParser:
         "noperspective",
         "override",
         "pervertex",
+        "row_major",
+        "column_major",
         "__prefix",
         "__postfix",
         "__exported",
