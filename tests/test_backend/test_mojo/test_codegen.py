@@ -369,6 +369,25 @@ def test_list_comprehension_codegen_from_current_mojo_docs():
     assert "Unhandled expression: ListComprehensionNode" not in generated_code
 
 
+def test_dict_display_and_comprehension_codegen_from_current_mojo_docs():
+    # Reduced from https://mojolang.org/docs/reference/expressions/
+    # Version 1.0.0b1, "Collection displays" dictionaries and comprehensions.
+    code = """
+    def main():
+        var empty: Dict[String, Int] = {}
+        var ages = {"Alice": 30, "Bob": 25}
+        var dict_squares = {x: x * x for x in range(3)}
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "Dict[String, Int] empty = {};" in generated_code
+    assert 'var ages = {"Alice": 30, "Bob": 25};' in generated_code
+    assert "var dict_squares = {x: (x * x) for x in range(3)};" in generated_code
+    assert "Unhandled expression: DictLiteralNode" not in generated_code
+    assert "Unhandled expression: DictComprehensionNode" not in generated_code
+
+
 def test_dotted_type_annotation_codegen_from_modular_tiled_matmul_example():
     code = """
     def tiled_matmul_kernel(matrix_c: TileTensor):

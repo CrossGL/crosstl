@@ -1272,6 +1272,62 @@ def test_parse_template_function_prefix_from_raytracing_sample():
     assert function.params[0].array_sizes == [3]
 
 
+def test_parse_struct_template_methods_from_dxc_spirv_resource_array():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/CodeGenSPIRV/use.rvalue.for.member-expr.of.array-subscript.hlsl
+    ast = parse_code("""
+    [[vk::binding(0, 0)]] ByteAddressBuffer babuf[]: register(t0, space0);
+    [[vk::binding(0, 0)]] RWByteAddressBuffer rwbuf[]: register(u0, space0);
+
+    struct BufferAccess {
+      uint handle;
+
+      template<typename T>
+      T load(uint index) {
+        return babuf[this.handle].Load<T>(index * sizeof(T));
+      }
+
+      template<typename T>
+      void store(uint index, T value) {
+        return rwbuf[this.handle].Store<T>(index * sizeof(T), value);
+      }
+    };
+
+    struct A {
+      uint x;
+    };
+
+    [numthreads(1, 1, 1)]
+    void main(uint tid : SV_DispatchThreadId) {
+      BufferAccess buf;
+      A b = buf.load<A>(0);
+      buf.store<A>(0, b);
+    }
+    """)
+
+    babuf, rwbuf = ast.global_variables
+    buffer_access = next(
+        struct for struct in ast.structs if struct.name == "BufferAccess"
+    )
+    load_method, store_method = buffer_access.methods
+    main = ast.functions[0]
+
+    assert babuf.array_sizes == [None]
+    assert babuf.register == "t0, space0"
+    assert rwbuf.array_sizes == [None]
+    assert rwbuf.register == "u0, space0"
+    assert [(attr.name, attr.args) for attr in babuf.attributes] == [
+        ("vk::binding", [0, 0])
+    ]
+    assert [method.name for method in buffer_access.methods] == ["load", "store"]
+    assert load_method.return_type == "T"
+    assert [param.vtype for param in load_method.params] == ["uint"]
+    assert store_method.return_type == "void"
+    assert [param.vtype for param in store_method.params] == ["uint", "T"]
+    assert main.qualifier == "compute"
+    assert main.params[0].semantic == "SV_DispatchThreadId"
+
+
 def test_parse_template_specialized_struct_declarations_from_dxc_sfinae():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/SemaHLSL/template-implicit-this-sfinae.hlsl

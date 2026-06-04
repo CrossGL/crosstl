@@ -413,6 +413,10 @@ class HLSLParser:
         self.eat("IDENTIFIER")
         self.skip_template_argument_list()
 
+    def parse_template_declaration_prefixes(self):
+        while self.is_template_declaration_prefix():
+            self.parse_template_declaration_prefix()
+
     def skip_template_argument_list(self):
         self.eat("LESS_THAN")
         depth = 1
@@ -873,7 +877,9 @@ class HLSLParser:
         members = []
         methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            self.parse_template_declaration_prefixes()
             attributes = self.parse_attribute_list()
+            self.parse_template_declaration_prefixes()
             qualifiers = self.parse_qualifiers()
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
@@ -962,7 +968,9 @@ class HLSLParser:
         nested_members = []
         nested_methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            self.parse_template_declaration_prefixes()
             member_attributes = self.parse_attribute_list()
+            self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
@@ -1153,7 +1161,9 @@ class HLSLParser:
         members = []
         methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            self.parse_template_declaration_prefixes()
             attributes = self.parse_attribute_list()
+            self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
@@ -1409,7 +1419,7 @@ class HLSLParser:
             if any(self.is_vertex_input_semantic(name) for name in semantic_names):
                 return "vertex"
         for param in params:
-            if getattr(param, "semantic", None) == "SV_DispatchThreadID":
+            if str(getattr(param, "semantic", "")).upper() == "SV_DISPATCHTHREADID":
                 return "compute"
         return None
 

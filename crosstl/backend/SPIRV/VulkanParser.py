@@ -231,6 +231,12 @@ class VulkanParser:
         "BitReverse": "bitfieldReverse",
         "OuterProduct": "outerProduct",
     }
+    SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS = {
+        "IAddCarry": "spirvIAddCarry",
+        "ISubBorrow": "spirvISubBorrow",
+        "SMulExtended": "spirvSMulExtended",
+        "UMulExtended": "spirvUMulExtended",
+    }
     CROSSGL_RESERVED_IDENTIFIERS = {
         "as",
         "async",
@@ -1583,6 +1589,27 @@ class VulkanParser:
                 continue
 
             operation = opcode[2:] if opcode.startswith("Op") else opcode
+            if (
+                result_id
+                and operation in self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS
+                and len(operands) >= 3
+            ):
+                expressions[result_id] = FunctionCallNode(
+                    self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS[operation],
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operand,
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                        for operand in operands[1:]
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             if (
                 result_id
                 and operation in self.SPIRV_CORE_FUNCTIONS

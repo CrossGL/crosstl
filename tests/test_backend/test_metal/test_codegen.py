@@ -1158,6 +1158,27 @@ def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_scoped_variable_template_expression_from_mlx_gemv_masked():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: b155224b9963cd9476363b464a559232a0868000
+    # Path: mlx/backend/metal/kernels/gemv_masked.h
+    code = """
+    using namespace metal;
+
+    constant constexpr const bool has_operand_mask =
+        !metal::is_same_v<op_mask_t, nomask_t>;
+    constant constexpr const bool has_mul_operand_mask =
+        has_operand_mask && !metal::is_same_v<op_mask_t, bool>;
+    """
+    crossgl = convert(code)
+
+    assert "metal_u3a_u3ais_same_v_u3cop_mask_t_u2cnomask_t_u3e" in crossgl
+    assert "metal_u3a_u3ais_same_v_u3cop_mask_t_u2cbool_u3e" in crossgl
+    assert "is_same_v<" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_normalizes_generic_atomic_types_from_apple_msl_spec():
     # Provenance: Apple Metal Shading Language Specification, section 2.8
     # "Atomic Data Types", version 2025-10-23.

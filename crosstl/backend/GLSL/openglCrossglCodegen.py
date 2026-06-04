@@ -83,10 +83,18 @@ class GLSLToCrossGLConverter:
         "perviewext": "perview",
         "perviewnv": "perview",
     }
+    VULKAN_MEMORY_MODEL_QUALIFIER_ATTRIBUTES = {
+        "workgroupcoherent": "workgroupcoherent",
+        "subgroupcoherent": "subgroupcoherent",
+        "queuefamilycoherent": "queuefamilycoherent",
+        "shadercallcoherent": "shadercallcoherent",
+        "nonprivate": "nonprivate",
+    }
     VARIABLE_QUALIFIER_ATTRIBUTES = {
         "invariant": "invariant",
         "precise": "precise",
         "nonuniformext": "nonuniformEXT",
+        **VULKAN_MEMORY_MODEL_QUALIFIER_ATTRIBUTES,
         "lowp": "lowp",
         "mediump": "mediump",
         "highp": "highp",
@@ -665,6 +673,7 @@ class GLSLToCrossGLConverter:
         for qualifier in ("coherent", "volatile", "restrict", "readonly", "writeonly"):
             if qualifier in qualifiers:
                 attributes.append(f"@{qualifier}")
+        attributes.extend(self.vulkan_memory_model_qualifier_attributes(var))
 
         return " " + " ".join(attributes)
 
@@ -852,6 +861,7 @@ class GLSLToCrossGLConverter:
         for qualifier in ("coherent", "volatile", "restrict", "readonly", "writeonly"):
             if qualifier in qualifiers:
                 attributes.append(f"@{qualifier}")
+        attributes.extend(self.vulkan_memory_model_qualifier_attributes(var))
 
         attributes.extend(storage_attributes)
 
@@ -906,6 +916,19 @@ class GLSLToCrossGLConverter:
             for qualifier, attribute in self.VARIABLE_QUALIFIER_ATTRIBUTES.items()
             if qualifier in qualifiers
         ]
+        return f" {' '.join(attributes)}" if attributes else ""
+
+    def vulkan_memory_model_qualifier_attributes(self, var):
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
+        memory_attributes = self.VULKAN_MEMORY_MODEL_QUALIFIER_ATTRIBUTES
+        return [
+            f"@{attribute}"
+            for qualifier, attribute in memory_attributes.items()
+            if qualifier in qualifiers
+        ]
+
+    def vulkan_memory_model_qualifier_attribute_suffix(self, var):
+        attributes = self.vulkan_memory_model_qualifier_attributes(var)
         return f" {' '.join(attributes)}" if attributes else ""
 
     def is_qualifier_only_builtin_declaration(self, var):
@@ -1391,7 +1414,13 @@ class GLSLToCrossGLConverter:
                     var_type = self.convert_type(uniform.vtype)
                     var_name = uniform.name
                     array_suffix = self.array_suffix(uniform)
-                    result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
+                    attributes = self.vulkan_memory_model_qualifier_attribute_suffix(
+                        uniform
+                    )
+                    result += (
+                        self.indent()
+                        + f"{var_type} {var_name}{array_suffix}{attributes};\n"
+                    )
                 self.decrease_indent()
                 result += self.indent_str + "};\n"
 
@@ -1586,6 +1615,10 @@ class GLSLToCrossGLConverter:
                         qualifier_prefix += " "
                     semantic += self.interface_member_layout_attribute_suffix(field)
                     semantic += self.variable_qualifier_attribute_suffix(field)
+                else:
+                    semantic += self.vulkan_memory_model_qualifier_attribute_suffix(
+                        field
+                    )
             result += (
                 self.indent()
                 + f"{qualifier_prefix}{var_type} {var_name}{array_suffix}{semantic};\n"

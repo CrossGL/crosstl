@@ -999,6 +999,60 @@ def test_codegen_template_style_vector_matrix_types_and_constructors():
     parse_crossgl(output)
 
 
+def test_codegen_struct_template_methods_semantic_case_from_dxc_spirv():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/CodeGenSPIRV/use.rvalue.for.member-expr.of.array-subscript.hlsl
+    hlsl = textwrap.dedent("""
+        [[vk::binding(0, 0)]] ByteAddressBuffer babuf[]: register(t0, space0);
+        [[vk::binding(0, 0)]] RWByteAddressBuffer rwbuf[]: register(u0, space0);
+
+        struct BufferAccess {
+          uint handle;
+
+          template<typename T>
+          T load(uint index) {
+            return babuf[this.handle].Load<T>(index * sizeof(T));
+          }
+
+          template<typename T>
+          void store(uint index, T value) {
+            return rwbuf[this.handle].Store<T>(index * sizeof(T), value);
+          }
+        };
+
+        struct Data {
+          BufferAccess buf;
+          uint a0;
+        };
+
+        struct A {
+          uint x;
+        };
+
+        [[vk::push_constant]] ConstantBuffer<Data> cbuf;
+
+        [numthreads(1, 1, 1)]
+        void main(uint tid : SV_DispatchThreadId) {
+          A b = cbuf.buf.load<A>(0);
+          b.x = 12;
+          cbuf.buf.store<A>(0, b);
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ vk::binding(0, 0)" in output
+    assert "ByteAddressBuffer babuf[];" in output
+    assert "RWByteAddressBuffer rwbuf[];" in output
+    assert "ConstantBuffer<Data> cbuf;" in output
+    assert "void main(uint tid @ gl_GlobalInvocationID)" in output
+    assert "SV_DispatchThreadId" not in output
+    assert "A b = cbuf.buf.load<A>(0);" in output
+    assert "cbuf.buf.store<A>(0, b);" in output
+
+    parse_crossgl(output)
+
+
 def test_codegen_one_row_matrix_aliases_from_dxc_matrix_syntax():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/SemaHLSL/matrix-syntax.hlsl

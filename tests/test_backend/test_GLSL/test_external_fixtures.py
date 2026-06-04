@@ -174,6 +174,42 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/spv.memoryScopeSemantics.comp.
+    # Reduced from GL_KHR_memory_scope_semantics storage qualifier coverage.
+    ExternalFixture(
+        name="glslang-spv-memory-scope-semantics-qualifiers",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.memoryScopeSemantics.comp",
+        shader_type="compute",
+        code=textwrap.dedent("""
+            #version 450
+            #extension GL_KHR_memory_scope_semantics : require
+            #pragma use_vulkan_memory_model
+
+            layout(binding = 0, r32ui) workgroupcoherent uniform uimage2D imageu;
+            layout(binding = 5, r32i) nonprivate uniform iimage2D imagej[2];
+            layout(binding = 2) buffer BufferU {
+                workgroupcoherent uint x;
+            } bufferu;
+            struct A { uint x[2]; };
+            layout(binding = 4) volatile buffer BufferJ {
+                subgroupcoherent A a;
+            } bufferj[2];
+            layout(binding = 6) nonprivate uniform sampler2D samp[2];
+            layout(binding = 7) nonprivate uniform BufferK {
+                uint x;
+            } bufferk;
+
+            void main()
+            {
+                uint y = bufferu.x;
+                y = bufferj[0].a.x[1];
+                imageLoad(imagej[0], ivec2(0,0));
+                texture(samp[0], vec2(0,0));
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.longVectorLiteral234.comp.
     # Reduced from GL_EXT_long_vector local template-type declarations.
     ExternalFixture(
@@ -916,6 +952,31 @@ def test_parse_glslang_control_flow_statement_attributes_fixture():
     ]
 
 
+def test_parse_glslang_memory_scope_semantics_qualifier_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-memory-scope-semantics-qualifiers"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    imageu = next(var for var in ast.uniforms if var.name == "imageu")
+    imagej = next(var for var in ast.uniforms if var.name == "imagej")
+    samp = next(var for var in ast.uniforms if var.name == "samp")
+    bufferk = next(var for var in ast.uniforms if var.name == "bufferk")
+    buffer_u = next(struct for struct in ast.structs if struct.name == "BufferU")
+    buffer_j = next(struct for struct in ast.structs if struct.name == "BufferJ")
+
+    assert imageu.qualifiers == ["workgroupcoherent", "uniform"]
+    assert imageu.layout == {"binding": "0", "r32ui": None}
+    assert imagej.qualifiers == ["nonprivate", "uniform"]
+    assert imagej.layout == {"binding": "5", "r32i": None}
+    assert samp.qualifiers == ["nonprivate", "uniform"]
+    assert bufferk.qualifiers == ["nonprivate", "uniform"]
+    assert buffer_u.members[0].qualifiers == ["workgroupcoherent"]
+    assert buffer_j.members[0].qualifiers == ["subgroupcoherent"]
+
+
 def test_parse_glslang_long_vector_template_declarations_fixture():
     fixture = next(
         item
@@ -1352,6 +1413,24 @@ def test_codegen_glslang_control_flow_statement_attributes_fixture_snippet():
     assert "for (int i = 0; (i < 8); (++i))" in crossgl
     assert "if (cond)" in crossgl
     assert "switch (3)" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_memory_scope_semantics_qualifier_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-memory-scope-semantics-qualifiers"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "uimage2D imageu @binding(0) @r32ui @workgroupcoherent;" in crossgl
+    assert "iimage2D imagej[2] @binding(5) @r32i @nonprivate;" in crossgl
+    assert "uint x @workgroupcoherent;" in crossgl
+    assert "A a @subgroupcoherent;" in crossgl
+    assert "sampler2D samp[2] @binding(6) @nonprivate;" in crossgl
+    assert "BufferK bufferk @nonprivate;" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

@@ -366,6 +366,9 @@ class HLSLToCrossGLConverter:
             "PSIZE": "gl_PointSize",
             "FOG": "Fog",
         }
+        self.semantic_map_upper = {
+            str(key).upper(): value for key, value in self.semantic_map.items()
+        }
         self.bitwise_op_map = {
             "&": "bitAnd",
             "|": "bitOr",
@@ -3405,6 +3408,8 @@ class HLSLToCrossGLConverter:
         if mapped is None and isinstance(semantic, str):
             semantic_upper = semantic.upper()
             mapped = self.semantic_map.get(semantic_upper)
+            if mapped is None:
+                mapped = self.semantic_map_upper.get(semantic_upper)
             if mapped is None:
                 for hlsl_prefix, crossgl_semantic in (
                     ("SV_CLIPDISTANCE", "gl_ClipDistance"),
