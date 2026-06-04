@@ -178,13 +178,17 @@ def _artifact_counts_by_target(
     return {target: counts[target] for target in sorted(counts)}
 
 
+def _resolved_include_dir(config: ProjectConfig, include_dir: str) -> Path:
+    path = Path(include_dir)
+    if not path.is_absolute():
+        path = config.root / path
+    return path.resolve()
+
+
 def _resolved_include_dirs(config: ProjectConfig) -> list[str]:
     include_dirs = []
     for include_dir in config.include_dirs:
-        path = Path(include_dir)
-        if not path.is_absolute():
-            path = config.root / path
-        include_dirs.append(str(path.resolve()))
+        include_dirs.append(str(_resolved_include_dir(config, include_dir)))
     return include_dirs
 
 
@@ -330,6 +334,26 @@ def _source_root_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
                     message=f"Configured source root does not exist: {source_root}",
                     location=location,
                     missing_capabilities=["repo.scan"],
+                )
+            )
+    return diagnostics
+
+
+def _include_dir_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    location = _config_location(config)
+    for include_dir in config.include_dirs:
+        absolute_dir = _resolved_include_dir(config, include_dir)
+        if not absolute_dir.exists():
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="warning",
+                    code="project.config.missing-include-dir",
+                    message=(
+                        f"Configured include directory does not exist: {include_dir}"
+                    ),
+                    location=location,
+                    missing_capabilities=["include.resolution"],
                 )
             )
     return diagnostics
@@ -558,6 +582,7 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
     skipped: list[dict[str, Any]] = []
     diagnostics: list[ProjectDiagnostic] = _configuration_diagnostics(config)
     diagnostics.extend(_source_root_diagnostics(config))
+    diagnostics.extend(_include_dir_diagnostics(config))
     internal_exclude_patterns = _internal_exclude_patterns(config)
 
     for path in _iter_scan_candidates(config):

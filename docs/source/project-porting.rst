@@ -89,11 +89,12 @@ source roots and roots that resolve outside the repository are reported as scan
 diagnostics. Source overrides allow extensionless or non-standard files to be
 assigned to a registered source backend; invalid override backend names are
 reported as configuration diagnostics. Include directories, defines, and
-variants are recorded in project reports. Include directories and defines are
-passed to source frontends that expose preprocessor options. Named variant
-expansion through every native preprocessor remains a tracked project-porting
-capability, and reports emit structured warnings when variants are present but
-not yet expanded.
+variants are recorded in project reports. Missing include directories are
+reported as configuration diagnostics. Include directories and defines are passed
+to source frontends that expose preprocessor options. Named variant expansion
+through every native preprocessor remains a tracked project-porting capability,
+and reports emit structured warnings when variants are present but not yet
+expanded.
 
 Report Shape
 ------------

@@ -167,6 +167,7 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
     shader_dir.mkdir(parents=True)
+    (shader_dir / "include").mkdir()
     (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
     (repo / "crosstl.toml").write_text(
         textwrap.dedent("""
@@ -211,6 +212,32 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     assert {
         diagnostic["location"]["file"] for diagnostic in payload["diagnostics"]
     } == {"crosstl.toml"}
+
+
+def test_scan_project_reports_missing_include_dirs_without_hiding_units(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "main.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include_dirs = ["missing-includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report().to_json()
+
+    assert [unit.relative_path for unit in scan.units] == ["shaders/main.cgl"]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.missing-include-dir"
+    assert diagnostic["location"]["file"] == "crosstl.toml"
+    assert diagnostic["missingCapabilities"] == ["include.resolution"]
+    assert "missing-includes" in diagnostic["message"]
 
 
 def test_project_config_rejects_malformed_variant_entries(tmp_path):
