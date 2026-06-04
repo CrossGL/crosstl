@@ -109,6 +109,30 @@ def test_current_supported_rows_have_evidence():
     assert rows == []
 
 
+def test_project_report_inspection_is_first_class_support_feature():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.report_inspection"]
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Project report inspection"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "supported"
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_writes_json_summary"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_reports_truncated_sections"
+        ) in backend_support["evidence"]
+
+
 def test_support_matrix_check_writes_machine_readable_report(tmp_path):
     report_path = tmp_path / "support-matrix-check.json"
 

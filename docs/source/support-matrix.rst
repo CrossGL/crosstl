@@ -35,15 +35,15 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "46", "5", "2", "0", "0", "0"
-   "OpenGL / GLSL", "46", "5", "2", "0", "0", "0"
-   "Metal", "45", "5", "3", "0", "0", "0"
-   "Vulkan SPIR-V", "46", "5", "2", "0", "0", "0"
-   "CUDA", "41", "5", "7", "0", "0", "0"
-   "HIP", "41", "5", "7", "0", "0", "0"
-   "Mojo", "43", "5", "5", "0", "0", "0"
-   "Rust", "44", "5", "4", "0", "0", "0"
-   "Slang", "45", "5", "3", "0", "0", "0"
+   "DirectX / HLSL", "47", "5", "2", "0", "0", "0"
+   "OpenGL / GLSL", "47", "5", "2", "0", "0", "0"
+   "Metal", "46", "5", "3", "0", "0", "0"
+   "Vulkan SPIR-V", "47", "5", "2", "0", "0", "0"
+   "CUDA", "42", "5", "7", "0", "0", "0"
+   "HIP", "42", "5", "7", "0", "0", "0"
+   "Mojo", "44", "5", "5", "0", "0", "0"
+   "Rust", "45", "5", "4", "0", "0", "0"
+   "Slang", "46", "5", "3", "0", "0", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -54,9 +54,9 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "46", "5", "2", "0", "0", "0"
-   "OpenGL / GLSL", "46", "5", "2", "0", "0", "0"
-   "Metal", "45", "5", "3", "0", "0", "0"
+   "DirectX / HLSL", "47", "5", "2", "0", "0", "0"
+   "OpenGL / GLSL", "47", "5", "2", "0", "0", "0"
+   "Metal", "46", "5", "3", "0", "0", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -170,6 +170,7 @@ Each category below uses the status codes from the legend.
    "Batch project translation", "P", "P", "P", "P", "P", "P", "P", "P", "P"
    "Optional validation hooks", "D", "D", "D", "D", "D", "D", "D", "D", "D"
    "Migration action report", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Project report inspection", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Artifact manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Source provenance and source-map bridge", "P", "P", "P", "P", "P", "P", "P", "P", "P"
    "Project diagnostics", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
