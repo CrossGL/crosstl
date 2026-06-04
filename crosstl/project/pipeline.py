@@ -3539,10 +3539,11 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
     reasons.extend(_generator_contract_reasons(report, require_generator=has_summary))
 
     project = report.get("project")
+    root_path: Path | None = None
+    project_output_path: Path | None = None
     if not isinstance(project, Mapping):
         reasons.append("missing project object")
     else:
-        root_path = None
         root = project.get("root")
         if not _is_non_empty_string(root):
             reasons.append("missing project.root")
@@ -3568,6 +3569,8 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 output_path = root_path / output_path
             if not _is_relative_to(output_path, root_path):
                 reasons.append("project.outputDir must resolve inside project.root")
+            else:
+                project_output_path = output_path.resolve()
         reasons.extend(
             _project_metadata_contract_reasons(
                 project, require_full_metadata=has_summary
@@ -3646,6 +3649,15 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 path
             ):
                 reasons.append(f"artifacts[{index}].path must be repository-relative")
+            elif (
+                root_path is not None
+                and project_output_path is not None
+                and _is_non_empty_string(path)
+                and not _is_relative_to(root_path / path, project_output_path)
+            ):
+                reasons.append(
+                    f"artifacts[{index}].path must be under project.outputDir"
+                )
             source_backend = artifact.get("sourceBackend")
             if has_summary or "sourceBackend" in artifact:
                 if not _is_non_empty_string(source_backend):
