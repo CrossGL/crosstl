@@ -1677,14 +1677,19 @@ class SlangToCrossGLConverter:
 
     def crossgl_texture_call_parts(self, expr, is_main=False):
         if expr.method == "Load":
+            resource_type = self.sampleable_resource_expression_type(expr.object)
             args = self.format_texture_load_args(
                 expr.args,
                 is_main,
-                self.sampleable_resource_expression_type(expr.object),
+                resource_type,
             )
-            texture_func = (
-                "texelFetchOffset" if len(expr.args or []) > 1 else "texelFetch"
-            )
+            resource_base = self.resource_type_base(resource_type)
+            if self.is_multisample_resource_base(resource_base):
+                texture_func = "texelFetch"
+            else:
+                texture_func = (
+                    "texelFetchOffset" if len(expr.args or []) > 1 else "texelFetch"
+                )
             return texture_func, args
 
         if expr.method in self.GATHER_METHOD_COMPONENTS:
@@ -1825,8 +1830,11 @@ class SlangToCrossGLConverter:
             vector_type = arg.name
             vector_args = arg.args
 
+        base_type = str(resource_type or "").strip().split("<", 1)[0].strip()
+        if self.is_multisample_resource_base(base_type):
+            return None
+
         if vector_type in {"int4", "uint4"}:
-            base_type = str(resource_type or "").strip().split("<", 1)[0].strip()
             if base_type != "Texture3D" or len(vector_args) != 4:
                 return None
             coord_type = "ivec3" if vector_type == "int4" else "uvec3"
@@ -1858,6 +1866,14 @@ class SlangToCrossGLConverter:
             return [f"{coord_type}({x}, {y})", mip]
 
         return None
+
+    def is_multisample_resource_base(self, resource_base):
+        return resource_base in {
+            "Texture2DMS",
+            "Texture2DMSArray",
+            "Sampler2DMS",
+            "Sampler2DMSArray",
+        }
 
     def is_sampleable_resource_expression(self, expr):
         return self.sampleable_resource_expression_type(expr) is not None

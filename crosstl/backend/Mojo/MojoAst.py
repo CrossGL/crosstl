@@ -109,6 +109,31 @@ class ListComprehensionNode(ASTNode):
         )
 
 
+class DictLiteralNode(ASTNode):
+    """Node representing a Mojo dictionary display."""
+
+    def __init__(self, entries):
+        self.entries = entries
+
+    def __repr__(self):
+        return f"DictLiteralNode(entries={self.entries})"
+
+
+class DictComprehensionNode(ASTNode):
+    """Node representing a Mojo dictionary comprehension expression."""
+
+    def __init__(self, key, value, clauses):
+        self.key = key
+        self.value = value
+        self.clauses = clauses
+
+    def __repr__(self):
+        return (
+            "DictComprehensionNode("
+            f"key={self.key}, value={self.value}, clauses={self.clauses})"
+        )
+
+
 class SliceNode(ASTNode):
     """Node representing a Mojo slice index."""
 

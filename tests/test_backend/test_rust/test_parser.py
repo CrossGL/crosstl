@@ -1169,6 +1169,44 @@ def test_rust_gpu_sampled_image_generic_type_parsing():
     ]
 
 
+def test_rust_gpu_runtime_descriptor_array_parsing_from_upstream():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/storage_class/runtime_descriptor_array.rs.
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::{Image, RuntimeArray, Sampler};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] sampler: &Sampler,
+        #[spirv(descriptor_set = 0, binding = 1)] slice: &RuntimeArray<Image!(2D, type=f32, sampled)>,
+        output: &mut glam::Vec4,
+    ) {
+        let img = unsafe { slice.index(5) };
+        let v2 = glam::Vec2::new(0.0, 1.0);
+        let r1: glam::Vec4 = img.sample(*sampler, v2);
+        *output = r1;
+    }
+    """
+    ast = parse_code(code)
+
+    function = ast.functions[0]
+    assert [param.vtype for param in function.params] == [
+        "&Sampler",
+        "&RuntimeArray<Image!(2D, type = f32, sampled)>",
+        "&mut glam::Vec4",
+    ]
+    assert function.params[1].attributes[0].args == [
+        "descriptor_set",
+        "=",
+        "0",
+        "binding",
+        "=",
+        "1",
+    ]
+
+
 def test_rust_gpu_builtin_spirv_parameter_attributes_parse():
     code = """
     use spirv_std::spirv;

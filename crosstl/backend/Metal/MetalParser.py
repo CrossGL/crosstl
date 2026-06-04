@@ -140,6 +140,33 @@ OPERATOR_OVERLOAD_TOKENS = {
     "LBRACKET",
     "LPAREN",
 }
+TEMPLATE_VARIABLE_SUFFIX_FOLLOW_TOKENS = {
+    "SEMICOLON",
+    "COMMA",
+    "RPAREN",
+    "RBRACKET",
+    "RBRACE",
+    "QUESTION",
+    "COLON",
+    "AND",
+    "OR",
+    "BITWISE_OR",
+    "BITWISE_XOR",
+    "BITWISE_AND",
+    "EQUAL",
+    "NOT_EQUAL",
+    "LESS_THAN",
+    "GREATER_THAN",
+    "LESS_EQUAL",
+    "GREATER_EQUAL",
+    "SHIFT_LEFT",
+    "SHIFT_RIGHT",
+    "PLUS",
+    "MINUS",
+    "MULTIPLY",
+    "DIVIDE",
+    "MOD",
+}
 CONSTRUCTOR_TYPE_TOKENS = TYPE_TOKENS - {
     "VOID",
     "IDENTIFIER",
@@ -2649,6 +2676,14 @@ class MetalParser:
                 else:
                     node.member += suffix
                 continue
+            if self.is_template_variable_suffix(node):
+                template_args = self.parse_template_argument_suffix()
+                suffix = f"<{self.format_generic_type_tokens(template_args)}>"
+                if isinstance(node, VariableNode):
+                    node.name += suffix
+                else:
+                    node.member += suffix
+                continue
             if self.current_token[0] == "LPAREN":
                 node = self.parse_call(node)
                 continue
@@ -2768,6 +2803,24 @@ class MetalParser:
         return self.template_argument_list_followed_by_call(
             follow_token_types={"LPAREN", "SCOPE"}, require_type_like_argument=True
         )
+
+    def is_template_variable_suffix(self, node):
+        if self.current_token[0] != "LESS_THAN":
+            return False
+        if not isinstance(node, (VariableNode, MemberAccessNode)):
+            return False
+        name = node.name if isinstance(node, VariableNode) else node.member
+        if not self.is_scoped_variable_template_name(name):
+            return False
+        return self.template_argument_list_followed_by_call(
+            follow_token_types=TEMPLATE_VARIABLE_SUFFIX_FOLLOW_TOKENS,
+            require_type_like_argument=True,
+        )
+
+    def is_scoped_variable_template_name(self, name):
+        if not isinstance(name, str) or "::" not in name:
+            return False
+        return name.split("::")[-1].endswith("_v")
 
     def template_argument_list_followed_by_call(
         self, follow_token_types=None, require_type_like_argument=False

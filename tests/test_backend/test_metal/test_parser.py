@@ -16,6 +16,7 @@ from crosstl.backend.common_ast import (
     MethodCallNode,
     RangeForNode,
     TextureSampleNode,
+    UnaryOpNode,
     VectorConstructorNode,
 )
 from crosstl.backend.Metal.MetalAst import BlockNode, LambdaNode
@@ -1883,6 +1884,36 @@ def test_parse_template_qualified_static_member_declaration_from_mlx_conv():
     variable = ast.global_variables[0]
     assert variable.name == "WinogradTransforms<6,3,8>::wt_transform"
     assert len(variable.array_sizes) == 2
+
+
+def test_parse_scoped_variable_template_expression_from_mlx_gemv_masked():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: b155224b9963cd9476363b464a559232a0868000
+    # Path: mlx/backend/metal/kernels/gemv_masked.h
+    code = """
+    using namespace metal;
+
+    template <typename out_mask_t, typename op_mask_t>
+    struct GEMVKernel {
+      static constant constexpr const bool has_operand_mask =
+          !metal::is_same_v<op_mask_t, nomask_t>;
+      static constant constexpr const bool has_mul_operand_mask =
+          has_operand_mask && !metal::is_same_v<op_mask_t, bool>;
+    };
+    """
+    ast = parse_ok(code)
+
+    members = ast.structs[0].members
+    first_value = members[0].default_value
+    assert isinstance(first_value, UnaryOpNode)
+    assert first_value.op == "!"
+    assert first_value.operand.name == "metal::is_same_v<op_mask_t,nomask_t>"
+
+    second_value = members[1].default_value
+    assert isinstance(second_value, BinaryOpNode)
+    assert second_value.op == "&&"
+    assert second_value.right.operand.name == "metal::is_same_v<op_mask_t,bool>"
 
 
 def test_parse_typename_qualified_threadgroup_type_from_mlx_gemv():

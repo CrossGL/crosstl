@@ -829,6 +829,35 @@ def test_rust_gpu_sampled_image_generic_type_drives_resource_parameter():
     assert "void main(SampledImage" not in result
 
 
+def test_rust_gpu_runtime_descriptor_array_image_type_codegen_from_upstream():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/storage_class/runtime_descriptor_array.rs.
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::{Image, RuntimeArray, Sampler};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] sampler: &Sampler,
+        #[spirv(descriptor_set = 0, binding = 1)] slice: &RuntimeArray<Image!(2D, type=f32, sampled)>,
+        output: &mut glam::Vec4,
+    ) {
+        let img = unsafe { slice.index(5) };
+        let v2 = glam::Vec2::new(0.0, 1.0);
+        let r1: glam::Vec4 = img.sample(*sampler, v2);
+        *output = r1;
+    }
+    """
+    result = parse_and_generate(code)
+
+    assert "sampler sampler_ @ set(0) @ binding(0)" in result
+    assert "sampler2D slice[] @ set(0) @ binding(1)" in result
+    assert "vec4 output" in result
+    assert "RuntimeArray<Image!(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_builtin_spirv_aliases_drive_parameter_semantics():
     code = """
     use spirv_std::spirv;

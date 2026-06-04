@@ -9104,6 +9104,9 @@ class RustToCrossGLConverter:
         if base_name == "SampledImage":
             return self.map_sampled_image_generic_type(args[0])
 
+        if base_name == "RuntimeArray":
+            return f"{self.map_type(args[0])}[]"
+
         sampled_texture_map = {
             "Texture1D": "sampler1D",
             "Texture1DArray": "sampler1DArray",

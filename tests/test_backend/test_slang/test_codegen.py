@@ -1561,6 +1561,62 @@ def test_texture_load_offset_method_call_codegen():
     assert "albedo.Load" not in generated_code
 
 
+def test_texture2dms_load_sample_index_codegen_from_current_slang_core_module():
+    # Source: shader-slang/slang@564ac9f050d6569efd773e2f74e7d067a4e54baa
+    # docs/generated/tests/design/cross-cutting/core-module/texture2dms-load.slang
+    # https://github.com/shader-slang/slang/blob/564ac9f050d6569efd773e2f74e7d067a4e54baa/docs/generated/tests/design/cross-cutting/core-module/texture2dms-load.slang
+    code = """
+    Texture2DMS<float4> tex;
+    RWStructuredBuffer<float4> outBuf;
+
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 tid : SV_DispatchThreadID)
+    {
+        outBuf[tid.x] = tex.Load(int2(int(tid.x), int(tid.y)), 0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2DMS tex;" in generated_code
+    assert (
+        "outBuf[tid.x] = texelFetch(tex, "
+        "ivec2(int(tid.x), int(tid.y)), 0);" in generated_code
+    )
+    assert "texelFetchOffset(tex" not in generated_code
+    assert "tex.Load" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_texture2dms_array_load_sample_index_preserves_array_coord_codegen():
+    # Source: shader-slang/slang@564ac9f050d6569efd773e2f74e7d067a4e54baa
+    # docs/generated/tests/design/target-pipelines/spirv/texture2dmsarray-image-type.slang
+    # https://github.com/shader-slang/slang/blob/564ac9f050d6569efd773e2f74e7d067a4e54baa/docs/generated/tests/design/target-pipelines/spirv/texture2dmsarray-image-type.slang
+    code = """
+    Texture2DMSArray<float4> tex;
+    RWStructuredBuffer<float4> outBuf;
+
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 tid : SV_DispatchThreadID)
+    {
+        outBuf[tid.x] = tex.Load(int3(0, 0, 0), 0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2DMSArray tex;" in generated_code
+    assert "outBuf[tid.x] = texelFetch(tex, ivec3(0, 0, 0), 0);" in generated_code
+    assert "texelFetchOffset(tex" not in generated_code
+    assert "texelFetch(tex, ivec2(0, 0), 0, 0)" not in generated_code
+    assert "tex.Load" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_structured_buffer_load_method_codegen_from_core_module_docs():
     # Source: shader-slang/slang stdlib docs for StructuredBuffer<T,L>.Load
     # and RWStructuredBuffer<T,L>.Load define the single-index Load overload.

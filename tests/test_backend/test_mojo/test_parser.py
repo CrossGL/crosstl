@@ -12,6 +12,8 @@ from crosstl.backend.Mojo.MojoAst import (
     ClassNode,
     ConstantBufferNode,
     ContinueNode,
+    DictComprehensionNode,
+    DictLiteralNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -1875,6 +1877,35 @@ def test_list_comprehension_parse_from_current_mojo_docs():
         "for",
         "if",
     ]
+
+
+def test_dict_display_and_comprehension_parse_from_current_mojo_docs():
+    # Reduced from https://mojolang.org/docs/reference/expressions/
+    # Version 1.0.0b1, "Collection displays" dictionaries and comprehensions.
+    code = """
+    def main():
+        var empty: Dict[String, Int] = {}
+        var ages = {"Alice": 30, "Bob": 25}
+        var dict_squares = {x: x * x for x in range(3)}
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    empty = function.body[0].initial_value
+    ages = function.body[1].initial_value
+    dict_squares = function.body[2].initial_value
+
+    assert isinstance(empty, DictLiteralNode)
+    assert empty.entries == []
+
+    assert isinstance(ages, DictLiteralNode)
+    assert ages.entries == [('"Alice"', "30"), ('"Bob"', "25")]
+
+    assert isinstance(dict_squares, DictComprehensionNode)
+    assert dict_squares.key.name == "x"
+    assert isinstance(dict_squares.value, BinaryOpNode)
+    assert [(clause["kind"]) for clause in dict_squares.clauses] == ["for"]
+    assert dict_squares.clauses[0]["pattern"] == "x"
+    assert isinstance(dict_squares.clauses[0]["iterable"], FunctionCallNode)
 
 
 def test_dotted_type_annotation_parse_from_modular_tiled_matmul_example():

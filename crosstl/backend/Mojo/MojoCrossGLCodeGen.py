@@ -795,6 +795,10 @@ class MojoToCrossGLConverter:
             return f"[{elements}]"
         elif isinstance(expr, ListComprehensionNode):
             return self.generate_list_comprehension(expr)
+        elif isinstance(expr, DictLiteralNode):
+            return self.generate_dict_literal(expr)
+        elif isinstance(expr, DictComprehensionNode):
+            return self.generate_dict_comprehension(expr)
         elif isinstance(expr, SliceNode):
             return self.generate_slice_index(expr)
         elif isinstance(expr, AssignmentNode):
@@ -873,7 +877,26 @@ class MojoToCrossGLConverter:
 
     def generate_list_comprehension(self, expr):
         pieces = [self.generate_expression(expr.expression)]
-        for clause in expr.clauses:
+        pieces.extend(self.generate_comprehension_clauses(expr.clauses))
+        return f"[{' '.join(pieces)}]"
+
+    def generate_dict_literal(self, expr):
+        entries = [
+            f"{self.generate_expression(key)}: {self.generate_expression(value)}"
+            for key, value in expr.entries
+        ]
+        return f"{{{', '.join(entries)}}}"
+
+    def generate_dict_comprehension(self, expr):
+        key = self.generate_expression(expr.key)
+        value = self.generate_expression(expr.value)
+        pieces = [f"{key}: {value}"]
+        pieces.extend(self.generate_comprehension_clauses(expr.clauses))
+        return f"{{{' '.join(pieces)}}}"
+
+    def generate_comprehension_clauses(self, clauses):
+        pieces = []
+        for clause in clauses:
             if clause["kind"] == "for":
                 pattern = self.generate_comprehension_pattern(clause["pattern"])
                 iterable = self.generate_expression(clause["iterable"])
@@ -881,7 +904,7 @@ class MojoToCrossGLConverter:
             elif clause["kind"] == "if":
                 condition = self.generate_expression(clause["condition"])
                 pieces.append(f"if {condition}")
-        return f"[{' '.join(pieces)}]"
+        return pieces
 
     def generate_comprehension_pattern(self, pattern):
         if isinstance(pattern, TupleNode):

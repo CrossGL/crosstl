@@ -2326,6 +2326,56 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_EXTENDED_ARITHMETIC_ASSEMBLY = """
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/val/val_arithmetics_test.cpp
+; Reduced from ValidateArithmetics IAddCarry/SMulExtended success fixtures.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_sum %out_carry %out_low %out_high
+OpExecutionMode %main OriginUpperLeft
+OpName %out_sum "outSum"
+OpName %out_carry "outCarry"
+OpName %out_low "outLow"
+OpName %out_high "outHigh"
+OpDecorate %out_sum Location 0
+OpDecorate %out_carry Location 1
+OpDecorate %out_low Location 2
+OpDecorate %out_high Location 3
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%int = OpTypeInt 32 1
+%uint_0 = OpConstant %uint 0
+%uint_1 = OpConstant %uint 1
+%int_2 = OpConstant %int 2
+%int_3 = OpConstant %int 3
+%struct_u32_u32 = OpTypeStruct %uint %uint
+%struct_i32_i32 = OpTypeStruct %int %int
+%ptr_output_uint = OpTypePointer Output %uint
+%ptr_output_int = OpTypePointer Output %int
+%out_sum = OpVariable %ptr_output_uint Output
+%out_carry = OpVariable %ptr_output_uint Output
+%out_low = OpVariable %ptr_output_int Output
+%out_high = OpVariable %ptr_output_int Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%add = OpIAddCarry %struct_u32_u32 %uint_0 %uint_1
+%sum = OpCompositeExtract %uint %add 0
+%carry = OpCompositeExtract %uint %add 1
+OpStore %out_sum %sum
+OpStore %out_carry %carry
+%mul = OpSMulExtended %struct_i32_i32 %int_2 %int_3
+%low = OpCompositeExtract %int %mul 0
+%high = OpCompositeExtract %int %mul 1
+OpStore %out_low %low
+OpStore %out_high %high
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -3444,6 +3494,25 @@ def test_spirv_tools_ptr_access_chain_codegen_reparse():
     assert "outB = inBoundsPtr;" not in generated_code
     assert "OpPtrAccessChain" not in generated_code
     assert "OpInBoundsPtrAccessChain" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_extended_arithmetic_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_EXTENDED_ARITHMETIC_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "uint outSum @output @location(0);" in generated_code
+    assert "uint outCarry @output @location(1);" in generated_code
+    assert "int outLow @output @location(2);" in generated_code
+    assert "int outHigh @output @location(3);" in generated_code
+    assert "outSum = spirvIAddCarry(0, 1)[0];" in generated_code
+    assert "outCarry = spirvIAddCarry(0, 1)[1];" in generated_code
+    assert "outLow = spirvSMulExtended(2, 3)[0];" in generated_code
+    assert "outHigh = spirvSMulExtended(2, 3)[1];" in generated_code
+    assert "OpIAddCarry" not in generated_code
+    assert "OpSMulExtended" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

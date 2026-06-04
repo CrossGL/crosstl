@@ -1888,6 +1888,8 @@ class MojoParser:
             return self.parse_postfix_suffixes(expr)
         elif self.current_token[0] == "LBRACKET":
             return self.parse_list_literal()
+        elif self.current_token[0] == "LBRACE":
+            return self.parse_dict_literal()
         elif self.current_token[0] in ["FN", "DEF", "STRUCT", "CLASS", "LET", "VAR"]:
             raise SyntaxError(f"Unexpected top-level keyword: {self.current_token[0]}")
         else:
@@ -1920,7 +1922,63 @@ class MojoParser:
         self.eat("RBRACKET")
         return self.parse_postfix_suffixes(ListLiteralNode(elements))
 
+    def parse_dict_literal(self):
+        self.eat("LBRACE")
+        entries = []
+        self.skip_layout_tokens()
+
+        if self.current_token[0] == "RBRACE":
+            self.eat("RBRACE")
+            return self.parse_postfix_suffixes(DictLiteralNode(entries))
+
+        while self.current_token[0] != "RBRACE":
+            self.expression_layout_depth += 1
+            try:
+                key = self.parse_expression()
+            finally:
+                self.expression_layout_depth -= 1
+            self.skip_layout_tokens()
+            if self.current_token[0] != "COLON":
+                raise SyntaxError(
+                    f"Expected COLON in Mojo dictionary display, got {self.current_token[0]}"
+                )
+            self.eat("COLON")
+            self.skip_layout_tokens()
+            self.expression_layout_depth += 1
+            try:
+                value = self.parse_expression()
+            finally:
+                self.expression_layout_depth -= 1
+            self.skip_layout_tokens()
+
+            if not entries and self.current_token[0] == "FOR":
+                comprehension = self.parse_dict_comprehension(key, value)
+                self.eat("RBRACE")
+                return self.parse_postfix_suffixes(comprehension)
+
+            entries.append((key, value))
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                self.skip_layout_tokens()
+                if self.current_token[0] == "RBRACE":
+                    break
+            elif self.current_token[0] != "RBRACE":
+                raise SyntaxError(
+                    f"Expected COMMA or RBRACE, got {self.current_token[0]}"
+                )
+
+        self.eat("RBRACE")
+        return self.parse_postfix_suffixes(DictLiteralNode(entries))
+
     def parse_list_comprehension(self, expression):
+        clauses = self.parse_comprehension_clauses()
+        return ListComprehensionNode(expression, clauses)
+
+    def parse_dict_comprehension(self, key, value):
+        clauses = self.parse_comprehension_clauses()
+        return DictComprehensionNode(key, value, clauses)
+
+    def parse_comprehension_clauses(self):
         clauses = []
         while self.current_token[0] == "FOR":
             self.eat("FOR")
@@ -1936,7 +1994,7 @@ class MojoParser:
                 clauses.append({"kind": "if", "condition": condition})
                 self.skip_layout_tokens()
 
-        return ListComprehensionNode(expression, clauses)
+        return clauses
 
     def parse_comprehension_pattern(self):
         if not self.is_identifier_like_token():

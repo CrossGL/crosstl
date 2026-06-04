@@ -169,7 +169,16 @@ MESH_STORAGE_QUALIFIERS = {
     "taskNV",
 }
 
+VULKAN_MEMORY_MODEL_QUALIFIERS = {
+    "workgroupcoherent",
+    "subgroupcoherent",
+    "queuefamilycoherent",
+    "shadercallcoherent",
+    "nonprivate",
+}
+
 IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS
+IDENTIFIER_QUALIFIERS |= VULKAN_MEMORY_MODEL_QUALIFIERS
 IDENTIFIER_QUALIFIERS |= {"nonuniformEXT"}
 CONTEXTUAL_QUALIFIERS = {"static"}
 TEMPLATE_TYPE_NAMES = {"vector"}
