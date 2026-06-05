@@ -5976,6 +5976,57 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     assert "Validation generated hashes: not-applicable=1" in text_result.stdout
     assert "Validation diagnostics:" in text_result.stdout
 
+    sarif_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+            "--format",
+            "sarif",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    sarif_payload = json.loads(sarif_result.stdout)
+    assert sarif_result.returncode == 1
+    assert sarif_payload["version"] == "2.1.0"
+    run = sarif_payload["runs"][0]
+    assert run["invocations"][0]["executionSuccessful"] is False
+    assert run["invocations"][0]["properties"]["sourceReport"] == str(report_path)
+    assert run["tool"]["driver"]["name"] == "CrossTL project validation"
+    assert run["tool"]["driver"]["rules"] == [
+        {
+            "id": "project.validate.failed-artifact",
+            "name": "project.validate.failed-artifact",
+        }
+    ]
+    assert len(run["results"]) == 1
+    result = run["results"][0]
+    assert result["ruleId"] == "project.validate.failed-artifact"
+    assert result["level"] == "error"
+    assert result["message"]["text"] == (
+        "Artifact translation failed before validation: "
+        "out/not-a-backend/simple.out: unsupported target backend"
+    )
+    assert result["locations"][0]["physicalLocation"] == {
+        "artifactLocation": {"uri": "simple.cgl"},
+        "region": {
+            "endColumn": 1,
+            "endLine": 1,
+            "startColumn": 1,
+            "startLine": 1,
+        },
+    }
+    assert result["properties"] == {
+        "target": "not-a-backend",
+        "missingCapabilities": ["batch.translation"],
+    }
+
 
 def test_project_cli_validate_project_reports_invalid_report_shape(tmp_path):
     report_path = tmp_path / "invalid-report.json"

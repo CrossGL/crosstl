@@ -106,7 +106,7 @@ severity, diagnostic-code, and missing-capability rollups for generated and
 preserved diagnostics, plus artifact target, hash-status, toolchain status,
 and toolchain-run status rollups for validation results. The default output is
 JSON; ``--format text`` prints a concise validation summary with the same
-rollups.
+rollups, and ``--format sarif`` emits validation diagnostics as SARIF.
 
 Inspect an existing report as a concise JSON or text summary:
 

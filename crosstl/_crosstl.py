@@ -306,7 +306,9 @@ def _run_validate_project(args):
     from .project import validate_project_report
 
     payload = validate_project_report(args.report, run_toolchains=args.run_toolchains)
-    if args.format == "text":
+    if args.format == "sarif":
+        _write_json_payload(_format_project_diagnostics_sarif(payload), args.output)
+    elif args.format == "text":
         text = _format_project_validation_report(payload)
         if args.output:
             path = Path(args.output)
@@ -471,6 +473,110 @@ def _format_project_validation_report(payload):
             )
 
     return "\n".join(lines) + "\n"
+
+
+def _sarif_level(severity):
+    return {
+        "error": "error",
+        "warning": "warning",
+        "note": "note",
+    }.get(severity, "none")
+
+
+def _sarif_region(location):
+    if not isinstance(location, Mapping):
+        return {}
+
+    region = {}
+    for source_name, sarif_name in (
+        ("line", "startLine"),
+        ("column", "startColumn"),
+        ("endLine", "endLine"),
+        ("endColumn", "endColumn"),
+    ):
+        value = location.get(source_name)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            region[sarif_name] = value
+    return region
+
+
+def _sarif_location(diagnostic):
+    location = diagnostic.get("location")
+    if not isinstance(location, Mapping):
+        return None
+
+    file_name = location.get("file")
+    if not isinstance(file_name, str) or not file_name:
+        return None
+
+    physical_location = {"artifactLocation": {"uri": file_name}}
+    region = _sarif_region(location)
+    if region:
+        physical_location["region"] = region
+    return {"physicalLocation": physical_location}
+
+
+def _format_project_diagnostics_sarif(payload):
+    diagnostics = payload.get("diagnostics", [])
+    if not isinstance(diagnostics, list):
+        diagnostics = []
+
+    rules = {}
+    results = []
+    for diagnostic in diagnostics:
+        if not isinstance(diagnostic, Mapping):
+            continue
+
+        code = diagnostic.get("code")
+        rule_id = code if isinstance(code, str) and code else "crosstl.project"
+        message = diagnostic.get("message")
+        message_text = message if isinstance(message, str) else ""
+        rules.setdefault(rule_id, {"id": rule_id, "name": rule_id})
+
+        result = {
+            "ruleId": rule_id,
+            "level": _sarif_level(diagnostic.get("severity")),
+            "message": {"text": message_text},
+        }
+        location = _sarif_location(diagnostic)
+        if location:
+            result["locations"] = [location]
+
+        properties = {}
+        target = diagnostic.get("target")
+        if isinstance(target, str) and target:
+            properties["target"] = target
+        missing_capabilities = diagnostic.get("missingCapabilities")
+        if isinstance(missing_capabilities, list) and missing_capabilities:
+            properties["missingCapabilities"] = list(missing_capabilities)
+        if properties:
+            result["properties"] = properties
+        results.append(result)
+
+    return {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "CrossTL project validation",
+                        "informationUri": "https://github.com/CrossGL/crosstl",
+                        "rules": [rules[key] for key in sorted(rules)],
+                    }
+                },
+                "invocations": [
+                    {
+                        "executionSuccessful": bool(payload.get("success")),
+                        "properties": {
+                            "sourceReport": payload.get("sourceReport"),
+                        },
+                    }
+                ],
+                "results": results,
+            }
+        ],
+    }
 
 
 def _format_project_config_counts(project):
@@ -967,7 +1073,7 @@ def _build_parser():
     validate_parser.add_argument("report", help="Project portability report JSON")
     validate_parser.add_argument(
         "--format",
-        choices=("json", "text"),
+        choices=("json", "text", "sarif"),
         default="json",
         help="Validation output format",
     )
