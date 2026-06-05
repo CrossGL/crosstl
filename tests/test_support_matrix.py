@@ -645,6 +645,13 @@ def test_project_external_corpus_coverage_documents_entry_consistency_checks():
             "test_validate_project_report_rejects_external_corpus_entry_"
             "state_mismatches"
         ) in backend_support["evidence"]
+        assert "skip malformed or duplicate manifest entries" in (
+            backend_support["notes"]
+        )
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_skips_duplicate_external_corpus_entries"
+        ) in backend_support["evidence"]
 
 
 def test_support_matrix_check_writes_machine_readable_report(tmp_path):

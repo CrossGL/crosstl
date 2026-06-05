@@ -1729,6 +1729,72 @@ def test_translate_project_skips_invalid_external_corpus_entries(tmp_path):
     assert "path must be repository-relative" in diagnostic["message"]
 
 
+def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "other.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/simple",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    },
+                    {
+                        "id": "repo/simple-path-duplicate",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    },
+                    {
+                        "id": "repo/simple",
+                        "path": "other.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    external_corpus = payload["externalCorpus"]
+    assert external_corpus["summary"]["manifestEntryCount"] == 3
+    assert external_corpus["summary"]["validEntryCount"] == 1
+    assert external_corpus["summary"]["invalidEntryCount"] == 2
+    assert [entry["path"] for entry in external_corpus["entries"]] == ["simple.cgl"]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 2, "error": 0}
+    diagnostics = payload["diagnostics"]
+    assert all(
+        diagnostic["code"] == "project.config.external-corpus-entry-invalid"
+        for diagnostic in diagnostics
+    )
+    assert "entry 2" in diagnostics[0]["message"]
+    assert "path duplicates entry 1" in diagnostics[0]["message"]
+    assert "entry 3" in diagnostics[1]["message"]
+    assert "id duplicates entry 1" in diagnostics[1]["message"]
+
+
 def test_validate_project_report_accepts_generated_source_maps(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

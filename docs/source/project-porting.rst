@@ -208,8 +208,10 @@ rollups, valid and invalid manifest-entry counts, and artifact outcomes for
 entries included in the project run. CrossTL does not clone upstream
 repositories, run native build systems, or claim whole corpus semantic parity
 from this manifest. Malformed manifest entries are reported as configuration
-diagnostics and skipped from retained corpus entries, while the summary still
-records how many manifest entries were skipped.
+diagnostics and skipped from retained corpus entries. Duplicate manifest paths
+or explicit entry ids are also reported and skipped so generated reports do not
+inflate corpus coverage. The summary still records how many manifest entries
+were skipped.
 
 Project reports include configured define and variant names and values, and
 artifact records include the applied define map used for that translation
