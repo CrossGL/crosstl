@@ -3922,6 +3922,21 @@ def test_hlsl_output_return_semantics_still_emit():
     assert "uint PSMain(): SV_TARGET3" in integer_target_output
     assert "gl_FragData" not in integer_target_output
 
+    coverage_code = """
+    shader ValidCoverageReturnSemantic {
+        fragment {
+            uint main() @ gl_SampleMask {
+                return 1u;
+            }
+        }
+    }
+    """
+    coverage_output = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(coverage_code), "fragment"
+    )
+    assert "uint PSMain(): SV_Coverage" in coverage_output
+    assert "gl_SampleMask" not in coverage_output
+
     location_code = """
     shader ValidLocationReturnSemantic {
         fragment {
@@ -3944,6 +3959,7 @@ def test_hlsl_output_return_semantics_still_emit():
         ("vertex", "float", "gl_Position", "0.0", "SV_POSITION", "float4"),
         ("fragment", "vec3", "gl_FragColor", "vec3(0.0)", "SV_TARGET", "float4"),
         ("fragment", "vec4", "gl_FragDepth", "vec4(0.0)", "SV_DEPTH", "float"),
+        ("fragment", "int", "gl_SampleMask", "1", "SV_Coverage", "uint"),
         ("fragment", "float", "SV_TARGET1", "0.0", "SV_TARGET1", "float4"),
     ],
 )
@@ -3967,9 +3983,11 @@ def test_hlsl_function_return_output_builtin_types_are_validated(
     ("stage", "return_type", "semantic", "value", "hlsl_semantic"),
     [
         ("vertex", "vec4", "gl_FragColor", "vec4(0.0)", "SV_TARGET"),
+        ("vertex", "uint", "gl_SampleMask", "1u", "SV_Coverage"),
         ("vertex", "float", "gl_FragDepth", "0.5", "SV_DEPTH"),
         ("fragment", "vec4", "gl_Position", "vec4(0.0)", "SV_POSITION"),
         ("compute", "vec4", "gl_Position", "vec4(0.0)", "SV_POSITION"),
+        ("compute", "uint", "gl_SampleMask", "1u", "SV_Coverage"),
     ],
 )
 def test_hlsl_function_return_output_builtin_stages_are_validated(
@@ -4020,6 +4038,7 @@ def test_hlsl_struct_output_builtin_semantics_still_emit():
             vec4 color @ gl_FragColor1;
             uvec4 integerColor @ gl_FragData[2];
             float depth @ gl_FragDepth;
+            uint mask @ gl_SampleMask;
         };
 
         vertex {
@@ -4047,6 +4066,7 @@ def test_hlsl_struct_output_builtin_semantics_still_emit():
     assert "float4 color: SV_TARGET1;" in generated
     assert "uint4 integerColor: SV_TARGET2;" in generated
     assert "float depth: SV_DEPTH;" in generated
+    assert "uint mask: SV_Coverage;" in generated
 
 
 def test_hlsl_struct_array_member_semantics_are_preserved():
@@ -4155,6 +4175,9 @@ def test_hlsl_fragment_plain_float4_return_defaults_to_sv_target():
 
 
 def test_hlsl_gl_builtin_input_semantics_use_canonical_system_values():
+    # Microsoft documents SV_Coverage as the HLSL pixel-shader coverage mask
+    # input/output semantic.
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics
     code = """
     shader CanonicalHLSLBuiltinInputs {
         fragment {
@@ -4162,9 +4185,10 @@ def test_hlsl_gl_builtin_input_semantics_use_canonical_system_values():
                 vec4 coord @ gl_FragCoord,
                 bool front @ gl_FrontFacing,
                 bool frontAlias @ gl_IsFrontFace,
-                int primitive @ gl_PrimitiveID
+                int primitive @ gl_PrimitiveID,
+                uint coverage @ gl_SampleMaskIn
             ) @ gl_FragColor {
-                return vec4(coord.xy, (front || frontAlias) ? 1.0 : 0.0, float(primitive));
+                return vec4(coord.xy, (front || frontAlias) ? 1.0 : 0.0, float(primitive + int(coverage)));
             }
         }
     }
@@ -4176,8 +4200,10 @@ def test_hlsl_gl_builtin_input_semantics_use_canonical_system_values():
     assert "bool front : SV_IsFrontFace" in generated
     assert "bool frontAlias : SV_IsFrontFace" in generated
     assert "int primitive : SV_PrimitiveID" in generated
+    assert "uint coverage : SV_Coverage" in generated
     assert "FRONT_FACE" not in generated
     assert "PRIMITIVE_ID" not in generated
+    assert "gl_SampleMaskIn" not in generated
 
 
 def test_hlsl_point_size_uses_legacy_psize_semantic():
@@ -4269,6 +4295,7 @@ def test_hlsl_struct_return_output_builtin_stages_are_validated(
         ("float position @ gl_Position", "SV_POSITION", "float4"),
         ("vec3 color @ gl_FragColor", "SV_TARGET", "float4"),
         ("vec4 depth @ gl_FragDepth", "SV_DEPTH", "float"),
+        ("int mask @ gl_SampleMask", "SV_Coverage", "uint"),
         ("float rawColor @ SV_TARGET1", "SV_TARGET1", "float4"),
     ],
 )
@@ -4301,6 +4328,7 @@ def test_hlsl_struct_output_builtin_types_are_validated(
         ("fragment", "vec4", "gl_FragCoord", "vec4(0.0)"),
         ("fragment", "bool", "gl_FrontFacing", "true"),
         ("fragment", "vec2", "gl_PointCoord", "vec2(0.0)"),
+        ("fragment", "uint", "gl_SampleMaskIn", "1u"),
         ("compute", "uvec3", "gl_GlobalInvocationID", "uvec3(0u)"),
     ],
 )
@@ -4318,6 +4346,43 @@ def test_hlsl_function_return_input_only_builtin_semantics_are_rejected(
     """
     with pytest.raises(ValueError, match=f"{semantic}.*return semantic"):
         HLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+def test_hlsl_fragment_coverage_rejects_wrong_crossgl_direction_and_type():
+    input_code = """
+    shader BadCoverageInputDirection {
+        fragment {
+            vec4 main(uint mask @ gl_SampleMask) @ gl_FragColor {
+                return vec4(float(mask));
+            }
+        }
+    }
+    """
+    type_code = """
+    shader BadCoverageType {
+        fragment {
+            vec4 main(int mask @ SV_Coverage) @ gl_FragColor {
+                return vec4(float(mask));
+            }
+        }
+    }
+    """
+    output_code = """
+    shader BadCoverageOutputDirection {
+        fragment {
+            uint main() @ gl_SampleMaskIn {
+                return 1u;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="gl_SampleMask.*output-only"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(input_code), "fragment")
+    with pytest.raises(ValueError, match="SV_Coverage.*scalar uint"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(type_code), "fragment")
+    with pytest.raises(ValueError, match="gl_SampleMaskIn.*return semantic"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(output_code), "fragment")
 
 
 def test_hlsl_cbuffer_binding_attributes_drive_registers():

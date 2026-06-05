@@ -3515,6 +3515,52 @@ def test_groupshared_global_and_pointer_dereference_member_access_parse():
     assert dereference.operand.member == "scale"
 
 
+def test_official_pointer_address_of_and_arrow_member_access_parse():
+    # Source: Slang User's Guide, Basic Convenience Features > Pointers (limited).
+    code = """
+    struct MyType
+    {
+        int a;
+    };
+
+    int test(MyType* pObj)
+    {
+        MyType* pNext = pObj + 1;
+        MyType* pNext2 = &pNext[1];
+        return pNext.a + pNext->a + (*pNext2).a + pNext2[0].a;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    test_function = find_function(ast, "test")
+    address_of = test_function.body[1].right
+    expression = test_function.body[2].value
+
+    assert isinstance(address_of, UnaryOpNode)
+    assert address_of.op == "&"
+    assert isinstance(address_of.operand, ArrayAccessNode)
+
+    terms = []
+    while isinstance(expression, BinaryOpNode) and expression.op == "+":
+        terms.append(expression.right)
+        expression = expression.left
+    terms.append(expression)
+    terms.reverse()
+
+    assert len(terms) == 4
+    assert all(isinstance(term, MemberAccessNode) for term in terms)
+    assert terms[0].object.name == "pNext"
+    assert terms[0].member == "a"
+    assert terms[1].object.name == "pNext"
+    assert terms[1].member == "a"
+    assert isinstance(terms[2].object, UnaryOpNode)
+    assert terms[2].object.op == "*"
+    assert terms[2].member == "a"
+    assert isinstance(terms[3].object, ArrayAccessNode)
+    assert terms[3].member == "a"
+
+
 def test_interpolation_modifiers_from_vulkan_samples_parse_as_qualifiers():
     code = """
     struct VSOutput

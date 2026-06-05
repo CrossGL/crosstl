@@ -498,6 +498,36 @@ def test_rust_gpu_spirv_entry_point_name_drives_stage_name():
     assert "vertex vertex_body {" not in result
 
 
+def test_rust_gpu_ray_payload_spirv_attributes_codegen_from_release_notes():
+    # Reduced from EmbarkStudios/rust-gpu v0.5 release notes ray-tracing example:
+    # https://github.com/EmbarkStudios/rust-gpu/releases/tag/v0.5.0
+    code = """
+    use spirv_std::spirv;
+
+    pub struct ShadowPayload {
+        shadowed: u32,
+    }
+
+    #[spirv(miss)]
+    pub fn miss(#[spirv(incoming_ray_payload)] payload: &mut ShadowPayload) {
+        payload.shadowed = 0;
+    }
+
+    #[spirv(ray_generation)]
+    pub fn raygen(#[spirv(ray_payload)] payload: &mut ShadowPayload) {}
+    """
+
+    result = parse_and_generate(code)
+
+    assert "ray_miss miss_ {" in result
+    assert "ShadowPayload payload @ rayPayloadInEXT" in result
+    assert "ray_generation raygen {" in result
+    assert "ShadowPayload payload @ rayPayloadEXT" in result
+    assert "incoming_ray_payload" not in result
+    assert "ray_payload" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_vec_extend_codegen_from_upstream_examples():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

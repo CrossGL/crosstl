@@ -1871,6 +1871,38 @@ class TestHipParser:
         assert isinstance(body[1].if_body, ReturnNode)
         assert body[2].value == "0"
 
+    def test_public_rocm_address_retrieval_multiline_if_initializer_parse(self):
+        code = """
+        void host() {
+            void* hipInitFunc;
+            int hipVersion = HIP_VERSION;
+            std::uint64_t flags = 0;
+            hipDriverProcAddressQueryResult symbolStatus;
+
+            if (auto err = hipGetProcAddress(
+                    "hipInit",
+                    reinterpret_cast<void**>(&hipInitFunc),
+                    hipVersion,
+                    flags,
+                    &symbolStatus);
+                err != hipSuccess) {
+                return;
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert isinstance(body[4], VariableNode)
+        assert body[4].vtype == "auto"
+        assert body[4].name == "err"
+        assert isinstance(body[4].value, FunctionCallNode)
+        assert body[4].value.name == "hipGetProcAddress"
+        assert isinstance(body[5], IfNode)
+        assert body[5].condition.left == "err"
+        assert body[5].condition.op == "!="
+        assert body[5].condition.right == "hipSuccess"
+
     def test_std_chrono_benchmark_expressions_parsing(self):
         code = """
         void bench() {

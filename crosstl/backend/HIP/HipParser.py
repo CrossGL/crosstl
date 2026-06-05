@@ -2382,6 +2382,7 @@ class HipParser:
         if self.match("SEMICOLON"):
             self.advance()
             init = condition_or_init
+            self.skip_newlines()
             condition = self.parse_expression()
         else:
             condition = condition_or_init

@@ -2818,6 +2818,28 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_NOPERSPECTIVE_INTERFACE_ASSEMBLY = """
+; Reduced from the Khronos SPIR-V spec section 1.10 example.
+; The source declares: noperspective in vec4 color2;
+; The corresponding assembly decorates the input with NoPerspective and no Location.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %color2
+OpExecutionMode %main OriginLowerLeft
+OpName %color2 "color2"
+OpDecorate %color2 NoPerspective
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%color2 = OpVariable %ptr_input_v4float Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_RELAXED_PRECISION_INTERFACE_ASSEMBLY = """
 ; Reduced from glslangValidator -V -H output for ESSL 310 mediump fragment IO.
 OpCapability Shader
@@ -4444,6 +4466,17 @@ def test_spirv_assembly_flat_location_interface_codegen():
 
     assert "uint input_flat_u32 @input @location(0) @flat;" in generated_code
     assert "%input_flat_u32" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_spec_noperspective_only_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SPEC_NOPERSPECTIVE_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 color2 @input @noperspective;" in generated_code
+    assert "NoPerspective" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

@@ -303,6 +303,41 @@ class TestHipCodeGen:
         assert "return 1;" in result
         assert "return 0;" in result
 
+    def test_public_rocm_address_retrieval_multiline_if_initializer_conversion(self):
+        code = """
+        void host() {
+            void* hipInitFunc;
+            int hipVersion = HIP_VERSION;
+            std::uint64_t flags = 0;
+            hipDriverProcAddressQueryResult symbolStatus;
+
+            if (auto err = hipGetProcAddress(
+                    "hipInit",
+                    reinterpret_cast<void**>(&hipInitFunc),
+                    hipVersion,
+                    flags,
+                    &symbolStatus);
+                err != hipSuccess) {
+                return;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            '// HIP get proc address: symbol: "hipInit", output: hipInitFunc, '
+            "version: hipVersion, flags: flags, status output: symbolStatus"
+        ) in result
+        assert "var err: auto = hipSuccess;" in result
+        assert "if ((err != hipSuccess)) {" in result
+        assert "return;" in result
+
     def test_launch_bounds_after_return_type_conversion(self):
         code = """
         __global__ void __launch_bounds__(MAX_THREADS_PER_BLOCK, MIN_WARPS_PER_EXECUTION_UNIT)

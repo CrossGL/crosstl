@@ -2576,5 +2576,29 @@ def test_pointer_declarator_codegen_from_mlp_training_samples():
     assert "vec2* inputs" in generated_code
 
 
+def test_official_pointer_address_of_and_arrow_member_codegen():
+    # Source: Slang User's Guide, Basic Convenience Features > Pointers (limited).
+    code = """
+    struct MyType
+    {
+        int a;
+    };
+
+    int test(MyType* pObj)
+    {
+        MyType* pNext = pObj + 1;
+        MyType* pNext2 = &pNext[1];
+        return pNext.a + pNext->a + (*pNext2).a + pNext2[0].a;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "MyType* pNext2 = &pNext[1];" in generated_code
+    assert "return pNext.a + pNext.a + (*pNext2).a + pNext2[0].a;" in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()

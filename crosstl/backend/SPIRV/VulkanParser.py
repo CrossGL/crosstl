@@ -4048,11 +4048,13 @@ class VulkanParser:
 
             variable_decorations = decorations.get(variable["id"], [])
             qualifiers = self.spirv_layout_qualifiers(variable_decorations)
-            if not self.spirv_has_interface_qualifier(qualifiers):
-                continue
             declaration_qualifiers = self.spirv_declaration_qualifiers(
                 variable_decorations
             )
+            if not self.spirv_has_interface_qualifier(
+                qualifiers, declaration_qualifiers
+            ):
+                continue
 
             data_type, array_suffix = self.spirv_type_name_and_suffix(
                 pointer_type.get("type_id"), types, constants
@@ -4523,11 +4525,13 @@ class VulkanParser:
                 if member == member_key
             ]
             qualifiers = self.spirv_layout_qualifiers(member_layout_decorations)
-            if not self.spirv_has_interface_qualifier(qualifiers):
-                continue
             declaration_qualifiers = self.spirv_declaration_qualifiers(
                 member_layout_decorations
             )
+            if not self.spirv_has_interface_qualifier(
+                qualifiers, declaration_qualifiers
+            ):
+                continue
 
             data_type, array_suffix = self.spirv_type_name_and_suffix(
                 member_type_id, types, constants
@@ -4583,8 +4587,14 @@ class VulkanParser:
     def spirv_image_access_qualifier(self, access_qualifier):
         return {"ReadOnly": "readonly", "WriteOnly": "writeonly"}.get(access_qualifier)
 
-    def spirv_has_interface_qualifier(self, qualifiers):
-        return any(name in {"builtin", "location"} for name, _value in qualifiers)
+    def spirv_has_interface_qualifier(self, qualifiers, declaration_qualifiers=None):
+        if any(name in {"builtin", "location"} for name, _value in qualifiers):
+            return True
+        declaration_qualifiers = set(declaration_qualifiers or [])
+        return bool(
+            declaration_qualifiers
+            & {"centroid", "flat", "invariant", "noperspective", "patch", "sample"}
+        )
 
     def spirv_struct_member_variable_name(
         self,

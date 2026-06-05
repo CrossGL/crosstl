@@ -415,6 +415,7 @@ class RustToCrossGLConverter:
             # Ray tracing semantics
             "hit_kind": "gl_HitKindEXT",
             "incoming_ray_flags": "gl_IncomingRayFlagsEXT",
+            "incoming_ray_payload": "rayPayloadInEXT",
             "instance_custom_index": "gl_InstanceCustomIndexEXT",
             "launch_id": "gl_LaunchIDEXT",
             "launch_size": "gl_LaunchSizeEXT",
@@ -422,6 +423,7 @@ class RustToCrossGLConverter:
             "object_ray_origin": "gl_ObjectRayOriginEXT",
             "object_to_world": "gl_ObjectToWorldEXT",
             "ray_geometry_index": "gl_GeometryIndexEXT",
+            "ray_payload": "rayPayloadEXT",
             "ray_tmax": "gl_RayTmaxEXT",
             "ray_tmin": "gl_RayTminEXT",
             "world_ray_direction": "gl_WorldRayDirectionEXT",
@@ -448,7 +450,7 @@ class RustToCrossGLConverter:
             "ray_generation": "ray_generation",
             "intersection": "intersection",
             "closest_hit": "ray_closest_hit",
-            "miss": "miss",
+            "miss": "ray_miss",
             "any_hit": "ray_any_hit",
             "callable": "callable",
         }

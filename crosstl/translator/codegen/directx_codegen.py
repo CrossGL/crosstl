@@ -791,6 +791,8 @@ class HLSLCodeGen:
             "gl_FragColor6": "SV_TARGET6",
             "gl_FragColor7": "SV_TARGET7",
             "gl_FragDepth": "SV_DEPTH",
+            "gl_SampleMask": "SV_Coverage",
+            "gl_SampleMaskIn": "SV_Coverage",
             "gl_GlobalInvocationID": "SV_DispatchThreadID",
             "gl_LocalInvocationID": "SV_GroupThreadID",
             "gl_WorkGroupID": "SV_GroupID",
@@ -3293,10 +3295,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return_semantic_attr = self.map_semantic(return_semantic)
             code += f"// {effective_shader_type.capitalize()} Shader\n"
             code += root_signature_attribute
+            self.validate_hlsl_stage_parameter_requirements(func, effective_shader_type)
             if effective_shader_type == "compute":
-                self.validate_hlsl_stage_parameter_requirements(
-                    func, effective_shader_type
-                )
                 code += self.generate_compute_numthreads(execution_config)
             code += wave_size_attribute
             code += waveops_helper_lanes_attribute
@@ -8114,6 +8114,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             parameters, shader_type, "SV_ViewID", "uint", "scalar uint"
         )
 
+    def validate_hlsl_fragment_system_value_types(self, parameters):
+        for parameter in parameters:
+            semantic = self.semantic_from_node(parameter)
+            if semantic is None:
+                continue
+            if str(semantic).lower() == "gl_samplemask":
+                raise ValueError(
+                    "DirectX fragment stage gl_SampleMask parameter "
+                    f"'{parameter.name}' cannot use output-only sample mask "
+                    "semantic"
+                )
+
+        self.validate_hlsl_exact_semantic_type(
+            parameters, "fragment", "SV_Coverage", "uint", "scalar uint"
+        )
+
     def validate_hlsl_compute_system_value_types(self, parameters):
         self.validate_hlsl_exact_semantic_type(
             parameters, "compute", "SV_GroupIndex", "uint", "scalar uint"
@@ -9035,6 +9051,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "gl_FragCoord",
             "gl_FrontFacing",
             "gl_PointCoord",
+            "gl_SampleMaskIn",
             "gl_GlobalInvocationID",
             "gl_LocalInvocationID",
             "gl_WorkGroupID",
@@ -9161,6 +9178,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         output_types = {
             "SV_POSITION": "float4",
             "SV_DEPTH": "float",
+            "SV_COVERAGE": "uint",
             "PSIZE": "float",
         }
         if semantic_key in output_types:
@@ -9236,9 +9254,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         mapped_semantic = self.hlsl_canonical_semantic(semantic)
         semantic_key = str(mapped_semantic).upper()
+        if str(semantic).lower() == "gl_samplemaskin":
+            raise ValueError(
+                f"DirectX {shader_type} stage {context} '{name}' cannot use "
+                f"input-only semantic '{mapped_semantic}'"
+            )
+
         forbidden_description = None
         if shader_type == "vertex" and (
-            semantic_key == "SV_DEPTH" or self.is_hlsl_target_semantic(semantic_key)
+            semantic_key in {"SV_DEPTH", "SV_COVERAGE"}
+            or self.is_hlsl_target_semantic(semantic_key)
         ):
             forbidden_description = "fragment output"
         elif shader_type in {
@@ -9247,13 +9272,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "tessellation_evaluation",
             "mesh",
         } and (
-            semantic_key == "SV_DEPTH" or self.is_hlsl_target_semantic(semantic_key)
+            semantic_key in {"SV_DEPTH", "SV_COVERAGE"}
+            or self.is_hlsl_target_semantic(semantic_key)
         ):
             forbidden_description = "fragment output"
         elif shader_type == "fragment" and semantic_key == "SV_POSITION":
             forbidden_description = "vertex position output"
         elif shader_type == "compute" and (
-            semantic_key in {"SV_POSITION", "SV_DEPTH"}
+            semantic_key in {"SV_POSITION", "SV_DEPTH", "SV_COVERAGE"}
             or self.is_hlsl_target_semantic(semantic_key)
         ):
             forbidden_description = "graphics output"
@@ -9329,6 +9355,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ("SV_PrimitiveID", "SV_GSInstanceID"),
             )
             self.validate_hlsl_geometry_stream_output_semantics(parameters)
+
+        if shader_type == "fragment":
+            self.validate_hlsl_fragment_system_value_types(parameters)
 
         if shader_type == "tessellation_control":
             if "InputPatch" not in parameter_type_bases:

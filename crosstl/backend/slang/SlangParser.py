@@ -2341,6 +2341,7 @@ class SlangParser:
             "IDENTIFIER",
             "LBRACKET",
             "LESS_THAN",
+            "MULTIPLY",
             "DOT",
             "COLON",
         }:
@@ -2764,7 +2765,13 @@ class SlangParser:
         if self.current_token[0] == "DECREMENT":
             self.eat("DECREMENT")
             return UnaryOpNode("PRE_DECREMENT", self.parse_unary())
-        if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT", "NOT"]:
+        if self.current_token[0] in [
+            "PLUS",
+            "MINUS",
+            "BITWISE_NOT",
+            "BITWISE_AND",
+            "NOT",
+        ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             operand = self.parse_unary()
@@ -3217,6 +3224,24 @@ class SlangParser:
                 node = MemberAccessNode(node, member)
                 continue
 
+            if self.is_pointer_member_access_operator():
+                self.eat("MINUS")
+                self.eat("GREATER_THAN")
+                if self.current_token[0] != "IDENTIFIER":
+                    raise SyntaxError(
+                        "Expected identifier after pointer member access, "
+                        f"got {self.current_token[0]}"
+                    )
+                member = self.current_token[1]
+                self.eat("IDENTIFIER")
+                if (
+                    self.current_token[0] == "LESS_THAN"
+                    and self.is_generic_expression_suffix()
+                ):
+                    member += self.parse_generic_type_suffix()
+                node = MemberAccessNode(node, member)
+                continue
+
             if self.current_token[0] == "LBRACKET":
                 self.eat("LBRACKET")
                 index = self.parse_subscript_index()
@@ -3233,6 +3258,13 @@ class SlangParser:
                 return UnaryOpNode("POST_DECREMENT", self.valid_postfix_update(node))
 
             return node
+
+    def is_pointer_member_access_operator(self):
+        return (
+            self.current_token[0] == "MINUS"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "GREATER_THAN"
+        )
 
     def parse_subscript_index(self):
         if self.current_token[0] == "RBRACKET":
