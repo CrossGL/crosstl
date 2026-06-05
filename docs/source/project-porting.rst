@@ -114,9 +114,9 @@ Inspect an existing report as a concise JSON or text summary:
 Report inspection includes validation status, project counts, project
 configuration counts, failed artifacts, diagnostic code and missing-capability
 rollups, validation diagnostic-code, missing-capability, and artifact target
-rollups, report source-backend and artifact target rollups, source-map count
-rollups, diagnostics, diagnostic and failed-artifact truncation counts, external
-corpus rollups, and migration actions. It exits
+rollups, report source-backend, file-extension, and artifact target rollups,
+source-map count rollups, diagnostics, diagnostic and failed-artifact truncation
+counts, external corpus rollups, and migration actions. It exits
 nonzero when validation finds report errors.
 
 Configuration
@@ -209,9 +209,9 @@ Project reports are JSON documents with:
   include patterns, exclude patterns, source overrides, include directories,
   defines, and variants.
 - ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
-  unit source backend, skipped reason, artifact source backend, variant,
-  target backend, diagnostic code (``diagnosticsByCode``), and missing
-  capability (``missingCapabilityCounts``).
+  unit source backend, unit file extension, skipped reason, skipped file
+  extension, artifact source backend, variant, target backend, diagnostic code
+  (``diagnosticsByCode``), and missing capability (``missingCapabilityCounts``).
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, and source overrides.
 - ``artifacts``: attempted outputs with source path, source backend, target,

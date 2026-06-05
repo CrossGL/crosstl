@@ -134,6 +134,8 @@ def test_project_report_inspection_is_first_class_support_feature():
             in (backend_support["notes"])
         )
         assert "skipped-reason" in backend_support["notes"]
+        assert "source-extension" in backend_support["notes"]
+        assert "skipped-extension" in backend_support["notes"]
         assert "scan-scope, and project-config count rollups" in (
             backend_support["notes"]
         )

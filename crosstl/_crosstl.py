@@ -496,6 +496,13 @@ def _format_project_report_inspection(payload):
     )
     if units_by_source_backend:
         lines.append(units_by_source_backend)
+    units_by_extension = _format_count_rollup(
+        "Units by extension",
+        summary.get("unitsByExtension"),
+        include_zero=False,
+    )
+    if units_by_extension:
+        lines.append(units_by_extension)
     skipped_by_reason = _format_count_rollup(
         "Skipped by reason",
         summary.get("skippedByReason"),
@@ -503,6 +510,13 @@ def _format_project_report_inspection(payload):
     )
     if skipped_by_reason:
         lines.append(skipped_by_reason)
+    skipped_by_extension = _format_count_rollup(
+        "Skipped by extension",
+        summary.get("skippedByExtension"),
+        include_zero=False,
+    )
+    if skipped_by_extension:
+        lines.append(skipped_by_extension)
     artifacts_by_source_backend = _format_artifact_rollup(
         "Artifacts by source backend",
         summary.get("artifactsBySourceBackend"),

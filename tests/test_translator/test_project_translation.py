@@ -142,6 +142,7 @@ def test_scan_project_reports_explicitly_included_unsupported_sources(tmp_path):
     assert scan.units == []
     assert scan.skipped == [{"path": "kernel.txt", "reason": "unsupported-extension"}]
     assert payload["summary"]["skippedByReason"] == {"unsupported-extension": 1}
+    assert payload["summary"]["skippedByExtension"] == {".txt": 1}
     assert {diagnostic.code for diagnostic in scan.diagnostics} == {
         "project.scan.empty",
         "project.scan.unsupported-source",
@@ -1074,7 +1075,9 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["summary"]["diagnosticsByCode"] == {}
     assert payload["summary"]["missingCapabilityCounts"] == {}
     assert payload["summary"]["unitsBySourceBackend"] == {"cgl": 1}
+    assert payload["summary"]["unitsByExtension"] == {".cgl": 1}
     assert payload["summary"]["skippedByReason"] == {}
+    assert payload["summary"]["skippedByExtension"] == {}
     assert payload["summary"]["artifactsBySourceBackend"] == {
         "cgl": {
             "artifactCount": 1,
@@ -4374,6 +4377,8 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     "diagnosticsByCode": {},
                     "missingCapabilityCounts": {},
                     "unitsBySourceBackend": {"metal": 1},
+                    "unitsByExtension": {".metal": 1},
+                    "skippedByExtension": {".txt": 1},
                     "artifactsBySourceBackend": {
                         "unknown": {
                             "artifactCount": 1,
@@ -4448,6 +4453,8 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     assert "summary.unitCount must match units length" in diagnostic["message"]
     assert "summary.skippedCount must match skipped length" in diagnostic["message"]
     assert "summary.skippedByReason must match skipped" in diagnostic["message"]
+    assert "summary.unitsByExtension must match units" in diagnostic["message"]
+    assert "summary.skippedByExtension must match skipped" in diagnostic["message"]
     assert "summary.targetCount must match project.targets length" in (
         diagnostic["message"]
     )
@@ -6147,6 +6154,7 @@ def test_project_cli_inspect_report_text_includes_skipped_reason_rollups(tmp_pat
 
     assert result.returncode == 0
     assert "Skipped by reason: unsupported-extension=1" in result.stdout
+    assert "Skipped by extension: .txt=1" in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
@@ -6203,6 +6211,7 @@ def test_project_cli_inspect_report_text_includes_report_rollups(tmp_path):
 
     assert result.returncode == 0
     assert "Units by source backend: cgl=1" in result.stdout
+    assert "Units by extension: .cgl=1" in result.stdout
     assert (
         "Artifacts by source backend: cgl=2 artifacts (2 translated, 0 failed)"
         in result.stdout
