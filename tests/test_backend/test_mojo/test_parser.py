@@ -1459,6 +1459,31 @@ def test_ternary_operator_parsing():
         pytest.fail("Ternary operator parsing not implemented.")
 
 
+def test_multiline_parenthesized_inline_if_parsing_from_mojo_gpu_puzzles():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # problems/p31/p31.mojo sophisticated_kernel cached_correction.
+    code = """
+    def sophisticated_kernel():
+        var cached_correction = (
+            shared_cache[local_i + 3072] if local_i
+            < 1024 else series_correction
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    declaration = find_function(ast, "sophisticated_kernel").body[0]
+    inline_if = declaration.initial_value
+
+    assert isinstance(inline_if, TernaryOpNode)
+    assert isinstance(inline_if.condition, BinaryOpNode)
+    assert inline_if.condition.op == "<"
+    assert inline_if.condition.left.name == "local_i"
+    assert inline_if.condition.right == "1024"
+    assert isinstance(inline_if.true_expr, ArrayAccessNode)
+    assert inline_if.true_expr.array.name == "shared_cache"
+    assert inline_if.false_expr.name == "series_correction"
+
+
 def test_at_attributes_attach_to_declarations():
     code = """
     @value

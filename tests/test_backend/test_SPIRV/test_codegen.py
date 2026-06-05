@@ -608,6 +608,51 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_SWITCH_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from a fragment shader
+; containing switch(mode) with two cases and a default color store.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %mode %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %mode "mode"
+OpName %out_color "outColor"
+OpDecorate %mode Flat
+OpDecorate %mode Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v4float = OpTypeVector %float 4
+%ptr_input_int = OpTypePointer Input %int
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero_f = OpConstant %float 0.0
+%one_f = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one_f %zero_f %zero_f %one_f
+%green = OpConstantComposite %v4float %zero_f %one_f %zero_f %one_f
+%blue = OpConstantComposite %v4float %zero_f %zero_f %one_f %one_f
+%mode = OpVariable %ptr_input_int Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_mode = OpLoad %int %mode
+OpSelectionMerge %merge None
+OpSwitch %loaded_mode %default 0 %case_zero 1 %case_one
+%case_zero = OpLabel
+OpStore %out_color %red
+OpBranch %merge
+%case_one = OpLabel
+OpStore %out_color %green
+OpBranch %merge
+%default = OpLabel
+OpStore %out_color %blue
+OpBranch %merge
+%merge = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_OPSELECT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -3402,6 +3447,27 @@ def test_spirv_glslang_selection_merge_codegen_reparse():
     assert "outColor = float4(0.0, 0.0, 1.0, 1.0);" in generated_code
     assert "OpSelectionMerge" not in generated_code
     assert "OpBranchConditional" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_glslang_switch_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_SWITCH_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int mode @input @location(0) @flat;" in generated_code
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "switch (mode) {" in generated_code
+    assert "case 0:" in generated_code
+    assert "outColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "case 1:" in generated_code
+    assert "outColor = float4(0.0, 1.0, 0.0, 1.0);" in generated_code
+    assert "default:" in generated_code
+    assert "outColor = float4(0.0, 0.0, 1.0, 1.0);" in generated_code
+    assert generated_code.count("break;") == 3
+    assert "OpSwitch" not in generated_code
+    assert "OpSelectionMerge" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

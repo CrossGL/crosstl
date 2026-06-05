@@ -2021,7 +2021,7 @@ class VulkanParser:
             if opcode == "OpReturn":
                 statements.append(ReturnNode())
 
-        structured_statements = self.spirv_assembly_simple_selection_body(
+        structured_statements = self.spirv_assembly_simple_switch_body(
             raw_instructions,
             expressions,
             names,
@@ -2032,10 +2032,220 @@ class VulkanParser:
             variables_by_id,
             constants,
         )
+        if structured_statements is None:
+            structured_statements = self.spirv_assembly_simple_selection_body(
+                raw_instructions,
+                expressions,
+                names,
+                decorations,
+                member_decorations,
+                member_names,
+                types,
+                variables_by_id,
+                constants,
+            )
         if structured_statements is not None:
             return structured_statements
 
         return statements
+
+    def spirv_assembly_simple_switch_body(
+        self,
+        raw_instructions,
+        expressions,
+        names,
+        decorations,
+        member_decorations,
+        member_names,
+        types,
+        variables_by_id,
+        constants,
+    ):
+        selection_count = sum(
+            1
+            for _result_id, opcode, _operands, _line_number in raw_instructions
+            if opcode == "OpSelectionMerge"
+        )
+        switch_count = sum(
+            1
+            for _result_id, opcode, _operands, _line_number in raw_instructions
+            if opcode == "OpSwitch"
+        )
+        if selection_count != 1 or switch_count != 1:
+            return None
+
+        labels = self.spirv_assembly_label_indices(raw_instructions)
+        for index, (_result_id, opcode, operands, _line_number) in enumerate(
+            raw_instructions
+        ):
+            if opcode != "OpSelectionMerge" or len(operands) < 1:
+                continue
+            if index + 1 >= len(raw_instructions):
+                continue
+
+            _switch_id, switch_opcode, switch_operands, _switch_line = raw_instructions[
+                index + 1
+            ]
+            if switch_opcode != "OpSwitch" or len(switch_operands) < 2:
+                continue
+
+            merge_label = operands[0]
+            selector_operand, default_label = switch_operands[:2]
+            case_operands = switch_operands[2:]
+            if (
+                merge_label not in labels
+                or default_label not in labels
+                or len(case_operands) % 2 != 0
+            ):
+                continue
+
+            cases = []
+            case_labels = set()
+            for operand_index in range(0, len(case_operands), 2):
+                literal = case_operands[operand_index]
+                target_label = case_operands[operand_index + 1]
+                if target_label not in labels or target_label in case_labels:
+                    return None
+                case_labels.add(target_label)
+                case_body = self.spirv_assembly_switch_case_body(
+                    raw_instructions,
+                    labels,
+                    target_label,
+                    merge_label,
+                    expressions,
+                    names,
+                    decorations,
+                    member_decorations,
+                    member_names,
+                    types,
+                    variables_by_id,
+                    constants,
+                )
+                if case_body is None:
+                    return None
+                cases.append(CaseNode(literal, case_body))
+
+            if default_label in case_labels:
+                return None
+            default_body = self.spirv_assembly_switch_case_body(
+                raw_instructions,
+                labels,
+                default_label,
+                merge_label,
+                expressions,
+                names,
+                decorations,
+                member_decorations,
+                member_names,
+                types,
+                variables_by_id,
+                constants,
+            )
+            if default_body is None:
+                return None
+            cases.append(CaseNode(None, default_body))
+
+            prelude = self.spirv_assembly_linear_statements(
+                raw_instructions[:index],
+                expressions,
+                names,
+                decorations,
+                member_decorations,
+                member_names,
+                types,
+                variables_by_id,
+                constants,
+            )
+            postlude = self.spirv_assembly_linear_statements(
+                raw_instructions[labels[merge_label] + 1 :],
+                expressions,
+                names,
+                decorations,
+                member_decorations,
+                member_names,
+                types,
+                variables_by_id,
+                constants,
+            )
+            selector = self.spirv_assembly_operand_expression(
+                selector_operand,
+                expressions,
+                names,
+                decorations,
+                constants,
+            )
+            return [*prelude, SwitchNode(selector, cases), *postlude]
+
+        return None
+
+    def spirv_assembly_switch_case_body(
+        self,
+        raw_instructions,
+        labels,
+        label,
+        merge_label,
+        expressions,
+        names,
+        decorations,
+        member_decorations,
+        member_names,
+        types,
+        variables_by_id,
+        constants,
+    ):
+        block = self.spirv_assembly_label_block_instructions(
+            raw_instructions, labels, label, merge_label
+        )
+        if block is None or not self.spirv_assembly_selection_block_is_simple(block):
+            return None
+
+        body = self.spirv_assembly_linear_statements(
+            block,
+            expressions,
+            names,
+            decorations,
+            member_decorations,
+            member_names,
+            types,
+            variables_by_id,
+            constants,
+        )
+        if self.spirv_assembly_label_block_branches_to_merge(
+            raw_instructions, labels, label, merge_label
+        ):
+            body.append(BreakNode())
+        return body
+
+    def spirv_assembly_label_indices(self, raw_instructions):
+        return {
+            result_id: index
+            for index, (result_id, opcode, _operands, _line_number) in enumerate(
+                raw_instructions
+            )
+            if result_id and opcode == "OpLabel"
+        }
+
+    def spirv_assembly_label_block_branches_to_merge(
+        self, raw_instructions, labels, label, merge_label
+    ):
+        start = labels.get(label)
+        if start is None:
+            return False
+
+        for _result_id, opcode, operands, _line_number in raw_instructions[start + 1 :]:
+            if opcode == "OpLabel":
+                return False
+            if opcode == "OpBranch":
+                return bool(operands and operands[0] == merge_label)
+            if opcode in {
+                "OpReturn",
+                "OpReturnValue",
+                "OpKill",
+                "OpTerminateInvocation",
+                "OpDemoteToHelperInvocation",
+            }:
+                return False
+        return False
 
     def spirv_assembly_simple_selection_body(
         self,
@@ -2057,13 +2267,7 @@ class VulkanParser:
         if selection_count != 1:
             return None
 
-        labels = {
-            result_id: index
-            for index, (result_id, opcode, _operands, _line_number) in enumerate(
-                raw_instructions
-            )
-            if result_id and opcode == "OpLabel"
-        }
+        labels = self.spirv_assembly_label_indices(raw_instructions)
 
         for index, (_result_id, opcode, operands, _line_number) in enumerate(
             raw_instructions

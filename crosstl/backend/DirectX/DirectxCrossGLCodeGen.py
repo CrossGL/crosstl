@@ -1131,6 +1131,34 @@ class HLSLToCrossGLConverter:
                 parts.append(f"[{self.generate_expression(size, is_main)}]")
         return "".join(parts)
 
+    def collect_cbuffer_reserved_names(self, ast):
+        names = set()
+        for collection in (
+            getattr(ast, "structs", []) or [],
+            getattr(ast, "global_variables", []) or [],
+            getattr(ast, "functions", []) or [],
+            getattr(ast, "typedefs", []) or [],
+            getattr(ast, "enums", []) or [],
+        ):
+            for node in collection:
+                name = getattr(node, "name", None)
+                if isinstance(name, str) and name:
+                    if isinstance(node, FunctionNode):
+                        name = self.render_function_identifier(name)
+                    names.add(name)
+        return names
+
+    def unique_cbuffer_name(self, name, used_names):
+        base = name if isinstance(name, str) and name else "CBuffer"
+        candidate = base
+        if candidate not in used_names:
+            return candidate
+
+        index = 1
+        while f"{base}_{index}" in used_names:
+            index += 1
+        return f"{base}_{index}"
+
     def format_attributes(self, attributes, indent, skip_names=None):
         if not attributes:
             return ""
@@ -2345,14 +2373,17 @@ class HLSLToCrossGLConverter:
 
     def generate_cbuffers(self, ast):
         code = ""
+        used_names = self.collect_cbuffer_reserved_names(ast)
         for node in ast.cbuffers:
             if isinstance(node, StructNode):
+                cbuffer_name = self.unique_cbuffer_name(node.name, used_names)
+                used_names.add(cbuffer_name)
                 attributes = list(getattr(node, "attributes", []) or [])
                 if getattr(node, "is_tbuffer", False):
                     attributes = [AttributeNode("tbuffer")] + attributes
                 code += self.format_attributes(attributes, 1)
                 code += self.format_binding_attributes(node, 1)
-                code += f"    cbuffer {node.name} {{\n"
+                code += f"    cbuffer {cbuffer_name} {{\n"
                 for member in node.members:
                     for qualifier in getattr(member, "qualifiers", []) or []:
                         if qualifier in {"row_major", "column_major"}:

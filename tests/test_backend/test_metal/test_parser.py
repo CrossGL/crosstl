@@ -394,6 +394,26 @@ def test_parse_gnu_attribute_after_function_return_type():
     assert function.attributes[0].args == []
 
 
+def test_parse_gnu_attribute_between_function_qualifiers_and_return_type_from_spirv_cross():
+    # Reduced from:
+    # Repo: https://github.com/KhronosGroup/SPIRV-Cross
+    # Path: reference/shaders-ue4/asm/vert/texture-buffer.asm.vert
+    code = """
+    static inline __attribute__((always_inline))
+    uint2 spvTexelBufferCoord(uint tc) {
+        return uint2(tc % 4096, tc / 4096);
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+
+    assert function.name == "spvTexelBufferCoord"
+    assert function.return_type == "uint2"
+    assert function.attributes[0].name == "always_inline"
+    assert function.attributes[0].args == []
+    assert function.body[0].value.type_name == "uint2"
+
+
 def test_parse_coherent_memory_qualifier_from_mlx_fence_kernel():
     code = """
     [[kernel]] void input_coherent(

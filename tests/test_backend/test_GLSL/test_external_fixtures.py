@@ -746,6 +746,34 @@ EXTERNAL_FIXTURES = [
         """).strip(),
     ),
     ExternalFixture(
+        name="godot-betsy-bc1-hash-section-preamble",
+        repo="https://github.com/godotengine/godot",
+        commit="72cc0fc9a75bf041e84b9d37e7e31e17cb114a9e",
+        path="modules/betsy/bc1.glsl",
+        shader_type="compute",
+        code=textwrap.dedent("""
+            #[versions]
+
+            standard = "";
+            dithered = "#define BC1_DITHER";
+
+            #[compute]
+            #version 450
+
+            #VERSION_DEFINES
+
+            layout(binding = 0) uniform sampler2D srcTex;
+            layout(binding = 1, rg32ui) uniform restrict writeonly uimage2D dstTexture;
+
+            layout(local_size_x = 8,
+                    local_size_y = 8,
+                    local_size_z = 1) in;
+
+            void main() {
+            }
+        """).strip(),
+    ),
+    ExternalFixture(
         name="filament-surface-instancing-highp-object-uniforms",
         repo="https://github.com/google/filament",
         commit="48881c840bca50da515f0df82b61c9a5b996b19a",
@@ -1356,6 +1384,38 @@ def test_parse_godot_bracketed_stage_marker_fixture():
     assert vertex.qualifiers == ["in", "highp"]
     assert uv.layout == {"location": "4"}
     assert [function.name for function in ast.functions] == ["main"]
+
+
+def test_parse_godot_hash_section_preamble_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "godot-betsy-bc1-hash-section-preamble"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    src_tex = next(uniform for uniform in ast.uniforms if uniform.name == "srcTex")
+    dst_texture = next(
+        uniform for uniform in ast.uniforms if uniform.name == "dstTexture"
+    )
+
+    assert ast.preprocessor == ["#version 450", "#VERSION_DEFINES"]
+    assert ast.layouts == [
+        {
+            "layout": {"local_size_x": "8", "local_size_y": "8", "local_size_z": "1"},
+            "qualifiers": ["in"],
+        }
+    ]
+    assert src_tex.layout == {"binding": "0"}
+    assert dst_texture.layout == {"binding": "1", "rg32ui": None}
+    assert dst_texture.qualifiers == ["uniform", "restrict", "writeonly"]
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+    assert "#[versions]" not in crossgl
+    assert "dithered" not in crossgl
+    assert "#VERSION_DEFINES" in crossgl
+    assert "compute {" in crossgl
+    parse_crossgl(crossgl)
 
 
 def test_parse_filament_instancing_highp_object_uniforms_fixture():

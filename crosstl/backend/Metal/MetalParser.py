@@ -824,6 +824,7 @@ class MetalParser:
         idx = self.skip_leading_attribute_tokens_at(self.pos)
         while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
             idx += 1
+            idx = self.skip_leading_attribute_tokens_at(idx)
         if idx >= len(self.tokens):
             return False
 
@@ -833,6 +834,7 @@ class MetalParser:
             idx = self.skip_leading_attribute_tokens_at(idx)
             while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
                 idx += 1
+                idx = self.skip_leading_attribute_tokens_at(idx)
             if idx >= len(self.tokens):
                 return False
             tok_type = self.tokens[idx][0]
@@ -1269,7 +1271,7 @@ class MetalParser:
     def parse_global_variable(self, pre_alignas=None):
         attributes = self.parse_attributes()
         alignas_specs = pre_alignas or self.parse_alignas_specifiers()
-        vtype, qualifiers = self.parse_type_specifier()
+        vtype, qualifiers = self.parse_type_specifier(attributes=attributes)
         name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
         vtype = self.apply_declarator_type_suffix(vtype, type_suffix)
         var_attributes = self.parse_attributes()
@@ -1304,10 +1306,19 @@ class MetalParser:
         self.eat("SEMICOLON")
         return var_node
 
-    def parse_type_specifier(self):
+    def parse_type_specifier(self, attributes=None):
         qualifiers = []
-        while self.is_type_qualifier_start():
-            qualifiers.append(self.parse_type_qualifier())
+        while (
+            self.is_type_qualifier_start()
+            or self.current_token[0] == "ATTRIBUTE"
+            or self.is_gnu_attribute_start()
+        ):
+            if self.is_type_qualifier_start():
+                qualifiers.append(self.parse_type_qualifier())
+                continue
+            parsed_attributes = self.parse_attributes()
+            if attributes is not None:
+                attributes.extend(parsed_attributes)
 
         if self.current_token[0] == "STRUCT" and self.peek(1)[0] == "IDENTIFIER":
             self.eat("STRUCT")
@@ -1937,7 +1948,9 @@ class MetalParser:
             qualifier = self.current_token[1]
             self.eat(self.current_token[0])
 
-        return_type, _return_qualifiers = self.parse_type_specifier()
+        return_type, _return_qualifiers = self.parse_type_specifier(
+            attributes=attributes
+        )
 
         if self.current_token[0] in STAGE_TOKENS and self.peek(1)[0] != "LPAREN":
             if qualifier is None:
@@ -2017,7 +2030,7 @@ class MetalParser:
                     f"Expected comma or closing parenthesis, got {self.current_token[0]}"
                 )
             attributes = self.parse_attributes()
-            vtype, qualifiers = self.parse_type_specifier()
+            vtype, qualifiers = self.parse_type_specifier(attributes=attributes)
             name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
             param_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             default_value = None
@@ -2322,7 +2335,7 @@ class MetalParser:
         attributes = self.parse_attributes()
         alignas_specs = self.parse_alignas_specifiers()
         attributes.extend(self.parse_attributes())
-        vtype, qualifiers = self.parse_type_specifier()
+        vtype, qualifiers = self.parse_type_specifier(attributes=attributes)
         name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
         vtype = self.apply_declarator_type_suffix(vtype, type_suffix)
         attributes.extend(self.parse_attributes())

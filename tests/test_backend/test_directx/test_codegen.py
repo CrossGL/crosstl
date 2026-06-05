@@ -1680,6 +1680,71 @@ def test_codegen_cbuffer_member_layout_metadata_passthrough():
     assert roughness_offset.member == "x"
 
 
+def test_codegen_cbuffer_name_matching_struct_is_renamed_for_crossgl():
+    # Source: microsoft/DirectX-Graphics-Samples
+    # Libraries/D3D12RaytracingFallback/src/GpuBvh2CopyBindings.h
+    hlsl = textwrap.dedent("""
+        struct DispatchWidthConstant
+        {
+            uint DispatchWidth;
+        };
+
+        cbuffer DispatchWidthConstant : register(b0)
+        {
+            DispatchWidthConstant Constants;
+        };
+
+        float main() : SV_Target0
+        {
+            return Constants.DispatchWidth;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "struct DispatchWidthConstant" in output
+    assert "@ register(b0)" in output
+    assert "cbuffer DispatchWidthConstant_1" in output
+    assert "DispatchWidthConstant Constants;" in output
+    parse_crossgl(output)
+
+
+def test_codegen_duplicate_cbuffer_names_are_renamed_for_crossgl():
+    # Source: microsoft/DirectX-Graphics-Samples
+    # Libraries/D3D12RaytracingFallback/src/FallbackLayerUnitTests/ReadRootConstants.hlsl
+    hlsl = textwrap.dedent("""
+        cbuffer Constants : register(b0)
+        {
+            float4 color0;
+        }
+
+        cbuffer Constants : register(b1)
+        {
+            float4 color1;
+        }
+
+        cbuffer Constants : register(b2)
+        {
+            float4 color2;
+        }
+
+        float4 main() : SV_Target0
+        {
+            return color0 + color1 + color2;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "cbuffer Constants {" in output
+    assert "cbuffer Constants_1 {" in output
+    assert "cbuffer Constants_2 {" in output
+    assert "@ register(b0)" in output
+    assert "@ register(b1)" in output
+    assert "@ register(b2)" in output
+    parse_crossgl(output)
+
+
 def test_codegen_hlsl_tbuffer_roundtrips_with_texture_register():
     hlsl = textwrap.dedent("""
         tbuffer LookupData : register(t3, space2) {

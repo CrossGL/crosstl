@@ -223,6 +223,7 @@ BRACKETED_STAGE_MARKERS = {
     "tessellation_control",
     "tessellation_evaluation",
 }
+GODOT_METADATA_SECTION_MARKERS = {"versions", "modes", "specializations"}
 
 ASSIGNMENT_TOKENS = {
     "EQUALS": "=",
@@ -391,6 +392,14 @@ class GLSLParser:
 
             if self.is_bracketed_stage_marker():
                 self.skip_bracketed_stage_marker()
+                continue
+
+            if self.is_godot_metadata_section_marker():
+                self.skip_godot_metadata_section()
+                continue
+
+            if self.is_hash_bracketed_stage_marker():
+                self.skip_hash_bracketed_marker()
                 continue
 
             if self.current_token[0] == "HASH":
@@ -699,6 +708,39 @@ class GLSLParser:
         self.eat("LBRACKET")
         self.eat("IDENTIFIER")
         self.eat("RBRACKET")
+
+    def hash_bracketed_marker_name(self):
+        if (
+            self.current_token[0] == "HASH"
+            and self.peek()[0] == "LBRACKET"
+            and self.peek(2)[0] == "IDENTIFIER"
+            and self.peek(3)[0] == "RBRACKET"
+        ):
+            return self.peek(2)[1]
+        return None
+
+    def is_hash_bracketed_stage_marker(self):
+        return self.hash_bracketed_marker_name() in BRACKETED_STAGE_MARKERS
+
+    def is_godot_metadata_section_marker(self):
+        return self.hash_bracketed_marker_name() in GODOT_METADATA_SECTION_MARKERS
+
+    def skip_hash_bracketed_marker(self):
+        self.eat("HASH")
+        self.eat("LBRACKET")
+        self.eat("IDENTIFIER")
+        self.eat("RBRACKET")
+
+    def skip_godot_metadata_section(self):
+        self.skip_hash_bracketed_marker()
+        while self.current_token[0] != "EOF":
+            self.skip_newlines()
+            if self.is_hash_bracketed_stage_marker():
+                return
+            if self.is_godot_metadata_section_marker():
+                self.skip_hash_bracketed_marker()
+                continue
+            self.advance()
 
     def parse_layout_qualifier(self):
         qualifiers = {}

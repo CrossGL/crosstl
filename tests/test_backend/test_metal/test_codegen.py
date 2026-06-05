@@ -355,6 +355,28 @@ def test_codegen_return_type_before_stage_qualifier_from_metal_cpp_sample():
     parse_crossgl(crossgl)
 
 
+def test_codegen_gnu_attribute_between_function_qualifiers_and_return_type_from_spirv_cross():
+    # Reduced from:
+    # Repo: https://github.com/KhronosGroup/SPIRV-Cross
+    # Path: reference/shaders-ue4/asm/vert/texture-buffer.asm.vert
+    code = """
+    static inline __attribute__((always_inline))
+    uint2 spvTexelBufferCoord(uint tc) {
+        return uint2(tc % 4096, tc / 4096);
+    }
+
+    uint2 main0(uint tc) {
+        return spvTexelBufferCoord(tc);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "uvec2 spvTexelBufferCoord(uint tc) @always_inline" in crossgl
+    assert "return uvec2(tc % 4096, tc / 4096);" in crossgl
+    assert "uvec2 main0(uint tc)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_reference_to_array_params_from_spirv_cross_reference():
     # Upstream repo: https://github.com/KhronosGroup/SPIRV-Cross
     # Commit: 9fbd8b789e351c2bb772cec570c1105962056b43

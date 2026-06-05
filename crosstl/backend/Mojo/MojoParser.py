@@ -1666,6 +1666,7 @@ class MojoParser:
         return left
 
     def is_inline_if_expression(self):
+        layout_tokens = {"NEWLINE", "INDENT", "DEDENT"}
         depth = 0
         idx = self.pos
         while idx < len(self.tokens):
@@ -1679,7 +1680,10 @@ class MojoParser:
             elif depth == 0:
                 if token_type == "ELSE":
                     return True
-                if token_type in {"NEWLINE", "DEDENT", "EOF", "COMMA", "SEMICOLON"}:
+                if token_type in layout_tokens and self.expression_layout_depth:
+                    idx += 1
+                    continue
+                if token_type in layout_tokens | {"EOF", "COMMA", "SEMICOLON"}:
                     return False
             idx += 1
         return False

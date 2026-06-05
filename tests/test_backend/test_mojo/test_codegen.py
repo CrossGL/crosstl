@@ -2395,6 +2395,27 @@ def test_ternary_operator_codegen():
         pytest.fail("Ternary operator parsing or code generation not implemented.")
 
 
+def test_multiline_parenthesized_inline_if_codegen_from_mojo_gpu_puzzles():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # problems/p31/p31.mojo sophisticated_kernel cached_correction.
+    code = """
+    def sophisticated_kernel():
+        var cached_correction = (
+            shared_cache[local_i + 3072] if local_i
+            < 1024 else series_correction
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "var cached_correction = ((local_i < 1024) ? "
+        "shared_cache[(local_i + 3072)] : series_correction);"
+    ) in generated_code
+    assert "Unhandled expression" not in generated_code
+
+
 def test_import_codegen():
     code = """
     import math
