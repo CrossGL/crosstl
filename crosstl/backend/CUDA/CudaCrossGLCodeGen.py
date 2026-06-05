@@ -65,9 +65,30 @@ class CudaToCrossGLConverter:
         "ulonglong3": "vec3<u64>",
         "ulonglong4": "vec4<u64>",
     }
+    VECTOR1_TYPE_MAPPING = {
+        "char1": "i8",
+        "uchar1": "u8",
+        "short1": "i16",
+        "ushort1": "u16",
+        "int1": "i32",
+        "uint1": "u32",
+        "long1": "i64",
+        "ulong1": "u64",
+        "longlong1": "i64",
+        "ulonglong1": "u64",
+        "float1": "f32",
+        "double1": "f64",
+    }
     VECTOR_CONSTRUCTOR_MAPPING = {
+        **VECTOR1_TYPE_MAPPING,
         **VECTOR_TYPE_MAPPING,
-        **{f"make_{name}": mapped for name, mapped in VECTOR_TYPE_MAPPING.items()},
+        **{
+            f"make_{name}": mapped
+            for name, mapped in {
+                **VECTOR1_TYPE_MAPPING,
+                **VECTOR_TYPE_MAPPING,
+            }.items()
+        },
     }
     CUDA_TEXTURE_TYPE_MAPPING = {
         "1": "sampler1D",
@@ -148,6 +169,7 @@ class CudaToCrossGLConverter:
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
+        self.vector1_name_scopes = [{}]
         self.user_function_names = set()
         self.global_resource_object_type_hints = {}
         self.struct_resource_member_hints = {}
@@ -162,6 +184,7 @@ class CudaToCrossGLConverter:
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
+        self.vector1_name_scopes = [{}]
         self.user_function_names = self.collect_user_function_names(ast_node)
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
@@ -3518,6 +3541,7 @@ class CudaToCrossGLConverter:
             return ", ".join(self.format_statement_fragment(item) for item in stmt)
         if isinstance(stmt, VariableNode):
             var_type = self.convert_cuda_variable_type_to_crossgl(stmt.vtype, stmt.name)
+            self.register_vector1_name(stmt.name, stmt.vtype)
             name = self.register_identifier_name(stmt.name)
             if stmt.value:
                 value = self.visit(stmt.value)
@@ -3632,11 +3656,13 @@ class CudaToCrossGLConverter:
             )
         )
         self.push_identifier_name_scope()
+        self.push_vector1_name_scope()
         try:
             for param in node.params:
                 param_type = self.convert_cuda_variable_type_to_crossgl(
                     param.vtype, param.name
                 )
+                self.register_vector1_name(param.name, param.vtype)
                 param_name = self.register_identifier_name(param.name)
                 params.append(f"{param_type} {param_name}")
 
@@ -3664,6 +3690,7 @@ class CudaToCrossGLConverter:
                 self.pop_packed_argument_scope()
                 self.indent_level -= 1
         finally:
+            self.pop_vector1_name_scope()
             self.pop_identifier_name_scope()
             self.pop_resource_object_hint_scope()
 
@@ -3695,8 +3722,10 @@ class CudaToCrossGLConverter:
             )
         )
         self.push_identifier_name_scope()
+        self.push_vector1_name_scope()
         try:
             for param in kernel.params:
+                self.register_vector1_name(param.name, param.vtype)
                 param_name = self.register_identifier_name(param.name)
                 if "*" in param.vtype:
                     element_type = self.convert_cuda_pointer_element_type(param.vtype)
@@ -3750,6 +3779,7 @@ class CudaToCrossGLConverter:
                 self.pop_packed_argument_scope()
                 self.indent_level -= 1
         finally:
+            self.pop_vector1_name_scope()
             self.pop_identifier_name_scope()
             self.pop_resource_object_hint_scope()
 
@@ -3807,6 +3837,7 @@ class CudaToCrossGLConverter:
             return
 
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
+        self.register_vector1_name(node.name, node.vtype)
         output_name = self.register_identifier_name(node.name)
 
         self.register_packed_argument_list(node)
@@ -3896,6 +3927,34 @@ class CudaToCrossGLConverter:
     def pop_type_alias_scope(self):
         if len(self.type_alias_scopes) > 1:
             self.type_alias_scopes.pop()
+
+    def push_vector1_name_scope(self):
+        self.vector1_name_scopes.append({})
+
+    def pop_vector1_name_scope(self):
+        if len(self.vector1_name_scopes) > 1:
+            self.vector1_name_scopes.pop()
+
+    def register_vector1_name(self, name, type_name):
+        if not name:
+            return
+        self.vector1_name_scopes[-1][name] = (
+            self.cuda_vector1_scalar_type(type_name) is not None
+        )
+
+    def is_vector1_name(self, name):
+        if not isinstance(name, str):
+            return False
+        for scope in reversed(self.vector1_name_scopes):
+            if name in scope:
+                return scope[name]
+        return False
+
+    def cuda_vector1_scalar_type(self, type_name):
+        type_name = self.strip_type_qualifiers(type_name)
+        if "*" in type_name or self.has_array_suffix(type_name):
+            return None
+        return self.VECTOR1_TYPE_MAPPING.get(type_name)
 
     def register_type_alias(self, name, alias_type):
         self.type_alias_scopes[-1][name] = alias_type
@@ -3991,6 +4050,7 @@ class CudaToCrossGLConverter:
 
         # Convert to workgroup memory in CrossGL
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
+        self.register_vector1_name(node.name, node.vtype)
         if getattr(node, "is_dynamic_shared_memory", False):
             self.emit(
                 f"// CUDA dynamic shared memory: {node.name} uses launch-time "
@@ -4005,6 +4065,7 @@ class CudaToCrossGLConverter:
     def visit_ConstantMemoryNode(self, node):
         # Convert to uniform buffer in CrossGL
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
+        self.register_vector1_name(node.name, node.vtype)
         if node.value:
             value = self.visit(node.value)
             self.emit(
@@ -5192,6 +5253,8 @@ class CudaToCrossGLConverter:
     def visit_MemberAccessNode(self, node):
         obj = self.visit(node.object)
         operator = "->" if getattr(node, "is_pointer", False) else "."
+        if node.member == "x" and operator == "." and self.is_vector1_name(node.object):
+            return obj
         return f"{obj}{operator}{node.member}"
 
     def visit_ArrayAccessNode(self, node):
@@ -5488,6 +5551,7 @@ class CudaToCrossGLConverter:
             "float": "f32",
             "double": "f64",
             "size_t": "u32",
+            **self.VECTOR1_TYPE_MAPPING,
             **self.VECTOR_TYPE_MAPPING,
             "dim3": "vec3<u32>",
         }

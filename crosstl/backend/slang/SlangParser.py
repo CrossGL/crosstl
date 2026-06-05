@@ -1871,6 +1871,9 @@ class SlangParser:
             self.eat("IDENTIFIER")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        generic_parameters = None
+        if self.current_token[0] == "LESS_THAN":
+            generic_parameters = self.parse_generic_type_suffix()
         underlying_type = None
         if self.current_token[0] == "COLON":
             self.eat("COLON")
@@ -1899,6 +1902,7 @@ class SlangParser:
             self.eat("SEMICOLON")
         enum = EnumNode(name, members)
         enum.kind = enum_kind
+        enum.generic_parameters = generic_parameters
         enum.underlying_type = underlying_type
         enum.qualifiers = qualifiers
         return enum

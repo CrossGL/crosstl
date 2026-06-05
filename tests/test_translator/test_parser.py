@@ -335,6 +335,29 @@ def test_preprocessor_and_precision_parsing():
     assert "precision" in names
 
 
+def test_multiline_preprocessor_directive_splices_before_parse():
+    # HLSL and GLSL allow directives to continue when a backslash precedes EOL.
+    code = """
+    #define SCALE(x) \\
+        ((x) * 2)
+    shader main {
+        compute {
+            void main() {
+                float scaled = SCALE(4.0);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+    directive = ast.preprocessors[0]
+    statement = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements[0]
+
+    assert isinstance(directive, PreprocessorNode)
+    assert directive.directive == "define"
+    assert directive.content == "SCALE(x)         ((x) * 2)"
+    assert statement.name == "scaled"
+
+
 def test_else_if_statement():
     code = """
     shader main {

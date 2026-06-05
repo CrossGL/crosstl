@@ -1897,6 +1897,10 @@ class MetalToCrossGLConverter:
         if atomic_alias:
             return f"{atomic_alias}{suffix}"
 
+        function_table_alias = self.function_table_type_alias(base)
+        if function_table_alias:
+            return f"{function_table_alias}{suffix}"
+
         pixel_payload_type = self.pixel_data_payload_type(base)
         if pixel_payload_type:
             return f"{self.map_type(pixel_payload_type)}{suffix}"
@@ -1931,6 +1935,15 @@ class MetalToCrossGLConverter:
             "uint64": "atomic_ulong",
             "float": "atomic_float",
         }.get(element_type)
+
+    def function_table_type_alias(self, metal_type):
+        base_name, generic_args = self.generic_type_parts(metal_type)
+        if (
+            base_name in {"visible_function_table", "intersection_function_table"}
+            and generic_args
+        ):
+            return base_name
+        return None
 
     def pixel_data_payload_type(self, metal_type):
         base_name, generic_args = self.generic_type_parts(metal_type)

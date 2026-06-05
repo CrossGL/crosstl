@@ -653,18 +653,25 @@ class GLSLToCrossGLConverter:
 
     def ssbo_binding_attribute_suffix(self, var):
         layout = getattr(var, "layout", None) or {}
+        attributes = []
+        descriptor_set = layout.get("set")
+        if descriptor_set is not None:
+            attributes.append(f"@set({self.layout_value_to_string(descriptor_set)})")
         binding = layout.get("binding")
-        return (
-            f" @binding({self.layout_value_to_string(binding)})"
-            if binding is not None
-            else ""
-        )
+        if binding is not None:
+            attributes.append(f"@binding({self.layout_value_to_string(binding)})")
+        return f" {' '.join(attributes)}" if attributes else ""
 
     def ssbo_block_attribute_suffix(self, var):
+        layout = getattr(var, "layout", None) or {}
         layout_names = self.ssbo_block_layout_names(var)
         attributes = [f"@glsl_buffer_block({', '.join(layout_names)})"]
         if self.is_shader_record_buffer_block(var):
             self.validate_shader_record_layout(var)
+
+        descriptor_set = layout.get("set")
+        if descriptor_set is not None:
+            attributes.append(f"@set({self.layout_value_to_string(descriptor_set)})")
 
         binding = self.ssbo_binding(var)
         if binding is not None:
@@ -840,6 +847,9 @@ class GLSLToCrossGLConverter:
 
         attributes = []
         layout = getattr(var, "layout", None) or {}
+        descriptor_set = layout.get("set")
+        if descriptor_set is not None:
+            attributes.append(f"@set({self.layout_value_to_string(descriptor_set)})")
         binding = layout.get("binding")
         if binding is not None:
             attributes.append(f"@binding({self.layout_value_to_string(binding)})")

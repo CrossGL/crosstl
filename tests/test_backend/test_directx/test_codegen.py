@@ -1017,6 +1017,26 @@ def test_codegen_template_style_vector_matrix_types_and_constructors():
     parse_crossgl(output)
 
 
+def test_codegen_signedness_prefixed_int1_aliases_from_microsoft_docs_reparse():
+    # Sources: Microsoft Learn HLSL vector and scalar type docs.
+    # URLs:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
+    crossgl = generate_crossgl("""
+        uint4 main() : SV_Target0 {
+            unsigned int1 unsignedOne = 1;
+            signed int1 signedOne = -1;
+            return uint4(unsignedOne, uint(signedOne), 0, 1);
+        }
+    """)
+
+    assert "uint unsignedOne = 1;" in crossgl
+    assert "int signedOne = -1;" in crossgl
+    assert "unsigned int1" not in crossgl
+    assert "signed int1" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_struct_template_methods_semantic_case_from_dxc_spirv():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/CodeGenSPIRV/use.rvalue.for.member-expr.of.array-subscript.hlsl

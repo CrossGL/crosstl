@@ -3252,6 +3252,8 @@ class HLSLToCrossGLConverter:
         if signedness == "unsigned":
             if base == "int":
                 return "uint"
+            if base == "int1":
+                return "uint1"
             if re.fullmatch(r"int[2-4]", base):
                 return "u" + base
             int_matrix_match = re.fullmatch(r"int([1-4])x([1-4])", base)
@@ -3266,6 +3268,7 @@ class HLSLToCrossGLConverter:
         if signedness == "signed":
             if (
                 base == "int"
+                or base == "int1"
                 or re.fullmatch(r"int[2-4]", base)
                 or re.fullmatch(r"int[1-4]x[1-4]", base)
             ):

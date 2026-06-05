@@ -662,6 +662,27 @@ def test_enum_declarations_codegen_from_gpu_printing_sample():
     assert "PrintF = 2 + 1," in generated_code
 
 
+def test_generic_enum_class_codegen_reparse_from_upstream_bug_test():
+    # Reduced from shader-slang/slang tests/bugs/11042-generic-enum-scope-conflict.slang.
+    code = """
+    enum class GenericEnum<T>
+    {
+        A,
+        B,
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "enum GenericEnum" in generated_code
+    assert "GenericEnum<" not in generated_code
+    assert "A," in generated_code
+    assert "B," in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_reverse_codegen_rejects_interface_and_conformance_constructs():
     code = """
     interface IFoo {

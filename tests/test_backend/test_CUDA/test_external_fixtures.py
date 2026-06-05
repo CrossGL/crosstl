@@ -197,6 +197,40 @@ def test_cuda_programming_guide_syncthreads_predicate_variants_codegen_reparse()
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_programming_guide_one_component_vectors_codegen_reparse():
+    # Upstream source:
+    # NVIDIA CUDA Programming Guide v12.4, section 7.3.1 Built-in Vector Types.
+    source = """
+    struct Pair {
+        float x;
+    };
+
+    float unpack(Pair pair, float1 packed) {
+        float1 local = make_float1(2.0f);
+        int1 count(3);
+        return pair.x + packed.x + local.x + count.x;
+    }
+    """
+
+    ast = parse_cuda(source)
+    function = ast.functions[0]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert function.params[1].vtype == "float1"
+    assert isinstance(function.body[0], VariableNode)
+    assert function.body[0].vtype == "float1"
+    assert isinstance(function.body[0].value, FunctionCallNode)
+    assert function.body[0].value.name == "make_float1"
+    assert "f32 unpack(Pair pair, f32 packed)" in crossgl
+    assert "var local: f32 = f32(2.0f);" in crossgl
+    assert "var count: i32 = i32(3);" in crossgl
+    assert "pair.x" in crossgl
+    assert "packed.x" not in crossgl
+    assert "local.x" not in crossgl
+    assert "count.x" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_simple_vote_intrinsics_warp_vote_codegen_reparse():
     source = """
     __global__ void VoteAnyKernel1(unsigned int *input,

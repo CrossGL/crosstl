@@ -4725,6 +4725,14 @@ class HipToCrossGLConverter:
         if function_name in {"__activemask", "__ballot_sync"}:
             return self.format_unsupported_hip_warp_intrinsic(function_name, args)
 
+        if function_name in {"__any", "__all"}:
+            if len(args) != 1:
+                return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            predicate = self.format_wave_predicate(args[0])
+            if function_name == "__any":
+                return f"(WaveActiveAnyTrue({predicate}) ? 1 : 0)"
+            return f"(WaveActiveAllTrue({predicate}) ? 1 : 0)"
+
         if function_name in {"__any_sync", "__all_sync"}:
             if len(args) != 2 or not self.is_full_or_active_warp_mask(args[0]):
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
@@ -4753,8 +4761,6 @@ class HipToCrossGLConverter:
 
         if function_name in {
             "__ballot",
-            "__any",
-            "__all",
             "__shfl",
             "__shfl_up",
             "__shfl_down",

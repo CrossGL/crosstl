@@ -582,9 +582,39 @@ def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
 
     crossgl = generate_crossgl(code, "fragment")
 
-    assert "texture2D Textures[] @binding(0);" in crossgl
-    assert "sampler ImmutableSampler @binding(0);" in crossgl
+    assert "texture2D Textures[] @set(0) @binding(0);" in crossgl
+    assert "sampler ImmutableSampler @set(1) @binding(0);" in crossgl
     assert "cbuffer Uniforms" not in crossgl
+
+
+def test_codegen_vulkan_descriptor_sets_preserved_on_resources():
+    # Reduced from Khronos Vulkan GLSL examples that use descriptor
+    # layout(set = <set-index>, binding = <binding-index>) on resources.
+    code = textwrap.dedent("""
+        #version 450
+        #extension GL_KHR_vulkan_glsl : enable
+
+        layout(set = 1, binding = 2) uniform sampler2D colorTex;
+        layout(set = 3, binding = 7, r32ui) coherent readonly uniform uimage2D counters;
+        layout(set = 4, binding = 8, rgba32f) writeonly uniform image2D outImage;
+
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            fragColor = texture(colorTex, vec2(0.5)) + vec4(imageLoad(counters, ivec2(0)));
+            imageStore(outImage, ivec2(0), fragColor);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "sampler2D colorTex @set(1) @binding(2);" in crossgl
+    assert (
+        "uimage2D counters @set(3) @binding(7) @r32ui @coherent @readonly;" in crossgl
+    )
+    assert "image2D outImage @set(4) @binding(8) @rgba32f @writeonly;" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    parse_crossgl(crossgl)
 
 
 def test_codegen_external_yuv_sampler_uniforms_are_resources_from_glslang():
@@ -689,8 +719,14 @@ def test_codegen_vulkan_subpass_inputs_are_resources():
 
     crossgl = generate_crossgl(code, "fragment")
 
-    assert "subpassInput colorInput @binding(0) @input_attachment_index(0);" in crossgl
-    assert "usubpassInputMS idInput @binding(1) @input_attachment_index(1);" in crossgl
+    assert (
+        "subpassInput colorInput @set(0) @binding(0) @input_attachment_index(0);"
+        in crossgl
+    )
+    assert (
+        "usubpassInputMS idInput @set(0) @binding(1) @input_attachment_index(1);"
+        in crossgl
+    )
     assert "subpassLoad(colorInput)" in crossgl
     assert "subpassLoad(idInput, 0)" in crossgl
     assert "cbuffer Uniforms" not in crossgl

@@ -892,6 +892,30 @@ class TestHipCodeGen:
         assert "__shfl_sync(0xffffffffffffffff, value, lane)" not in result
         assert "__activemask();" not in result
 
+    def test_rocm_docs_legacy_warp_any_all_codegen_reparse(self):
+        # Source: ROCm HIP C++ language extensions, HIP 7.2.53211 docs.
+        # URL: https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/
+        #      hip_cpp_language_extensions.html#warp-vote-and-ballot-functions
+        code = """
+        __global__ void warp_vote(int* out, int pred) {
+            int any_set = __any(pred);
+            int all_set = __all(pred);
+            out[threadIdx.x] = any_set + all_set;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "var any_set: i32 = (WaveActiveAnyTrue((pred != 0)) ? 1 : 0);" in result
+        assert "var all_set: i32 = (WaveActiveAllTrue((pred != 0)) ? 1 : 0);" in result
+        assert "__any(pred)" not in result
+        assert "__all(pred)" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_public_llama_cpp_full_warp_shfl_xor_sync_codegen(self):
         # Upstream: ggml-org/llama.cpp@7c158fbb4aec1bdc9c81d6ca0e785139f4826fae,
         # ggml/src/ggml-cuda/argmax.cu.

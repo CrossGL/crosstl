@@ -1685,6 +1685,41 @@ def test_enum_declarations_from_gpu_printing_sample():
     assert isinstance(valued_enum.members[1][1], BinaryOpNode)
 
 
+def test_generic_enum_class_from_upstream_bug_tests():
+    # Reduced from shader-slang/slang tests/bugs/11042-generic-enum-scope-conflict.slang
+    # and tests/diagnostics/generic-enum-underlying-type.slang.
+    code = """
+    enum class GenericEnum<T>
+    {
+        A,
+        B,
+    }
+
+    enum class TestEnum<T : IArithmetic> : T
+    {
+        X = T(0),
+        Y = T(1),
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generic_enum, typed_enum = ast.enums
+
+    assert generic_enum.name == "GenericEnum"
+    assert generic_enum.kind == "class"
+    assert generic_enum.generic_parameters == "<T>"
+    assert generic_enum.underlying_type is None
+    assert generic_enum.members == [("A", None), ("B", None)]
+
+    assert typed_enum.name == "TestEnum"
+    assert typed_enum.kind == "class"
+    assert typed_enum.generic_parameters == "<T:IArithmetic>"
+    assert typed_enum.underlying_type == "T"
+    assert typed_enum.members[0][0] == "X"
+    assert isinstance(typed_enum.members[0][1], FunctionCallNode)
+
+
 def test_function_generic_where_conformance_constraint_parsing():
     code = """
     int useFoo<T>(T value) where T : IFoo {

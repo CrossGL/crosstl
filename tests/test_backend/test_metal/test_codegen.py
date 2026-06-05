@@ -2173,6 +2173,10 @@ def test_codegen_using_alias():
 
 
 def test_codegen_function_table_call_and_icb_methods():
+    # Source inspiration: Apple WWDC20 "Get to know Metal function pointers"
+    # shows visible_function_table<T> resources passed through buffer bindings and
+    # invoked through indexed table calls.
+    # https://developer.apple.com/videos/play/wwdc2020/10013/
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -2190,9 +2194,12 @@ def test_codegen_function_table_call_and_icb_methods():
     }
     """
     result = convert(code)
+    assert "visible_function_table vft @buffer(0);" in result
+    assert "visible_function_table<" not in result
     assert "vft[0](p)" in result
     assert "icb.reset()" in result
     assert "icb.draw_primitives" in result
+    assert parse_crossgl(result) is not None
 
 
 def test_codegen_icb_extended_methods():
