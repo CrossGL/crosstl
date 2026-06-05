@@ -631,6 +631,30 @@ def test_scan_project_reports_unsupported_source_overrides(tmp_path):
     assert "unknown-backend" in payload["diagnostics"][0]["message"]
 
 
+def test_scan_project_reports_unsupported_source_override_without_matches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project.sources]
+            "gpu/*.shader" = "unknown-backend"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(load_project_config(repo)).to_report().to_json()
+
+    assert payload["skipped"] == []
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.config.unsupported-source-override": 1,
+        "project.scan.empty": 1,
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.unsupported-source-override"
+    assert "unknown-backend" in diagnostic["message"]
+    assert diagnostic["location"]["file"] == "crosstl.toml"
+
+
 def test_scan_project_reports_source_override_patterns_outside_project(tmp_path):
     repo = tmp_path / "repo"
     outside = tmp_path / "outside"

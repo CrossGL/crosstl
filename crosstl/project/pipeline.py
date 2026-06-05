@@ -993,6 +993,25 @@ def _scan_pattern_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
                 missing_capabilities=["source.override"],
             )
         )
+    if config.source_overrides:
+        register_default_sources()
+        discover_backend_plugins()
+    supported_sources = ", ".join(SOURCE_REGISTRY.names())
+    for pattern, backend in config.source_overrides.items():
+        if _is_non_empty_string(backend) and SOURCE_REGISTRY.get(backend):
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.config.unsupported-source-override",
+                message=(
+                    f"Source override '{pattern}' references unsupported backend "
+                    f"'{backend}'. Supported source backends: {supported_sources}"
+                ),
+                location=location,
+                missing_capabilities=["source.override"],
+            )
+        )
     return diagnostics
 
 
@@ -1320,18 +1339,6 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
                     "reason": "unsupported-source-override",
                     "sourceOverride": override,
                 }
-            )
-            diagnostics.append(
-                ProjectDiagnostic(
-                    severity="error",
-                    code="project.config.unsupported-source-override",
-                    message=(
-                        f"Source override for {relative_path} references "
-                        f"unsupported backend '{override}'."
-                    ),
-                    location=_config_location(config),
-                    missing_capabilities=["source.override"],
-                )
             )
             continue
         if not source_spec:
