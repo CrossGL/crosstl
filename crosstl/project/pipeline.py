@@ -3642,6 +3642,8 @@ def _source_map_contract_reasons(
         reasons.append(f"{prefix}.mappings must be a list")
     elif not mappings:
         reasons.append(f"{prefix}.mappings must not be empty")
+    elif len(mappings) != 1:
+        reasons.append(f"{prefix}.mappings must contain one file-level mapping")
     else:
         for mapping_index, mapping in enumerate(mappings):
             mapping_prefix = f"{prefix}.mappings[{mapping_index}]"

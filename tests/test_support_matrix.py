@@ -188,9 +188,15 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
 
     for backend_support in feature["support"].values():
         assert "non-empty source-map mappings" in backend_support["notes"]
+        assert "single file-level source-map mapping" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_empty_source_map_mappings"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_multiple_file_level_"
+            "source_map_mappings"
         ) in backend_support["evidence"]
 
 
@@ -214,6 +220,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "required and canonical artifact provenance" in backend_support["notes"]
         assert "required translated artifact source maps" in backend_support["notes"]
         assert "non-empty source-map mappings" in backend_support["notes"]
+        assert "single file-level source-map mapping" in backend_support["notes"]
         assert "repository-relative file paths" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -251,6 +258,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_empty_source_map_mappings"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_multiple_file_level_"
+            "source_map_mappings"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

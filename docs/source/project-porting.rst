@@ -72,10 +72,11 @@ Validate artifacts referenced by a report:
 
 Validation exits nonzero when the report metadata is malformed, artifact
 records, source-map records, or preserved diagnostics are malformed, source-map
-or diagnostic location spans are internally inconsistent, diagnostic location
-file paths or artifact source paths are not repository-relative, project target
-lists are not normalized and deduplicated, diagnostic or artifact targets are
-not declared by the report, artifact sources are not declared translation units,
+mapping lists are empty or do not contain one file-level mapping, source-map or
+diagnostic location spans are internally inconsistent, diagnostic location file
+paths or artifact source paths are not repository-relative, project target lists
+are not normalized and deduplicated, diagnostic or artifact targets are not
+declared by the report, artifact sources are not declared translation units,
 embedded validation records reference artifacts not declared by the report,
 validation records contain duplicate identities or inconsistent status fields,
 summarized embedded validation omits declared artifacts, external corpus entry
@@ -219,10 +220,10 @@ Project reports are JSON documents with:
   source/generated hash status fields, aggregate validation artifact and
   hash-status summary counts, failed artifact error metadata checks, required
   artifact provenance and provenance value checks, required translated artifact
-  source maps, source-map record shape, non-empty mapping list, span
-  consistency, and anchor consistency checks, external corpus record, per-entry
-  artifact count, and summary checks, summary consistency checks, migration
-  action shape and target declaration checks,
+  source maps, source-map record shape, non-empty mapping list, single
+  file-level mapping, span consistency, and anchor consistency checks, external
+  corpus record, per-entry artifact count, and summary checks, summary
+  consistency checks, migration action shape and target declaration checks,
   preserved diagnostic shape, repository-relative file path, span consistency,
   and target declaration checks, validation toolchain status consistency
   checks, validation artifact and toolchain run record shape and duplicate
