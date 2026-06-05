@@ -4851,6 +4851,44 @@ def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatc
     )
 
 
+def test_validate_project_report_records_toolchain_timeouts(tmp_path, monkeypatch):
+    report_path = _write_opengl_toolchain_report(tmp_path / "repo")
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def run_with_timeout(*args, **kwargs):
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(
+            cmd=args[0],
+            timeout=kwargs["timeout"],
+            output="partial stdout",
+            stderr="partial stderr",
+        )
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_with_timeout)
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == "project.validate.toolchain-failed"
+    assert "timed out after" in payload["diagnostics"][0]["message"]
+    run = payload["validation"]["toolchainRuns"][0]
+    assert run["status"] == "failed"
+    assert run["returncode"] == project_pipeline.TOOLCHAIN_TIMEOUT_RETURNCODE
+    assert run["stdout"] == "partial stdout"
+    assert run["stderr"] == (
+        "partial stderr\n"
+        f"Validation toolchain timed out after "
+        f"{project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
+    )
+
+
 def test_inspect_project_report_summarizes_toolchain_run_failures(
     tmp_path, monkeypatch, capsys
 ):

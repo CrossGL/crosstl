@@ -66,6 +66,8 @@ TOOLCHAIN_BY_BACKEND = {
     "slang": ("slangc",),
     "vulkan": ("spirv-val", "spirv-as"),
 }
+TOOLCHAIN_SMOKE_TIMEOUT_SECONDS = 30
+TOOLCHAIN_TIMEOUT_RETURNCODE = 124
 
 CROSSL_TARGETS = {"cgl", "crossgl"}
 SHA256_HEX_LENGTH = 64
@@ -2088,20 +2090,51 @@ def _toolchain_run_diagnostics(
             continue
         target = str(run.get("target", "unknown"))
         artifact_path = str(run.get("path", ""))
+        reason = _toolchain_run_failure_reason(run)
+        message = f"Validation toolchain for target {target} rejected {artifact_path}."
+        if reason:
+            message = (
+                f"Validation toolchain for target {target} rejected "
+                f"{artifact_path}: {reason}"
+            )
         diagnostics.append(
             ProjectDiagnostic(
                 severity="error",
                 code="project.validate.toolchain-failed",
-                message=(
-                    f"Validation toolchain for target {target} rejected "
-                    f"{artifact_path}."
-                ),
+                message=message,
                 location=SourceLocation(file=artifact_path),
                 target=target,
                 missing_capabilities=["toolchain.validation"],
             )
         )
     return diagnostics
+
+
+def _toolchain_run_failure_reason(run: Mapping[str, Any]) -> str:
+    lines = [
+        line.strip()
+        for line in _toolchain_output_text(run.get("stderr")).splitlines()
+        if line.strip()
+    ]
+    for line in lines:
+        if "timed out" in line.lower():
+            return line
+    if lines:
+        return lines[0]
+    stdout_lines = [
+        line.strip()
+        for line in _toolchain_output_text(run.get("stdout")).splitlines()
+        if line.strip()
+    ]
+    return stdout_lines[0] if stdout_lines else ""
+
+
+def _toolchain_output_text(output: Any) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return str(output)
 
 
 def _validation_report_payload(
@@ -4191,27 +4224,41 @@ def _run_toolchain_smoke(
             command = [tools[0], "metal", "-v"]
         else:
             continue
-        completed = subprocess.run(
-            command,
-            cwd=str(root),
-            input=(
-                artifact_path.read_text(encoding="utf-8", errors="replace")
-                if command[-1] == "--stdin"
-                else None
-            ),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(root),
+                input=(
+                    artifact_path.read_text(encoding="utf-8", errors="replace")
+                    if command[-1] == "--stdin"
+                    else None
+                ),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
+            )
+            returncode = completed.returncode
+            stdout = _toolchain_output_text(completed.stdout)
+            stderr = _toolchain_output_text(completed.stderr)
+        except subprocess.TimeoutExpired as exc:
+            returncode = TOOLCHAIN_TIMEOUT_RETURNCODE
+            stdout = _toolchain_output_text(getattr(exc, "stdout", None))
+            stderr = _toolchain_output_text(getattr(exc, "stderr", None))
+            timeout_message = (
+                "Validation toolchain timed out after "
+                f"{TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
+            )
+            stderr = f"{stderr.rstrip()}\n{timeout_message}".strip()
         run = {
             "source": str(artifact.get("source", "")),
             "target": target,
             "path": str(artifact["path"]),
             "command": command,
-            "returncode": completed.returncode,
-            "status": "ok" if completed.returncode == 0 else "failed",
-            "stdout": completed.stdout[-4000:],
-            "stderr": completed.stderr[-4000:],
+            "returncode": returncode,
+            "status": "ok" if returncode == 0 else "failed",
+            "stdout": stdout[-4000:],
+            "stderr": stderr[-4000:],
         }
         if artifact.get("variant") is not None:
             run["variant"] = artifact["variant"]

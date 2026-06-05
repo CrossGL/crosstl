@@ -86,8 +86,10 @@ the repository, generated artifact hashes no longer match the files on disk,
 source files with recorded hashes are missing or changed, or opt-in toolchain
 smoke checks fail.
 Toolchain smoke checks only run for translated artifacts that still exist inside
-the repository. Validation reports include severity, diagnostic-code, and
-missing-capability rollups for generated and preserved diagnostics.
+the repository. Each smoke check is bounded by a short subprocess timeout, and
+timeouts are reported as failed toolchain runs. Validation reports include
+severity, diagnostic-code, and missing-capability rollups for generated and
+preserved diagnostics.
 
 Inspect an existing report as a concise JSON or text summary:
 
@@ -249,7 +251,8 @@ Project reports are JSON documents with:
   translated artifact existence checks, escaped output directory and
   artifact-path checks, source artifact existence and hash mismatch checks,
   generated artifact hash mismatch checks, optional external toolchain
-  availability, and opt-in toolchain smoke results.
+  availability, and opt-in toolchain smoke results including bounded timeout
+  failures.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. The report records documented non-goals for runtime API
   migration, build-system rewrites, and backend framework integration. Each
