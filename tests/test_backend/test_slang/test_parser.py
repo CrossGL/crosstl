@@ -2325,6 +2325,39 @@ def test_namespace_global_resource_array_parsing_from_current_slang_spirv_test()
     assert assignment.left.array.array.member == "textureTable"
 
 
+def test_dotted_namespace_global_resource_parsing_from_namespace_import_sample():
+    # Source: shader-slang/slang tests/language-feature/namespaces/namespace-import/m.slang
+    # at 52339028a2aa703271533454c6b9528a534bac31.
+    code = """
+    namespace ns1.ns2
+    {
+        [[vk::binding(0, 0)]] RWTexture2D<float4> textureTable[];
+    }
+
+    [shader("compute")]
+    [numthreads(8, 8, 1)]
+    void main(uint3 pixel_i : SV_DispatchThreadID)
+    {
+        ns1.ns2.textureTable[0][pixel_i.xy] = float4(0,1,0,0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    namespaced_resource = ast.global_vars[0]
+    assert namespaced_resource.vtype == "RWTexture2D<float4>"
+    assert namespaced_resource.name == "ns1.ns2.textureTable"
+    assert namespaced_resource.array_sizes == [None]
+
+    assignment = find_function(ast, "main").body[0]
+    resource_access = assignment.left.array.array
+    assert isinstance(resource_access, MemberAccessNode)
+    assert resource_access.member == "textureTable"
+    assert isinstance(resource_access.object, MemberAccessNode)
+    assert resource_access.object.object.name == "ns1"
+    assert resource_access.object.member == "ns2"
+
+
 def test_local_and_parameter_array_declarator_parsing():
     code = """
     float bump(float values[2], int idx) {

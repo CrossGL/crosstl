@@ -349,12 +349,32 @@ class SlangParser:
         return current_pos
 
     def is_namespace_declaration_start(self):
-        return (
-            self.current_token == ("IDENTIFIER", "namespace")
-            and self.pos + 2 < len(self.tokens)
-            and self.tokens[self.pos + 1][0] == "IDENTIFIER"
-            and self.tokens[self.pos + 2][0] == "LBRACE"
-        )
+        body_pos = self.namespace_declaration_body_index(self.pos)
+        return body_pos is not None and self.tokens[body_pos][0] == "LBRACE"
+
+    def namespace_declaration_body_index(self, index):
+        if index >= len(self.tokens) or self.tokens[index] != (
+            "IDENTIFIER",
+            "namespace",
+        ):
+            return None
+
+        current_pos = index + 1
+        if (
+            current_pos >= len(self.tokens)
+            or self.tokens[current_pos][0] != "IDENTIFIER"
+        ):
+            return None
+
+        current_pos += 1
+        while (
+            current_pos + 1 < len(self.tokens)
+            and self.tokens[current_pos][0] == "DOT"
+            and self.tokens[current_pos + 1][0] == "IDENTIFIER"
+        ):
+            current_pos += 2
+
+        return current_pos
 
     def parse_namespace_declaration(self):
         self.eat("IDENTIFIER")

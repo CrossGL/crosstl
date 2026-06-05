@@ -154,6 +154,31 @@ def test_codegen_stage_layout_integer_constant_expression_values():
     ) in crossgl
 
 
+def test_parse_multiline_layout_qualifiers_with_comments_from_godot_betsy():
+    # Reduced from godot/modules/betsy/alpha_stitch.glsl.
+    code = """
+    #version 450
+    layout(local_size_x = 8, //
+           local_size_y = 8, //
+           local_size_z = 1) in;
+
+    void main() {
+    }
+    """
+
+    ast = parse_glsl(code, "compute")
+
+    assert ast.layouts[0]["layout"] == {
+        "local_size_x": "8",
+        "local_size_y": "8",
+        "local_size_z": "1",
+    }
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;" in crossgl
+
+
 @pytest.mark.parametrize(
     "depth_layout",
     ["depth_any", "depth_greater", "depth_less", "depth_unchanged"],

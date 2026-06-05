@@ -2316,6 +2316,45 @@ def test_derivative_and_fused_math_calls_convert_to_crossgl_intrinsics():
     assert ".mul_add(" not in result
 
 
+def test_rust_gpu_derivative_trait_calls_convert_to_crossgl_intrinsics():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/arch/{derivative,derivative_control}.rs.
+    code = """
+    use spirv_std::arch::Derivative;
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main(value: Vec3<f32>) {
+        let dx = Derivative::dfdx(value);
+        let dy = spirv_std::arch::Derivative::dfdy(value);
+        let fine_x = Derivative::dfdx_fine(value);
+        let fine_y = Derivative::dfdy_fine(value);
+        let coarse_x = Derivative::dfdx_coarse(value);
+        let coarse_y = Derivative::dfdy_coarse(value);
+        let wide = Derivative::fwidth(value);
+        let wide_fine = Derivative::fwidth_fine(value);
+        let wide_coarse = Derivative::fwidth_coarse(value);
+        let method_dx = value.dfdx();
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "dx = dFdx(value);" in result
+    assert "dy = dFdy(value);" in result
+    assert "fine_x = dFdxFine(value);" in result
+    assert "fine_y = dFdyFine(value);" in result
+    assert "coarse_x = dFdxCoarse(value);" in result
+    assert "coarse_y = dFdyCoarse(value);" in result
+    assert "wide = fwidth(value);" in result
+    assert "wide_fine = fwidthFine(value);" in result
+    assert "wide_coarse = fwidthCoarse(value);" in result
+    assert "method_dx = dFdx(value);" in result
+    assert "Derivative::" not in result
+    crosstl.translator.parse(result)
+
+
 def test_ldexp_intrinsic_calls_convert_to_crossgl_intrinsic():
     code = """
     fn exponent_ops(value: Vec3<f32>, exponents: Vec3<i32>, scale: f32, scalar_exponent: i32) -> Vec3<f32> {

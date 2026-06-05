@@ -79,6 +79,18 @@ class RustToCrossGLConverter:
         "lerp": "mix",
         "mul_add": "fma",
     }
+    RUST_GPU_DERIVATIVE_METHOD_MAP = {
+        "dfdx": "dFdx",
+        "dfdy": "dFdy",
+        "dfdx_fine": "dFdxFine",
+        "dfdy_fine": "dFdyFine",
+        "dfdx_coarse": "dFdxCoarse",
+        "dfdy_coarse": "dFdyCoarse",
+        "fwidth": "fwidth",
+        "fwidth_fine": "fwidthFine",
+        "fwidth_coarse": "fwidthCoarse",
+    }
+    RUST_GPU_ASSOCIATED_INTRINSIC_TYPES = {"Derivative"}
     RESOURCE_METHOD_PREFIXES = ("sample", "texture_", "image_", "buffer_")
     RESOURCE_METHOD_NAMES = {
         "fetch",
@@ -3891,6 +3903,10 @@ class RustToCrossGLConverter:
 
         if method_name == "len" and not args:
             return f"{obj}.length"
+
+        derivative_method = self.RUST_GPU_DERIVATIVE_METHOD_MAP.get(method_name)
+        if derivative_method is not None and not args:
+            return f"{derivative_method}({obj})"
 
         if not args and method_name in self.SCALAR_ZERO_ARG_METHOD_MAP:
             return f"{self.SCALAR_ZERO_ARG_METHOD_MAP[method_name]}({obj})"
@@ -9644,6 +9660,12 @@ class RustToCrossGLConverter:
             return rust_func
 
         segments = rust_func.split("::")
+        mapped = self.RUST_GPU_DERIVATIVE_METHOD_MAP.get(segments[-1])
+        if mapped is not None and self.is_rust_gpu_associated_intrinsic_path(
+            segments[:-1]
+        ):
+            return mapped
+
         mapped = self.function_map.get(segments[-1])
         if mapped is None:
             return rust_func
@@ -9651,6 +9673,19 @@ class RustToCrossGLConverter:
         if self.is_module_qualified_function_path(segments[:-1]):
             return mapped
         return rust_func
+
+    def is_rust_gpu_associated_intrinsic_path(self, qualifier_segments):
+        if not qualifier_segments:
+            return False
+
+        type_segment = qualifier_segments[-1].split("<", 1)[0]
+        if type_segment not in self.RUST_GPU_ASSOCIATED_INTRINSIC_TYPES:
+            return False
+
+        module_segments = qualifier_segments[:-1]
+        return not module_segments or self.is_module_qualified_function_path(
+            module_segments
+        )
 
     def current_module_user_function_name(self, rust_func):
         if not isinstance(rust_func, str) or "::" not in rust_func:

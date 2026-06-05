@@ -15433,6 +15433,30 @@ class TestHipCodeGen:
         assert "for (var i: i32 = 0; (i < n); (++i)) {" in result
         assert "h[i] = f32(i);" in result
 
+    def test_fixed_width_function_style_cast_conversion(self):
+        code = """
+        __global__ void normalize_indices(const int* src, int* dst) {
+            const int64_t i = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
+            uint32_t tmp = uint32_t(i);
+            dst[tmp] = src[i];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "var i: i64 = ((i64(gl_WorkGroupSize.x) * gl_WorkGroupID.x) "
+            "+ gl_LocalInvocationID.x);"
+        ) in result
+        assert "var tmp: u32 = u32(i);" in result
+        assert "int64_t(" not in result
+        assert "uint32_t(" not in result
+
     def test_reference_host_helper_parameters_conversion(self):
         code = """
         void prepare(std::vector<float>& h) {

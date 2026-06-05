@@ -567,6 +567,47 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_SELECTION_MERGE_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from a fragment shader
+; containing if (value > 0.0) { outColor = red; } else { outColor = blue; }.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %value %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %value "value"
+OpName %out_color "outColor"
+OpDecorate %value Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%bool = OpTypeBool
+%v4float = OpTypeVector %float 4
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%blue = OpConstantComposite %v4float %zero %zero %one %one
+%value = OpVariable %ptr_input_float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %value
+%gt = OpFOrdGreaterThan %bool %loaded %zero
+OpSelectionMerge %merge None
+OpBranchConditional %gt %then %else
+%then = OpLabel
+OpStore %out_color %red
+OpBranch %merge
+%else = OpLabel
+OpStore %out_color %blue
+OpBranch %merge
+%merge = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_OPSELECT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -3344,6 +3385,23 @@ def test_spirv_glslang_void_function_call_codegen_reparse():
     assert "void helper()" in generated_code
     assert "OpFunctionCall" not in generated_code
     assert "call;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_glslang_selection_merge_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_SELECTION_MERGE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float value @input @location(0);" in generated_code
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "if ((value > 0.0)) {" in generated_code
+    assert "outColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "} else {" in generated_code
+    assert "outColor = float4(0.0, 0.0, 1.0, 1.0);" in generated_code
+    assert "OpSelectionMerge" not in generated_code
+    assert "OpBranchConditional" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

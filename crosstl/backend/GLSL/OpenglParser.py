@@ -704,16 +704,20 @@ class GLSLParser:
         qualifiers = {}
         self.eat("LAYOUT")
         self.eat("LPAREN")
+        self.skip_newlines()
         while self.current_token[0] != "RPAREN":
             if self.current_token[0] in ("IDENTIFIER", "IN", "OUT") or (
                 self.current_token[0] in QUALIFIER_TOKENS
             ):
                 key = self.current_token[1]
                 self.advance()
+                self.skip_newlines()
                 value = None
                 if self.current_token[0] == "EQUALS":
                     self.eat("EQUALS")
+                    self.skip_newlines()
                     value = self.parse_layout_value()
+                    self.skip_newlines()
                 qualifiers[key] = value
             else:
                 raise SyntaxError(
@@ -721,6 +725,7 @@ class GLSLParser:
                 )
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
+                self.skip_newlines()
         self.eat("RPAREN")
         return qualifiers
 

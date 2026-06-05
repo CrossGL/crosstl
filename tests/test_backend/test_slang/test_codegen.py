@@ -1371,6 +1371,32 @@ def test_namespace_global_resource_array_codegen_from_current_slang_spirv_test()
     cgl_translator.parse(generated_code)
 
 
+def test_dotted_namespace_global_resource_codegen_from_namespace_import_sample():
+    # Source: shader-slang/slang tests/language-feature/namespaces/namespace-import/m.slang
+    # at 52339028a2aa703271533454c6b9528a534bac31.
+    code = """
+    namespace ns1.ns2
+    {
+        [[vk::binding(0, 0)]] RWTexture2D<float4> textureTable[];
+    }
+
+    [shader("compute")]
+    [numthreads(8, 8, 1)]
+    void main(uint3 pixel_i : SV_DispatchThreadID)
+    {
+        ns1.ns2.textureTable[0][pixel_i.xy] = float4(0,1,0,0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "image2D ns1_ns2_textureTable[] @set(0) @binding(0);" in generated_code
+    assert "ns1_ns2_textureTable[0][pixel_i.xy] = vec4(0, 1, 0, 0);" in generated_code
+    assert "ns1.ns2.textureTable" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_local_and_parameter_array_declarator_codegen():
     code = """
     float bump(float values[2], int idx) {

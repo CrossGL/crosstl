@@ -2021,6 +2021,398 @@ class VulkanParser:
             if opcode == "OpReturn":
                 statements.append(ReturnNode())
 
+        structured_statements = self.spirv_assembly_simple_selection_body(
+            raw_instructions,
+            expressions,
+            names,
+            decorations,
+            member_decorations,
+            member_names,
+            types,
+            variables_by_id,
+            constants,
+        )
+        if structured_statements is not None:
+            return structured_statements
+
+        return statements
+
+    def spirv_assembly_simple_selection_body(
+        self,
+        raw_instructions,
+        expressions,
+        names,
+        decorations,
+        member_decorations,
+        member_names,
+        types,
+        variables_by_id,
+        constants,
+    ):
+        selection_count = sum(
+            1
+            for _result_id, opcode, _operands, _line_number in raw_instructions
+            if opcode == "OpSelectionMerge"
+        )
+        if selection_count != 1:
+            return None
+
+        labels = {
+            result_id: index
+            for index, (result_id, opcode, _operands, _line_number) in enumerate(
+                raw_instructions
+            )
+            if result_id and opcode == "OpLabel"
+        }
+
+        for index, (_result_id, opcode, operands, _line_number) in enumerate(
+            raw_instructions
+        ):
+            if opcode != "OpSelectionMerge" or len(operands) < 1:
+                continue
+            if index + 1 >= len(raw_instructions):
+                continue
+
+            _branch_id, branch_opcode, branch_operands, _branch_line = raw_instructions[
+                index + 1
+            ]
+            if branch_opcode != "OpBranchConditional" or len(branch_operands) < 3:
+                continue
+
+            merge_label = operands[0]
+            condition_operand, true_label, false_label = branch_operands[:3]
+            if merge_label not in labels or true_label not in labels:
+                continue
+            if false_label != merge_label and false_label not in labels:
+                continue
+
+            true_instructions = self.spirv_assembly_label_block_instructions(
+                raw_instructions, labels, true_label, merge_label
+            )
+            false_instructions = (
+                []
+                if false_label == merge_label
+                else self.spirv_assembly_label_block_instructions(
+                    raw_instructions, labels, false_label, merge_label
+                )
+            )
+            if true_instructions is None or false_instructions is None:
+                continue
+            if not self.spirv_assembly_selection_block_is_simple(
+                true_instructions
+            ) or not self.spirv_assembly_selection_block_is_simple(false_instructions):
+                continue
+
+            prelude = self.spirv_assembly_linear_statements(
+                raw_instructions[:index],
+                expressions,
+                names,
+                decorations,
+                member_decorations,
+                member_names,
+                types,
+                variables_by_id,
+                constants,
+            )
+            true_body = self.spirv_assembly_linear_statements(
+                true_instructions,
+                expressions,
+                names,
+                decorations,
+                member_decorations,
+                member_names,
+                types,
+                variables_by_id,
+                constants,
+            )
+            false_body = self.spirv_assembly_linear_statements(
+                false_instructions,
+                expressions,
+                names,
+                decorations,
+                member_decorations,
+                member_names,
+                types,
+                variables_by_id,
+                constants,
+            )
+            postlude = self.spirv_assembly_linear_statements(
+                raw_instructions[labels[merge_label] + 1 :],
+                expressions,
+                names,
+                decorations,
+                member_decorations,
+                member_names,
+                types,
+                variables_by_id,
+                constants,
+            )
+            condition = self.spirv_assembly_operand_expression(
+                condition_operand,
+                expressions,
+                names,
+                decorations,
+                constants,
+            )
+            return [
+                *prelude,
+                IfNode(condition, true_body, false_body or None),
+                *postlude,
+            ]
+
+        return None
+
+    def spirv_assembly_label_block_instructions(
+        self, raw_instructions, labels, label, merge_label
+    ):
+        if label == merge_label:
+            return []
+
+        start = labels.get(label)
+        if start is None:
+            return None
+
+        block = []
+        for instruction in raw_instructions[start + 1 :]:
+            _result_id, opcode, operands, _line_number = instruction
+            if opcode == "OpLabel":
+                return block
+            if opcode == "OpBranch" and operands and operands[0] == merge_label:
+                return block
+            block.append(instruction)
+            if opcode in {
+                "OpReturn",
+                "OpReturnValue",
+                "OpKill",
+                "OpTerminateInvocation",
+                "OpDemoteToHelperInvocation",
+            }:
+                return block
+
+        return block
+
+    def spirv_assembly_selection_block_is_simple(self, instructions):
+        structured_control_opcodes = {
+            "OpBranch",
+            "OpBranchConditional",
+            "OpLabel",
+            "OpLoopMerge",
+            "OpSelectionMerge",
+            "OpSwitch",
+        }
+        return all(
+            opcode not in structured_control_opcodes
+            for _result_id, opcode, _operands, _line_number in instructions
+        )
+
+    def spirv_assembly_linear_statements(
+        self,
+        instructions,
+        expressions,
+        names,
+        decorations,
+        member_decorations,
+        member_names,
+        types,
+        variables_by_id,
+        constants,
+    ):
+        statements = []
+        for result_id, opcode, operands, _line_number in instructions:
+            if result_id and opcode == "OpVariable" and len(operands) >= 2:
+                pointer_type = types.get(operands[0], {})
+                storage_class = operands[1]
+                if storage_class != "Function":
+                    continue
+
+                variable_name = self.spirv_assembly_value_name(
+                    result_id, names, decorations
+                )
+                variable_type, array_suffix = self.spirv_type_name_and_suffix(
+                    pointer_type.get("type_id"),
+                    types,
+                    constants,
+                    names=names,
+                )
+                variable_type = variable_type or pointer_type.get("type_id") or ""
+                declaration = VariableNode(
+                    variable_type,
+                    f"{variable_name}{array_suffix}",
+                    spirv_id=result_id,
+                    spirv_type_id=pointer_type.get("type_id"),
+                )
+                if len(operands) >= 3:
+                    statements.append(
+                        AssignmentNode(
+                            declaration,
+                            self.spirv_assembly_operand_expression(
+                                operands[2],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                        )
+                    )
+                else:
+                    statements.append(declaration)
+                continue
+
+            if result_id and opcode == "OpFunctionCall" and len(operands) >= 2:
+                if self.spirv_type_name(operands[0], types) != "void":
+                    continue
+                statements.append(
+                    FunctionCallNode(
+                        self.spirv_assembly_value_name(
+                            operands[1], names, decorations, prefix="function"
+                        ),
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[2:]
+                        ],
+                    )
+                )
+                continue
+
+            if opcode == "OpAtomicStore" and len(operands) >= 4:
+                statements.append(
+                    self.spirv_assembly_atomic_store_statement(
+                        operands[0],
+                        operands[3],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                )
+                continue
+
+            if opcode == "OpImageWrite" and len(operands) >= 3:
+                statements.append(
+                    self.spirv_assembly_image_write_statement(
+                        operands[0],
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                )
+                continue
+
+            if opcode == "OpControlBarrier" and len(operands) >= 3:
+                statements.append(
+                    FunctionCallNode(
+                        "spirvControlBarrier",
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[:3]
+                        ],
+                    )
+                )
+                continue
+
+            if opcode == "OpMemoryBarrier" and len(operands) >= 2:
+                statements.append(
+                    FunctionCallNode(
+                        "spirvMemoryBarrier",
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[:2]
+                        ],
+                    )
+                )
+                continue
+
+            if opcode == "OpStore" and len(operands) >= 2:
+                statements.append(
+                    AssignmentNode(
+                        self.spirv_assembly_operand_expression(
+                            operands[0],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                    )
+                )
+                continue
+
+            if opcode == "OpCopyMemory" and len(operands) >= 2:
+                if operands[0] == operands[1]:
+                    continue
+                statements.append(
+                    AssignmentNode(
+                        self.spirv_assembly_operand_expression(
+                            operands[0],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                    )
+                )
+                continue
+
+            if opcode in {
+                "OpKill",
+                "OpTerminateInvocation",
+                "OpDemoteToHelperInvocation",
+            }:
+                statements.append(DiscardNode())
+                continue
+
+            if opcode == "OpReturnValue" and operands:
+                statements.append(
+                    ReturnNode(
+                        self.spirv_assembly_operand_expression(
+                            operands[0],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                    )
+                )
+                continue
+
+            if opcode == "OpReturn":
+                statements.append(ReturnNode())
+
         return statements
 
     def spirv_assembly_access_chain_expression(
