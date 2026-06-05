@@ -19741,6 +19741,35 @@ def test_derivative_and_fused_math_intrinsics_infer_types_and_smoke_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_scalar_fma_and_mad_lower_to_rust_mul_add_method_and_smoke_compile(
+    tmp_path,
+):
+    code = """
+    shader ScalarMulAddInference {
+        fragment {
+            vec4 main(float scale, float value, float bias) {
+                let fused = fma(value, scale, bias);
+                let mad_alias = mad(scale, value, 0.25);
+                let literal_receiver = mad(1, scale, bias);
+                return vec4(vec3(fused + mad_alias + literal_receiver), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let fused: f32 = (value).mul_add(scale, bias);" in generated_code
+    assert "let mad_alias: f32 = (scale).mul_add(value, 0.25);" in generated_code
+    assert (
+        "let literal_receiver: f32 = (1.0 as f32).mul_add(scale, bias);"
+        in generated_code
+    )
+    assert "fma(value, scale, bias)" not in generated_code
+    assert "fma(scale, value, 0.25)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_ldexp_intrinsic_preserves_float_input_shape_and_smoke_compile(tmp_path):
     code = """
     shader LdexpIntrinsicInference {

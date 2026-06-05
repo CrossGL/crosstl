@@ -2349,6 +2349,43 @@ class TestVulkanSPIRVCodeGen:
         assert " Frac " not in spv_code
         assert " Saturate " not in spv_code
 
+    def test_inverse_sqrt_alias_lowers_to_spirv_extinst(self, tmp_path):
+        source_code = """
+        shader InverseSqrtAlias {
+            compute {
+                void main() {
+                    float scalar = inverseSqrt(4.0);
+                    vec2 vector = inverseSqrt(vec2(4.0, 9.0));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 2",
+            spv_code,
+        )
+        assert vec2_type is not None
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"InverseSqrt %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(vec2_type.group(1))} %\d+ "
+            r"InverseSqrt %\d+",
+            spv_code,
+        )
+        assert "inverseSqrt" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_malformed_std450_math_builtins_emit_diagnostics(self, tmp_path):
         source_code = """
         shader MalformedStd450Builtins {

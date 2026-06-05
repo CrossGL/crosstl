@@ -1,4 +1,8 @@
 import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -54,6 +58,34 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def compile_with_metal_if_available(source: str):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not available")
+
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if lookup.returncode != 0:
+        pytest.skip("Metal compiler is not available")
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "shader.metal"
+        output_path = Path(temp_dir) / "shader.air"
+        source_path.write_text(source)
+        result = subprocess.run(
+            [xcrun, "metal", str(source_path), "-o", str(output_path)],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_metal_codegen_skips_resource_array_hint_walk_without_resource_arrays():
     shader = """
     shader MetalBlendOverloadShape {
@@ -70,6 +102,81 @@ def test_metal_codegen_skips_resource_array_hint_walk_without_resource_arrays():
 
     assert "float4 blendedColor = blend(backdrop, source);" in generated_code
     assert "return mix(backdrop, blendedColor, intensity);" in generated_code
+
+
+def test_metal_mod_builtin_lowers_to_glsl_semantics_expression():
+    # Apple MSL exposes fmod(), not GLSL/CrossGL mod(); real tiled shaders with
+    # negative coordinates need floor-based mod semantics instead of fmod().
+    shader = """
+    shader MetalModuloPattern {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                vec2 uv = vec2(float(tid.x), float(tid.y));
+                vec2 tile = mod((uv * 4.0) - vec2(2.0), 1.0);
+                vec2 wrapped = mod(tile, vec2(0.25, 0.5));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert (
+        "float2 tile = ((uv * float2(4.0) - float2(2.0)) - "
+        "((1.0) * floor((uv * float2(4.0) - float2(2.0)) / (1.0))));"
+    ) in generated_code
+    assert (
+        "float2 wrapped = ((tile) - "
+        "((float2(0.25, 0.5)) * floor((tile) / (float2(0.25, 0.5)))));"
+    ) in generated_code
+    assert "mod(" not in generated_code
+
+
+def test_metal_user_defined_mod_function_is_preserved():
+    shader = """
+    shader MetalUserMod {
+        compute {
+            float mod(float value, float period) {
+                return value + period;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float wrapped = mod(float(tid.x), 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float mod(float value, float period)" in generated_code
+    assert "float wrapped = mod(float(tid.x), 2.0);" in generated_code
+    assert "floor(" not in generated_code
+
+
+def test_metal_mod_builtin_lowers_to_compilable_msl_when_toolchain_is_available():
+    shader = """
+    shader MetalModuloCompile {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                vec2 uv = vec2(float(tid.x), float(tid.y));
+                vec2 tile = mod((uv * 4.0) - vec2(2.0), 1.0);
+                vec2 wrapped = mod(tile, vec2(0.25, 0.5));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "mod(" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():

@@ -285,6 +285,8 @@ class SlangCodeGen:
             "mix": "lerp",
             "mod": "fmod",
             "fract": "frac",
+            "dFdx": "ddx",
+            "dFdy": "ddy",
             "inversesqrt": "rsqrt",
             "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
         }

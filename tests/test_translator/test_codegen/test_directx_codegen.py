@@ -5858,6 +5858,50 @@ def test_hlsl_two_argument_atan_lowers_to_atan2_intrinsic():
     assert "atan(direction.y, direction.x)" not in generated_code
 
 
+def test_hlsl_inversesqrt_lowers_to_rsqrt_intrinsic():
+    shader = """
+    shader HlslInverseSqrtBuiltinLowering {
+        fragment {
+            vec4 main(vec3 normal @ TEXCOORD0) @ gl_FragColor {
+                float invLength = inversesqrt(dot(normal, normal));
+                vec3 renormalized = normal * invLength;
+                return vec4(renormalized, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # Microsoft HLSL docs list reciprocal square root as rsqrt(x).
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-rsqrt
+    assert "float invLength = rsqrt(dot(normal, normal));" in generated_code
+    assert "inversesqrt(" not in generated_code
+
+
+def test_hlsl_user_defined_inversesqrt_is_not_lowered():
+    shader = """
+    shader HlslInverseSqrtShadowing {
+        float inversesqrt(float value) {
+            return value;
+        }
+
+        fragment {
+            vec4 main(float lengthSquared @ TEXCOORD0) @ gl_FragColor {
+                float invLength = inversesqrt(lengthSquared);
+                return vec4(invLength, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float inversesqrt(float value)" in generated_code
+    assert "float invLength = inversesqrt(lengthSquared);" in generated_code
+    assert "rsqrt(" not in generated_code
+
+
 def test_hlsl_user_defined_two_argument_atan_is_not_lowered():
     shader = """
     shader HlslAtanShadowing {

@@ -2726,6 +2726,63 @@ def test_inversesqrt_builtin_lowers_to_slang_rsqrt():
     assert "inversesqrt(" not in generated_code
 
 
+def test_glsl_derivative_builtins_lower_to_slang_ddx_ddy():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                vec2 dx = dFdx(uv);
+                vec2 dy = dFdy(uv);
+                float edge = fwidth(uv.x);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2 dx = ddx(uv);" in generated_code
+    assert "float2 dy = ddy(uv);" in generated_code
+    assert "float edge = fwidth(uv.x);" in generated_code
+    assert "dFdx(" not in generated_code
+    assert "dFdy(" not in generated_code
+
+
+def test_user_defined_derivative_function_names_are_not_lowered():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            float dFdx(float x) {
+                return x + 1.0;
+            }
+
+            float dFdy(float x) {
+                return x - 1.0;
+            }
+
+            void main() {
+                float dx = dFdx(0.5);
+                float dy = dFdy(0.5);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float dFdx(float x)" in generated_code
+    assert "float dFdy(float x)" in generated_code
+    assert "float dx = dFdx(0.5);" in generated_code
+    assert "float dy = dFdy(0.5);" in generated_code
+    assert "float dx = ddx(0.5);" not in generated_code
+    assert "float dy = ddy(0.5);" not in generated_code
+
+
 def test_saturate_builtin_lowers_to_slang_clamp():
     code = """
     shader BuiltinGap {

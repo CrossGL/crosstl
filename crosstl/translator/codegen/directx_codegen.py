@@ -762,6 +762,7 @@ class HLSLCodeGen:
             "dFdx": "ddx",
             "dFdy": "ddy",
             "fract": "frac",
+            "inversesqrt": "rsqrt",
             "mix": "lerp",
             "mod": "fmod",
         }

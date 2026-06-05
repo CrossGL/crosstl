@@ -6092,6 +6092,12 @@ class MetalCodeGen:
                 )
             if func_name == "cross" and args:
                 return self.expression_result_type(args[0])
+            if (
+                func_name == "mod"
+                and args
+                and func_name not in self.user_function_names
+            ):
+                return self.expression_result_type(args[0])
             if func_name in {"mix", "clamp", "min", "max"} and args:
                 return self.expression_result_type(args[0])
             if is_resource_size_query_operation(func_name) and args:
@@ -7185,6 +7191,14 @@ class MetalCodeGen:
                     self.required_metal_inverse_helpers.add(arg_type)
                     arg = self.generate_expression(expr.args[0])
                     return f"__crossgl_inverse_{arg_type}({arg})"
+            if (
+                func_name == "mod"
+                and len(expr.args) == 2
+                and func_name not in self.user_function_names
+            ):
+                left = self.generate_expression(expr.args[0])
+                right = self.generate_expression(expr.args[1])
+                return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
             if func_name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"{func_name}({args})"

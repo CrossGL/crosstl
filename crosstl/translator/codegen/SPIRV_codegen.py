@@ -8151,7 +8151,10 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         """Call a built-in function."""
-        function_name = {"frac": "fract"}.get(function_name, function_name)
+        function_name = {
+            "frac": "fract",
+            "inverseSqrt": "inversesqrt",
+        }.get(function_name, function_name)
         synchronization_call = self.call_synchronization_function(function_name, args)
         if synchronization_call is not None:
             return synchronization_call

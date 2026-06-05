@@ -9209,6 +9209,10 @@ class GLSLCodeGen:
             if mul_call is not None:
                 return mul_call
 
+            mad_call = self.generate_mad_call(original_func_name, expr.args)
+            if mad_call is not None:
+                return mad_call
+
             func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
 
@@ -9331,6 +9335,17 @@ class GLSLCodeGen:
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
         return f"({left} * {right})"
+
+    def generate_mad_call(self, func_name, args):
+        if func_name != "mad" or func_name in self.function_return_types:
+            return None
+        if len(args) != 3:
+            raise ValueError("OpenGL mad alias requires 3 arguments")
+
+        left = self.generate_expression(args[0])
+        right = self.generate_expression(args[1])
+        addend = self.generate_expression(args[2])
+        return f"(({left} * {right}) + {addend})"
 
     def saturate_bound_literals(self, value_expr):
         value_type = self.expression_result_type(value_expr)

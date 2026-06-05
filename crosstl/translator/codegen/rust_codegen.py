@@ -7244,6 +7244,58 @@ class RustCodeGen:
 
         return f"({left} {mapped_op} {right})"
 
+    def generate_scalar_mul_add_call(self, func_name, args):
+        if func_name != "fma" or len(args or []) != 3:
+            return None
+
+        arg_types = [self.expression_result_type(arg) for arg in args]
+        if any(
+            self.vector_type_info(arg_type) is not None
+            or self.matrix_type_info(arg_type) is not None
+            for arg_type in arg_types
+        ):
+            return None
+
+        if any(self.normalize_scalar_type(arg_type) is None for arg_type in arg_types):
+            return None
+
+        target_type = self.normalize_scalar_type(self.promoted_argument_type(arg_types))
+        if target_type not in {"f32", "f64"}:
+            return None
+
+        value = self.generate_mul_add_receiver(args[0], arg_types[0], target_type)
+        multiplier = self.generate_mul_add_scalar_operand(
+            args[1], arg_types[1], target_type
+        )
+        addend = self.generate_mul_add_scalar_operand(
+            args[2], arg_types[2], target_type
+        )
+        return f"{value}.mul_add({multiplier}, {addend})"
+
+    def generate_mul_add_receiver(self, expr, source_type, target_type):
+        value = self.generate_mul_add_scalar_operand(expr, source_type, target_type)
+        if self.is_numeric_literal_expression(expr):
+            return f"({value} as {target_type})"
+        return f"({value})"
+
+    def generate_mul_add_scalar_operand(self, expr, source_type, target_type):
+        generated = self.generate_expression(expr)
+        return self.normalize_binary_scalar_operand(
+            expr,
+            generated,
+            source_type,
+            target_type,
+        )
+
+    def is_numeric_literal_expression(self, expr):
+        if isinstance(expr, (int, float)) and not isinstance(expr, bool):
+            return True
+        return (
+            isinstance(expr, LiteralNode)
+            and isinstance(expr.value, (int, float))
+            and not isinstance(expr.value, bool)
+        )
+
     def generate_matrix_multiply_expression(
         self, left_expr, right_expr, left_type, right_type, operator
     ):
@@ -8444,6 +8496,10 @@ class RustCodeGen:
             if func_name == "saturate" and len(args) == 1:
                 arg = self.generate_expression(args[0])
                 return f"clamp({arg}, 0.0, 1.0)"
+
+            scalar_mul_add = self.generate_scalar_mul_add_call(func_name, args)
+            if scalar_mul_add is not None:
+                return scalar_mul_add
 
             dot_call = self.generate_inline_dot_call(func_name, args)
             if dot_call is not None:

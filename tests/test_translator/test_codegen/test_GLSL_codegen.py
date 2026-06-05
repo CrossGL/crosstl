@@ -5483,6 +5483,52 @@ def test_glsl_hlsl_mul_alias_emits_binary_matrix_multiply():
     assert "mul(" not in generated_code
 
 
+def test_glsl_hlsl_mad_alias_emits_multiply_add_expression():
+    # Khronos GLSL 4.60 documents fma(x, y, z) as returning x * y + z;
+    # shader ports commonly spell the non-fused source form as mad(x, y, z).
+    shader = """
+    shader MadAlias {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                vec3 albedo;
+                vec3 lighting;
+                vec3 ambient;
+                vec3 color = mad(albedo, lighting, ambient);
+                return vec4(color, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "vec3 color = ((albedo * lighting) + ambient);" in generated_code
+    assert "mad(" not in generated_code
+
+
+def test_glsl_user_defined_mad_function_is_preserved():
+    shader = """
+    shader UserMad {
+        vec3 mad(vec3 value, vec3 scale, vec3 bias) {
+            return bias + value * scale;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                vec3 color = mad(vec3(0.25), vec3(2.0), vec3(0.5));
+                return vec4(color, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "vec3 mad(vec3 value, vec3 scale, vec3 bias)" in generated_code
+    assert "vec3 color = mad(vec3(0.25), vec3(2.0), vec3(0.5));" in generated_code
+    assert "((vec3(0.25) * vec3(2.0)) + vec3(0.5))" not in generated_code
+
+
 def test_glsl_hlsl_double_aliases_map_to_glsl_names():
     shader = """
     shader DoubleAliasSmoke {
