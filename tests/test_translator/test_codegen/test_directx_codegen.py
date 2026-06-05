@@ -386,6 +386,55 @@ def test_directx_interpolation_builtins_lower_to_hlsl_intrinsics():
     assert "interpolateAtCentroid(" not in generated_code
 
 
+def test_directx_interpolation_modifiers_are_preserved_on_stage_interfaces():
+    shader = """
+    shader InterpolationModifierRoundTrip {
+        vertex {
+            struct VertexOutput {
+                vec4 position @SV_Position;
+                int materialId @TEXCOORD0 @nointerpolation;
+                vec2 centerUv @TEXCOORD1 @centroid;
+                vec4 sampleColor @TEXCOORD2 @sample;
+                vec2 affineUv @TEXCOORD3 @noperspective;
+            }
+
+            VertexOutput main() {
+                VertexOutput output;
+                output.position = vec4(0.0, 0.0, 0.0, 1.0);
+                output.materialId = 7;
+                output.centerUv = vec2(0.25, 0.5);
+                output.sampleColor = vec4(1.0);
+                output.affineUv = vec2(0.75, 1.0);
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(
+                int materialId @TEXCOORD0 @nointerpolation,
+                vec2 centerUv @TEXCOORD1 @centroid,
+                vec4 sampleColor @TEXCOORD2 @sample,
+                vec2 affineUv @TEXCOORD3 @noperspective
+            ) @SV_Target {
+                return sampleColor
+                    + vec4(centerUv + affineUv, float(materialId), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "nointerpolation int materialId: TEXCOORD0;" in generated_code
+    assert "centroid float2 centerUv: TEXCOORD1;" in generated_code
+    assert "sample float4 sampleColor: TEXCOORD2;" in generated_code
+    assert "noperspective float2 affineUv: TEXCOORD3;" in generated_code
+    assert "nointerpolation int materialId : TEXCOORD0" in generated_code
+    assert "centroid float2 centerUv : TEXCOORD1" in generated_code
+    assert "sample float4 sampleColor : TEXCOORD2" in generated_code
+    assert "noperspective float2 affineUv : TEXCOORD3" in generated_code
+
+
 def test_directx_user_defined_interpolation_names_are_not_lowered():
     shader = """
     shader InterpolationShadowing {

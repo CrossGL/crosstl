@@ -1162,6 +1162,13 @@ class GLSLCodeGen:
             "double": "double",
             "void": "void",
             "sampler": "sampler",
+            "texture1D": "texture1D",
+            "texture1DArray": "texture1DArray",
+            "texture2D": "texture2D",
+            "texture3D": "texture3D",
+            "textureCube": "textureCube",
+            "texture2DArray": "texture2DArray",
+            "textureCubeArray": "textureCubeArray",
             "sampler1D": "sampler1D",
             "sampler1DArray": "sampler1DArray",
             "sampler2D": "sampler2D",
@@ -1359,6 +1366,8 @@ class GLSLCodeGen:
         stage_names = self.glsl_stage_names(ast, target_stage)
 
         lines = []
+        if self.uses_nonuniform_ext(ast):
+            lines.append("#extension GL_EXT_nonuniform_qualifier : require")
         if stage_names & self.MESH_STAGE_NAMES:
             lines.append("#extension GL_EXT_mesh_shader : require")
         uses_ray_stage = bool(stage_names & self.RAY_STAGE_NAMES)
@@ -1384,6 +1393,15 @@ class GLSLCodeGen:
                     if operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
                         operations.add(operation)
         return operations
+
+    def uses_nonuniform_ext(self, ast):
+        for node in self.walk_ast(ast):
+            if (
+                isinstance(node, FunctionCallNode)
+                and self.function_call_name(node) == "nonuniformEXT"
+            ):
+                return True
+        return False
 
     def glsl_wave_extension_lines(self, ast, target_stage=None):
         operations = self.glsl_wave_operations(ast, target_stage)
@@ -1950,6 +1968,8 @@ class GLSLCodeGen:
             self.collect_function_sampler_parameter_indices(ast)
         )
         functions = self.collect_functions(ast)
+        self.preserved_sampler_variables = set()
+        self.preserved_sampler_parameters = {}
         self.function_return_types = {
             func.name: self.type_name_string(getattr(func, "return_type", "void"))
             for func in functions
@@ -1961,6 +1981,7 @@ class GLSLCodeGen:
         self.function_definitions = {
             func.name: func for func in functions if getattr(func, "name", None)
         }
+        self.collect_preserved_nonuniform_sampler_resources(ast, functions)
         self.validate_glsl_tessellation_control_barriers(ast, target_stage, functions)
         self.glsl_resource_function_specializations = {}
         self.glsl_resource_function_call_names = {}
@@ -2526,6 +2547,40 @@ class GLSLCodeGen:
             if mapped_type == "sampler":
                 self.explicit_resource_binding_index(node)
                 self.sampler_variables.add(var_name)
+                if self.should_preserve_sampler_resource(var_name):
+                    binding_namespace = "sampler binding"
+                    explicit_binding = self.explicit_resource_binding_index(node)
+                    resource_binding = (
+                        explicit_binding
+                        if explicit_binding is not None
+                        else self.next_available_resource_binding(
+                            used_resource_bindings,
+                            resource_binding_cursors,
+                            binding_namespace,
+                            resource_count,
+                        )
+                    )
+                    self.reserve_resource_binding_range(
+                        used_resource_bindings,
+                        "OpenGL",
+                        binding_namespace,
+                        resource_binding,
+                        resource_count,
+                        var_name,
+                    )
+                    declaration = format_c_style_array_declaration(
+                        f"{mapped_type}{array_suffix}", var_name
+                    )
+                    code += (
+                        f"layout(binding = {resource_binding}) uniform "
+                        f"{declaration};\n"
+                    )
+                    self.advance_resource_binding(
+                        resource_binding_cursors,
+                        binding_namespace,
+                        resource_binding,
+                        resource_count,
+                    )
                 continue
             if self.is_structured_buffer_type(vtype):
                 self.record_structured_buffer_access_metadata(var_name, vtype, node)
@@ -5261,7 +5316,10 @@ class GLSLCodeGen:
             if self.is_sampler_type(raw_param_type):
                 self.explicit_resource_binding_index(p)
                 sampler_parameters.add(p.name)
-                continue
+                if not self.should_preserve_sampler_parameter(
+                    getattr(func, "name", None), p.name
+                ):
+                    continue
 
             buffer_array = self.structured_buffer_array_parameter_info(
                 raw_param_type, p.name, getattr(func, "name", None)
@@ -9942,6 +10000,9 @@ class GLSLCodeGen:
         return texture_name, coord, extra_args
 
     def texture_resource_type(self, texture_arg):
+        return self.sampled_image_type(self.texture_declared_resource_type(texture_arg))
+
+    def texture_declared_resource_type(self, texture_arg):
         texture_name = self.expression_name(texture_arg)
         if not texture_name:
             return None
@@ -9951,6 +10012,36 @@ class GLSLCodeGen:
         return self.current_texture_parameters.get(
             texture_name, self.texture_variable_types.get(texture_name)
         )
+
+    def sampled_image_type(self, texture_type):
+        base_type = self.resource_base_type(texture_type)
+        texture_to_sampler = {
+            "texture1D": "sampler1D",
+            "texture1DArray": "sampler1DArray",
+            "texture2D": "sampler2D",
+            "texture3D": "sampler3D",
+            "textureCube": "samplerCube",
+            "texture2DArray": "sampler2DArray",
+            "textureCubeArray": "samplerCubeArray",
+        }
+        sampled_type = texture_to_sampler.get(base_type)
+        if sampled_type is None:
+            return texture_type
+        if "[" not in str(texture_type):
+            return sampled_type
+        _, array_suffix = split_array_type_suffix(str(texture_type))
+        return f"{sampled_type}{array_suffix}"
+
+    def is_separate_texture_object_type(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "texture1D",
+            "texture1DArray",
+            "texture2D",
+            "texture3D",
+            "textureCube",
+            "texture2DArray",
+            "textureCubeArray",
+        }
 
     def texture_argument_resource_type(self, texture_arg):
         texture_type = self.texture_resource_type(texture_arg)
@@ -12901,6 +12992,12 @@ class GLSLCodeGen:
         if parts is None:
             return None
         texture_name, coord, extra_args = parts
+        sampler_name = self.generate_expression(args[1])
+        declared_texture_type = self.texture_declared_resource_type(args[0])
+        if self.is_separate_texture_object_type(declared_texture_type):
+            sampled_type = self.sampled_image_type(declared_texture_type)
+            sampled_type = self.resource_base_type(sampled_type)
+            texture_name = f"{sampled_type}({texture_name}, {sampler_name})"
         mapped_args = [texture_name, coord] + [
             self.generate_expression(arg) for arg in extra_args
         ]
@@ -12978,6 +13075,103 @@ class GLSLCodeGen:
         if not skipped_indices:
             return args
         return [arg for index, arg in enumerate(args) if index not in skipped_indices]
+
+    def should_preserve_sampler_resource(self, name):
+        return name in getattr(self, "preserved_sampler_variables", set())
+
+    def should_preserve_sampler_parameter(self, func_name, param_name):
+        if not func_name:
+            return False
+        return param_name in getattr(self, "preserved_sampler_parameters", {}).get(
+            func_name, set()
+        )
+
+    def expression_uses_nonuniform_ext(self, expr):
+        for node in self.walk_ast(expr):
+            if (
+                isinstance(node, FunctionCallNode)
+                and self.function_call_name(node) == "nonuniformEXT"
+            ):
+                return True
+        return False
+
+    def collect_preserved_nonuniform_sampler_resources(self, ast, functions):
+        global_samplers = set()
+        for node in getattr(ast, "global_variables", []) or []:
+            name = self.resource_node_name(node)
+            if name and self.is_sampler_type(self.resource_node_type(node)):
+                global_samplers.add(name)
+
+        sampler_parameters = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            sampler_parameters[func_name] = {
+                getattr(param, "name", None)
+                for param in getattr(func, "parameters", getattr(func, "params", []))
+                if self.is_sampler_type(
+                    getattr(param, "param_type", getattr(param, "vtype", None))
+                )
+            }
+
+        preserved_globals = set()
+        preserved_params = {name: set() for name in sampler_parameters}
+
+        changed = True
+        while changed:
+            changed = False
+            for func in functions or []:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    index_expr = getattr(
+                        node, "index", getattr(node, "index_expr", None)
+                    )
+                    if isinstance(
+                        node, ArrayAccessNode
+                    ) and self.expression_uses_nonuniform_ext(index_expr):
+                        array_name = self.expression_name(
+                            getattr(node, "array", getattr(node, "array_expr", None))
+                        )
+                        if array_name in sampler_parameters.get(func_name, set()):
+                            if array_name not in preserved_params[func_name]:
+                                preserved_params[func_name].add(array_name)
+                                changed = True
+                        elif array_name in global_samplers:
+                            if array_name not in preserved_globals:
+                                preserved_globals.add(array_name)
+                                changed = True
+
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    callee_name = self.function_call_name(node)
+                    callee_preserved = preserved_params.get(callee_name)
+                    if not callee_preserved:
+                        continue
+                    callee_params = self.function_parameter_names.get(callee_name, [])
+                    args = list(getattr(node, "arguments", getattr(node, "args", [])))
+                    for index, arg in enumerate(args):
+                        if index >= len(callee_params):
+                            break
+                        if callee_params[index] not in callee_preserved:
+                            continue
+                        arg_name = self.expression_name(arg)
+                        if arg_name in sampler_parameters.get(func_name, set()):
+                            if arg_name not in preserved_params[func_name]:
+                                preserved_params[func_name].add(arg_name)
+                                changed = True
+                        elif arg_name in global_samplers:
+                            if arg_name not in preserved_globals:
+                                preserved_globals.add(arg_name)
+                                changed = True
+
+        self.preserved_sampler_variables = preserved_globals
+        self.preserved_sampler_parameters = {
+            func_name: names for func_name, names in preserved_params.items() if names
+        }
 
     def collect_resource_array_size_hints(self, ast):
         global_hints, function_hints = collect_resource_array_size_hints(
@@ -13411,6 +13605,17 @@ class GLSLCodeGen:
 
     def skipped_function_parameter_indices(self, func_name):
         skipped = set(self.function_sampler_parameter_indices.get(func_name, set()))
+        preserved = getattr(self, "preserved_sampler_parameters", {}).get(
+            func_name, set()
+        )
+        if preserved:
+            parameter_names = self.function_parameter_names.get(func_name, [])
+            skipped = {
+                index
+                for index in skipped
+                if index >= len(parameter_names)
+                or parameter_names[index] not in preserved
+            }
         unsupported = self.unsupported_structured_buffer_array_functions.get(
             func_name, {}
         )
@@ -13858,14 +14063,17 @@ class GLSLCodeGen:
         else:
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if mapped_type == "sampler":
+                if not self.should_preserve_sampler_resource(var_name):
+                    return None
+                namespace = "sampler binding"
+            elif not self.is_opaque_resource_type(mapped_type):
                 return None
-            if not self.is_opaque_resource_type(mapped_type):
-                return None
-            namespace = (
-                "image binding"
-                if self.is_storage_image_type(vtype)
-                else "texture binding"
-            )
+            else:
+                namespace = (
+                    "image binding"
+                    if self.is_storage_image_type(vtype)
+                    else "texture binding"
+                )
 
         binding = self.explicit_resource_binding_index(node)
         if binding is None:
@@ -14398,6 +14606,13 @@ class GLSLCodeGen:
 
     def is_opaque_resource_type(self, vtype):
         return vtype in {
+            "texture1D",
+            "texture1DArray",
+            "texture2D",
+            "texture3D",
+            "textureCube",
+            "texture2DArray",
+            "textureCubeArray",
             "sampler1D",
             "sampler1DArray",
             "sampler2D",

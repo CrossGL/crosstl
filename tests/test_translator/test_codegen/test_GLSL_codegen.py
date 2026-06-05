@@ -12694,6 +12694,63 @@ def test_opengl_texture_array_resources_and_indexed_sampling():
     assert "texture(envMap, normal)" in generated_code
 
 
+def test_glsl_separate_texture_sampler_arrays_preserve_nonuniform_indexing():
+    shader = """
+    shader SeparateTextureSamplerNonuniform {
+        texture2d textures[8] @binding(0);
+        sampler samplers[8] @binding(1);
+
+        struct VSOutput {
+            vec2 uv;
+            uint materialIndex;
+        };
+
+        vec4 sampleMaterial(
+            texture2d textures[8],
+            sampler samplers[8],
+            uint materialIndex,
+            vec2 uv
+        ) {
+            return texture(
+                textures[nonuniformEXT(materialIndex)],
+                samplers[nonuniformEXT(materialIndex)],
+                uv
+            );
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return sampleMaterial(
+                    textures,
+                    samplers,
+                    input.materialIndex,
+                    input.uv
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "#extension GL_EXT_nonuniform_qualifier : require" in generated_code
+    assert "layout(binding = 0) uniform texture2D textures[8];" in generated_code
+    assert "layout(binding = 1) uniform sampler samplers[8];" in generated_code
+    assert (
+        "vec4 sampleMaterial(texture2D textures[8], sampler samplers[8], "
+        "uint materialIndex, vec2 uv)"
+    ) in generated_code
+    assert (
+        "texture(sampler2D(textures[nonuniformEXT(materialIndex)], "
+        "samplers[nonuniformEXT(materialIndex)]), uv)"
+    ) in generated_code
+    assert "in vec2 uv;" in generated_code
+    assert "flat in uint materialIndex;" in generated_code
+    assert "sampleMaterial(textures, samplers, materialIndex, uv)" in generated_code
+    assert "texture(textures[nonuniformEXT(materialIndex)], uv)" not in generated_code
+    assert "samplers[nonuniformEXT(materialIndex)]" in generated_code
+
+
 def test_opengl_fixed_texture_array_keeps_declared_size_with_constant_indices():
     shader = """
     shader FixedArrayConstantIndex {

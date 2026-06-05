@@ -3789,6 +3789,67 @@ def test_metal_global_function_constants_validate_declarations(
         MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
+def test_metal_argument_buffer_resource_members_preserve_id_attributes():
+    code = """
+    shader ArgumentBufferMemberABI {
+        struct MaterialResources {
+            sampler2D color [[id(0)]];
+            sampler state [[id(1)]];
+            image2D output @rgba32f [[id(2)]];
+            sampler2D layers[4] [[id(3)]];
+        };
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                MaterialResources resources;
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "texture2d<float> color [[id(0)]];" in generated_code
+    assert "sampler state [[id(1)]];" in generated_code
+    assert "texture2d<float, access::read_write> output [[id(2)]];" in generated_code
+    assert "array<texture2d<float>, 4> layers [[id(3)]];" in generated_code
+    assert "texture2d<float> color [[id]];" not in generated_code
+    assert "sampler state [[id]];" not in generated_code
+    assert "texture2d<float> color;" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("attribute", "expected_error"),
+    [
+        ("[[id]]", "requires an integer id"),
+        ("[[id(slot)]]", "requires an integer id"),
+    ],
+)
+def test_metal_argument_buffer_resource_member_ids_validate_attributes(
+    attribute, expected_error
+):
+    code = f"""
+    shader InvalidArgumentBufferMemberABI {{
+        struct MaterialResources {{
+            sampler2D color {attribute};
+        }};
+
+        fragment {{
+            vec4 main() @gl_FragColor {{
+                MaterialResources resources;
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
 def test_metal_resource_binding_attributes_are_not_parameter_semantics():
     code = """
     shader BindingAttributes {

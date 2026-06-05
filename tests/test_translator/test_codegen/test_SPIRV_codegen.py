@@ -9481,6 +9481,106 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_forwarded_r32_integer_image_atomics_validate_for_vulkan(self, tmp_path):
+        source_code = """
+        shader ForwardedImageAtomics {
+            uimage2D counters @r32ui;
+            iimage2D signedCounters @r32i;
+
+            uint touchUnsignedLeaf(uimage2D image @r32ui, ivec2 pixel) {
+                return imageAtomicAdd(image, pixel, 1u);
+            }
+
+            uint touchUnsignedForward(uimage2D image @r32ui, ivec2 pixel) {
+                return touchUnsignedLeaf(image, pixel);
+            }
+
+            int touchSignedLeaf(iimage2D image @r32i, ivec2 pixel) {
+                return imageAtomicMin(image, pixel, -1);
+            }
+
+            int touchSignedForward(iimage2D image @r32i, ivec2 pixel) {
+                return touchSignedLeaf(image, pixel);
+            }
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    uint unsignedValue = touchUnsignedForward(counters, pixel);
+                    int signedValue = touchSignedForward(signedCounters, pixel);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        assert uint_type is not None
+        assert int_type is not None
+        assert f"OpTypeImage {uint_type.group(1)} 2D 0 0 0 2 R32ui" in spv_code
+        assert f"OpTypeImage {int_type.group(1)} 2D 0 0 0 2 R32i" in spv_code
+        assert spv_code.count("OpImageTexelPointer") == 2
+        assert "OpAtomicIAdd" in spv_code
+        assert "OpAtomicSMin" in spv_code
+        assert "OpAtomicUMin" not in spv_code
+        assert "WARNING" not in spv_code
+        assert "imageAtomic" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
+    def test_image_atomics_reject_non_scalar_integer_storage_image_formats(
+        self, tmp_path
+    ):
+        source_code = """
+        shader InvalidImageAtomicFormats {
+            image2D floatImage @r32f;
+            image2D rgbaFloatImage @rgba32f;
+            uimage2D rgbaCounters @rgba32ui;
+            iimage2D signedRgbaCounters @rgba32i;
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    uint badFloat = imageAtomicAdd(floatImage, pixel, 1u);
+                    uint badRgbaFloat =
+                        imageAtomicExchange(rgbaFloatImage, pixel, 2u);
+                    uint badUnsignedRgba =
+                        imageAtomicAdd(rgbaCounters, pixel, 3u);
+                    int badSignedRgba =
+                        imageAtomicMin(signedRgbaCounters, pixel, -4);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count("WARNING: imageAtomicAdd requires an integer storage image")
+            == 1
+        )
+        assert (
+            "WARNING: imageAtomicExchange requires an integer storage image" in spv_code
+        )
+        assert (
+            "WARNING: imageAtomicAdd requires a scalar storage image format" in spv_code
+        )
+        assert (
+            "WARNING: imageAtomicMin requires a scalar storage image format" in spv_code
+        )
+        assert "OpImageTexelPointer" not in spv_code
+        assert "OpAtomic" not in spv_code
+        assert "imageAtomicAdd(" not in spv_code
+        assert "imageAtomicExchange(" not in spv_code
+        assert "imageAtomicMin(" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
     def test_atomic_operations_share_device_scope_and_none_memory_semantics(
         self, tmp_path
     ):

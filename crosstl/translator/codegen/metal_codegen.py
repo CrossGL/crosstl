@@ -2084,6 +2084,49 @@ class MetalCodeGen:
                 return True
         return False
 
+    def is_metal_struct_member_abi_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+        normalized = str(attr_name).lower()
+        if normalized.startswith("metal_") or normalized.startswith("msl_"):
+            normalized = normalized.split("_", 1)[1]
+        return normalized == "id"
+
+    def format_metal_struct_member_abi_attributes(self, member):
+        attributes = []
+        seen_attributes = set()
+        member_name = getattr(member, "name", None)
+        for attr in getattr(member, "attributes", []) or []:
+            if not self.is_metal_struct_member_abi_attribute(attr):
+                continue
+
+            arguments = getattr(attr, "arguments", []) or []
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name.startswith("metal_") or attr_name.startswith("msl_"):
+                attr_name = attr_name.split("_", 1)[1]
+
+            if attr_name in seen_attributes:
+                raise ValueError(
+                    f"Metal struct member '{member_name}' has multiple {attr_name} "
+                    "attributes"
+                )
+            seen_attributes.add(attr_name)
+
+            if attr_name == "id":
+                member_id = (
+                    self.binding_index_value(arguments[0])
+                    if len(arguments) == 1
+                    else None
+                )
+                if member_id is None:
+                    raise ValueError(
+                        f"Metal struct member '{member_name}' requires an integer id"
+                    )
+                attributes.append(f"[[id({member_id})]]")
+
+        return f" {' '.join(attributes)}" if attributes else ""
+
     def format_struct_resource_array_member(self, member):
         name = getattr(member, "name", None)
         if not name:
@@ -2499,8 +2542,12 @@ class MetalCodeGen:
                 member
             )
             if resource_array_declaration is not None:
+                abi_attr = self.format_metal_struct_member_abi_attributes(member)
                 semantic_attr = self.map_semantic(semantic) if semantic else ""
-                return f"    {resource_array_declaration}{semantic_attr};\n", set()
+                return (
+                    f"    {resource_array_declaration}{abi_attr}{semantic_attr};\n",
+                    set(),
+                )
 
             element_type = getattr(
                 member,
@@ -2524,6 +2571,7 @@ class MetalCodeGen:
         semantic = self.semantic_from_node(member)
         if semantic is None:
             semantic = default_member_semantics.get(member.name)
+        abi_attr = self.format_metal_struct_member_abi_attributes(member)
         semantic_attr = self.map_semantic(semantic) if semantic else ""
 
         if hasattr(member, "member_type"):
@@ -2533,7 +2581,7 @@ class MetalCodeGen:
                 )
                 if resource_array_declaration is not None:
                     return (
-                        f"    {resource_array_declaration}{semantic_attr};\n",
+                        f"    {resource_array_declaration}{abi_attr}{semantic_attr};\n",
                         set(),
                     )
             address_space_declaration = self.format_address_space_parameter_declaration(
@@ -2549,7 +2597,7 @@ class MetalCodeGen:
                     )
                 )
                 return (
-                    f"    {address_space_declaration}{semantic_attr};\n",
+                    f"    {address_space_declaration}{abi_attr}{semantic_attr};\n",
                     dependencies,
                 )
             if str(type(member.member_type)).find("ArrayType") != -1:
@@ -2560,10 +2608,10 @@ class MetalCodeGen:
                 if member.member_type.size is None:
                     base_type, _ = split_array_type_suffix(member_type)
                     return (
-                        f"    {base_type} {member.name}[1024]{semantic_attr};\n",
+                        f"    {base_type} {member.name}[1024]{abi_attr}{semantic_attr};\n",
                         dependencies,
                     )
-                return f"    {declaration}{semantic_attr};\n", dependencies
+                return f"    {declaration}{abi_attr}{semantic_attr};\n", dependencies
 
             member_type_str = self.convert_type_node_to_string(member.member_type)
             member_type = self.map_resource_type_with_format(member_type_str, member)
@@ -2573,7 +2621,10 @@ class MetalCodeGen:
             member_type = "float"
 
         dependencies.update(self.metal_struct_type_dependencies(member_type))
-        return f"    {member_type} {member.name}{semantic_attr};\n", dependencies
+        return (
+            f"    {member_type} {member.name}{abi_attr}{semantic_attr};\n",
+            dependencies,
+        )
 
     def metal_struct_type_dependencies(self, type_name):
         type_name = self.type_name_string(type_name)
@@ -15114,6 +15165,7 @@ class MetalCodeGen:
                 or self.is_resource_memory_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.is_metal_address_space_attribute(attr)
+                or self.is_metal_struct_member_abi_attribute(attr)
             ):
                 continue
             if hasattr(attr, "name"):

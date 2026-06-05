@@ -313,6 +313,20 @@ class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
     HLSL_PATCH_CONTROL_POINT_LIMIT = 32
+    HLSL_INTERPOLATION_MODE_MODIFIERS = {
+        "flat": "nointerpolation",
+        "nointerpolation": "nointerpolation",
+        "noperspective": "noperspective",
+        "linear_noperspective": "noperspective",
+        "linear_noperspective_centroid": "noperspective",
+    }
+    HLSL_INTERPOLATION_SAMPLING_MODIFIERS = {
+        "centroid": "centroid",
+        "linear_centroid": "centroid",
+        "linear_noperspective_centroid": "centroid",
+        "sample": "sample",
+        "linear_sample": "sample",
+    }
     HLSL_FEEDBACK_WRITE_HELPERS = {
         "write_sampler_feedback": ("WriteSamplerFeedback", {4, 5}),
         "write_sampler_feedback_bias": ("WriteSamplerFeedbackBias", {5, 6}),
@@ -2059,6 +2073,7 @@ class HLSLCodeGen:
                     semantic,
                 )
                 semantic_attr = self.map_semantic(semantic)
+                interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
                 tess_factor_declaration = self.hlsl_tess_factor_member_declaration(
                     declaration_type,
                     member.name,
@@ -2068,7 +2083,7 @@ class HLSLCodeGen:
                     code += f"    {tess_factor_declaration} {semantic_attr};\n"
                 else:
                     declaration = format_c_style_array_declaration(
-                        declaration_type,
+                        f"{interpolation_prefix}{declaration_type}",
                         member.name,
                     )
                     code += f"    {declaration}{semantic_attr};\n"
@@ -2127,6 +2142,7 @@ class HLSLCodeGen:
                 semantic,
             )
             semantic_attr = self.map_semantic(semantic)
+            interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
             tess_factor_declaration = self.hlsl_tess_factor_member_declaration(
                 member_type,
                 member.name,
@@ -2138,13 +2154,14 @@ class HLSLCodeGen:
 
             if array_syntax is None:
                 declaration = format_c_style_array_declaration(
-                    member_type,
+                    f"{interpolation_prefix}{member_type}",
                     member.name,
                 )
                 code += f"    {declaration}{semantic_attr};\n"
             else:
                 code += (
-                    f"    {member_type} {member.name}{array_syntax}{semantic_attr};\n"
+                    f"    {interpolation_prefix}{member_type} "
+                    f"{member.name}{array_syntax}{semantic_attr};\n"
                 )
         code += "};\n"
         return code
@@ -3083,6 +3100,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             else:
                 param_type = self.apply_hlsl_parameter_qualifiers(param_type, p)
+                param_type = f"{self.hlsl_interpolation_modifier_prefix(p)}{param_type}"
             declaration = format_c_style_array_declaration(param_type, p.name)
             semantic_attr = "" if ray_role else self.map_semantic(semantic)
             params.append(
@@ -7798,6 +7816,42 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 qualifiers.append(normalized)
 
         return qualifiers
+
+    def hlsl_interpolation_metadata_names(self, node):
+        names = []
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            if qualifier is not None:
+                names.append(str(qualifier).lower())
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name is not None:
+                names.append(str(attr_name).lower())
+        return names
+
+    def is_hlsl_interpolation_metadata_name(self, name):
+        if name is None:
+            return False
+        normalized = str(name).lower()
+        return (
+            normalized in self.HLSL_INTERPOLATION_MODE_MODIFIERS
+            or normalized in self.HLSL_INTERPOLATION_SAMPLING_MODIFIERS
+            or normalized in {"smooth", "linear"}
+        )
+
+    def hlsl_interpolation_modifier_prefix(self, node):
+        mode = None
+        sampling = None
+        for name in self.hlsl_interpolation_metadata_names(node):
+            if mode is None:
+                mode = self.HLSL_INTERPOLATION_MODE_MODIFIERS.get(name)
+            if sampling is None:
+                sampling = self.HLSL_INTERPOLATION_SAMPLING_MODIFIERS.get(name)
+
+        modifiers = []
+        for modifier in (mode, sampling):
+            if modifier and modifier not in modifiers:
+                modifiers.append(modifier)
+        return f"{' '.join(modifiers)} " if modifiers else ""
 
     def hlsl_mesh_parameter_role_attribute_name(self, attr):
         attr_name = getattr(attr, "name", None)
@@ -16708,6 +16762,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 continue
             if hasattr(attr, "name"):
+                if self.is_hlsl_interpolation_metadata_name(attr.name):
+                    continue
                 return self.semantic_attribute_name(attr)
         return None
 
@@ -16762,6 +16818,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 continue
             if hasattr(attr, "name"):
+                if self.is_hlsl_interpolation_metadata_name(attr.name):
+                    continue
                 return self.semantic_attribute_name(attr)
         return None
 

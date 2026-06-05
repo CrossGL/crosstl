@@ -18426,6 +18426,68 @@ def test_texture_and_sampler_binding_namespaces_are_independent_for_rust_codegen
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_resource_placeholders_diagnose_explicit_sampler_sampling(tmp_path):
+    code = """
+    shader RustExplicitSamplerResourceDiagnostic {
+        sampler2D colorMap @set(1) @binding(4);
+        sampler linearSampler @set(1) @binding(5);
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return texture(colorMap, linearSampler, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return sample_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv);" in generated_code
+    assert "texture(" not in generated_code
+    assert (
+        "// CrossGL Rust limitation: resource colorMap is emitted as a "
+        "compile-only placeholder static, not a rust-gpu resource binding"
+    ) in generated_code
+    assert (
+        "// CrossGL Rust limitation: resource linearSampler is emitted as a "
+        "compile-only placeholder static, not a rust-gpu resource binding"
+    ) in generated_code
+    assert (
+        "resource colorMap is emitted as a compile-only placeholder static"
+        in generated_code
+        and "static COLOR_MAP: std::sync::LazyLock<Texture2D<f32>>" in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_resource_placeholders_diagnose_storage_image_atomic(tmp_path):
+    code = """
+    shader RustStorageImageAtomicResourceDiagnostic {
+        uimage2D counterImage @r32ui @binding(2);
+
+        compute {
+            void main(ivec2 pixel, uint amount) {
+                uint previous = imageAtomicAdd(counterImage, pixel, amount);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let previous: u32 = image_atomic_add(*COUNTER_IMAGE, pixel, amount);" in (
+        generated_code
+    )
+    assert "imageAtomicAdd" not in generated_code
+    assert "imageLoad" not in generated_code
+    assert (
+        "// CrossGL Rust limitation: resource counterImage is emitted as a "
+        "compile-only placeholder static, not a rust-gpu resource binding"
+    ) in generated_code
+    assert "static COUNTER_IMAGE: std::sync::LazyLock<Image2D<u32>>" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_duplicate_resource_bindings_are_rejected_for_rust_codegen():
     duplicate_texture_binding = """
     shader DuplicateRustTextureBindings {

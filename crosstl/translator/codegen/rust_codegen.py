@@ -3656,13 +3656,15 @@ class RustCodeGen:
             init_expr = self.rust_static_default_initializer(rust_type)
             lazy_lock = False
 
-        return self.rust_resource_metadata_comment(
-            node, var_type
-        ) + self.generate_static_declaration(
-            node.name,
-            rust_type,
-            init_expr,
-            lazy_lock=lazy_lock,
+        return (
+            self.rust_resource_metadata_comment(node, var_type)
+            + self.rust_resource_placeholder_diagnostic_comment(node, var_type)
+            + self.generate_static_declaration(
+                node.name,
+                rust_type,
+                init_expr,
+                lazy_lock=lazy_lock,
+            )
         )
 
     def generate_global_array_declaration(self, node):
@@ -3704,10 +3706,12 @@ class RustCodeGen:
                 lazy_lock = False
 
         self.register_variable_type(node.name, source_type, scope="static")
-        return self.rust_resource_metadata_comment(
-            node, source_type
-        ) + self.generate_static_declaration(
-            node.name, rust_type, initializer, lazy_lock=lazy_lock
+        return (
+            self.rust_resource_metadata_comment(node, source_type)
+            + self.rust_resource_placeholder_diagnostic_comment(node, source_type)
+            + self.generate_static_declaration(
+                node.name, rust_type, initializer, lazy_lock=lazy_lock
+            )
         )
 
     def register_constant_types(self, ast):
@@ -12309,6 +12313,18 @@ class RustCodeGen:
         if register_metadata:
             parts.append(f"register={register_metadata}")
         return " ".join(parts) + "\n"
+
+    def rust_resource_placeholder_diagnostic_comment(self, node, type_name):
+        name = getattr(node, "name", None)
+        resource_kind = self.rust_resource_kind(type_name, node=node)
+        if not name or resource_kind is None:
+            return ""
+        return (
+            f"// CrossGL Rust limitation: resource {name} is emitted as a "
+            "compile-only placeholder static, not a rust-gpu resource binding; "
+            "pass real spirv_std resources as #[spirv(...)] entry parameters "
+            "when targeting rust-gpu.\n"
+        )
 
     def reserve_explicit_rust_resource_binding(self, node, type_name, kind=None):
         name = getattr(node, "name", None)
