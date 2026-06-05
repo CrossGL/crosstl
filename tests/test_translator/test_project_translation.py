@@ -5846,6 +5846,38 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert "Source maps: 1 file-level, 0 fine-grained" in result.stdout
 
 
+def test_project_cli_inspect_report_text_includes_report_rollups(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl", "opengl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Units by source backend: cgl=1" in result.stdout
+    assert (
+        "Artifacts by target: cgl=1 artifact (1 translated, 0 failed), "
+        "opengl=1 artifact (1 translated, 0 failed)"
+    ) in result.stdout
+
+
 def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

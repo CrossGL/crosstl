@@ -470,6 +470,19 @@ def _format_project_report_inspection(payload):
     source_maps = _format_source_map_counts(summary)
     if source_maps:
         lines.append(source_maps)
+    units_by_source_backend = _format_count_rollup(
+        "Units by source backend",
+        summary.get("unitsBySourceBackend"),
+        include_zero=False,
+    )
+    if units_by_source_backend:
+        lines.append(units_by_source_backend)
+    artifacts_by_target = _format_artifact_rollup(
+        "Artifacts by target",
+        summary.get("artifactsByTarget"),
+    )
+    if artifacts_by_target:
+        lines.append(artifacts_by_target)
     diagnostic_codes = _format_count_rollup(
         "Diagnostic codes", summary.get("diagnosticsByCode")
     )

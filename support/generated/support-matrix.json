@@ -7251,13 +7251,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_report_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_toolchain_run_failures",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_sections"
           ],
-          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, report source-backend and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "status": "supported"
         },
         "directx": {
@@ -7268,13 +7269,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_report_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_toolchain_run_failures",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_sections"
           ],
-          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, report source-backend and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "status": "supported"
         },
         "hip": {
@@ -7285,13 +7287,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_report_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_toolchain_run_failures",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_sections"
           ],
-          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, report source-backend and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "status": "supported"
         },
         "metal": {
@@ -7302,13 +7305,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_report_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_toolchain_run_failures",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_sections"
           ],
-          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, report source-backend and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "status": "supported"
         },
         "mojo": {
@@ -7319,13 +7323,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_report_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_toolchain_run_failures",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_sections"
           ],
-          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, report source-backend and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "status": "supported"
         },
         "opengl": {
@@ -7336,13 +7341,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_report_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_toolchain_run_failures",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_sections"
           ],
-          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, report source-backend and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "status": "supported"
         },
         "rust": {
@@ -7353,13 +7359,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_report_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_toolchain_run_failures",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_sections"
           ],
-          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, report source-backend and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "status": "supported"
         },
         "slang": {
@@ -7370,13 +7377,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_report_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_toolchain_run_failures",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_sections"
           ],
-          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, report source-backend and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "status": "supported"
         },
         "vulkan": {
@@ -7387,13 +7395,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_report_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_toolchain_run_failures",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_sections"
           ],
-          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON and text summaries for generated portability reports, validation results, failed-artifact and diagnostic truncation metadata, report diagnostic-code and missing-capability rollups, report source-backend and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count rollups, external-corpus and project-config count rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "status": "supported"
         }
       }
