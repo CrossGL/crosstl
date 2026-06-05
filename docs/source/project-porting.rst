@@ -86,7 +86,8 @@ the repository, generated artifact hashes no longer match the files on disk,
 source files with recorded hashes are missing or changed, or opt-in toolchain
 smoke checks fail.
 Toolchain smoke checks only run for translated artifacts that still exist inside
-the repository.
+the repository. Validation reports include severity, diagnostic-code, and
+missing-capability rollups for generated and preserved diagnostics.
 
 Inspect an existing report as a concise JSON or text summary:
 
@@ -97,10 +98,10 @@ Inspect an existing report as a concise JSON or text summary:
 
 Report inspection includes validation status, project counts, project
 configuration counts, failed artifacts, diagnostic code and missing-capability
-rollups, validation artifact target rollups, source-map count rollups,
-diagnostics, diagnostic and failed-artifact truncation counts, external corpus
-rollups, and migration actions. It exits nonzero when validation finds report
-errors.
+rollups, validation diagnostic-code, missing-capability, and artifact target
+rollups, source-map count rollups, diagnostics, diagnostic and failed-artifact
+truncation counts, external corpus rollups, and migration actions. It exits
+nonzero when validation finds report errors.
 
 Configuration
 -------------

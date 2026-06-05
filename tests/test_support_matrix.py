@@ -129,10 +129,10 @@ def test_project_report_inspection_is_first_class_support_feature():
         ) in backend_support["evidence"]
         assert "source-map count rollups" in backend_support["notes"]
         assert (
-            "validation hash-status, toolchain-status, and toolchain-run rollups"
+            "validation hash-status, diagnostic-code, missing-capability, "
+            "toolchain-status, toolchain-run, and artifact target rollups"
             in (backend_support["notes"])
         )
-        assert "validation artifact target rollups" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_map_counts"
@@ -305,6 +305,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "single file-level source-map mapping" in backend_support["notes"]
         assert "repository-relative file paths" in backend_support["notes"]
         assert "required summarized validation artifact hash status fields" in (
+            backend_support["notes"]
+        )
+        assert "validation diagnostic-code and missing-capability rollups" in (
             backend_support["notes"]
         )
         assert "required summarized validation toolchain target coverage" in (

@@ -1561,6 +1561,8 @@ def test_validate_project_report_returns_structured_invalid_report_diagnostics(
 
     assert payload["success"] is False
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["diagnosticsByCode"] == {"project.validate.invalid-report": 1}
+    assert payload["missingCapabilityCounts"] == {"artifact.manifest": 1}
     assert payload["validation"] == {"toolchains": [], "artifacts": []}
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
@@ -5557,6 +5559,8 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     payload = json.loads(result.stdout)
     assert result.returncode == 1
     assert payload["success"] is False
+    assert payload["diagnosticsByCode"] == {"project.validate.failed-artifact": 1}
+    assert payload["missingCapabilityCounts"] == {"batch.translation": 1}
     assert payload["diagnostics"][0]["code"] == "project.validate.failed-artifact"
 
 
@@ -5952,6 +5956,10 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
             "failedCount": 1,
         }
     }
+    assert payload["validation"]["diagnosticsByCode"] == {
+        "project.validate.generated-hash-mismatch": 1
+    }
+    assert payload["validation"]["missingCapabilityCounts"] == {"artifact.manifest": 1}
     assert result.returncode == 1
     assert "Validation toolchains: not-configured=1" in result.stdout
     assert "Validation artifacts: 0 ok, 1 failed" in result.stdout
@@ -5959,6 +5967,11 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
         "Validation artifacts by target: cgl=1 artifact (0 ok, 1 failed)"
         in result.stdout
     )
+    assert (
+        "Validation diagnostic codes: project.validate.generated-hash-mismatch=1"
+        in result.stdout
+    )
+    assert "Validation missing capabilities: artifact.manifest=1" in result.stdout
     assert "Validation source hashes: ok=1" in result.stdout
     assert "Validation generated hashes: mismatch=1" in result.stdout
     assert (
@@ -5998,6 +6011,11 @@ def test_project_cli_inspect_report_text_fails_on_error_diagnostics(tmp_path):
     assert "Diagnostic codes: project.config.unsupported-target=1" in result.stdout
     assert "Missing capabilities: target.backend=1" in result.stdout
     assert "Validation diagnostics: 1 errors" in result.stdout
+    assert (
+        "Validation diagnostic codes: project.config.unsupported-target=1"
+        in result.stdout
+    )
+    assert "Validation missing capabilities: target.backend=1" in result.stdout
     assert "Validation artifacts: 0 ok, 0 failed" in result.stdout
     assert "project.config.unsupported-target" in result.stdout
 

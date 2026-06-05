@@ -423,6 +423,10 @@ def _format_project_report_inspection(payload):
     project = report.get("project", {}) if isinstance(report, Mapping) else {}
     diagnostic_counts = summary.get("diagnosticCounts", {})
     validation_counts = payload.get("validation", {}).get("diagnosticCounts", {})
+    validation_diagnostic_codes = payload.get("validation", {}).get("diagnosticsByCode")
+    validation_missing_capabilities = payload.get("validation", {}).get(
+        "missingCapabilityCounts"
+    )
     validation_toolchain_counts = payload.get("validation", {}).get(
         "toolchainStatusCounts"
     )
@@ -482,6 +486,20 @@ def _format_project_report_inspection(payload):
         f"{validation_counts.get('warning', 0)} warnings, "
         f"{validation_counts.get('note', 0)} notes"
     )
+    validation_codes = _format_count_rollup(
+        "Validation diagnostic codes",
+        validation_diagnostic_codes,
+        include_zero=False,
+    )
+    if validation_codes:
+        lines.append(validation_codes)
+    validation_missing = _format_count_rollup(
+        "Validation missing capabilities",
+        validation_missing_capabilities,
+        include_zero=False,
+    )
+    if validation_missing:
+        lines.append(validation_missing)
     validation_toolchains = _format_count_rollup(
         "Validation toolchains",
         validation_toolchain_counts,

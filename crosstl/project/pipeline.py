@@ -1895,6 +1895,10 @@ def inspect_project_report(
         "validation": {
             "success": bool(validation_report.get("success")),
             "diagnosticCounts": dict(validation_report.get("diagnosticCounts", {})),
+            "diagnosticsByCode": dict(validation_report.get("diagnosticsByCode", {})),
+            "missingCapabilityCounts": dict(
+                validation_report.get("missingCapabilityCounts", {})
+            ),
             "artifactStatusByTarget": _validation_artifact_status_by_target(
                 validation_artifacts
                 if isinstance(validation_artifacts, Sequence)
@@ -2106,6 +2110,10 @@ def _validation_report_payload(
             diagnostic.get("severity") == "error" for diagnostic in diagnostics
         ),
         "diagnosticCounts": _diagnostic_payload_counts(diagnostics),
+        "diagnosticsByCode": _payload_diagnostic_counts_by_code(diagnostics) or {},
+        "missingCapabilityCounts": (
+            _payload_missing_capability_counts(diagnostics) or {}
+        ),
         "diagnostics": list(diagnostics),
         "validation": dict(validation),
     }
