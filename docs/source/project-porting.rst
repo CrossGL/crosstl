@@ -188,12 +188,12 @@ Project reports are JSON documents with:
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, and source overrides.
 - ``artifacts``: attempted outputs with source path, source backend, target,
-  optional variant name, output path, status, source hash, generated artifact
-  hash, pipeline provenance, and file-granularity source-map anchors for
-  successful translations. Full reports require artifact source paths to match
-  declared translation units and artifact source backend names to match those
-  units. Invalid project output directories are recorded as failed artifacts
-  without writing files.
+  optional variant name, target/variant-scoped output path, status, source
+  hash, generated artifact hash, pipeline provenance, and file-granularity
+  source-map anchors for successful translations. Full reports require artifact
+  source paths to match declared translation units and artifact source backend
+  names to match those units. Invalid project output directories are recorded as
+  failed artifacts without writing files.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, and translated/failed artifact outcome counts for manifest entries.

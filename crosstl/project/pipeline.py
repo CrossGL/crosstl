@@ -3727,6 +3727,8 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             ):
                 reasons.append(f"artifacts[{index}].source must be listed in units")
             path = artifact.get("path")
+            target = artifact.get("target")
+            variant = artifact.get("variant")
             if _is_non_empty_string(path) and not _is_repository_relative_report_path(
                 path
             ):
@@ -3740,6 +3742,24 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"artifacts[{index}].path must be under project.outputDir"
                 )
+            elif (
+                root_path is not None
+                and project_output_path is not None
+                and _is_non_empty_string(path)
+                and _is_non_empty_string(target)
+            ):
+                expected_output_base = (
+                    project_output_path / _normalized_targets([target])[0]
+                )
+                if _is_non_empty_string(variant):
+                    expected_output_base = (
+                        expected_output_base / _variant_output_segment(variant)
+                    )
+                if not _is_relative_to(root_path / path, expected_output_base):
+                    reasons.append(
+                        f"artifacts[{index}].path must be under "
+                        "project.outputDir target/variant directory"
+                    )
             source_backend = artifact.get("sourceBackend")
             if has_summary or "sourceBackend" in artifact:
                 if not _is_non_empty_string(source_backend):
@@ -3755,7 +3775,6 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                             f"artifacts[{index}].sourceBackend must match "
                             f"units[{unit_index}].sourceBackend"
                         )
-            target = artifact.get("target")
             if _is_non_empty_string(target) and project_targets_valid:
                 normalized_target = _normalized_targets([target])[0]
                 if normalized_target not in declared_targets:
@@ -3767,7 +3786,6 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"artifacts[{index}].status must be translated or failed"
                 )
-            variant = artifact.get("variant")
             if "variant" in artifact:
                 if not _is_non_empty_string(variant):
                     reasons.append(f"artifacts[{index}].variant must be a string")

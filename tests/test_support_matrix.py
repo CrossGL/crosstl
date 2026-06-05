@@ -152,6 +152,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
             backend_support["notes"]
         )
         assert "unit extension/path consistency" in backend_support["notes"]
+        assert "target/variant directory containment" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_altered_migration_non_goals"
@@ -159,6 +160,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_unit_extension_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_paths_outside_target_dir"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
