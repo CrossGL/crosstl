@@ -19675,6 +19675,49 @@ def test_binary_math_intrinsics_promote_mixed_scalar_vector_operands_and_smoke_c
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_hlsl_fmod_alias_lowers_to_rust_modulo_and_smoke_compile(tmp_path):
+    code = """
+    shader FmodAliasInference {
+        fragment {
+            vec4 main(vec3 value, float scalar) {
+                let wrapped_vector = fmod(value, scalar);
+                let wrapped_scalar = fmod(scalar, 2.0);
+                return vec4(wrapped_vector, wrapped_scalar);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let wrapped_vector: Vec3<f32> = modulo(value, scalar);" in generated_code
+    assert "let wrapped_scalar: f32 = modulo(scalar, 2.0);" in generated_code
+    assert "fmod(" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_user_defined_fmod_function_is_not_lowered_to_modulo():
+    code = """
+    shader UserDefinedFmod {
+        float fmod(float value, float divisor) {
+            return value + divisor;
+        }
+
+        fragment {
+            float main(float value) {
+                return fmod(value, 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn fmod(value: f32, divisor: f32) -> f32" in generated_code
+    assert "return fmod(value, 2.0);" in generated_code
+    assert "modulo(value, 2.0)" not in generated_code
+
+
 def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
     code = """
     shader MatrixIntrinsicInference {

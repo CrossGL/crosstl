@@ -630,3 +630,36 @@ def test_primary_graphics_structured_buffer_access_contracts_are_preserved(
     assert f"constant uint* {target_name}Length" in metal
     assert f"len = {target_name}Length[0];" in metal
     assert f"{target_name}[tid.x] = value;" in metal
+
+
+def test_hlsl_lerp_alias_does_not_call_shadowed_mix_target():
+    shader = """
+    shader LerpAliasTargetShadow {
+        float shade(float a, float b, float t) {
+            float mix = t;
+            return lerp(a, b, t) + mix;
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    hlsl = HLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    metal = MetalCodeGen().generate(ast)
+
+    for backend, generated in (
+        ("directx", hlsl),
+        ("opengl", glsl),
+        ("metal", metal),
+    ):
+        _assert_codegen_output_is_usable(backend, generated)
+
+    assert "return (lerp(a, b, t) + mix);" in hlsl
+
+    assert "float mix_ = t;" in glsl
+    assert "return (mix(a, b, t) + mix_);" in glsl
+    assert "return (mix(a, b, t) + mix);" not in glsl
+
+    assert "float mix = t;" in metal
+    assert "return metal::mix(a, b, t) + mix;" in metal
+    assert "return mix(a, b, t) + mix;" not in metal

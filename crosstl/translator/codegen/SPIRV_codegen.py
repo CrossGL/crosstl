@@ -8165,6 +8165,10 @@ class VulkanSPIRVCodeGen:
         if scalar_constructor is not None:
             return scalar_constructor
 
+        derivative_call = self.call_derivative_function(function_name, args)
+        if derivative_call is not None:
+            return derivative_call
+
         exact_operand_counts = {
             "min": 2,
             "max": 2,
@@ -8632,6 +8636,95 @@ class VulkanSPIRVCodeGen:
             return self.emit_glsl_std450_instruction(
                 glsl_std450_map[function_name], result_type_id, args
             )
+
+    def derivative_function_opcode(self, function_name: str) -> Optional[str]:
+        aliases = {
+            "ddx": "dFdx",
+            "ddx_fine": "dFdxFine",
+            "ddx_coarse": "dFdxCoarse",
+            "ddy": "dFdy",
+            "ddy_fine": "dFdyFine",
+            "ddy_coarse": "dFdyCoarse",
+            "fwidth_fine": "fwidthFine",
+            "fwidth_coarse": "fwidthCoarse",
+        }
+        function_name = aliases.get(function_name, function_name)
+        opcodes = {
+            "dFdx": "OpDPdx",
+            "dFdxFine": "OpDPdxFine",
+            "dFdxCoarse": "OpDPdxCoarse",
+            "dFdy": "OpDPdy",
+            "dFdyFine": "OpDPdyFine",
+            "dFdyCoarse": "OpDPdyCoarse",
+            "fwidth": "OpFwidth",
+            "fwidthFine": "OpFwidthFine",
+            "fwidthCoarse": "OpFwidthCoarse",
+        }
+        return opcodes.get(function_name)
+
+    def derivative_operand_is_valid(self, value: SpirvId) -> bool:
+        result_type = self.ensure_registered_type(value.type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type not in {"float", "double"}:
+            return False
+
+        type_name = self.normalize_primitive_name(result_type.type.base_type)
+        return (
+            type_name in {"float", "double"}
+            or self.vector_component_type_and_count(result_type.type.base_type)
+            is not None
+        )
+
+    def current_derivative_execution_models(self) -> set:
+        return self.current_synchronization_execution_models()
+
+    def can_emit_derivative_function(self) -> bool:
+        execution_models = self.current_derivative_execution_models()
+        derivative_execution_models = {"Fragment", "GLCompute", "MeshEXT", "TaskEXT"}
+        return bool(execution_models) and execution_models.issubset(
+            derivative_execution_models
+        )
+
+    def call_derivative_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        opcode = self.derivative_function_opcode(function_name)
+        if opcode is None:
+            return None
+
+        if len(args) != 1:
+            self.emit(f"; WARNING: {function_name} requires 1 operand")
+            return self.register_constant(0.0, self.register_primitive_type("float"))
+
+        result_type = self.ensure_registered_type(args[0].type)
+        if not self.derivative_operand_is_valid(args[0]):
+            self.emit(
+                f"; WARNING: {function_name} requires floating-point scalar "
+                "or vector operand"
+            )
+            return self.default_value_for_type(result_type)
+
+        if not self.can_emit_derivative_function():
+            self.emit(
+                f"; WARNING: derivative builtin '{function_name}' requires Fragment "
+                "or compute-derivative-capable execution model; current execution "
+                f"model: {self.current_execution_model_label()}"
+            )
+            return self.default_value_for_type(result_type)
+
+        compute_derivative_models = {"GLCompute", "MeshEXT", "TaskEXT"}
+        if self.current_derivative_execution_models() & compute_derivative_models:
+            self.require_compute_derivatives()
+
+        if opcode.endswith("Fine") or opcode.endswith("Coarse"):
+            self.require_capability("DerivativeControl")
+
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = {opcode} %{result_type.id} %{args[0].id}")
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
 
     def call_scalar_constructor(
         self, function_name: str, args: List[SpirvId]

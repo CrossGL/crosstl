@@ -3427,6 +3427,91 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_fragment_derivative_aliases_lower_to_spirv_opcodes(self, tmp_path):
+        source_code = """
+        shader FragmentDerivativeAliases {
+            fragment {
+                vec4 main() @ gl_FragColor {
+                    float x = 1.0;
+                    float aliasDx = ddx(x);
+                    float aliasDy = ddy(x);
+                    float glslDx = dFdx(x);
+                    float glslDy = dFdy(x);
+                    float width = fwidth(x);
+                    return vec4(aliasDx, aliasDy, glslDx + glslDy, width);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        assert (
+            len(
+                re.findall(
+                    rf"%\d+ = OpDPdx {re.escape(float_type.group(1))} %\d+\b",
+                    spv_code,
+                )
+            )
+            == 2
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"%\d+ = OpDPdy {re.escape(float_type.group(1))} %\d+\b",
+                    spv_code,
+                )
+            )
+            == 2
+        )
+        assert re.search(
+            rf"%\d+ = OpFwidth {re.escape(float_type.group(1))} %\d+\b",
+            spv_code,
+        )
+        assert "SPIR-V backend cannot lower unknown function 'ddx'" not in spv_code
+        assert "SPIR-V backend cannot lower unknown function 'dFdx'" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_user_defined_ddx_function_shadows_derivative_alias(self, tmp_path):
+        source_code = """
+        shader UserDdx {
+            float ddx(float x) {
+                return x + 1.0;
+            }
+
+            fragment {
+                vec4 main() @ gl_FragColor {
+                    float value = ddx(4.0);
+                    return vec4(value, 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        ddx_function = re.search(
+            r"(?P<function>%\d+) = OpFunction %\d+ None %\d+\n"
+            r"%\d+ = OpFunctionParameter %\d+",
+            spv_code,
+        )
+
+        assert ddx_function is not None
+        assert re.search(
+            rf"%\d+ = OpFunctionCall %\d+ "
+            rf"{re.escape(ddx_function.group('function'))} %\d+",
+            spv_code,
+        )
+        assert "OpDPdx" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_float_min_max_clamp_builtins_use_typed_spirv_extinsts(self):
         source_code = """
         shader MinMaxClamp {

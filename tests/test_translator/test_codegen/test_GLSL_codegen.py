@@ -23543,6 +23543,29 @@ def test_opengl_hlsl_saturate_alias_emits_three_argument_clamp():
     assert "clamp(color)" not in generated_code
 
 
+def test_opengl_hlsl_lerp_alias_renames_local_mix_shadow():
+    shader = """
+    shader LerpAliasLocalMixShadow {
+        fragment {
+            vec4 main(float weight @ TEXCOORD0) @ gl_FragColor {
+                vec3 cool = vec3(0.1, 0.2, 0.8);
+                vec3 warm = vec3(1.0, 0.4, 0.1);
+                float mix = weight;
+                vec3 color = lerp(cool, warm, weight);
+                return vec4(color + vec3(mix), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float mix_ = weight;" in generated_code
+    assert "vec3 color = mix(cool, warm, weight);" in generated_code
+    assert "vec3(mix_)" in generated_code
+    assert "float mix = weight;" not in generated_code
+
+
 def test_opengl_hlsl_rcp_alias_emits_reciprocal_expression():
     # Microsoft HLSL rcp computes a per-component reciprocal:
     # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/rcp

@@ -98,3 +98,45 @@ def test_structured_buffer_parameters_preserve_element_type_for_core_backends():
     assert "data.Store(index, value * 2.0);" in slang
     assert "buffer_load(" not in slang
     assert "buffer_store(" not in slang
+
+
+def test_buffer_builtin_aliases_do_not_instantiate_same_named_generics():
+    shader = """
+    shader main {
+        RWStructuredBuffer<float> data;
+        StructuredBuffer<float> input;
+
+        generic<T> fn buffer_load(T value, uint index) -> T {
+            return value;
+        }
+
+        generic<T> fn buffer_store(T buffer, uint index, float value) -> void {
+        }
+
+        compute {
+            void scale(uint index) {
+                float value = buffer_load(input, index);
+                buffer_store(data, index, value * 2.0);
+            }
+        }
+    }
+    """
+    ast = parse(shader)
+
+    hlsl = HLSLCodeGen().generate(ast)
+    assert "float value = input.Load(index);" in hlsl
+    assert "data.Store(index, (value * 2.0));" in hlsl
+    assert "buffer_load_" not in hlsl
+    assert "buffer_store_" not in hlsl
+
+    metal = MetalCodeGen().generate(ast)
+    assert "float value = input[index];" in metal
+    assert "data[index] = value * 2.0;" in metal
+    assert "buffer_load_" not in metal
+    assert "buffer_store_" not in metal
+
+    glsl = GLSLCodeGen().generate(ast)
+    assert "float value = input[index];" in glsl
+    assert "data[index] = (value * 2.0);" in glsl
+    assert "buffer_load_" not in glsl
+    assert "buffer_store_" not in glsl

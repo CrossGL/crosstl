@@ -205,6 +205,30 @@ def test_metal_hlsl_frac_and_lerp_aliases_lower_to_msl_stdlib_names():
     assert "lerp(" not in generated_code
 
 
+def test_metal_hlsl_lerp_alias_qualifies_mix_when_local_name_shadows_it():
+    shader = """
+    shader MetalLerpAliasLocalMixShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float phase = float(tid.x) * 0.25;
+                vec3 cool = vec3(0.1, 0.2, 0.8);
+                vec3 warm = vec3(1.0, 0.4, 0.1);
+                float mix = phase;
+                vec3 color = lerp(cool, warm, phase);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float mix = phase;" in generated_code
+    assert "float3 color = metal::mix(cool, warm, phase);" in generated_code
+    assert "float3 color = mix(cool, warm, phase);" not in generated_code
+
+
 def test_metal_user_defined_frac_and_lerp_functions_are_preserved():
     shader = """
     shader MetalUserHlslMathNames {

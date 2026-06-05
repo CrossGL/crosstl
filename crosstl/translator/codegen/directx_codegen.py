@@ -760,7 +760,11 @@ class HLSLCodeGen:
         self.function_map = {
             "atomicAdd": "InterlockedAdd",
             "dFdx": "ddx",
+            "dFdxCoarse": "ddx_coarse",
+            "dFdxFine": "ddx_fine",
             "dFdy": "ddy",
+            "dFdyCoarse": "ddy_coarse",
+            "dFdyFine": "ddy_fine",
             "fract": "frac",
             "inverseSqrt": "rsqrt",
             "inversesqrt": "rsqrt",

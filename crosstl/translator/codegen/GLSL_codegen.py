@@ -581,6 +581,7 @@ class GLSLCodeGen:
     GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
     GLSL_PARAMETER_QUALIFIERS = {"out", "inout"}
     GLSL_RESERVED_IDENTIFIERS = {"active", "input", "output"}
+    GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {"mix"}
     GLSL_INTERPOLATION_FUNCTIONS = {
         "interpolateAtCentroid": 1,
         "interpolateAtSample": 2,
@@ -7559,12 +7560,17 @@ class GLSLCodeGen:
 
     def glsl_local_identifier_name(self, name):
         reserved_names = self.current_stage_declared_names()
-        if name not in self.GLSL_RESERVED_IDENTIFIERS and name not in reserved_names:
+        if (
+            name not in self.GLSL_RESERVED_IDENTIFIERS
+            and name not in self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS
+            and name not in reserved_names
+        ):
             return name
 
         used_names = set(self.local_variable_types)
         used_names.update(self.current_identifier_aliases.values())
         used_names.update(reserved_names)
+        used_names.update(self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS)
 
         alias = f"{name}_"
         suffix = 1

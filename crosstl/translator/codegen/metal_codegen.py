@@ -7242,7 +7242,12 @@ class MetalCodeGen:
                 and func_name not in self.user_function_names
             ):
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"mix({args})"
+                mix_name = (
+                    "metal::mix"
+                    if self.metal_function_name_is_shadowed("mix")
+                    else "mix"
+                )
+                return f"{mix_name}({args})"
             if (
                 func_name in {"inverseSqrt", "inversesqrt"}
                 and len(expr.args) == 1
@@ -7571,6 +7576,12 @@ class MetalCodeGen:
             return name
         else:
             return str(expr)
+
+    def metal_function_name_is_shadowed(self, func_name):
+        return (
+            func_name in self.local_variable_types
+            or func_name in self.user_function_names
+        )
 
     def generate_binary_operand(self, expr):
         rendered = self.generate_expression(expr)

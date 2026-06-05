@@ -502,6 +502,60 @@ def test_directx_derivative_builtins_lower_to_hlsl_intrinsics():
     assert "dFdy(" not in generated_code
 
 
+def test_directx_fine_and_coarse_derivative_builtins_lower_to_hlsl_intrinsics():
+    shader = """
+    shader FineCoarseDerivativeBuiltins {
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float fineX = dFdxFine(input.uv.x);
+                float coarseX = dFdxCoarse(input.uv.x);
+                float fineY = dFdyFine(input.uv.y);
+                float coarseY = dFdyCoarse(input.uv.y);
+                return vec4(fineX, coarseX, fineY, coarseY);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float fineX = ddx_fine(input.uv.x);" in generated_code
+    assert "float coarseX = ddx_coarse(input.uv.x);" in generated_code
+    assert "float fineY = ddy_fine(input.uv.y);" in generated_code
+    assert "float coarseY = ddy_coarse(input.uv.y);" in generated_code
+    assert "dFdxFine(" not in generated_code
+    assert "dFdxCoarse(" not in generated_code
+    assert "dFdyFine(" not in generated_code
+    assert "dFdyCoarse(" not in generated_code
+
+
+def test_directx_user_defined_fine_derivative_name_is_not_lowered():
+    shader = """
+    shader FineDerivativeShadowing {
+        float dFdxFine(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {
+                float fine = dFdxFine(value);
+                return vec4(fine, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float dFdxFine(float value)" in generated_code
+    assert "float fine = dFdxFine(value);" in generated_code
+    assert "ddx_fine(" not in generated_code
+
+
 def test_hlsl_float16_ir_aliases_map_to_half_and_min_precision_names():
     shader = """
     shader Float16IRSmoke {

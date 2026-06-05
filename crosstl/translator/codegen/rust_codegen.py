@@ -459,6 +459,7 @@ class RustCodeGen:
             "frac": "fract",
             "fract": "fract",
             "mod": "modulo",
+            "fmod": "modulo",
             "barrier": "workgroup_barrier",
             "workgroupBarrier": "workgroup_barrier",
             "memoryBarrier": "memory_barrier",
