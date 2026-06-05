@@ -1750,6 +1750,46 @@ def test_validate_project_report_rejects_malformed_unit_and_skipped_records(tmp_
     assert "skipped[1] must be an object" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_unit_extension_mismatches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "unit-extension-mismatch-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "units": [
+                    {
+                        "id": "simple.cgl",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "extension": ".hlsl",
+                    }
+                ],
+                "skipped": [],
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].extension must match units[0].path suffix" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_duplicate_unit_and_skipped_paths(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

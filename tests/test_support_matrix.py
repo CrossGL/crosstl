@@ -151,9 +151,14 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "migration scope, non-goals, action kinds, and target declarations" in (
             backend_support["notes"]
         )
+        assert "unit extension/path consistency" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_altered_migration_non_goals"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_unit_extension_mismatches"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

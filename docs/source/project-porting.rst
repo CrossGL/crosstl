@@ -186,7 +186,7 @@ Project reports are JSON documents with:
   source backend, target backend, diagnostic code (``diagnosticsByCode``), and
   missing capability (``missingCapabilityCounts``).
 - ``units``: discovered translation units with repository-relative paths,
-  source backend names, and source overrides.
+  source backend names, path-derived extensions, and source overrides.
 - ``artifacts``: attempted outputs with source path, source backend, target,
   optional variant name, output path, status, source hash, generated artifact
   hash, pipeline provenance, and file-granularity source-map anchors for

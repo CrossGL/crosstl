@@ -2475,8 +2475,13 @@ def _unit_contract_reasons(index: int, unit: Any) -> list[str]:
 
     if not _is_non_empty_string(unit.get("sourceBackend")):
         reasons.append(f"{prefix}.sourceBackend must be a string")
-    if not isinstance(unit.get("extension"), str):
+    extension = unit.get("extension")
+    if not isinstance(extension, str):
         reasons.append(f"{prefix}.extension must be a string")
+    elif _is_non_empty_string(path) and _is_repository_relative_report_path(path):
+        expected_extension = Path(path).suffix.lower()
+        if extension != expected_extension:
+            reasons.append(f"{prefix}.extension must match {prefix}.path suffix")
     if "sourceOverride" in unit and not _is_non_empty_string(
         unit.get("sourceOverride")
     ):
