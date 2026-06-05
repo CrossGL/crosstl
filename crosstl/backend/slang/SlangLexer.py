@@ -50,6 +50,7 @@ TOKENS = tuple(
         (
             "NUMBER",
             r"0[xX][0-9a-fA-F]+[uUlL]*|"
+            r"0[bB][01]+[uUlL]*|"
             r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFhHuUlL]*",
         ),
         ("LBRACE", r"\{"),

@@ -203,7 +203,7 @@ def test_typealias_and_associatedtype_tokenization():
 
 
 def test_numeric_literal_tokenization():
-    tokens = tokenize_code("1e-3f 1.0f .5f 1. 0xffu 123u")
+    tokens = tokenize_code("1e-3f 1.0f .5f 1. 0xffu 0b1010 0B1111 123u")
 
     assert tokens == [
         ("NUMBER", "1e-3f"),
@@ -211,6 +211,8 @@ def test_numeric_literal_tokenization():
         ("NUMBER", ".5f"),
         ("NUMBER", "1."),
         ("NUMBER", "0xffu"),
+        ("NUMBER", "0b1010"),
+        ("NUMBER", "0B1111"),
         ("NUMBER", "123u"),
         ("EOF", ""),
     ]

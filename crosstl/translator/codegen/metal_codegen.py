@@ -2499,6 +2499,11 @@ class MetalCodeGen:
         }
 
     def metal_stage_io_member_array_info(self, member):
+        if self.canonical_metal_semantic(self.semantic_from_node(member)) in {
+            "clip_distance"
+        }:
+            return None
+
         if isinstance(member, ArrayNode):
             resource_array_declaration = self.format_struct_resource_array_member(
                 member
@@ -2658,9 +2663,20 @@ class MetalCodeGen:
             mapped_type = self.map_type(element_type)
             dependencies.update(self.metal_struct_type_dependencies(mapped_type))
             if member.size:
+                if self.metal_array_semantic_attribute_precedes_extent(semantic):
+                    return (
+                        f"    {mapped_type} {member.name}{semantic_attr}"
+                        f"[{member.size}];\n",
+                        dependencies,
+                    )
                 return (
                     f"    {mapped_type} {member.name}[{member.size}]"
                     f"{semantic_attr};\n",
+                    dependencies,
+                )
+            if self.metal_array_semantic_attribute_precedes_extent(semantic):
+                return (
+                    f"    {mapped_type} {member.name}{semantic_attr}[1024];\n",
                     dependencies,
                 )
             return (
@@ -2705,6 +2721,22 @@ class MetalCodeGen:
                 member_type = self.map_type(member_type_str)
                 dependencies.update(self.metal_struct_type_dependencies(member_type))
                 declaration = format_c_style_array_declaration(member_type, member.name)
+                if self.metal_array_semantic_attribute_precedes_extent(semantic):
+                    base_type, array_size = split_array_type_suffix(member_type)
+                    if member.member_type.size is None:
+                        array_size = "1024"
+                    if not array_size:
+                        array_size = self.safe_expression_to_string(
+                            member.member_type.size
+                        )
+                    array_size = str(array_size).strip()
+                    if array_size.startswith("[") and array_size.endswith("]"):
+                        array_size = array_size[1:-1]
+                    return (
+                        f"    {base_type} {member.name}{abi_attr}{semantic_attr}"
+                        f"[{array_size}];\n",
+                        dependencies,
+                    )
                 if member.member_type.size is None:
                     base_type, _ = split_array_type_suffix(member_type)
                     return (
@@ -19892,6 +19924,9 @@ class MetalCodeGen:
                 return f" [[{mapped_semantic}]]"
         else:
             return ""
+
+    def metal_array_semantic_attribute_precedes_extent(self, semantic):
+        return self.canonical_metal_semantic(semantic) in {"clip_distance"}
 
     def is_metal_tessellation_helper_semantic(self, semantic):
         if semantic is None:

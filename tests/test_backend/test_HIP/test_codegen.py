@@ -162,6 +162,29 @@ class TestHipCodeGen:
         assert "var d_shadow: ptr<u32>;" in result
         assert "d_output[0] = ((d_input[0] & 0xf00) >> 8);" in result
 
+    def test_public_rocm_bit_extract_intrinsic_conversion(self):
+        code = """
+        __global__ void bit_extract_kernel(
+            uint32_t* d_output,
+            const uint32_t* d_input) {
+            d_output[threadIdx.x] = __bitextract_u32(
+                d_input[threadIdx.x], 8, 4);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "d_output[gl_LocalInvocationID.x] = "
+            "((d_input[gl_LocalInvocationID.x] >> 8) & 0xfu);"
+        ) in result
+        assert "__bitextract_u32" not in result
+
     def test_public_rocm_floyd_warshall_multiline_sizeof_type_operand_conversion(self):
         code = """
         void host(unsigned int* verificationPathMatrix, int numNodes) {

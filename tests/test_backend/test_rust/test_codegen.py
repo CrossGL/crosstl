@@ -582,6 +582,32 @@ def test_rust_gpu_image_macro_types_drive_resource_parameters():
     assert "sampler2D direct_tex @ set(4) @ binding(2)" in result
 
 
+def test_rust_gpu_typed_buffer_resource_parameters_codegen_from_upstream():
+    # Reduced from Rust-GPU/rust-gpu tests/compiletests/ui/storage_class/typed_buffer.rs
+    # and crates/spirv-std/src/typed_buffer.rs documented slice form.
+    code = """
+    use glam::Vec4;
+    use spirv_std::TypedBuffer;
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] single: &TypedBuffer<Vec4>,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] single_mut: &mut TypedBuffer<Vec4>,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] slice: &TypedBuffer<[u32]>,
+    ) {}
+    """
+
+    result = parse_and_generate(code)
+
+    assert "fragment {" in result
+    assert "StructuredBuffer<vec4> single @ set(0) @ binding(0)" in result
+    assert "RWStructuredBuffer<vec4> single_mut @ set(0) @ binding(1)" in result
+    assert "StructuredBuffer<uint> slice @ set(0) @ binding(2)" in result
+    assert "void main(TypedBuffer" not in result
+    crosstl.translator.parse(result)
+
+
 def test_vulkan_shader_examples_oit_block_scoped_use_codegen():
     code = """
     use spirv_std::{spirv, glam::{IVec2, Vec4}, arch::atomic_i_add, Image};

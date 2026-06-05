@@ -2412,6 +2412,26 @@ def test_numeric_literal_codegen_normalizes_crossgl_float_forms():
     assert "1f" not in generated_code
 
 
+def test_binary_integer_literals_codegen_from_generated_conformance_sample():
+    # Source: shader-slang/slang docs/generated/tests/conformance/
+    # expressions-literal/bin-prefix-lowercase.slang at d25453d.
+    code = """
+    void main() {
+        int x = 0b1010;
+        int y = 0B1111;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int x = 0b1010;" in generated_code
+    assert "int y = 0B1111;" in generated_code
+    assert "b1010" not in generated_code.replace("0b1010", "")
+    cgl_translator.parse(generated_code)
+
+
 def test_generic_struct_member_and_uniform_parameter_codegen_from_official_sample():
     code = """
     struct ImageProcessingOptions

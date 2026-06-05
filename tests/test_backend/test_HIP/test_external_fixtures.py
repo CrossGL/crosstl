@@ -595,7 +595,8 @@ def test_external_rocm_bit_extract_builtin_crossgl_reparse():
     assert isinstance(bit_extract_call, FunctionCallNode)
     assert bit_extract_call.name == "__bitextract_u32"
     assert "gl_NumWorkGroups.x" in crossgl
-    assert "__bitextract_u32(d_input[i], 8, 4)" in crossgl
+    assert "d_output[i] = ((d_input[i] >> 8) & 0xfu);" in crossgl
+    assert "__bitextract_u32" not in crossgl
 
 
 def test_external_rocm_texture_management_tex2d_atomic_codegen_reparse():

@@ -668,6 +668,10 @@ class VulkanToCrossGLConverter:
         mapped_builtins = {
             "BaseInstance": "gl_BaseInstance",
             "BaseVertex": "gl_BaseVertex",
+            "BaryCoordKHR": "gl_BaryCoordEXT",
+            "BaryCoordNV": "gl_BaryCoordEXT",
+            "BaryCoordNoPerspKHR": "gl_BaryCoordNoPerspEXT",
+            "BaryCoordNoPerspNV": "gl_BaryCoordNoPerspEXT",
             "ClipDistance": "gl_ClipDistance",
             "CullDistance": "gl_CullDistance",
             "FragCoord": "gl_FragCoord",

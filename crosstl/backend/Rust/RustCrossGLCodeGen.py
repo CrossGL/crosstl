@@ -984,7 +984,7 @@ class RustToCrossGLConverter:
             semantic = self.get_semantic_from_attributes(
                 getattr(param, "attributes", [])
             )
-            param_type = self.normalize_receiver_type(param.vtype, struct_name)
+            param_type = self.normalize_parameter_type(param.vtype, struct_name)
             declarations.append(
                 f"{self.format_typed_declarator(param_type, name)}{semantic}"
             )
@@ -1196,6 +1196,12 @@ class RustToCrossGLConverter:
         if type_name == "Self" and struct_name:
             return struct_name
         return type_name
+
+    def normalize_parameter_type(self, type_name, struct_name=None):
+        typed_buffer_type = self.map_typed_buffer_parameter_type(type_name)
+        if typed_buffer_type is not None:
+            return typed_buffer_type
+        return self.normalize_receiver_type(type_name, struct_name)
 
     def infer_value_type(self, expression):
         if isinstance(expression, StructInitializationNode):
@@ -9212,6 +9218,9 @@ class RustToCrossGLConverter:
         if base_name == "RuntimeArray":
             return f"{self.map_type(args[0])}[]"
 
+        if base_name == "TypedBuffer":
+            return self.format_typed_buffer_resource_type(args[0])
+
         sampled_texture_map = {
             "Texture1D": "sampler1D",
             "Texture1DArray": "sampler1DArray",
@@ -9264,6 +9273,53 @@ class RustToCrossGLConverter:
         if element_type.startswith("i"):
             return f"iimage{suffix}"
         return f"image{suffix}"
+
+    def map_typed_buffer_parameter_type(self, rust_type):
+        if not isinstance(rust_type, str):
+            return None
+
+        rust_type = self.strip_lifetime_type_syntax(rust_type.strip())
+        if rust_type.startswith("&mut "):
+            return self.map_typed_buffer_reference_type(rust_type[5:].strip(), True)
+        if rust_type.startswith("&"):
+            return self.map_typed_buffer_reference_type(rust_type[1:].strip(), False)
+        return None
+
+    def map_typed_buffer_reference_type(self, rust_type, writable):
+        mapped_type = self.map_typed_buffer_type(rust_type, writable=writable)
+        if mapped_type is not None:
+            return mapped_type
+        return None
+
+    def map_typed_buffer_type(self, rust_type, writable=False):
+        generic = self.parse_generic_type(rust_type)
+        if generic is None:
+            return None
+
+        base_name, args = generic
+        if "TypedBuffer" not in self.type_lookup_names(base_name):
+            return None
+
+        buffer_kind = "RWStructuredBuffer" if writable else "StructuredBuffer"
+        return self.format_typed_buffer_resource_type(args[0], buffer_kind)
+
+    def format_typed_buffer_resource_type(
+        self,
+        element_type,
+        buffer_kind="StructuredBuffer",
+    ):
+        mapped_element_type = self.map_typed_buffer_element_type(element_type)
+        return f"{buffer_kind}<{mapped_element_type}>"
+
+    def map_typed_buffer_element_type(self, element_type):
+        element_type = element_type.strip()
+        if element_type.startswith("[") and element_type.endswith("]"):
+            body = element_type[1:-1].strip()
+            if ";" in body:
+                inner_type, size = body.split(";", 1)
+                return f"{self.map_type(inner_type.strip())}[{size.strip()}]"
+            return self.map_type(body)
+        return self.map_type(element_type)
 
     def map_sampled_image_generic_type(self, image_type):
         image_config = self.parse_image_macro_type(image_type)

@@ -2900,6 +2900,46 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_FRAGMENT_BARYCENTRIC_ASSEMBLY = """
+; Source repo: https://chromium.googlesource.com/external/github.com/KhronosGroup/glslang.git
+; Source ref: refs/heads/vulkan-sdk-1.3.275
+; Source path: Test/baseResults/spv.fragmentShaderBarycentric4.frag.out
+; Reduced from gl_BaryCoordNoPerspEXT and PerVertexKHR fragment inputs.
+OpCapability Shader
+OpCapability FragmentBarycentricKHR
+OpExtension "SPV_KHR_fragment_shader_barycentric"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_value %bary_coord %vertex_ids
+OpExecutionMode %main OriginUpperLeft
+OpName %out_value "outValue"
+OpName %bary_coord "gl_BaryCoordNoPerspEXT"
+OpName %vertex_ids "vertexIDs"
+OpDecorate %out_value Location 0
+OpDecorate %bary_coord BuiltIn BaryCoordNoPerspKHR
+OpDecorate %vertex_ids Location 1
+OpDecorate %vertex_ids PerVertexKHR
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%uint = OpTypeInt 32 0
+%uint_3 = OpConstant %uint 3
+%v3float = OpTypeVector %float 3
+%arr_v3float_3 = OpTypeArray %v3float %uint_3
+%ptr_output_float = OpTypePointer Output %float
+%ptr_input_v3float = OpTypePointer Input %v3float
+%ptr_input_arr_v3float_3 = OpTypePointer Input %arr_v3float_3
+%out_value = OpVariable %ptr_output_float Output
+%bary_coord = OpVariable %ptr_input_v3float Input
+%vertex_ids = OpVariable %ptr_input_arr_v3float_3 Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_bary = OpLoad %v3float %bary_coord
+%x = OpCompositeExtract %float %loaded_bary 0
+OpStore %out_value %x
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY = """
 ; Reduced from KhronosGroup/SPIRV-Tools@96545708d0fb060ec6d1e67e85de593bcf24dd21
 ; test/diff/diff_files/spec_constant_array_size_src.spvasm.
@@ -4507,6 +4547,24 @@ def test_spirv_assembly_fragment_sample_and_view_builtins_codegen():
     assert "@builtin(sampleid)" not in generated_code
     assert "@builtin(samplemask)" not in generated_code
     assert "@builtin(layer)" not in generated_code
+
+
+def test_glslang_fragment_barycentric_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_FRAGMENT_BARYCENTRIC_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float outValue @output @location(0);" in generated_code
+    assert (
+        "float3 gl_BaryCoordNoPerspEXT @input @gl_BaryCoordNoPerspEXT;"
+        in generated_code
+    )
+    assert "float3 vertexIDs[3] @input @location(1) @pervertexEXT;" in generated_code
+    assert "outValue = gl_BaryCoordNoPerspEXT[0];" in generated_code
+    assert "@builtin(barycoordnoperspkhr)" not in generated_code
+    assert "PerVertexKHR" not in generated_code
+    assert "Unhandled statement type" not in generated_code
 
 
 def test_spirv_tools_gl_pervertex_access_chain_codegen():

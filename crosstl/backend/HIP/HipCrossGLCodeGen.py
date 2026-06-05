@@ -5040,6 +5040,8 @@ class HipToCrossGLConverter:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
         if function_name == "__byte_perm" and len(args) == 3:
             return self.format_hip_byte_perm(args[0], args[1], args[2])
+        if function_name == "__bitextract_u32" and len(args) == 3:
+            return self.format_hip_unsigned_bit_extract(args[0], args[1], args[2])
         if function_name == "__ffs" and len(args) == 1:
             return f"(findLSB({args[0]}) + 1)"
         if function_name in {"__clz", "__clzll"} and len(args) == 1:
@@ -5069,6 +5071,19 @@ class HipToCrossGLConverter:
 
     def format_hip_signed_24_bit_operand(self, arg):
         return f"(({arg} << 8) >> 8)"
+
+    def format_hip_unsigned_bit_extract(self, value, offset, width):
+        width_value = self.parse_hip_integer_literal(width)
+        if width_value is not None:
+            if width_value <= 0:
+                mask = "0u"
+            elif width_value >= 32:
+                mask = "0xffffffffu"
+            else:
+                mask = f"0x{(1 << width_value) - 1:x}u"
+        else:
+            mask = f"((1u << {width}) - 1u)"
+        return f"(({value} >> {offset}) & {mask})"
 
     def format_hip_byte_perm(self, left, right, selector):
         selector_value = self.parse_hip_integer_literal(selector)

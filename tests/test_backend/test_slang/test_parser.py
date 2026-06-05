@@ -3050,6 +3050,23 @@ def test_numeric_literal_parsing():
     ]
 
 
+def test_binary_integer_literals_from_generated_conformance_sample_parse():
+    # Source: shader-slang/slang docs/generated/tests/conformance/
+    # expressions-literal/bin-prefix-lowercase.slang at d25453d.
+    code = """
+    void main() {
+        int x = 0b1010;
+        int y = 0B1111;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "main").body
+
+    assert [stmt.right for stmt in body] == ["0b1010", "0B1111"]
+
+
 def test_generic_struct_member_and_uniform_parameters_from_official_sample():
     code = """
     static const uint THREADGROUP_SIZE_X = 8;

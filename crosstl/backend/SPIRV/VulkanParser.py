@@ -89,6 +89,8 @@ class VulkanParser:
         "NonWritable": "readonly",
         "NoPerspective": "noperspective",
         "Patch": "patch",
+        "PerVertexKHR": "pervertexEXT",
+        "PerVertexNV": "pervertexEXT",
         "RelaxedPrecision": "mediump",
         "Restrict": "restrict",
         "Sample": "sample",
@@ -111,6 +113,10 @@ class VulkanParser:
     SPIRV_BUILTIN_VARIABLE_NAMES = {
         "BaseInstance": "gl_BaseInstance",
         "BaseVertex": "gl_BaseVertex",
+        "BaryCoordKHR": "gl_BaryCoordEXT",
+        "BaryCoordNV": "gl_BaryCoordEXT",
+        "BaryCoordNoPerspKHR": "gl_BaryCoordNoPerspEXT",
+        "BaryCoordNoPerspNV": "gl_BaryCoordNoPerspEXT",
         "ClipDistance": "gl_ClipDistance",
         "CullDistance": "gl_CullDistance",
         "FragCoord": "gl_FragCoord",
@@ -4593,7 +4599,15 @@ class VulkanParser:
         declaration_qualifiers = set(declaration_qualifiers or [])
         return bool(
             declaration_qualifiers
-            & {"centroid", "flat", "invariant", "noperspective", "patch", "sample"}
+            & {
+                "centroid",
+                "flat",
+                "invariant",
+                "noperspective",
+                "patch",
+                "pervertexEXT",
+                "sample",
+            }
         )
 
     def spirv_struct_member_variable_name(

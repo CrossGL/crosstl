@@ -12185,6 +12185,37 @@ def test_struct_builtin_member_semantics_are_validated():
     assert "uint sampleMask [[sample_mask]];" in generated
 
 
+def test_metal_clip_distance_array_keeps_native_vertex_attribute_order():
+    # Reduced from the Metal-by-Tutorials reflection/refraction clip-plane
+    # pattern, where MSL requires `[[clip_distance]]` before the array extent:
+    # `float clip_distance [[clip_distance]][1];`.
+    code = """
+    shader MetalClipDistanceArray {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            float clipDistance[1] @ gl_ClipDistance;
+        };
+
+        vertex {
+            VSOutput main(vec3 position @ POSITION) {
+                VSOutput output;
+                output.position = vec4(position, 1.0);
+                output.clipDistance[0] = dot(vec4(position, 1.0), vec4(0.0, 1.0, 0.0, 0.0));
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(crosstl.translator.parse(code), "vertex")
+
+    assert "float clipDistance [[clip_distance]][1];" in generated
+    assert "output.clipDistance[0] = dot(" in generated
+    assert "clipDistance[1] [[clip_distance]]" not in generated
+    assert "clipDistance_0" not in generated
+    assert "__crossgl_stage_io_get_VSOutput_clipDistance" not in generated
+
+
 @pytest.mark.parametrize(
     ("member_decl", "metal_semantic", "expected_type"),
     [
