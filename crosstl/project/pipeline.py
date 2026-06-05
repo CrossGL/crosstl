@@ -3854,6 +3854,17 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             if "error" in artifact or (has_summary and status == "failed"):
                 if not _is_non_empty_string(artifact.get("error")):
                     reasons.append(f"artifacts[{index}].error must be a string")
+            if has_summary and status == "failed":
+                if "generatedHash" in artifact:
+                    reasons.append(
+                        f"artifacts[{index}].generatedHash must be omitted "
+                        "for failed artifacts"
+                    )
+                if "sourceMap" in artifact:
+                    reasons.append(
+                        f"artifacts[{index}].sourceMap must be omitted "
+                        "for failed artifacts"
+                    )
             if "variant" in artifact:
                 if not _is_non_empty_string(variant):
                     reasons.append(f"artifacts[{index}].variant must be a string")

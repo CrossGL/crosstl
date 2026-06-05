@@ -170,10 +170,18 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         assert "current translated artifacts without source-map records" in (
             backend_support["notes"]
         )
+        assert "failed artifacts missing error metadata or generated metadata" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_current_translated_artifacts_"
             "without_source_maps"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_failed_artifacts_with_"
+            "generated_metadata"
         ) in backend_support["evidence"]
 
 
@@ -217,6 +225,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "target/variant directory containment" in backend_support["notes"]
         assert "artifact target suffix consistency" in backend_support["notes"]
         assert "failed artifact error metadata" in backend_support["notes"]
+        assert "failed artifact generated metadata rejection" in (
+            backend_support["notes"]
+        )
         assert "required and canonical artifact provenance" in backend_support["notes"]
         assert "required translated artifact source maps" in backend_support["notes"]
         assert "non-empty source-map mappings" in backend_support["notes"]
@@ -241,6 +252,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_failed_artifacts_without_error"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_failed_artifacts_with_"
+            "generated_metadata"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
