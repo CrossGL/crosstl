@@ -335,6 +335,12 @@ class CharTypeMapper:
 class MetalCodeGen:
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
+    METAL_DERIVATIVE_FUNCTION_ALIASES = {
+        "ddx": "dfdx",
+        "dFdx": "dfdx",
+        "ddy": "dfdy",
+        "dFdy": "dfdy",
+    }
     METAL_WAVE_INTRINSIC_ARITIES = {
         "WaveGetLaneCount": 0,
         "WaveGetLaneIndex": 0,
@@ -6116,6 +6122,12 @@ class MetalCodeGen:
                 and func_name not in self.user_function_names
             ):
                 return self.expression_result_type(args[0])
+            if (
+                func_name in self.METAL_DERIVATIVE_FUNCTION_ALIASES
+                and args
+                and func_name not in self.user_function_names
+            ):
+                return self.expression_result_type(args[0])
             if func_name in {"mix", "clamp", "min", "max"} and args:
                 return self.expression_result_type(args[0])
             if is_resource_size_query_operation(func_name) and args:
@@ -7238,6 +7250,14 @@ class MetalCodeGen:
             ):
                 arg = self.generate_expression(expr.args[0])
                 return f"rsqrt({arg})"
+            derivative_name = self.METAL_DERIVATIVE_FUNCTION_ALIASES.get(func_name)
+            if (
+                derivative_name is not None
+                and len(expr.args) == 1
+                and func_name not in self.user_function_names
+            ):
+                arg = self.generate_expression(expr.args[0])
+                return f"{derivative_name}({arg})"
             if func_name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"{func_name}({args})"

@@ -8213,6 +8213,12 @@ class GLSLCodeGen:
                 return left_type or right_type
             if func_name == "saturate" and args:
                 return self.expression_result_type(args[0])
+            if (
+                func_name == "rcp"
+                and args
+                and func_name not in self.function_return_types
+            ):
+                return self.expression_result_type(args[0])
             specialized_func_name = generic_function_call_name(self, func_name, args)
             if specialized_func_name in self.function_return_types:
                 return self.function_return_types[specialized_func_name]
@@ -9212,6 +9218,12 @@ class GLSLCodeGen:
             if saturate_call is not None:
                 return saturate_call
 
+            reciprocal_call = self.generate_reciprocal_call(
+                original_func_name, expr.args
+            )
+            if reciprocal_call is not None:
+                return reciprocal_call
+
             mul_call = self.generate_mul_call(original_func_name, expr.args)
             if mul_call is not None:
                 return mul_call
@@ -9332,6 +9344,25 @@ class GLSLCodeGen:
         value = self.generate_expression(args[0])
         zero, one = self.saturate_bound_literals(args[0])
         return f"clamp({value}, {zero}, {one})"
+
+    def generate_reciprocal_call(self, func_name, args):
+        if func_name != "rcp" or func_name in self.function_return_types:
+            return None
+        if len(args) != 1:
+            raise ValueError("OpenGL rcp alias requires 1 argument")
+
+        value_expr = args[0]
+        value_type = self.map_type(self.expression_result_type(value_expr))
+        component_type = self.vector_component_type(value_type) or value_type
+        if component_type not in {"float", "double"}:
+            return None
+
+        value = self.generate_expression(value_expr)
+        if self.is_scalar_value_type(value_type) or self.is_vector_value_type(
+            value_type
+        ):
+            return f"(1.0 / {value})"
+        return None
 
     def generate_mul_call(self, func_name, args):
         if func_name != "mul":

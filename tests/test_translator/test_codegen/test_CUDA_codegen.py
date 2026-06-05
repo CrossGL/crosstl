@@ -876,6 +876,8 @@ class TestCudaCodeGen:
         assert codegen.convert_builtin_function("exp2") == "exp2f"
         assert codegen.convert_builtin_function("log2") == "log2f"
         assert codegen.convert_builtin_function("inversesqrt") == "rsqrtf"
+        assert codegen.convert_builtin_function("inverseSqrt") == "rsqrtf"
+        assert codegen.convert_builtin_function("rsqrt") == "rsqrtf"
         assert codegen.convert_builtin_function("fma") == "fmaf"
         assert codegen.convert_builtin_function("mad") == "fmaf"
         assert codegen.convert_builtin_function("round") == "roundf"
@@ -3197,6 +3199,96 @@ class TestCudaCodeGen:
         assert "fmodf(" not in cuda_code
         assert "mix(" not in cuda_code
         assert "atan2(" not in cuda_code
+
+    def test_inverse_sqrt_aliases_lower_to_cuda_inverse_sqrt_math(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float x = 4.0;
+                    float a = inverseSqrt(x);
+                    float h = rsqrt(x);
+
+                    double dx = 4.0;
+                    double da = inverseSqrt(dx);
+                    double dh = rsqrt(dx);
+
+                    vec3 v = vec3(4.0, 9.0, 16.0);
+                    vec3 va = inverseSqrt(v);
+                    vec3 vh = rsqrt(v);
+
+                    dvec2 dv = dvec2(4.0, 9.0);
+                    dvec2 dva = inverseSqrt(dv);
+                    dvec2 dvh = rsqrt(dv);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float a = rsqrtf(x);" in cuda_code
+        assert "float h = rsqrtf(x);" in cuda_code
+        assert "double da = (1.0 / sqrt(dx));" in cuda_code
+        assert "double dh = (1.0 / sqrt(dx));" in cuda_code
+        assert (
+            "__device__ inline float3 cgl_float3_inversesqrt(float3 value)" in cuda_code
+        )
+        assert (
+            "return make_float3(rsqrtf(value.x), rsqrtf(value.y), "
+            "rsqrtf(value.z));" in cuda_code
+        )
+        assert (
+            "__device__ inline double2 cgl_double2_inversesqrt(double2 value)"
+            in cuda_code
+        )
+        assert (
+            "return make_double2((1.0 / sqrt(value.x)), "
+            "(1.0 / sqrt(value.y)));" in cuda_code
+        )
+        assert "float3 va = cgl_float3_inversesqrt(v);" in cuda_code
+        assert "float3 vh = cgl_float3_inversesqrt(v);" in cuda_code
+        assert "double2 dva = cgl_double2_inversesqrt(dv);" in cuda_code
+        assert "double2 dvh = cgl_double2_inversesqrt(dv);" in cuda_code
+        assert "inverseSqrt(" not in cuda_code
+        assert " rsqrt(" not in cuda_code
+
+    def test_user_defined_inverse_sqrt_aliases_are_not_lowered_to_cuda_builtins(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                float inverseSqrt(float x) {
+                    return x + 1.0;
+                }
+
+                float rsqrt(float x) {
+                    return x - 1.0;
+                }
+
+                void main() {
+                    float value = inverseSqrt(4.0);
+                    float hlslValue = rsqrt(4.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float inverseSqrt(float x)" in cuda_code
+        assert "__device__ float rsqrt(float x)" in cuda_code
+        assert "float value = inverseSqrt(4.0);" in cuda_code
+        assert "float hlslValue = rsqrt(4.0);" in cuda_code
+        assert "float value = rsqrtf(4.0);" not in cuda_code
+        assert "float hlslValue = rsqrtf(4.0);" not in cuda_code
 
     def test_fma_and_mad_builtins_lower_to_cuda_fused_multiply_add(self):
         source_code = """

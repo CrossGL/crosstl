@@ -2998,8 +2998,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if geometric_call is not None:
                 return geometric_call
 
+        math_func_name = self.cuda_math_function_name(func_name)
         vector_math_call = self.generate_vector_scalar_math_call(
-            func_name,
+            math_func_name,
             raw_args,
             args,
         )
@@ -3023,7 +3024,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if func_name in self.struct_member_types:
             args = self.struct_constructor_arguments(func_name, raw_args, args)
 
-        scalar_math_call = self.generate_scalar_math_call(func_name, raw_args, args)
+        scalar_math_call = self.generate_scalar_math_call(
+            math_func_name, raw_args, args
+        )
         if scalar_math_call is not None:
             return scalar_math_call
 
@@ -3031,6 +3034,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
+
+    def cuda_math_function_name(self, func_name):
+        return {"inverseSqrt": "inversesqrt", "rsqrt": "inversesqrt"}.get(
+            func_name, func_name
+        )
 
     def visit_MeshOpNode(self, node):
         operation = getattr(node, "operation", "")
@@ -8801,6 +8809,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "exp": "expf",
             "exp2": "exp2f",
             "inversesqrt": "rsqrtf",
+            "inverseSqrt": "rsqrtf",
+            "rsqrt": "rsqrtf",
             "fma": "fmaf",
             "mad": "fmaf",
             "abs": "fabsf",

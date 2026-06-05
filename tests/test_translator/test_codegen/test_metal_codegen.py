@@ -335,6 +335,100 @@ def test_metal_inverse_sqrt_aliases_compile_when_toolchain_is_available():
     compile_with_metal_if_available(generated_code)
 
 
+def test_metal_derivative_aliases_lower_to_msl_dfdx_dfdy():
+    shader = """
+    shader MetalFragmentDerivativeAliases {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                vec2 dx = ddx(uv);
+                vec2 dy = ddy(uv);
+                float gx = dFdx(uv.x);
+                float gy = dFdy(uv.y);
+                return vec4(dx.x + dy.x, dx.y + dy.y, gx, gy);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float2 dx = dfdx(uv);" in generated_code
+    assert "float2 dy = dfdy(uv);" in generated_code
+    assert "float gx = dfdx(uv.x);" in generated_code
+    assert "float gy = dfdy(uv.y);" in generated_code
+    assert "ddx(" not in generated_code
+    assert "ddy(" not in generated_code
+    assert "dFdx(" not in generated_code
+    assert "dFdy(" not in generated_code
+
+
+def test_metal_user_defined_derivative_alias_functions_are_preserved():
+    shader = """
+    shader MetalUserDerivativeAliases {
+        fragment {
+            float ddx(float value) {
+                return value + 1.0;
+            }
+
+            float ddy(float value) {
+                return value + 2.0;
+            }
+
+            float dFdx(float value) {
+                return value + 3.0;
+            }
+
+            float dFdy(float value) {
+                return value + 4.0;
+            }
+
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                return vec4(ddx(uv.x), ddy(uv.y), dFdx(uv.x), dFdy(uv.y));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float ddx(float value)" in generated_code
+    assert "float ddy(float value)" in generated_code
+    assert "float dFdx(float value)" in generated_code
+    assert "float dFdy(float value)" in generated_code
+    assert (
+        "return float4(ddx(uv.x), ddy(uv.y), dFdx(uv.x), dFdy(uv.y));" in generated_code
+    )
+    assert "dfdx(" not in generated_code
+    assert "dfdy(" not in generated_code
+
+
+def test_metal_derivative_aliases_compile_when_toolchain_is_available():
+    shader = """
+    shader MetalFragmentDerivativeAliasCompile {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                vec2 gradient = ddx(uv) + ddy(uv);
+                return vec4(gradient, dFdx(uv.x), dFdy(uv.y));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "ddx(" not in generated_code
+    assert "ddy(" not in generated_code
+    assert "dFdx(" not in generated_code
+    assert "dFdy(" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
     shader = """
     shader SynchronizationBuiltins {

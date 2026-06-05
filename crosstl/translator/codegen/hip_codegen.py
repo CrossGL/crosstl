@@ -4296,6 +4296,86 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         return components
 
+    def generate_mod_call(self, raw_args, args):
+        """Lower CrossGL/GLSL mod with GLSL floor semantics."""
+        if len(raw_args) != 2 or len(args) != 2:
+            return None
+
+        vector_call = self.lower_vector_binary_operation(
+            raw_args[0],
+            args[0],
+            raw_args[1],
+            args[1],
+            "%",
+        )
+        if vector_call is not None:
+            return vector_call
+
+        return self.lower_scalar_modulo_operation(
+            raw_args[0],
+            args[0],
+            raw_args[1],
+            args[1],
+        )
+
+    def lower_scalar_modulo_operation(
+        self,
+        left_node,
+        left_expr,
+        right_node,
+        right_expr,
+    ):
+        """Lower floating-point scalar modulo with GLSL floor semantics."""
+        scalar_type = self.hip_mod_scalar_type(left_node, right_node)
+        if scalar_type is None:
+            return None
+
+        helper_name = self.require_hip_scalar_mod_helper(scalar_type)
+        return f"{helper_name}({left_expr}, {right_expr})"
+
+    def format_vector_binary_component(self, component_type, operator, left, right):
+        if operator == "%" and component_type in {"float", "double"}:
+            helper_name = self.require_hip_scalar_mod_helper(component_type)
+            return f"{helper_name}({left}, {right})"
+        return super().format_vector_binary_component(
+            component_type,
+            operator,
+            left,
+            right,
+        )
+
+    def hip_mod_scalar_type(self, left_node, right_node):
+        component_types = []
+        for node in (left_node, right_node):
+            arg_type = self.expression_result_type(node)
+            if self.vector_type_info(arg_type) is not None:
+                return None
+            component_type = self.scalar_component_type(arg_type)
+            if component_type is not None:
+                component_types.append(component_type)
+
+        if "double" in component_types:
+            return "double"
+        if "float" in component_types:
+            return "float"
+        return None
+
+    def require_hip_scalar_mod_helper(self, scalar_type):
+        helper_name = f"cgl_mod_{scalar_type}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        floor_name = "floor" if scalar_type == "double" else "floorf"
+        helper = (
+            f"__device__ inline {scalar_type} {helper_name}"
+            f"({scalar_type} lhs, {scalar_type} rhs)\n"
+            "{\n"
+            f"    return lhs - rhs * {floor_name}(lhs / rhs);\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
     def generate_fract_call(self, raw_args, args):
         arg_type = self.expression_result_type(raw_args[0])
         vector_info = self.vector_type_info(arg_type)

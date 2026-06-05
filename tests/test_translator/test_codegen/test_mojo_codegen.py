@@ -18451,10 +18451,11 @@ def test_builtin_function_call_names_are_mapped():
         "var invVec: SIMD[DType.float32, 2] = "
         "rsqrt(SIMD[DType.float32, 2](4.0, 9.0))" in generated_code
     )
-    assert "var w: Float32 = fmod(5.0, 2.0)" in generated_code
+    assert "var w: Float32 = _crossgl_mod_f32(5.0, 2.0)" in generated_code
     assert (
         "var wrappedVec: SIMD[DType.float32, 4] = "
-        "fmod(v, SIMD[DType.float32, 4](2.0, 2.0, 2.0, 0.0))" in generated_code
+        "_crossgl_mod_f32_3_4_vv("
+        "v, SIMD[DType.float32, 4](2.0, 2.0, 2.0, 0.0))" in generated_code
     )
     assert "var i: Int32 = (n % 2)" in generated_code
     assert "mix(0.0, 1.0, 0.25)" not in generated_code
@@ -18464,7 +18465,124 @@ def test_builtin_function_call_names_are_mapped():
     assert "frac(" not in generated_code
     assert "inversesqrt(" not in generated_code
     assert "var w: Float32 = mod(" not in generated_code
-    assert "var i: Int32 = fmod(" not in generated_code
+    assert "var i: Int32 = _crossgl_mod_" not in generated_code
+    assert "fmod(" not in generated_code
+
+
+def test_mod_builtin_lowers_to_crossgl_floor_semantics_helpers():
+    code = """
+    shader NumericWrap {
+        compute {
+            void main() {
+                float scalar = mod(-5.0, 2.0);
+                vec3 uv = vec3(-5.0, 7.0, -9.0);
+                vec3 vectorScalar = mod(uv, 2.0);
+                vec3 scalarVector = mod(2.0, uv);
+                dvec2 precise = mod(dvec2(-5.0, 7.0), dvec2(2.0, 2.0));
+                int count = 5;
+                int wrappedCount = mod(count, 2);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn _crossgl_mod_f32(a: Float32, b: Float32) -> Float32:" in generated_code
+    assert "fn _crossgl_mod_f64(a: Float64, b: Float64) -> Float64:" in generated_code
+    assert "return a - floor(a / b) * b" in generated_code
+    assert (
+        "fn _crossgl_mod_f32_3_4_vs(a: SIMD[DType.float32, 4], b: Float32) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn _crossgl_mod_f32_3_4_sv(a: Float32, b: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn _crossgl_mod_f64_2_2_vv("
+        "a: SIMD[DType.float64, 2], b: SIMD[DType.float64, 2]) "
+        "-> SIMD[DType.float64, 2]:" in generated_code
+    )
+    assert "var scalar: Float32 = _crossgl_mod_f32((-5.0), 2.0)" in generated_code
+    assert (
+        "var vectorScalar: SIMD[DType.float32, 4] = "
+        "_crossgl_mod_f32_3_4_vs(uv, 2.0)" in generated_code
+    )
+    assert (
+        "var scalarVector: SIMD[DType.float32, 4] = "
+        "_crossgl_mod_f32_3_4_sv(2.0, uv)" in generated_code
+    )
+    assert (
+        "var precise: SIMD[DType.float64, 2] = "
+        "_crossgl_mod_f64_2_2_vv(" in generated_code
+    )
+    assert "var wrappedCount: Int32 = (count % 2)" in generated_code
+    assert "fmod(" not in generated_code
+
+
+def test_user_defined_mod_function_is_not_lowered_to_crossgl_mod_helper():
+    code = """
+    shader NumericWrap {
+        compute {
+            float mod(float value, float period) {
+                return value + period;
+            }
+
+            void main() {
+                float scalar = mod(-5.0, 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn mod(value: Float32, period: Float32) -> Float32:" in generated_code
+    assert "var scalar: Float32 = mod((-5.0), 2.0)" in generated_code
+    assert "_crossgl_mod_" not in generated_code
+
+
+def test_mod_builtin_floor_semantics_helpers_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    float wrapScalar(float value, float period) {
+        return mod(value, period);
+    }
+
+    vec3 wrapVectorScalar(vec3 value, float period) {
+        return mod(value, period);
+    }
+
+    vec3 wrapScalarVector(float value, vec3 period) {
+        return mod(value, period);
+    }
+
+    dvec2 wrapPrecise(dvec2 value, dvec2 period) {
+        return mod(value, period);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += """
+fn main():
+    print(wrapScalar(Float32(-5.0), Float32(2.0)))
+    print(wrapVectorScalar(SIMD[DType.float32, 4](-5.0, 7.0, -9.0, 0.0), Float32(2.0)))
+    print(wrapScalarVector(Float32(2.0), SIMD[DType.float32, 4](-5.0, 7.0, -9.0, 0.0)))
+    print(wrapPrecise(SIMD[DType.float64, 2](-5.0, 7.0), SIMD[DType.float64, 2](2.0, 2.0)))
+"""
+
+    source_path = tmp_path / "mod_floor_semantics_helpers.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr + "\n\n" + generated_code
 
 
 def _vector_min_max_builtin_source():

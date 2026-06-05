@@ -1848,20 +1848,28 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         assert "int scalar = (5 % 2);" in hip_code
+        assert "__device__ inline float cgl_mod_float(float lhs, float rhs)" in hip_code
+        assert "return lhs - rhs * floorf(lhs / rhs);" in hip_code
+        assert (
+            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
+            in hip_code
+        )
+        assert "return lhs - rhs * floor(lhs / rhs);" in hip_code
         assert (
             "__device__ inline float3 cgl_float3_mod(float3 lhs, float3 rhs)"
             in hip_code
         )
         assert (
-            "return make_float3(fmodf(lhs.x, rhs.x), fmodf(lhs.y, rhs.y), fmodf(lhs.z, rhs.z));"
-            in hip_code
+            "return make_float3(cgl_mod_float(lhs.x, rhs.x), "
+            "cgl_mod_float(lhs.y, rhs.y), cgl_mod_float(lhs.z, rhs.z));" in hip_code
         )
         assert (
             "__device__ inline double2 cgl_double2_mod(double2 lhs, double2 rhs)"
             in hip_code
         )
         assert (
-            "return make_double2(fmod(lhs.x, rhs.x), fmod(lhs.y, rhs.y));" in hip_code
+            "return make_double2(cgl_mod_double(lhs.x, rhs.x), "
+            "cgl_mod_double(lhs.y, rhs.y));" in hip_code
         )
         assert "__device__ inline int3 cgl_int3_mod(int3 lhs, int3 rhs)" in hip_code
         assert "__device__ inline uint4 cgl_uint4_mod(uint4 lhs, uint4 rhs)" in hip_code
@@ -1885,8 +1893,10 @@ class TestHipCodeGen:
         assert "ia %= ib;" not in hip_code
         assert "uint4 um = (ua % ub);" not in hip_code
         assert "ua %= ub;" not in hip_code
+        assert "fmodf(" not in hip_code
+        assert "fmod(" not in hip_code
 
-    def test_scalar_float_modulo_uses_hip_fmod(self):
+    def test_scalar_float_modulo_uses_hip_floor_semantics(self):
         source_code = """
         shader TestShader {
             compute {
@@ -1919,11 +1929,18 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "float fm = fmodf(fa, fb);" in hip_code
-        assert "float flit = fmodf(5.5, 2.0);" in hip_code
-        assert "fa = fmodf(fa, fb);" in hip_code
-        assert "double dm = fmod(da, db);" in hip_code
-        assert "da = fmod(da, db);" in hip_code
+        assert "__device__ inline float cgl_mod_float(float lhs, float rhs)" in hip_code
+        assert "return lhs - rhs * floorf(lhs / rhs);" in hip_code
+        assert (
+            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
+            in hip_code
+        )
+        assert "return lhs - rhs * floor(lhs / rhs);" in hip_code
+        assert "float fm = cgl_mod_float(fa, fb);" in hip_code
+        assert "float flit = cgl_mod_float(5.5, 2.0);" in hip_code
+        assert "fa = cgl_mod_float(fa, fb);" in hip_code
+        assert "double dm = cgl_mod_double(da, db);" in hip_code
+        assert "da = cgl_mod_double(da, db);" in hip_code
         assert "int im = (ia % ib);" in hip_code
         assert "ia %= ib;" in hip_code
         assert "unsigned int um = (ua % ub);" in hip_code
@@ -1932,6 +1949,34 @@ class TestHipCodeGen:
         assert "double dm = (da % db);" not in hip_code
         assert "fa %= fb;" not in hip_code
         assert "da %= db;" not in hip_code
+        assert "fmodf(" not in hip_code
+        assert "fmod(" not in hip_code
+
+    def test_user_defined_mod_function_is_not_lowered_to_hip_builtin(self):
+        source_code = """
+        shader TestShader {
+            float mod(float x, float y) {
+                return x + y;
+            }
+
+            compute {
+                void main() {
+                    float value = mod(1.0, 2.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__device__ float mod(float x, float y)" in hip_code
+        assert "return (x + y);" in hip_code
+        assert "float value = mod(1.0, 2.0);" in hip_code
+        assert "cgl_mod_float" not in hip_code
 
     def test_vector_comparisons_emit_hip_bool_vector_constructors(self):
         source_code = """

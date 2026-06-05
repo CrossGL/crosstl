@@ -8737,6 +8737,12 @@ class SlangCodeGen:
                 and callee not in self.user_function_names
             ):
                 return f"clamp({args}, 0.0, 1.0)"
+            if (
+                callee == "atan"
+                and len(node.args) == 2
+                and callee not in self.user_function_names
+            ):
+                callee = "atan2"
             if callee not in self.user_function_names:
                 callee = self.function_map.get(callee, callee)
             return f"{callee}({args})"

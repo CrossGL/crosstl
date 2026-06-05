@@ -2873,6 +2873,57 @@ def test_user_defined_saturate_function_is_not_lowered_to_clamp():
     assert "float adjusted = clamp(0.5, 0.0, 1.0);" not in generated_code
 
 
+def test_glsl_two_argument_atan_lowers_to_slang_atan2():
+    code = """
+    shader BuiltinGap {
+        compute {
+            void main() {
+                vec2 direction = vec2(1.0, 2.0);
+                vec2 y = vec2(1.0, 2.0);
+                vec2 x = vec2(3.0, 4.0);
+                float angle = atan(direction.y, direction.x);
+                float slope = atan(direction.y / direction.x);
+                vec2 vectorAngle = atan(y, x);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float angle = atan2(direction.y, direction.x);" in generated_code
+    assert "float slope = atan(direction.y / direction.x);" in generated_code
+    assert "float2 vectorAngle = atan2(y, x);" in generated_code
+    assert "atan(direction.y, direction.x)" not in generated_code
+    assert "atan(y, x)" not in generated_code
+
+
+def test_user_defined_two_argument_atan_function_is_not_lowered_to_atan2():
+    code = """
+    shader BuiltinGap {
+        compute {
+            float atan(float y, float x) {
+                return y + x;
+            }
+
+            void main() {
+                float angle = atan(1.0, 2.0);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float atan(float y, float x)" in generated_code
+    assert "float angle = atan(1.0, 2.0);" in generated_code
+    assert "atan2(" not in generated_code
+
+
 def test_user_defined_mix_function_is_not_lowered_to_lerp():
     code = """
     shader BuiltinGap {

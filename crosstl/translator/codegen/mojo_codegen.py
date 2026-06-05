@@ -806,6 +806,11 @@ MOJO_INTEGER_DTYPES = {
     "DType.uint32",
 }
 
+MOJO_FLOAT_DTYPES = {
+    "DType.float32",
+    "DType.float64",
+}
+
 MOJO_INTEGER_INDEX_TYPES = {
     "Int",
     "Int16",
@@ -1179,6 +1184,7 @@ class MojoCodeGen:
         self.required_matrix_diagonal_helpers = set()
         self.required_math_helpers = set()
         self.required_fract_helpers = set()
+        self.required_mod_helpers = set()
         self.required_saturate_helpers = set()
         self.required_builtin_placeholders = set()
         self.current_return_type = None
@@ -1428,6 +1434,7 @@ class MojoCodeGen:
         self.required_matrix_diagonal_helpers = set()
         self.required_math_helpers = set()
         self.required_fract_helpers = set()
+        self.required_mod_helpers = set()
         self.required_saturate_helpers = set()
         self.required_builtin_placeholders = set()
         self.current_return_type = None
@@ -9525,8 +9532,46 @@ class MojoCodeGen:
         ):
             return f"({generated_args[0]} % {generated_args[1]})"
 
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is not None or right_info is not None:
+            mod_call = self.generate_vector_mod_call(
+                generated_args, left_info, right_info
+            )
+            if mod_call is not None:
+                return mod_call
+
+        left_dtype = self.expression_mojo_dtype(args[0])
+        right_dtype = self.expression_mojo_dtype(args[1])
+        dtype = left_dtype if left_dtype in MOJO_FLOAT_DTYPES else right_dtype
+        if dtype in MOJO_FLOAT_DTYPES:
+            self.required_mod_helpers.add((dtype, "ss", 1, 1))
+            helper_name = self.mod_helper_name(dtype, "ss", 1, 1)
+            return f"{helper_name}({generated_args[0]}, {generated_args[1]})"
+
         self.required_math_helpers.add("fmod")
         return f"fmod({generated_args[0]}, {generated_args[1]})"
+
+    def generate_vector_mod_call(self, generated_args, left_info, right_info):
+        if left_info is not None and right_info is not None:
+            if left_info[:3] != right_info[:3]:
+                return None
+            dtype, source_width, storage_width, _ = left_info
+            kind = "vv"
+        elif left_info is not None:
+            dtype, source_width, storage_width, _ = left_info
+            kind = "vs"
+        else:
+            dtype, source_width, storage_width, _ = right_info
+            kind = "sv"
+
+        if dtype not in MOJO_FLOAT_DTYPES:
+            return None
+
+        self.required_mod_helpers.add((dtype, "ss", 1, 1))
+        self.required_mod_helpers.add((dtype, kind, source_width, storage_width))
+        helper_name = self.mod_helper_name(dtype, kind, source_width, storage_width)
+        return f"{helper_name}({generated_args[0]}, {generated_args[1]})"
 
     def generate_saturate_call(self, args):
         if len(args) != 1:
@@ -11676,6 +11721,7 @@ class MojoCodeGen:
             and not self.required_matrix_diagonal_helpers
             and not self.required_math_helpers
             and not self.required_fract_helpers
+            and not self.required_mod_helpers
             and not self.required_saturate_helpers
             and not self.required_resource_types
             and not self.required_resource_sample_types
@@ -11869,6 +11915,7 @@ class MojoCodeGen:
         if (
             self.required_math_helpers
             or self.required_fract_helpers
+            or self.required_mod_helpers
             or self.required_saturate_helpers
         ):
             code += "# CrossGL math helpers\n"
@@ -11876,6 +11923,8 @@ class MojoCodeGen:
                 code += self.generate_math_helper(helper_name)
             for key in sorted(self.required_fract_helpers):
                 code += self.generate_fract_helper(key)
+            for key in sorted(self.required_mod_helpers):
+                code += self.generate_mod_helper(key)
             for key in sorted(self.required_saturate_helpers):
                 code += self.generate_saturate_helper(key)
             code += "\n"
@@ -12722,6 +12771,52 @@ class MojoCodeGen:
     def fract_vector_helper_name(self, dtype, source_width, storage_width):
         dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
         return f"_crossgl_fract_{dtype_suffix}_{source_width}_{storage_width}"
+
+    def generate_mod_helper(self, key):
+        dtype, kind, source_width, storage_width = key
+        scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+        helper_name = self.mod_helper_name(dtype, kind, source_width, storage_width)
+
+        if kind == "ss":
+            return (
+                f"fn {helper_name}(a: {mojo_scalar_type}, "
+                f"b: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
+                "    return a - floor(a / b) * b\n\n"
+            )
+
+        vector_type = f"SIMD[{dtype}, {storage_width}]"
+        if kind == "vv":
+            params = f"a: {vector_type}, b: {vector_type}"
+            components = [
+                f"{self.mod_helper_name(dtype, 'ss', 1, 1)}(a[{index}], b[{index}])"
+                for index in range(source_width)
+            ]
+        elif kind == "vs":
+            params = f"a: {vector_type}, b: {mojo_scalar_type}"
+            components = [
+                f"{self.mod_helper_name(dtype, 'ss', 1, 1)}(a[{index}], b)"
+                for index in range(source_width)
+            ]
+        else:
+            params = f"a: {mojo_scalar_type}, b: {vector_type}"
+            components = [
+                f"{self.mod_helper_name(dtype, 'ss', 1, 1)}(a, b[{index}])"
+                for index in range(source_width)
+            ]
+        if storage_width > source_width:
+            components.append(pad_literal)
+
+        return (
+            f"fn {helper_name}({params}) -> {vector_type}:\n"
+            f"    return {vector_type}({', '.join(components)})\n\n"
+        )
+
+    def mod_helper_name(self, dtype, kind, source_width, storage_width):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        if kind == "ss":
+            return f"_crossgl_mod_{dtype_suffix}"
+        return f"_crossgl_mod_{dtype_suffix}_{source_width}_{storage_width}_{kind}"
 
     def generate_saturate_helper(self, key):
         dtype, source_width, storage_width = key
@@ -13586,6 +13681,12 @@ class MojoCodeGen:
             if func_name == "mix" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "pow" and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "mod" and expr.args:
+                for arg in expr.args:
+                    arg_type = self.expression_result_type(arg)
+                    if self.vector_type_info(arg_type) is not None:
+                        return arg_type
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name in {"min", "max"} and expr.args:
                 for arg in expr.args:

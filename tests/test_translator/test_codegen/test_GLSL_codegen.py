@@ -23543,6 +23543,54 @@ def test_opengl_hlsl_saturate_alias_emits_three_argument_clamp():
     assert "clamp(color)" not in generated_code
 
 
+def test_opengl_hlsl_rcp_alias_emits_reciprocal_expression():
+    # Microsoft HLSL rcp computes a per-component reciprocal:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/rcp
+    # Khronos GLSL 4.60 defines division for scalar/vector floating-point
+    # operands:
+    # https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html#operators
+    shader = """
+    shader RcpAlias {
+        fragment {
+            vec4 main(vec3 value, float scalar) @ gl_FragColor {
+                vec3 invValue = rcp(value);
+                float invScalar = rcp(scalar);
+                return vec4(invValue, invScalar);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "vec3 invValue = (1.0 / value);" in generated_code
+    assert "float invScalar = (1.0 / scalar);" in generated_code
+    assert "rcp(" not in generated_code
+
+
+def test_opengl_user_defined_rcp_function_is_preserved():
+    shader = """
+    shader UserRcp {
+        float rcp(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(float value) @ gl_FragColor {
+                float adjusted = rcp(value);
+                return vec4(adjusted);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float rcp(float value)" in generated_code
+    assert "float adjusted = rcp(value);" in generated_code
+    assert "1.0 / value" not in generated_code
+
+
 def test_opengl_hlsl_clip_alias_emits_discard_guards():
     # Microsoft HLSL clip discards the current pixel if any component is
     # less than zero:
