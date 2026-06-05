@@ -109,13 +109,15 @@ Inspect an existing report as a concise JSON or text summary:
 .. code-block:: bash
 
    python -m crosstl._crosstl inspect-report crosstl-out/portability-report.json \
-     --format text
+     --format text \
+     --max-diagnostics 20 \
+     --max-failed-artifacts 20
 
 Report inspection includes validation status, invalid/unavailable report status, project
 counts, project configuration path and counts, failed artifacts, diagnostic code and missing-capability
 rollups, validation diagnostic-code, missing-capability, and artifact target
 rollups, report source-backend, file-extension, and artifact target rollups,
-source-map count rollups, diagnostics, diagnostic and failed-artifact truncation
+source-map count rollups, diagnostics, configurable diagnostic and failed-artifact truncation
 counts, external corpus rollups, and migration actions. It exits
 nonzero when validation finds report errors.
 

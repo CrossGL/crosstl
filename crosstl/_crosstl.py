@@ -788,7 +788,12 @@ def _format_project_report_inspection(payload):
 def _run_inspect_report(args):
     from .project import inspect_project_report
 
-    payload = inspect_project_report(args.report, run_toolchains=args.run_toolchains)
+    payload = inspect_project_report(
+        args.report,
+        run_toolchains=args.run_toolchains,
+        max_diagnostics=args.max_diagnostics,
+        max_failed_artifacts=args.max_failed_artifacts,
+    )
     if args.format == "text":
         text = _format_project_report_inspection(payload)
         if args.output:
@@ -902,6 +907,18 @@ def _build_parser():
         help="Inspection output format",
     )
     inspect_parser.add_argument("--output", "-o", help="Write inspection output")
+    inspect_parser.add_argument(
+        "--max-diagnostics",
+        type=int,
+        default=20,
+        help="Maximum diagnostics to include in the inspection summary",
+    )
+    inspect_parser.add_argument(
+        "--max-failed-artifacts",
+        type=int,
+        default=20,
+        help="Maximum failed artifacts to include in the inspection summary",
+    )
     inspect_parser.add_argument(
         "--run-toolchains",
         action="store_true",

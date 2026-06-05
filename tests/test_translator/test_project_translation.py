@@ -6567,6 +6567,10 @@ def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
             str(report_path),
             "--format",
             "text",
+            "--max-failed-artifacts",
+            "3",
+            "--max-diagnostics",
+            "4",
         ],
         cwd=str(ROOT),
         capture_output=True,
@@ -6575,8 +6579,8 @@ def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "Failed artifacts truncated: showing 20 of 21" in result.stdout
-    assert "Diagnostics truncated: showing 20 of " in result.stdout
+    assert "Failed artifacts truncated: showing 3 of 21" in result.stdout
+    assert "Diagnostics truncated: showing 4 of " in result.stdout
 
 
 @pytest.mark.parametrize("command_prefix", ([], ["translate"]))
