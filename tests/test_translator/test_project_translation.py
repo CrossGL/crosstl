@@ -856,6 +856,18 @@ def test_translate_project_expands_named_variants_with_merged_defines(
     assert payload["summary"]["artifactCount"] == 2
     assert payload["summary"]["translatedCount"] == 2
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["summary"]["artifactsByVariant"] == {
+        "debug": {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        },
+        "release": {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        },
+    }
     assert [artifact["variant"] for artifact in payload["artifacts"]] == [
         "debug",
         "release",
@@ -1043,6 +1055,7 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
             "failedCount": 0,
         }
     }
+    assert payload["summary"]["artifactsByVariant"] == {}
     assert payload["summary"]["artifactsByTarget"] == {
         "opengl": {
             "artifactCount": 1,
@@ -4311,6 +4324,13 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                             "failedCount": 1,
                         }
                     },
+                    "artifactsByVariant": {
+                        "debug": {
+                            "artifactCount": 1,
+                            "translatedCount": 1,
+                            "failedCount": 0,
+                        }
+                    },
                     "artifactsByTarget": {
                         "metal": {
                             "artifactCount": 1,
@@ -4388,6 +4408,7 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     assert "summary.artifactsBySourceBackend must match artifacts" in (
         diagnostic["message"]
     )
+    assert "summary.artifactsByVariant must match artifacts" in diagnostic["message"]
     assert "summary.artifactsByTarget must match artifacts" in diagnostic["message"]
     assert "summary.sourceMapCount must match artifact source maps" in (
         diagnostic["message"]
@@ -6024,6 +6045,10 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
         "Project config: sourceOverrides=1, includeDirs=0, defines=1, variants=2"
         in result.stdout
     )
+    assert (
+        "Artifacts by variant: debug=1 artifact (1 translated, 0 failed), "
+        "release=1 artifact (1 translated, 0 failed)"
+    ) in result.stdout
     assert "MODE" not in result.stdout
 
 

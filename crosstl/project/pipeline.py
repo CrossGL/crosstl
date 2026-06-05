@@ -380,6 +380,30 @@ def _artifact_counts_by_source_backend(
     return {source_backend: counts[source_backend] for source_backend in sorted(counts)}
 
 
+def _artifact_counts_by_variant(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact in artifacts:
+        variant = artifact.get("variant")
+        if not _is_non_empty_string(variant):
+            continue
+        row = counts.setdefault(
+            variant,
+            {
+                "artifactCount": 0,
+                "translatedCount": 0,
+                "failedCount": 0,
+            },
+        )
+        row["artifactCount"] += 1
+        if artifact.get("status") == "translated":
+            row["translatedCount"] += 1
+        elif artifact.get("status") == "failed":
+            row["failedCount"] += 1
+    return {variant: counts[variant] for variant in sorted(counts)}
+
+
 def _source_map_counts(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     source_map_count = sum(1 for artifact in artifacts if artifact.get("sourceMap"))
     return {
@@ -1111,6 +1135,7 @@ class ProjectPortabilityReport:
                 "artifactsBySourceBackend": _artifact_counts_by_source_backend(
                     self.artifacts
                 ),
+                "artifactsByVariant": _artifact_counts_by_variant(self.artifacts),
                 "artifactsByTarget": _artifact_counts_by_target(self.artifacts),
                 **source_map_counts,
             },
@@ -3769,6 +3794,14 @@ def _summary_contract_reasons(
                 "summary.artifactsBySourceBackend",
                 summary.get("artifactsBySourceBackend"),
                 _artifact_counts_by_source_backend(artifact_records),
+                "artifacts",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.artifactsByVariant",
+                summary.get("artifactsByVariant"),
+                _artifact_counts_by_variant(artifact_records),
                 "artifacts",
             )
         )
