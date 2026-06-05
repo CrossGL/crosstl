@@ -194,8 +194,10 @@ Project reports are JSON documents with:
   backend suffix, status, source hash, generated artifact hash, pipeline
   provenance, and file-granularity source-map anchors for successful
   translations. Full reports require every artifact to carry a source hash,
-  artifact source paths to match declared translation units, and artifact
-  source backend names to match those units.
+  artifact output paths to match the target/variant directory plus the
+  source-relative path with the target backend suffix, artifact source paths
+  to match declared translation units, and artifact source backend names to
+  match those units.
   Successful artifact records in full reports must include file-level
   source-map anchors.
   Artifact provenance records the
@@ -236,10 +238,11 @@ Project reports are JSON documents with:
   identity checks, validation artifact and toolchain target coverage and status
   consistency checks,
   artifact source, source-backend,
-  target, and variant declaration checks, translated artifact existence checks,
-  escaped output directory and artifact-path checks, source artifact existence
-  and hash mismatch checks, generated artifact hash mismatch checks, optional
-  external toolchain availability, and opt-in toolchain smoke results.
+  target, variant, and source-relative output layout declaration checks,
+  translated artifact existence checks, escaped output directory and
+  artifact-path checks, source artifact existence and hash mismatch checks,
+  generated artifact hash mismatch checks, optional external toolchain
+  availability, and opt-in toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. The report records documented non-goals for runtime API
   migration, build-system rewrites, and backend framework integration. Each

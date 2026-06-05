@@ -3658,6 +3658,42 @@ def test_validate_project_report_rejects_artifact_path_suffix_mismatches(
     )
 
 
+def test_validate_project_report_rejects_artifact_path_source_layout_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "shaders" / "simple.cgl").parent.mkdir()
+    (repo / "shaders" / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    misplaced_output = repo / "out" / "cgl" / "renamed.cgl"
+    misplaced_output.write_text(
+        (repo / "out" / "cgl" / "shaders" / "simple.cgl").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    payload["artifacts"][0]["path"] = "out/cgl/renamed.cgl"
+    payload["artifacts"][0]["generatedHash"] = project_pipeline._source_hash(
+        misplaced_output
+    )
+    source_map = payload["artifacts"][0]["sourceMap"]
+    source_map["generated"]["file"] = "out/cgl/renamed.cgl"
+    source_map["mappings"][0]["generated"]["file"] = "out/cgl/renamed.cgl"
+    report_path = repo / "out" / "artifact-source-layout-mismatch-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].path must match project.outputDir target/variant "
+        "directory plus artifacts[0].source"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_artifacts_with_escaped_output_paths(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -4368,6 +4404,56 @@ def test_validate_project_report_rejects_migration_actions_with_undeclared_targe
     assert "migration.actions[0].targets must be listed in project.targets" in (
         diagnostic["message"]
     )
+
+
+def test_validate_project_report_rejects_noncanonical_migration_action_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "noncanonical-migration-target-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl", "metal"],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "migration": {
+                    "scope": "shader-kernel-translation",
+                    "nonGoals": [
+                        "automatic runtime API migration",
+                        "application build-system rewrites",
+                        "backend framework integration",
+                    ],
+                    "actions": [
+                        {
+                            "kind": "manual-runtime-integration",
+                            "severity": "note",
+                            "message": "Review host runtime integration.",
+                            "targets": ["OpenGL", "opengl"],
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "migration.actions[0].targets must use normalized backend names "
+        "without duplicates"
+    ) in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_altered_migration_non_goals(tmp_path):

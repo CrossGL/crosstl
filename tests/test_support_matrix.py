@@ -138,6 +138,35 @@ def test_project_report_inspection_is_first_class_support_feature():
         ) in backend_support["evidence"]
 
 
+def test_project_migration_actions_are_first_class_support_feature():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.migration_actions"]
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Migration action report"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "supported"
+        assert "noncanonical or duplicate action targets" in backend_support["notes"]
+        assert "shader/kernel source translation from host runtime APIs" in (
+            backend_support["notes"]
+        )
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_report_records_documented_migration_actions"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_noncanonical_migration_action_"
+            "targets"
+        ) in backend_support["evidence"]
+
+
 def test_project_diagnostics_document_location_path_checks():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(
@@ -177,6 +206,7 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             backend_support["notes"]
         )
         assert "translated artifacts with error metadata" in backend_support["notes"]
+        assert "source-relative target/variant layout" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_current_translated_artifacts_"
@@ -197,6 +227,11 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             "test_validate_project_report_rejects_translated_artifacts_with_"
             "error_metadata"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_path_source_layout_"
+            "mismatches"
+        ) in backend_support["evidence"]
 
 
 def test_project_source_provenance_documents_source_map_mapping_checks():
@@ -211,6 +246,7 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
     for backend_support in feature["support"].values():
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "single file-level source-map mapping" in backend_support["notes"]
+        assert "source-relative target/variant layout" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_empty_source_map_mappings"
@@ -219,6 +255,11 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_multiple_file_level_"
             "source_map_mappings"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_path_source_layout_"
+            "mismatches"
         ) in backend_support["evidence"]
 
 
@@ -232,11 +273,13 @@ def test_project_validation_hooks_document_migration_contract_checks():
     feature = features["project.validation_hooks"]
 
     for backend_support in feature["support"].values():
-        assert "migration scope, non-goals, action kinds, and target declarations" in (
-            backend_support["notes"]
-        )
+        assert (
+            "migration scope, non-goals, action kinds, and canonical target "
+            "declarations"
+        ) in backend_support["notes"]
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "target/variant directory containment" in backend_support["notes"]
+        assert "source-relative layout" in backend_support["notes"]
         assert "artifact target suffix consistency" in backend_support["notes"]
         assert "required full-report artifact source hashes" in (
             backend_support["notes"]
@@ -274,6 +317,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_path_suffix_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_path_source_layout_"
+            "mismatches"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

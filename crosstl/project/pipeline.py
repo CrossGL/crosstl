@@ -3421,23 +3421,25 @@ def _migration_contract_reasons(
             severity = action.get("severity")
             if severity not in {"note", "warning", "error"}:
                 reasons.append(f"{prefix}.severity must be note, warning, or error")
-            reasons.extend(
-                _string_list_contract_reasons(
-                    f"{prefix}.targets", action.get("targets")
-                )
+            target_reasons = _string_list_contract_reasons(
+                f"{prefix}.targets", action.get("targets")
             )
+            reasons.extend(target_reasons)
             action_targets = action.get("targets")
-            if (
-                project_targets_valid
-                and isinstance(action_targets, list)
-                and all(_is_non_empty_string(target) for target in action_targets)
-            ):
-                for target in _normalized_targets(action_targets):
-                    if target not in declared_targets:
-                        reasons.append(
-                            f"{prefix}.targets must be listed in project.targets"
-                        )
-                        break
+            if not target_reasons:
+                normalized_action_targets = _normalized_targets(action_targets)
+                if normalized_action_targets != action_targets:
+                    reasons.append(
+                        f"{prefix}.targets must use normalized backend names "
+                        "without duplicates"
+                    )
+                elif project_targets_valid:
+                    for target in normalized_action_targets:
+                        if target not in declared_targets:
+                            reasons.append(
+                                f"{prefix}.targets must be listed in project.targets"
+                            )
+                            break
     return reasons
 
 
@@ -3867,6 +3869,19 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"artifacts[{index}].path suffix must match "
                         f"artifacts[{index}].target"
                     )
+                elif _is_non_empty_string(
+                    source
+                ) and _is_repository_relative_report_path(source):
+                    expected_relative = Path(source.replace("\\", "/")).with_suffix(
+                        _artifact_target_extension(target)
+                    )
+                    expected_path = (expected_output_base / expected_relative).resolve()
+                    if (root_path / path).resolve() != expected_path:
+                        reasons.append(
+                            f"artifacts[{index}].path must match "
+                            "project.outputDir target/variant directory plus "
+                            f"artifacts[{index}].source"
+                        )
             source_backend = artifact.get("sourceBackend")
             if has_summary or "sourceBackend" in artifact:
                 if not _is_non_empty_string(source_backend):
