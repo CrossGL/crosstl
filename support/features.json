@@ -4205,7 +4205,7 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4221,12 +4221,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4242,12 +4244,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4263,12 +4267,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4284,12 +4290,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root"
           ]
         },
         "cuda": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4305,12 +4313,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root"
           ]
         },
         "hip": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4326,12 +4336,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root"
           ]
         },
         "mojo": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4347,12 +4359,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4368,12 +4382,14 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root"
           ]
         },
         "slang": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots and non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4389,7 +4405,9 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata"
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root"
           ]
         }
       }

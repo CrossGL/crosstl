@@ -130,6 +130,10 @@ configuration contract is intentionally small:
    [project.variants.debug]
    USE_FAST_PATH = "0"
 
+An explicit ``--config`` path may be absolute or repository-relative. Relative
+config paths are resolved against the repository root passed to the command, not
+against the shell's current working directory.
+
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Missing
 source roots and roots that resolve outside the repository are reported as scan

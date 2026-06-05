@@ -397,6 +397,25 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     assert payload["project"]["variantCount"] == 1
 
 
+def test_project_config_resolves_relative_config_path_from_root(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "custom.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "generated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    config = load_project_config(repo, "custom.toml")
+
+    assert config.config_path == repo.resolve() / "custom.toml"
+    assert config.targets == ["opengl"]
+    assert config.output_dir == "generated"
+
+
 def test_scan_project_reports_missing_include_dirs_without_hiding_units(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -5174,6 +5193,41 @@ def test_project_cli_translate_project_writes_report(tmp_path):
     assert "Wrote" in result.stdout
     assert payload["summary"]["translatedCount"] == 1
     assert (repo / "out" / "opengl" / "simple.glsl").exists()
+
+
+def test_project_cli_scan_resolves_relative_config_path_from_root(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "custom.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "generated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--config",
+            "custom.toml",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["project"]["config"] == str(repo / "custom.toml")
+    assert payload["project"]["targets"] == ["opengl"]
+    assert payload["project"]["outputDir"] == str(repo / "generated")
 
 
 def test_project_cli_translate_project_applies_include_dir_and_define_overrides(
