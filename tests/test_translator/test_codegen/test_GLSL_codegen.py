@@ -5459,6 +5459,30 @@ def test_glsl_hlsl_matrix_aliases_map_to_glsl_names():
     assert "float3x2" not in generated_code
 
 
+def test_glsl_hlsl_mul_alias_emits_binary_matrix_multiply():
+    # Khronos GLSL 4.60 section 5.9 defines matrix/vector/matrix
+    # multiplication through the binary * operator, not a mul() built-in.
+    shader = """
+    shader MatrixMulAlias {
+        vec4 transformColumn(mat4 viewProj, vec4 position) {
+            return mul(viewProj, position);
+        }
+
+        vec4 transformRow(vec4 position, mat4 viewProj) {
+            return mul(position, viewProj);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return (viewProj * position);" in generated_code
+    assert "return (position * viewProj);" in generated_code
+    assert "*(viewProj, position)" not in generated_code
+    assert "*(position, viewProj)" not in generated_code
+    assert "mul(" not in generated_code
+
+
 def test_glsl_hlsl_double_aliases_map_to_glsl_names():
     shader = """
     shader DoubleAliasSmoke {

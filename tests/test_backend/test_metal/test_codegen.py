@@ -2273,6 +2273,27 @@ def test_codegen_enum_and_typedef():
     assert "enum Mode" in result
 
 
+def test_codegen_anonymous_enum_uses_synthetic_name_from_metal_base_effect():
+    code = """
+    enum {
+        VertexAttributePosition,
+        VertexAttributeNormal,
+        VertexAttributeColor,
+        VertexAttributeTexCoord0,
+    };
+
+    vertex float4 vertex_main(float4 position [[attribute(VertexAttributePosition)]]) {
+        return position;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "enum MetalAnonymousEnum0" in crossgl
+    assert "enum None" not in crossgl
+    assert "VertexAttributeTexCoord0" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_sizeof_and_cast():
     code = """
     void main() {

@@ -1279,7 +1279,6 @@ class GLSLCodeGen:
             "atomicCounterDecrement": "atomicCounterDecrement",
             "atomicCounter": "atomicCounter",
             "atomicCounterAdd": "atomicCounterAdd",
-            "mul": "*",  # Matrix multiplication
             "ddx": "dFdx",
             "ddx_fine": "dFdxFine",
             "ddx_coarse": "dFdxCoarse",
@@ -9206,6 +9205,10 @@ class GLSLCodeGen:
             if saturate_call is not None:
                 return saturate_call
 
+            mul_call = self.generate_mul_call(original_func_name, expr.args)
+            if mul_call is not None:
+                return mul_call
+
             func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
 
@@ -9318,6 +9321,16 @@ class GLSLCodeGen:
         value = self.generate_expression(args[0])
         zero, one = self.saturate_bound_literals(args[0])
         return f"clamp({value}, {zero}, {one})"
+
+    def generate_mul_call(self, func_name, args):
+        if func_name != "mul":
+            return None
+        if len(args) != 2:
+            raise ValueError("OpenGL mul alias requires 2 arguments")
+
+        left = self.generate_expression(args[0])
+        right = self.generate_expression(args[1])
+        return f"({left} * {right})"
 
     def saturate_bound_literals(self, value_expr):
         value_type = self.expression_result_type(value_expr)

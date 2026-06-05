@@ -14891,6 +14891,65 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_storage_image_1d_declares_required_capability(self, tmp_path):
+        source_code = """
+        shader StorageImage1D {
+            image1d line @r32f;
+            uimage1d counters @r32ui;
+            image1darray layers @rgba16f;
+
+            compute {
+                void main() {
+                    int x = 3;
+                    ivec2 layerCoord = ivec2(x, 1);
+                    float value = imageLoad(line, x);
+                    imageStore(line, x, value);
+                    uint oldCount = imageAtomicAdd(counters, x, 1u);
+                    uint count = imageLoad(counters, x);
+                    imageStore(counters, x, count);
+                    vec4 layerValue = imageLoad(layers, layerCoord);
+                    imageStore(layers, layerCoord, layerValue);
+                    int lineSize = imageSize(line);
+                    ivec2 layerSize = imageSize(layers);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        assert float_type is not None
+        assert uint_type is not None
+        assert int_type is not None
+
+        ivec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(int_type.group(1))} 2",
+            spv_code,
+        )
+        assert ivec2_type is not None
+
+        assert "OpCapability Image1D" in spv_code
+        assert "OpCapability Sampled1D" not in spv_code
+        assert " 1D 0 0 0 2 R32f" in spv_code
+        assert " 1D 0 0 0 2 R32ui" in spv_code
+        assert " 1D 0 1 0 2 Rgba16f" in spv_code
+        assert f"OpImageRead {float_type.group(1)}" in spv_code
+        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spv_code.count("OpImageRead") == 3
+        assert spv_code.count("OpImageWrite") == 3
+        assert "OpAtomicIAdd" in spv_code
+        assert f"OpImageQuerySize {int_type.group(1)}" in spv_code
+        assert f"OpImageQuerySize {ivec2_type.group(1)}" in spv_code
+        assert "using float as default" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_spirv_texture_sampling_supports_regular_and_shadow_samplers(
         self, tmp_path
     ):

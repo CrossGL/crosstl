@@ -903,9 +903,22 @@ class MetalToCrossGLConverter:
 
         if enums:
             code += "    // Enums\n"
+            used_enum_names = {
+                enum.name for enum in enums if isinstance(enum, EnumNode) and enum.name
+            }
+            anonymous_enum_index = 0
             for enum in enums:
                 if isinstance(enum, EnumNode):
-                    code += f"    enum {enum.name} {{\n"
+                    enum_name = enum.name
+                    if not enum_name:
+                        while True:
+                            candidate = f"MetalAnonymousEnum{anonymous_enum_index}"
+                            anonymous_enum_index += 1
+                            if candidate not in used_enum_names:
+                                enum_name = candidate
+                                used_enum_names.add(candidate)
+                                break
+                    code += f"    enum {enum_name} {{\n"
                     for member_name, member_value in enum.members:
                         if member_value is not None:
                             value = self.generate_expression(member_value, False)

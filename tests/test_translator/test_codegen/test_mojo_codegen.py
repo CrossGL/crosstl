@@ -18467,6 +18467,66 @@ def test_builtin_function_call_names_are_mapped():
     assert "var i: Int32 = fmod(" not in generated_code
 
 
+def _vector_min_max_builtin_source():
+    return """
+    vec3 fresnelCap(vec3 albedo, float roughness) {
+        vec3 f0 = vec3(0.04);
+        vec3 ceiling = max(vec3(1.0 - roughness), f0);
+        vec3 bright = max(albedo, 0.0);
+        vec3 dim = min(1.0, albedo);
+        return min(max(ceiling, bright), dim);
+    }
+    """
+
+
+def test_vector_min_max_builtins_emit_mojo_simd_overloads():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_vector_min_max_builtin_source()))
+    )
+
+    assert (
+        "fn max(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn max(a: SIMD[DType.float32, 4], b: Float32) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn min(a: Float32, b: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert "var ceiling: SIMD[DType.float32, 4] = max(" in generated_code
+    assert (
+        "var bright: SIMD[DType.float32, 4] = max(albedo, Float32(0.0))"
+        in generated_code
+    )
+    assert (
+        "var dim: SIMD[DType.float32, 4] = min(Float32(1.0), albedo)" in generated_code
+    )
+    assert "return min(max(ceiling, bright), dim)" in generated_code
+
+
+def test_vector_min_max_builtins_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_vector_min_max_builtin_source()))
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "vector_min_max_builtins.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr + "\n\n" + generated_code
+
+
 def test_round_even_builtin_lowers_to_mojo_helper():
     code = """
     shader NumericGuards {

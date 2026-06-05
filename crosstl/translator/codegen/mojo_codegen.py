@@ -8265,6 +8265,10 @@ class MojoCodeGen:
                 bool_mix_call = self.generate_bool_mix_call(expr.args)
                 if bool_mix_call is not None:
                     return bool_mix_call
+            if func_name in {"min", "max"}:
+                min_max_call = self.generate_min_max_call(func_name, expr.args)
+                if min_max_call is not None:
+                    return min_max_call
             if func_name == "texture":
                 return self.generate_texture_call(expr.args, "sample")
             if func_name == "textureLod":
@@ -9568,6 +9572,30 @@ class MojoCodeGen:
         true_value = self.generate_expression(args[1])
         false_value = self.generate_expression(args[0])
         return f"({true_value} if {condition} else {false_value})"
+
+    def generate_min_max_call(self, func_name, args):
+        if len(args) != 2:
+            return None
+
+        left_type = self.expression_result_type(args[0])
+        right_type = self.expression_result_type(args[1])
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is None and right_info is None:
+            return None
+        if left_info is not None and left_info[0] != "DType.float32":
+            return None
+        if right_info is not None and right_info[0] != "DType.float32":
+            return None
+
+        self.required_math_helpers.add(func_name)
+        left = self.generate_expression(args[0])
+        right = self.generate_expression(args[1])
+        if left_info is not None and right_info is None:
+            right = f"Float32({right})"
+        elif left_info is None and right_info is not None:
+            left = f"Float32({left})"
+        return f"{func_name}({left}, {right})"
 
     def generate_texture_call(self, args, helper_name):
         if not args:
@@ -12495,15 +12523,9 @@ class MojoCodeGen:
                 "    return SIMD[DType.float32, 4](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value), clamp(value[2], min_value, max_value), clamp(value[3], min_value, max_value))\n\n"
             )
         if helper_name == "max":
-            return (
-                "fn max(a: Float32, b: Float32) -> Float32:\n"
-                "    return a if a >= b else b\n\n"
-            )
+            return self.generate_min_max_helper("max", ">=")
         if helper_name == "min":
-            return (
-                "fn min(a: Float32, b: Float32) -> Float32:\n"
-                "    return a if a <= b else b\n\n"
-            )
+            return self.generate_min_max_helper("min", "<=")
         if helper_name == "dot_product":
             return (
                 "fn dot_product(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> Float32:\n"
@@ -12631,6 +12653,44 @@ class MojoCodeGen:
                 "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]), smoothstep(edge0[2], edge1[2], x[2]), smoothstep(edge0[3], edge1[3], x[3]))\n\n"
             )
         return ""
+
+    def generate_min_max_helper(self, helper_name, comparator):
+        selector = f"a if a {comparator} b else b"
+
+        def lane_selector(left, right):
+            return f"{left} if {left} {comparator} {right} else {right}"
+
+        code = (
+            f"fn {helper_name}(a: Float32, b: Float32) -> Float32:\n"
+            f"    return {selector}\n\n"
+        )
+        for width in (2, 4):
+            vector_type = f"SIMD[DType.float32, {width}]"
+            components = ", ".join(
+                lane_selector(f"a[{index}]", f"b[{index}]") for index in range(width)
+            )
+            code += (
+                f"fn {helper_name}(a: {vector_type}, b: {vector_type}) -> "
+                f"{vector_type}:\n"
+                f"    return {vector_type}({components})\n\n"
+            )
+            components = ", ".join(
+                lane_selector(f"a[{index}]", "b") for index in range(width)
+            )
+            code += (
+                f"fn {helper_name}(a: {vector_type}, b: Float32) -> "
+                f"{vector_type}:\n"
+                f"    return {vector_type}({components})\n\n"
+            )
+            components = ", ".join(
+                lane_selector("a", f"b[{index}]") for index in range(width)
+            )
+            code += (
+                f"fn {helper_name}(a: Float32, b: {vector_type}) -> "
+                f"{vector_type}:\n"
+                f"    return {vector_type}({components})\n\n"
+            )
+        return code
 
     def generate_fract_helper(self, key):
         kind, dtype, source_width, storage_width = key
@@ -13525,6 +13585,12 @@ class MojoCodeGen:
             if func_name == "mix" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "pow" and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"min", "max"} and expr.args:
+                for arg in expr.args:
+                    arg_type = self.expression_result_type(arg)
+                    if self.vector_type_info(arg_type) is not None:
+                        return arg_type
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "saturate" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"

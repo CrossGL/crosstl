@@ -659,6 +659,24 @@ def test_codegen_mul_intrinsic_imports_to_multiply_expression():
     parse_crossgl(crossgl)
 
 
+def test_codegen_mad_intrinsic_from_microsoft_docs_imports_to_arithmetic_expression():
+    # Source: Microsoft Learn HLSL mad intrinsic docs.
+    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/mad
+    crossgl = generate_crossgl("""
+        float4 main(float4 base : TEXCOORD0, float4 scale : TEXCOORD1, float4 bias : TEXCOORD2) : SV_Target0 {
+            float4 adjusted = mad(base + 1.0, scale, bias);
+            return adjusted;
+        }
+    """)
+
+    assert "vec4 adjusted = (((base + 1.0) * scale) + bias);" in crossgl
+    assert "mad(" not in crossgl
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "mad(" not in glsl
+    assert "((base + 1.0) * scale) + bias" in glsl
+
+
 def test_codegen_bit_scan_intrinsics_from_microsoft_docs_reparse():
     # Source: Microsoft Learn HLSL intrinsic functions and firstbitlow docs.
     # URLs:

@@ -403,8 +403,11 @@ class VulkanSPIRVCodeGen:
                 self.require_capability("ImageCubeArray")
             else:
                 self.require_capability("SampledCubeArray")
-        if sampled == 1 and dim == "1D":
-            self.require_capability("Sampled1D")
+        if dim == "1D":
+            if sampled == 2:
+                self.require_capability("Image1D")
+            else:
+                self.require_capability("Sampled1D")
 
         id_value = self.get_id()
         self.emit(
@@ -9646,7 +9649,9 @@ class VulkanSPIRVCodeGen:
         if self.is_acceleration_structure_type_name(type_str):
             return {"kind": "acceleration_structure"}
 
-        image_match = re.fullmatch(r"([iu]?image)(2D|3D|Cube)(MS)?(Array)?", type_str)
+        image_match = re.fullmatch(
+            r"([iu]?image)(1D|2D|3D|Cube)(MS)?(Array)?", type_str
+        )
         if image_match:
             prefix, dim, ms_suffix, array_suffix = image_match.groups()
             if ms_suffix and dim != "2D":
