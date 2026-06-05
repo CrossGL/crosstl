@@ -336,6 +336,18 @@ def _unit_counts_by_source_backend(
     return dict(sorted(counts.items()))
 
 
+def _skipped_counts_by_reason(
+    skipped: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in skipped:
+        reason = record.get("reason")
+        if not _is_non_empty_string(reason):
+            continue
+        counts[reason] = counts.get(reason, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _artifact_counts_by_target(
     artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, dict[str, int]]:
@@ -1135,6 +1147,7 @@ class ProjectPortabilityReport:
                 "diagnosticsByCode": _diagnostic_counts_by_code(self.diagnostics),
                 "missingCapabilityCounts": _missing_capability_counts(self.diagnostics),
                 "unitsBySourceBackend": _unit_counts_by_source_backend(self.units),
+                "skippedByReason": _skipped_counts_by_reason(self.skipped),
                 "artifactsBySourceBackend": _artifact_counts_by_source_backend(
                     self.artifacts
                 ),
@@ -2441,6 +2454,11 @@ def _payload_unit_counts_by_source_backend(units: Sequence[Any]) -> dict[str, in
             continue
         counts[source_backend] = counts.get(source_backend, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _payload_skipped_counts_by_reason(skipped: Sequence[Any]) -> dict[str, int]:
+    records = [record for record in skipped if isinstance(record, Mapping)]
+    return _skipped_counts_by_reason(records)
 
 
 def _payload_artifact_records(artifacts: Sequence[Any]) -> list[Mapping[str, Any]]:
@@ -3766,6 +3784,14 @@ def _summary_contract_reasons(
                 summary.get("skippedCount"),
                 len(skipped),
                 "skipped length",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.skippedByReason",
+                summary.get("skippedByReason"),
+                _payload_skipped_counts_by_reason(skipped),
+                "skipped",
             )
         )
     if isinstance(project, Mapping):

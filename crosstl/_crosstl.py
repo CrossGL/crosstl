@@ -481,6 +481,13 @@ def _format_project_report_inspection(payload):
     )
     if units_by_source_backend:
         lines.append(units_by_source_backend)
+    skipped_by_reason = _format_count_rollup(
+        "Skipped by reason",
+        summary.get("skippedByReason"),
+        include_zero=False,
+    )
+    if skipped_by_reason:
+        lines.append(skipped_by_reason)
     artifacts_by_source_backend = _format_artifact_rollup(
         "Artifacts by source backend",
         summary.get("artifactsBySourceBackend"),

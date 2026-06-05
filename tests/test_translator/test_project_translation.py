@@ -137,9 +137,11 @@ def test_scan_project_reports_explicitly_included_unsupported_sources(tmp_path):
 
     config = load_project_config(repo)
     scan = scan_project(config)
+    payload = scan.to_report(targets=["cgl"]).to_json()
 
     assert scan.units == []
     assert scan.skipped == [{"path": "kernel.txt", "reason": "unsupported-extension"}]
+    assert payload["summary"]["skippedByReason"] == {"unsupported-extension": 1}
     assert {diagnostic.code for diagnostic in scan.diagnostics} == {
         "project.scan.empty",
         "project.scan.unsupported-source",
@@ -1048,6 +1050,7 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["summary"]["diagnosticsByCode"] == {}
     assert payload["summary"]["missingCapabilityCounts"] == {}
     assert payload["summary"]["unitsBySourceBackend"] == {"cgl": 1}
+    assert payload["summary"]["skippedByReason"] == {}
     assert payload["summary"]["artifactsBySourceBackend"] == {
         "cgl": {
             "artifactCount": 1,
@@ -4338,6 +4341,7 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                 "summary": {
                     "unitCount": 2,
                     "skippedCount": 1,
+                    "skippedByReason": {"unsupported-extension": 1},
                     "targetCount": 2,
                     "artifactCount": 2,
                     "translatedCount": 0,
@@ -4419,6 +4423,7 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "summary.unitCount must match units length" in diagnostic["message"]
     assert "summary.skippedCount must match skipped length" in diagnostic["message"]
+    assert "summary.skippedByReason must match skipped" in diagnostic["message"]
     assert "summary.targetCount must match project.targets length" in (
         diagnostic["message"]
     )
@@ -6080,6 +6085,44 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
         "release=1 artifact (1 translated, 0 failed)"
     ) in result.stdout
     assert "MODE" not in result.stdout
+
+
+def test_project_cli_inspect_report_text_includes_skipped_reason_rollups(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "notes.txt").write_text("not shader code", encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["**/*"]
+            exclude = []
+            targets = ["cgl"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Skipped by reason: unsupported-extension=1" in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
