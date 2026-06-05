@@ -6211,6 +6211,11 @@ class MetalCodeGen:
 
     def generate_expression_statement(self, stmt):
         """Generate code for expression statements."""
+        expr_node = getattr(stmt, "expression", stmt)
+        discard_statement = self.generate_fragment_discard_statement(expr_node)
+        if discard_statement is not None:
+            return discard_statement
+
         if hasattr(stmt, "expression"):
             if isinstance(stmt.expression, AssignmentNode):
                 return self.generate_assignment(stmt.expression)
@@ -6218,6 +6223,38 @@ class MetalCodeGen:
             return expr
         else:
             return self.generate_expression(stmt)
+
+    def generate_fragment_discard_statement(self, expr):
+        """Lower CrossGL/HLSL fragment-kill expressions to Metal syntax."""
+        if isinstance(expr, IdentifierNode) and expr.name == "discard":
+            return "discard_fragment()"
+
+        if not isinstance(expr, FunctionCallNode):
+            return None
+
+        func_expr = getattr(expr, "function", getattr(expr, "name", None))
+        func_name = getattr(func_expr, "name", func_expr)
+        args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+        if func_name == "discard" and not args:
+            return "discard_fragment()"
+        if func_name != "clip" or len(args) != 1:
+            return None
+
+        predicate = self.generate_clip_discard_predicate(args[0])
+        return f"if ({predicate}) {{\n    discard_fragment();\n}}"
+
+    def generate_clip_discard_predicate(self, expr):
+        """Return the Metal predicate for HLSL-style ``clip(expr)``."""
+        rendered = self.generate_expression(expr)
+        expr_type = self.expression_result_type(expr)
+        width = self.vector_value_width(expr_type)
+        if width is None:
+            return f"({rendered}) < 0.0"
+
+        mapped_type = self.map_type(expr_type)
+        component_type = self.vector_component_type(mapped_type) or "float"
+        zero = "0.0" if component_type in {"float", "half", "double"} else "0"
+        return f"any(({rendered}) < {mapped_type}({zero}))"
 
     def generate_assignment(self, node):
         if hasattr(node, "target") and hasattr(node, "value"):

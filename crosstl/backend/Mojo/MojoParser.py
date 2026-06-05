@@ -1767,9 +1767,12 @@ class MojoParser:
                 "GREATER_EQUAL",
                 "IN",
             ]
+            or self.is_negated_membership_operator()
             or self.is_identity_operator()
         ):
-            if self.is_identity_operator():
+            if self.is_negated_membership_operator():
+                op = self.parse_negated_membership_operator()
+            elif self.is_identity_operator():
                 op = self.parse_identity_operator()
             else:
                 op = self.current_token[1]
@@ -1790,6 +1793,14 @@ class MojoParser:
                 BinaryOpNode(left, op, right),
             )
         return expression
+
+    def is_negated_membership_operator(self):
+        return self.current_token[0] == "NOT" and self.peek_token()[0] == "IN"
+
+    def parse_negated_membership_operator(self):
+        self.eat("NOT")
+        self.eat("IN")
+        return "not in"
 
     def is_identity_operator(self):
         return self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "is"

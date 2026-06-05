@@ -2294,6 +2294,8 @@ class MetalParser:
             return None
         if self.current_token[0] == "LBRACE":
             return BlockNode(self.parse_block())
+        if self.is_statement_expression_block_start():
+            return self.parse_statement_expression_block()
         if self.is_declaration_start():
             return self.parse_variable_declaration_or_assignment()
         elif self.current_token[0] == "IF":
@@ -2324,6 +2326,16 @@ class MetalParser:
             return self.parse_static_assert()
         else:
             return self.parse_expression_statement()
+
+    def is_statement_expression_block_start(self):
+        return self.current_token[0] == "LPAREN" and self.peek(1)[0] == "LBRACE"
+
+    def parse_statement_expression_block(self):
+        self.eat("LPAREN")
+        block = BlockNode(self.parse_block())
+        self.eat("RPAREN")
+        self.eat("SEMICOLON")
+        return block
 
     def is_for_loop_macro_prefix(self):
         if self.current_token[0] != "IDENTIFIER" or self.peek(1)[0] != "FOR":

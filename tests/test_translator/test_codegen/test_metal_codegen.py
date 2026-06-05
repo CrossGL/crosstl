@@ -189,6 +189,32 @@ def test_metal_user_defined_synchronization_names_are_not_lowered():
     assert "threadgroup_barrier(" not in generated_code
 
 
+def test_metal_fragment_discard_and_clip_lower_to_discard_fragment():
+    shader = """
+    shader FragmentDiscardAndClip {
+        fragment {
+            void main(float alpha, vec3 mask) {
+                if (alpha < 0.5) {
+                    discard;
+                }
+                discard();
+                clip(alpha - 0.5);
+                clip(mask);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("discard_fragment();") == 4
+    assert "discard;" not in generated_code
+    assert "discard();" not in generated_code
+    assert "clip(" not in generated_code
+    assert "if ((alpha - 0.5) < 0.0) {" in generated_code
+    assert "if (any((mask) < float3(0.0))) {" in generated_code
+
+
 def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     shader = """
     shader MetalWaveIntrinsics {

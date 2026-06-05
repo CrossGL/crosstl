@@ -796,6 +796,29 @@ def test_gpu_fundamentals_launch_keyword_tuple_args_codegen():
     assert "comptime" not in generated_code
 
 
+def test_not_in_membership_condition_codegen_from_mojo_gpu_puzzles_dispatch():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # problems/p13/p13.mojo main command-dispatch guard.
+    code = """
+    def main():
+        if len(argv()) != 2 or argv()[1] not in [
+            "--simple",
+            "--block-boundary",
+        ]:
+            raise Error("Expected mode")
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        'if (((len(argv()) != 2) || (!(argv()[1] in ["--simple", "--block-boundary"]))))'
+        in generated_code
+    )
+    assert " not in " not in generated_code
+    assert "Unhandled expression" not in generated_code
+
+
 def test_mojo_gpu_intro_vector_addition_host_buffer_codegen():
     # Reduced from modular/modular commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,

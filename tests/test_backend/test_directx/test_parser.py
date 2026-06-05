@@ -1547,6 +1547,47 @@ def test_parse_tbuffer_preserves_texture_buffer_metadata():
     assert tbuffer.members[1].packoffset == "c4.x"
 
 
+def test_parse_cbuffer_and_tbuffer_methods_from_dxc_spirv():
+    # Source: microsoft/DirectXShaderCompiler
+    # tools/clang/test/CodeGenSPIRV/fn.ctbuffer.hlsl
+    ast = parse_code("""
+    cbuffer MyCBuffer {
+        float4 cb_val;
+
+        float4 get_cb_val() { return cb_val; }
+    }
+
+    struct S {
+        float3 s_val;
+
+        float3 get_s_val() { return s_val; }
+    };
+
+    tbuffer MyTBuffer {
+        float tb_val;
+        S tb_s;
+
+        float get_tb_val() { return tb_val; }
+    }
+
+    float4 main() : SV_Target {
+        return get_cb_val() + float4(tb_s.get_s_val(), 0.0) * get_tb_val();
+    }
+    """)
+
+    cbuffer, tbuffer = ast.cbuffers
+
+    assert [member.name for member in cbuffer.members] == ["cb_val"]
+    assert [method.name for method in cbuffer.methods] == ["get_cb_val"]
+    assert cbuffer.methods[0].return_type == "float4"
+    assert len(cbuffer.methods[0].body) == 1
+
+    assert [member.name for member in tbuffer.members] == ["tb_val", "tb_s"]
+    assert [method.name for method in tbuffer.methods] == ["get_tb_val"]
+    assert tbuffer.methods[0].return_type == "float"
+    assert len(tbuffer.methods[0].body) == 1
+
+
 def test_parse_object_style_buffer_resource_templates():
     ast = parse_code("""
     struct FrameConstants {

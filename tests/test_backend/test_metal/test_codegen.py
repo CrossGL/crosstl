@@ -1379,6 +1379,39 @@ def test_codegen_standalone_scoped_block_from_llama_cpp():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_statement_expression_block_from_angle_generated_shader():
+    # Reduced from:
+    # Repo: https://android.googlesource.com/platform/external/angle
+    # Commit: 282a5fb4ad
+    # Path: src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_autogen.metal
+    code = """
+    void outputPrimitive(bool use16,
+                         bool use32,
+                         device ushort* out16,
+                         device uint* out32,
+                         thread uint& onOutIndex,
+                         uint tmpIndex) {
+        ({
+            if (use16) {
+                out16[(onOutIndex)] = tmpIndex;
+            }
+            if (use32) {
+                out32[(onOutIndex)] = tmpIndex;
+            }
+            onOutIndex++;
+        });
+    }
+    """
+    crossgl = convert(code)
+
+    assert re.search(r"\n\s+\{\n\s+if \(use16\)", crossgl)
+    assert "out16[onOutIndex] = tmpIndex;" in crossgl
+    assert "out32[onOutIndex] = tmpIndex;" in crossgl
+    assert "onOutIndex++;" in crossgl
+    assert "({" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_preserves_binding_attributes():
     code = """
     #include <metal_stdlib>

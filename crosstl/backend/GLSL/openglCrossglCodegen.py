@@ -281,20 +281,45 @@ class GLSLToCrossGLConverter:
             "fwidthFine": "fwidth_fine",
             "fwidthCoarse": "fwidth_coarse",
         }
+        legacy_texture_aliases = {
+            "texture1D": ("texture", "sample"),
+            "texture2D": ("texture", "sample"),
+            "texture3D": ("texture", "sample"),
+            "textureCube": ("texture", "sample"),
+            "texture1DProj": ("textureProj", "sample_projected"),
+            "texture2DProj": ("textureProj", "sample_projected"),
+            "texture3DProj": ("textureProj", "sample_projected"),
+            "texture1DLod": ("textureLod", "sample_lod"),
+            "texture2DLod": ("textureLod", "sample_lod"),
+            "texture3DLod": ("textureLod", "sample_lod"),
+            "textureCubeLod": ("textureLod", "sample_lod"),
+            "texture1DProjLod": ("textureProjLod", "sample_projected"),
+            "texture2DProjLod": ("textureProjLod", "sample_projected"),
+            "texture3DProjLod": ("textureProjLod", "sample_projected"),
+            "texture1DGrad": ("textureGrad", "sample_grad"),
+            "texture2DGrad": ("textureGrad", "sample_grad"),
+            "texture3DGrad": ("textureGrad", "sample_grad"),
+            "textureCubeGrad": ("textureGrad", "sample_grad"),
+            "texture1DProjGrad": ("textureProjGrad", "sample_projected"),
+            "texture2DProjGrad": ("textureProjGrad", "sample_projected"),
+            "texture3DProjGrad": ("textureProjGrad", "sample_projected"),
+            "texture1DOffset": ("textureOffset", "sample_offset"),
+            "texture2DOffset": ("textureOffset", "sample_offset"),
+            "texture3DOffset": ("textureOffset", "sample_offset"),
+            "texture1DLodOffset": ("textureLodOffset", "sample_lod"),
+            "texture2DLodOffset": ("textureLodOffset", "sample_lod"),
+            "texture3DLodOffset": ("textureLodOffset", "sample_lod"),
+            "texture1DGradOffset": ("textureGradOffset", "sample_grad"),
+            "texture2DGradOffset": ("textureGradOffset", "sample_grad"),
+            "texture3DGradOffset": ("textureGradOffset", "sample_grad"),
+        }
         self.texture_function_operations = {
             "texture": "sample",
-            "texture1D": "sample",
-            "texture2D": "sample",
-            "texture3D": "sample",
-            "textureCube": "sample",
             "textureLod": "sample_lod",
             "textureLodOffset": "sample_lod",
             "textureGrad": "sample_grad",
             "textureGradOffset": "sample_grad",
             "textureProj": "sample_projected",
-            "texture1DProj": "sample_projected",
-            "texture2DProj": "sample_projected",
-            "texture3DProj": "sample_projected",
             "textureProjLod": "sample_projected",
             "textureProjLodOffset": "sample_projected",
             "textureProjGrad": "sample_projected",
@@ -325,14 +350,11 @@ class GLSLToCrossGLConverter:
             "textureQueryLod": "query_lod",
             "textureSamples": "query_samples",
         }
+        self.texture_function_operations.update(
+            {name: operation for name, (_, operation) in legacy_texture_aliases.items()}
+        )
         self.legacy_texture_function_names = {
-            "texture1D": "texture",
-            "texture2D": "texture",
-            "texture3D": "texture",
-            "textureCube": "texture",
-            "texture1DProj": "textureProj",
-            "texture2DProj": "textureProj",
-            "texture3DProj": "textureProj",
+            name: canonical for name, (canonical, _) in legacy_texture_aliases.items()
         }
         self.image_function_operations = {
             "imageLoad": "load",

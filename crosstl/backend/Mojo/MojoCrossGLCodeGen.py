@@ -901,7 +901,10 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_nested_expression(expr.left)
             right = self.generate_nested_expression(expr.right)
-            op = self.map_operator(expr.op if hasattr(expr, "op") else "+")
+            op = expr.op if hasattr(expr, "op") else "+"
+            if op == "not in":
+                return f"(!({left} in {right}))"
+            op = self.map_operator(op)
             return f"({left} {op} {right})"
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_nested_expression(expr.operand)

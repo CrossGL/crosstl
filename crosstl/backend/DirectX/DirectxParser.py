@@ -1261,23 +1261,48 @@ class HLSLParser:
 
         self.eat("LBRACE")
         members = []
+        methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
                 members.append(self.parse_cbuffer(attributes=[]))
                 continue
+            member_attributes = self.parse_attribute_list()
             qualifiers = self.parse_qualifiers()
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
                     name,
                     qualifiers=qualifiers,
-                    attributes=[],
+                    attributes=member_attributes,
                     allow_semantic=True,
                 )
                 members.extend(self.ensure_statement_list(declarations))
                 continue
-            declarations = self.parse_variable_declaration(
+
+            if not self.is_type_token(self.current_token[0]):
+                raise SyntaxError(
+                    f"Expected type in cbuffer member, got {self.current_token[0]}"
+                )
+
+            member_type = self.parse_type()
+            qualifiers.extend(self.parse_post_type_qualifiers())
+            member_attributes.extend(self.parse_attribute_list())
+            member_name = self.parse_member_declarator_name()
+            if self.current_token[0] == "LPAREN":
+                methods.append(
+                    self.parse_function(
+                        member_type,
+                        member_name,
+                        qualifiers=qualifiers,
+                        attributes=member_attributes,
+                    )
+                )
+                continue
+
+            declarations = self.parse_variable_declaration_list_rest(
+                member_type,
+                member_name,
                 qualifiers=qualifiers,
-                attributes=[],
+                attributes=member_attributes,
                 allow_semantic=True,
                 consume_semicolon=True,
             )
@@ -1294,6 +1319,7 @@ class HLSLParser:
         cbuffer_node.register = cbuffer_register
         cbuffer_node.packoffset = cbuffer_packoffset
         cbuffer_node.attributes = attributes or []
+        cbuffer_node.methods = methods
         return cbuffer_node
 
     def synthetic_cbuffer_name(self, cbuffer_register):

@@ -365,6 +365,30 @@ def test_codegen_resource_function_descriptors():
         "resource": "texture",
         "operation": "sample_lod",
     }
+    assert converter.resource_function_descriptor("texture2DLod") == {
+        "name": "texture2DLod",
+        "function": "textureLod",
+        "resource": "texture",
+        "operation": "sample_lod",
+    }
+    assert converter.resource_function_descriptor("textureCubeLod") == {
+        "name": "textureCubeLod",
+        "function": "textureLod",
+        "resource": "texture",
+        "operation": "sample_lod",
+    }
+    assert converter.resource_function_descriptor("texture2DGrad") == {
+        "name": "texture2DGrad",
+        "function": "textureGrad",
+        "resource": "texture",
+        "operation": "sample_grad",
+    }
+    assert converter.resource_function_descriptor("texture2DLodOffset") == {
+        "name": "texture2DLodOffset",
+        "function": "textureLodOffset",
+        "resource": "texture",
+        "operation": "sample_lod",
+    }
     assert converter.resource_function_descriptor("texture2DProj") == {
         "name": "texture2DProj",
         "function": "textureProj",
@@ -462,6 +486,42 @@ def test_codegen_texture_intrinsics_use_canonical_crossgl_resources():
     assert "textureLod(tex, uv, 1.0)" in glsl
     assert "textureGrad(tex, uv, vec2(1.0), vec2(1.0))" in glsl
     assert "textureGather(tex, uv)" in glsl
+
+
+def test_codegen_legacy_lod_grad_texture_intrinsics_from_bgfx_examples():
+    # Reduced from bkaradzic/bgfx@6e0d61bf examples that use texture2DLod,
+    # textureCubeLod, texture2DGrad, and texture2DLodOffset.
+    code = textwrap.dedent("""
+        #version 130
+        varying vec2 vUV;
+        uniform sampler2D s_texColor;
+        uniform samplerCube s_texCube;
+
+        void main() {
+            vec4 lod = texture2DLod(s_texColor, vUV, 0.0);
+            vec4 cube = textureCubeLod(s_texCube, vec3(1.0), 1.0);
+            vec4 grad = texture2DGrad(s_texColor, vUV, vec2(1.0), vec2(1.0));
+            vec4 offset = texture2DLodOffset(s_texColor, vUV, 0.0, ivec2(1));
+            gl_FragColor = lod + cube + grad + offset;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "textureLod(s_texColor, input.vUV, 0.0)" in crossgl
+    assert "textureLod(s_texCube, vec3(1.0), 1.0)" in crossgl
+    assert "textureGrad(s_texColor, input.vUV, vec2(1.0), vec2(1.0))" in crossgl
+    assert "textureLodOffset(s_texColor, input.vUV, 0.0, ivec2(1))" in crossgl
+    assert "texture2DLod(" not in crossgl
+    assert "textureCubeLod(" not in crossgl
+    assert "texture2DGrad(" not in crossgl
+    assert "texture2DLodOffset(" not in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "textureLod(s_texColor, vUV, 0.0)" in glsl
+    assert "textureLod(s_texCube, vec3(1.0), 1.0)" in glsl
+    assert "textureGrad(s_texColor, vUV, vec2(1.0), vec2(1.0))" in glsl
+    assert "textureLodOffset(s_texColor, vUV, 0.0, ivec2(1))" in glsl
 
 
 def test_codegen_array_of_arrays_return_type_from_glslang_spv_aofa():

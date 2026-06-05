@@ -1790,6 +1790,39 @@ def test_parse_standalone_scoped_block_from_llama_cpp():
     assert isinstance(block.statements[2], AssignmentNode)
 
 
+def test_parse_statement_expression_block_from_angle_generated_shader():
+    # Reduced from:
+    # Repo: https://android.googlesource.com/platform/external/angle
+    # Commit: 282a5fb4ad
+    # Path: src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_autogen.metal
+    code = """
+    void outputPrimitive(bool use16,
+                         bool use32,
+                         device ushort* out16,
+                         device uint* out32,
+                         thread uint& onOutIndex,
+                         uint tmpIndex) {
+        ({
+            if (use16) {
+                out16[(onOutIndex)] = tmpIndex;
+            }
+            if (use32) {
+                out32[(onOutIndex)] = tmpIndex;
+            }
+            onOutIndex++;
+        });
+    }
+    """
+    ast = parse_ok(code)
+    block = ast.functions[0].body[0]
+
+    assert isinstance(block, BlockNode)
+    assert len(block.statements) == 2
+    assert isinstance(block.statements[0], IfNode)
+    assert len(block.statements[0].if_chain) == 2
+    assert getattr(block.statements[1], "op", None) == "++"
+
+
 def test_parse_decltype_template_typedef_and_explicit_instantiations_from_llama_cpp():
     code = """
     template [[host_name("kernel_unary_f32_f32")]]

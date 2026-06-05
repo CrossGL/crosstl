@@ -2486,6 +2486,31 @@ def test_comptime_in_expression_and_parameterized_declaration_parse():
     assert assertion.args[1] == '"MmaOpSM100 only supports cta_group 1 or 2"'
 
 
+def test_not_in_membership_condition_parse_from_mojo_gpu_puzzles_dispatch():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # problems/p13/p13.mojo main command-dispatch guard.
+    code = """
+    def main():
+        if len(argv()) != 2 or argv()[1] not in [
+            "--simple",
+            "--block-boundary",
+        ]:
+            pass
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    condition = function.body[0].condition
+
+    assert isinstance(condition, BinaryOpNode)
+    assert condition.op == "||"
+    assert isinstance(condition.right, BinaryOpNode)
+    assert condition.right.op == "not in"
+    assert isinstance(condition.right.right, ListLiteralNode)
+    assert condition.right.right.elements == ['"--simple"', '"--block-boundary"']
+
+
 def test_gpu_fundamentals_launch_keyword_tuple_args_parse():
     code = """
     from std.sys import has_accelerator
