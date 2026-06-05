@@ -5608,11 +5608,30 @@ class HipToCrossGLConverter:
             return arg
         return self.visit(arg)
 
+    def format_atomic_argument(self, arg, index):
+        if index == 0 and isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.visit(arg.operand)
+        return self.visit(arg)
+
     def visit_AtomicOperationNode(self, node):
-        args = [self.visit(arg) for arg in node.args]
+        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node.args)]
         args_str = ", ".join(args)
-        crossgl_func = self.convert_hip_builtin_function(node.operation)
-        return f"{crossgl_func}({args_str})"
+        operation = node.operation
+        scope = None
+        for suffix, scope_name in (("_block", "block"), ("_system", "system")):
+            if operation.endswith(suffix):
+                operation = operation[: -len(suffix)]
+                scope = scope_name
+                break
+
+        crossgl_func = self.convert_hip_builtin_function(operation)
+        expression = f"{crossgl_func}({args_str})"
+        if scope is not None:
+            return (
+                f"(/* hip {scope}-scope atomic {node.operation} lowered to "
+                f"{crossgl_func}; scope not preserved */ {expression})"
+            )
+        return expression
 
     def is_get_method_call(self, node):
         return (

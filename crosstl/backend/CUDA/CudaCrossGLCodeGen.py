@@ -5099,6 +5099,13 @@ class CudaToCrossGLConverter:
     def visit_AtomicOperationNode(self, node):
         args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node.args)]
         args_str = ", ".join(args)
+        operation = node.operation
+        scope = None
+        for suffix, scope_name in (("_block", "block"), ("_system", "system")):
+            if operation.endswith(suffix):
+                operation = operation[: -len(suffix)]
+                scope = scope_name
+                break
 
         atomic_map = {
             "atomicAdd": "atomicAdd",
@@ -5114,8 +5121,14 @@ class CudaToCrossGLConverter:
             "atomicDec": "atomicDec",
         }
 
-        crossgl_func = atomic_map.get(node.operation, node.operation)
-        return f"{crossgl_func}({args_str})"
+        crossgl_func = atomic_map.get(operation, operation)
+        expression = f"{crossgl_func}({args_str})"
+        if scope is not None:
+            return (
+                f"(/* cuda {scope}-scope atomic {node.operation} lowered to "
+                f"{crossgl_func}; scope not preserved */ {expression})"
+            )
+        return expression
 
     def visit_SyncNode(self, node):
         if node.sync_type == "__syncthreads":

@@ -240,6 +240,13 @@ class VulkanToCrossGLConverter:
                             code += self.generate_fragment_execution_layout(layout)
                         code += self.generate_function(node)
                         code += "    }\n\n"
+                    elif shader_stage == "geometry":
+                        code += "    // Geometry Shader\n"
+                        code += "    geometry {\n"
+                        for layout in self.spirv_geometry_execution_layouts(node):
+                            code += self.generate_stage_layout(layout)
+                        code += self.generate_function(node)
+                        code += "    }\n\n"
                     else:
                         code += self.generate_function(node)
                 else:
@@ -267,6 +274,7 @@ class VulkanToCrossGLConverter:
         return {
             "Vertex": "vertex",
             "Fragment": "fragment",
+            "Geometry": "geometry",
             "GLCompute": "compute",
         }.get(execution_model)
 
@@ -323,6 +331,41 @@ class VulkanToCrossGLConverter:
                 )
         return layouts
 
+    def spirv_geometry_execution_layouts(self, node):
+        input_qualifiers = []
+        output_qualifiers = []
+        input_modes = {
+            "InputPoints": "points",
+            "InputLines": "lines",
+            "InputLinesAdjacency": "lines_adjacency",
+            "Triangles": "triangles",
+            "InputTrianglesAdjacency": "triangles_adjacency",
+        }
+        output_modes = {
+            "OutputPoints": "points",
+            "OutputLineStrip": "line_strip",
+            "OutputTriangleStrip": "triangle_strip",
+        }
+
+        for mode in getattr(node, "spirv_execution_modes", []) or []:
+            mode_name = mode.get("mode")
+            operands = mode.get("operands", [])
+            if mode_name in input_modes:
+                input_qualifiers.append((input_modes[mode_name], None))
+            elif mode_name == "Invocations" and operands:
+                input_qualifiers.append(("invocations", operands[0]))
+            elif mode_name in output_modes:
+                output_qualifiers.append((output_modes[mode_name], None))
+            elif mode_name == "OutputVertices" and operands:
+                output_qualifiers.append(("max_vertices", operands[0]))
+
+        layouts = []
+        if input_qualifiers:
+            layouts.append(LayoutNode(input_qualifiers, layout_type="in"))
+        if output_qualifiers:
+            layouts.append(LayoutNode(output_qualifiers, layout_type="out"))
+        return layouts
+
     def is_fragment_execution_layout(self, node):
         if not isinstance(node, LayoutNode):
             return False
@@ -344,11 +387,15 @@ class VulkanToCrossGLConverter:
         return f"        layout({qualifiers}) in;\n"
 
     def generate_fragment_execution_layout(self, node):
+        return self.generate_stage_layout(node)
+
+    def generate_stage_layout(self, node):
         qualifiers = ", ".join(
             f"{name} = {value}" if value is not None else name
             for name, value in node.qualifiers
         )
-        return f"        layout({qualifiers}) in;\n"
+        layout_type = (node.layout_type or "in").lower()
+        return f"        layout({qualifiers}) {layout_type};\n"
 
     def is_position_assignment(self, stmt):
         if isinstance(stmt, AssignmentNode):

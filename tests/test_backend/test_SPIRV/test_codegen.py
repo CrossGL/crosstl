@@ -2384,6 +2384,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_GEOMETRY_EXECUTION_MODES_ASSEMBLY = """
+; Reduced from glslangValidator-style SPIR-V assembly for:
+; layout(triangles, invocations = 2) in;
+; layout(triangle_strip, max_vertices = 3) out;
+OpCapability Shader
+OpCapability Geometry
+OpMemoryModel Logical GLSL450
+OpEntryPoint Geometry %main "main" %in_color %out_color
+OpExecutionMode %main Triangles
+OpExecutionMode %main Invocations 2
+OpExecutionMode %main OutputTriangleStrip
+OpExecutionMode %main OutputVertices 3
+OpName %in_color "inColor"
+OpName %out_color "outColor"
+OpDecorate %in_color Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v3float = OpTypeVector %float 3
+%uint = OpTypeInt 32 0
+%uint_3 = OpConstant %uint 3
+%arr_v3float_3 = OpTypeArray %v3float %uint_3
+%ptr_input_arr_v3float_3 = OpTypePointer Input %arr_v3float_3
+%ptr_output_v3float = OpTypePointer Output %v3float
+%in_color = OpVariable %ptr_input_arr_v3float_3 Input
+%out_color = OpVariable %ptr_output_v3float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_CROSS_ISNAN_ISINF_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
 ; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
@@ -3780,6 +3813,21 @@ def test_glslang_derivative_ops_codegen_reparse():
     assert "dxOut = dx;" not in generated_code
     assert "dyOut = dy_fine;" not in generated_code
     assert "widthOut = width_coarse;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_geometry_execution_modes_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_GEOMETRY_EXECUTION_MODES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "geometry {" in generated_code
+    assert "layout(triangles, invocations = 2) in;" in generated_code
+    assert "layout(triangle_strip, max_vertices = 3) out;" in generated_code
+    assert "float3 inColor[3] @input @location(0);" in generated_code
+    assert "float3 outColor @output @location(0);" in generated_code
+    assert "fragment {" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

@@ -18650,6 +18650,60 @@ def test_fract_vec3_builtin_lowers_componentwise_and_preserves_padding():
     assert "fract(" not in generated_code
 
 
+def test_step_and_smoothstep_vector_helpers_cover_shader_threshold_patterns():
+    code = """
+    shader Thresholds {
+        compute {
+            void main() {
+                vec3 low = vec3(0.1, 0.2, 0.3);
+                vec3 high = vec3(0.7, 0.8, 0.9);
+                vec3 value = vec3(0.4, 0.5, 0.6);
+                float scalar = 0.5;
+                vec3 vectorGate = step(0.25, value);
+                vec3 vectorEdgeGate = step(low, scalar);
+                vec3 softValue = smoothstep(0.0, 1.0, value);
+                vec3 softEdges = smoothstep(low, high, scalar);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn step(edge: Float32, x: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn step(edge: SIMD[DType.float32, 4], x: Float32) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn smoothstep(edge0: Float32, edge1: Float32, "
+        "x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn smoothstep(edge0: SIMD[DType.float32, 4], "
+        "edge1: SIMD[DType.float32, 4], x: Float32) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "var vectorGate: SIMD[DType.float32, 4] = step(0.25, value)" in generated_code
+    )
+    assert (
+        "var vectorEdgeGate: SIMD[DType.float32, 4] = step(low, scalar)"
+        in generated_code
+    )
+    assert (
+        "var softValue: SIMD[DType.float32, 4] = "
+        "smoothstep(0.0, 1.0, value)" in generated_code
+    )
+    assert (
+        "var softEdges: SIMD[DType.float32, 4] = "
+        "smoothstep(low, high, scalar)" in generated_code
+    )
+
+
 @pytest.mark.parametrize(
     "shader, expected_output",
     [

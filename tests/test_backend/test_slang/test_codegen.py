@@ -2118,6 +2118,26 @@ def test_slang_rsqrt_builtin_lowers_to_crossgl_inversesqrt():
     assert "rsqrt(" not in generated_code
 
 
+def test_slang_rcp_builtin_from_stdlib_reference_lowers_to_reciprocal_expression():
+    # Source: shader-slang stdlib rcp reference.
+    # URL: https://shader-slang.org/stdlib-reference/global-decls/rcp
+    code = """
+    void main() {
+        float inv = rcp(x + 1.0);
+        float2 invVec = rcp(float2(4.0, 8.0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float inv = (1.0 / (x + 1.0));" in generated_code
+    assert "vec2 invVec = (1.0 / vec2(4.0, 8.0));" in generated_code
+    assert "rcp(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_slang_saturate_builtin_lowers_to_crossgl_clamp():
     code = """
     void main() {

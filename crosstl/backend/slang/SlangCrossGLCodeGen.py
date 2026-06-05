@@ -1141,6 +1141,14 @@ class SlangToCrossGLConverter:
                 and expr.name not in self.user_function_names
             ):
                 return f"clamp({args}, 0.0, 1.0)"
+            if (
+                expr.name == "rcp"
+                and len(expr.args) == 1
+                and expr.name not in self.user_function_names
+            ):
+                value = self.generate_expression(expr.args[0], is_main)
+                value = self.maybe_parenthesize_expression(expr.args[0], value)
+                return f"(1.0 / {value})"
             if expr.name in self.user_function_names:
                 name = self.format_function_name(expr.name)
             elif expr.name in self.type_map and expr.name[:1].islower():

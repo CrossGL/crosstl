@@ -4294,6 +4294,21 @@ def test_codegen_frac_intrinsic_from_microsoft_docs_roundtrips():
     assert "fract(" not in regenerated_hlsl
 
 
+def test_codegen_rcp_intrinsic_from_microsoft_docs_imports_to_reciprocal_expression():
+    # Source: Microsoft Learn rcp intrinsic docs.
+    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/rcp
+    crossgl = generate_crossgl("""
+        float4 main(float4 lightFalloff : TEXCOORD0) : SV_Target0 {
+            float4 invFalloff = rcp(lightFalloff + 1.0);
+            return invFalloff;
+        }
+    """)
+
+    assert "vec4 invFalloff = (1.0 / (lightFalloff + 1.0));" in crossgl
+    assert "rcp(" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_interpolation_intrinsics_roundtrip():
     crossgl = generate_crossgl(INTERPOLATION_INTRINSICS_HLSL)
 

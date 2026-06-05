@@ -3082,6 +3082,9 @@ class HLSLToCrossGLConverter:
                 if expr.args:
                     return f"clamp({self.generate_expression(expr.args[0], is_main)}, 0.0, 1.0)"
                 return "clamp(0.0, 0.0, 1.0)"
+            if func_name == "rcp" and len(expr.args) == 1:
+                value = self.maybe_parenthesize(expr.args[0], rendered_args[0])
+                return f"(1.0 / {value})"
             func_name = self.function_map.get(func_name, func_name)
             func_name = self.interlocked_map.get(func_name, func_name)
             func_name = self.render_function_identifier(func_name)

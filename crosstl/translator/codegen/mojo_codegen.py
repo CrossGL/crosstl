@@ -12478,12 +12478,36 @@ class MojoCodeGen:
             return (
                 "fn step(edge: Float32, x: Float32) -> Float32:\n"
                 "    return 0.0 if x < edge else 1.0\n\n"
+                "fn step(edge: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](step(edge, x[0]), step(edge, x[1]))\n\n"
+                "fn step(edge: SIMD[DType.float32, 2], x: Float32) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](step(edge[0], x), step(edge[1], x))\n\n"
+                "fn step(edge: SIMD[DType.float32, 2], x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](step(edge[0], x[0]), step(edge[1], x[1]))\n\n"
+                "fn step(edge: Float32, x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](step(edge, x[0]), step(edge, x[1]), step(edge, x[2]), step(edge, x[3]))\n\n"
+                "fn step(edge: SIMD[DType.float32, 4], x: Float32) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](step(edge[0], x), step(edge[1], x), step(edge[2], x), step(edge[3], x))\n\n"
+                "fn step(edge: SIMD[DType.float32, 4], x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](step(edge[0], x[0]), step(edge[1], x[1]), step(edge[2], x[2]), step(edge[3], x[3]))\n\n"
             )
         if helper_name == "smoothstep":
             return (
                 "fn smoothstep(edge0: Float32, edge1: Float32, x: Float32) -> Float32:\n"
                 "    var t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)\n"
                 "    return t * t * (3.0 - 2.0 * t)\n\n"
+                "fn smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](smoothstep(edge0, edge1, x[0]), smoothstep(edge0, edge1, x[1]))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: Float32) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](smoothstep(edge0[0], edge1[0], x), smoothstep(edge0[1], edge1[1], x))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]))\n\n"
+                "fn smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](smoothstep(edge0, edge1, x[0]), smoothstep(edge0, edge1, x[1]), smoothstep(edge0, edge1, x[2]), smoothstep(edge0, edge1, x[3]))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: Float32) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x), smoothstep(edge0[1], edge1[1], x), smoothstep(edge0[2], edge1[2], x), smoothstep(edge0[3], edge1[3], x))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]), smoothstep(edge0[2], edge1[2], x[2]), smoothstep(edge0[3], edge1[3], x[3]))\n\n"
             )
         return ""
 

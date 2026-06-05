@@ -435,6 +435,42 @@ def test_external_rocm_graph_api_variable_template_arithmetic_crossgl_reparse():
     ) in crossgl
 
 
+def test_external_rocm_docs_system_scope_atomics_codegen_reparse():
+    # Upstream source:
+    # ROCm HIP C++ language extensions atomic functions table. ROCm examples
+    # exercise ordinary atomics in kernels; HIP docs list the _system variants.
+    source = """
+    __global__ void scoped_atomic_kernel(unsigned int* bins,
+                                         unsigned int* flags) {
+        unsigned int old = atomicAdd_system(&bins[threadIdx.x], 1u);
+        atomicOr_system(flags, old);
+        unsigned int exchanged = atomicCAS_system(flags, 0u, 1u);
+        bins[threadIdx.x] = exchanged;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert isinstance(body[0].value, AtomicOperationNode)
+    assert body[0].value.operation == "atomicAdd_system"
+    assert isinstance(body[1], AtomicOperationNode)
+    assert body[1].operation == "atomicOr_system"
+    assert isinstance(body[2].value, AtomicOperationNode)
+    assert body[2].value.operation == "atomicCAS_system"
+    assert "hip system-scope atomic atomicAdd_system lowered to atomicAdd" in crossgl
+    assert "hip system-scope atomic atomicOr_system lowered to atomicOr" in crossgl
+    assert (
+        "hip system-scope atomic atomicCAS_system lowered to " "atomicCompareExchange"
+    ) in crossgl
+    assert "atomicAdd(bins[gl_LocalInvocationID.x], 1u)" in crossgl
+    assert "atomicOr(flags, old)" in crossgl
+    assert "atomicCompareExchange(flags, 0u, 1u)" in crossgl
+    assert "atomicAdd_system(" not in crossgl
+    assert "atomicOr_system(" not in crossgl
+    assert "atomicCAS_system(" not in crossgl
+
+
 def test_external_hip_examples_histogram_dynamic_shared_crossgl_reparse():
     source = """
     #define BIN_SIZE 256
@@ -593,7 +629,7 @@ def test_external_rocm_texture_management_tex2d_atomic_codegen_reparse():
     assert body[8].operation == "atomicAdd"
     assert "sampler2D tex_obj" in crossgl
     assert "var val: u8 = texture(tex_obj, vec2<f32>(u, v));" in crossgl
-    assert "atomicAdd((&histogram[bin_idx]), 1);" in crossgl
+    assert "atomicAdd(histogram[bin_idx], 1);" in crossgl
 
 
 def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():

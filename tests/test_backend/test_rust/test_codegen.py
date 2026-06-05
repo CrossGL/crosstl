@@ -2218,6 +2218,33 @@ def test_step_and_smoothstep_calls_convert_to_crossgl_intrinsics():
     assert "crate::math::smoothstep" not in result
 
 
+def test_rust_gpu_shadertoy_step_and_rem_euclid_methods_codegen():
+    # Reduced from Rust-GPU/rust-gpu-shadertoys shaders that use method-form
+    # step and rem_euclid for periodic SDF/repetition math.
+    code = """
+    fn repeat_tile(point: Vec3<f32>, face_blend: f32, delta: f32) -> Vec3<f32> {
+        let repeated = point.rem_euclid(Vec3::splat(6.0)) - Vec3::splat(3.0);
+        let angle = (face_blend + delta * 22.5).rem_euclid(delta * 45.0) - delta * 22.5;
+        let scalar_gate = 0.5.step(face_blend);
+        let vector_gate = Vec3::ZERO.step(point);
+        return repeated + vector_gate + Vec3::splat(angle + scalar_gate);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 repeat_tile(vec3 point, float face_blend, float delta)" in result
+    assert "repeated = (mod(point, vec3(6.0)) - vec3(3.0));" in result
+    assert (
+        "angle = (mod((face_blend + (delta * 22.5)), (delta * 45.0)) "
+        "- (delta * 22.5));" in result
+    )
+    assert "scalar_gate = step(0.5, face_blend);" in result
+    assert "vector_gate = step(vec3(0.0, 0.0, 0.0), point);" in result
+    assert ".rem_euclid(" not in result
+    assert ".step(" not in result
+
+
 def test_derivative_and_fused_math_calls_convert_to_crossgl_intrinsics():
     code = """
     fn derivative_ops(value: Vec3<f32>, scale: f32, bias: f32) -> Vec3<f32> {

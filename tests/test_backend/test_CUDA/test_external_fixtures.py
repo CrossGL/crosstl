@@ -435,6 +435,44 @@ def test_cuda_samples_simple_atomic_intrinsics_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_programming_guide_scoped_atomics_codegen_reparse():
+    # Upstream source:
+    # NVIDIA CUDA Programming Guide, atomic functions section. CUDA samples
+    # simpleAtomicIntrinsics covers the unscoped atomic family; the programming
+    # guide documents _block and _system scoped variants.
+    source = """
+    __global__ void scopedAtomicKernel(int *g_odata, unsigned int *flags) {
+        int old = atomicAdd_system(&g_odata[0], 10);
+        atomicMax_block(&g_odata[threadIdx.x], old);
+        unsigned int exchanged = atomicCAS_system(flags, 0u, 1u);
+        flags[threadIdx.x] = exchanged;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.kernels[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(body[0].value, AtomicOperationNode)
+    assert body[0].value.operation == "atomicAdd_system"
+    assert isinstance(body[1], AtomicOperationNode)
+    assert body[1].operation == "atomicMax_block"
+    assert isinstance(body[2].value, AtomicOperationNode)
+    assert body[2].value.operation == "atomicCAS_system"
+    assert "cuda system-scope atomic atomicAdd_system lowered to atomicAdd" in crossgl
+    assert "cuda block-scope atomic atomicMax_block lowered to atomicMax" in crossgl
+    assert (
+        "cuda system-scope atomic atomicCAS_system lowered to " "atomicCompareExchange"
+    ) in crossgl
+    assert "atomicAdd(g_odata[0], 10)" in crossgl
+    assert "atomicMax(g_odata[gl_LocalInvocationID.x], old)" in crossgl
+    assert "atomicCompareExchange(flags, 0u, 1u)" in crossgl
+    assert "atomicAdd_system(" not in crossgl
+    assert "atomicMax_block(" not in crossgl
+    assert "atomicCAS_system(" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_scan_cooperative_group_parameter_codegen_reparse():
     source = """
     namespace cg = cooperative_groups;

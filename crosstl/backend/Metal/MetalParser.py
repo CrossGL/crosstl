@@ -2385,6 +2385,7 @@ class MetalParser:
             self.eat("LPAREN")
             condition = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
+            self.parse_control_statement_attributes()
             body = self.parse_statement_body()
             if_chain.append((condition, body))
         while self.current_token[0] == "ELSE_IF":
@@ -2393,6 +2394,7 @@ class MetalParser:
             self.eat("LPAREN")
             condition = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
+            self.parse_control_statement_attributes()
             body = self.parse_statement_body()
             else_if_chain.append((condition, body))
 
@@ -2407,6 +2409,9 @@ class MetalParser:
     def parse_optional_if_constexpr(self):
         if self.current_token[0] == "CONSTEXPR":
             self.eat("CONSTEXPR")
+
+    def parse_control_statement_attributes(self):
+        self.parse_attributes()
 
     def parse_for_statement(self):
         self.eat("FOR")
@@ -2434,6 +2439,7 @@ class MetalParser:
                 update = self.parse_for_tail_items(update, "RPAREN")
         self.eat("RPAREN")
 
+        self.parse_control_statement_attributes()
         body = self.parse_statement_body()
 
         return ForNode(init, condition, update, body)
@@ -2512,6 +2518,7 @@ class MetalParser:
         self.eat("LPAREN")
         condition = self.parse_expression(allow_comma=True)
         self.eat("RPAREN")
+        self.parse_control_statement_attributes()
         body = self.parse_block()
         return WhileNode(condition, body)
 

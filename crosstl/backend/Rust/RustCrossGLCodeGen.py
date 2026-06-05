@@ -71,6 +71,8 @@ class RustToCrossGLConverter:
         "powf": "pow",
         "powi": "pow",
         "atan2": "atan2",
+        "rem_euclid": "mod",
+        "step": "step",
     }
     SCALAR_TWO_ARG_METHOD_MAP = {
         "clamp": "clamp",

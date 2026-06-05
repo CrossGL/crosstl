@@ -104,6 +104,25 @@ def test_codegen_emits_shader_and_stages():
     assert re.search(r"gl_FragColor", result)
 
 
+def test_codegen_drops_static_branch_attribute_after_if_condition_from_blender_shader():
+    # Reduced from:
+    # Repo: https://github.com/blender/blender
+    # Commit: e5fc656cdab0e682296f8dd024b942b548e788f4
+    # Path: source/blender/gpu/shaders/gpu_shader_2D_widget_base.bsl.hh
+    code = """
+    void draw_widget(bool instanced) {
+        if (instanced) [[static_branch]] {
+            return;
+        }
+    }
+    """
+    crossgl = convert(code)
+
+    assert "if (instanced)" in crossgl
+    assert "static_branch" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_attribute_mapping():
     code = """
     #include <metal_stdlib>

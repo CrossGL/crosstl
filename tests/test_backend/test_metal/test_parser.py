@@ -135,6 +135,25 @@ def test_parse_control_flow_constructs():
     parse_ok(code)
 
 
+def test_parse_static_branch_attribute_after_if_condition_from_blender_shader():
+    # Reduced from:
+    # Repo: https://github.com/blender/blender
+    # Commit: e5fc656cdab0e682296f8dd024b942b548e788f4
+    # Path: source/blender/gpu/shaders/gpu_shader_2D_widget_base.bsl.hh
+    code = """
+    void draw_widget(bool instanced) {
+        if (instanced) [[static_branch]] {
+            return;
+        }
+    }
+    """
+    ast = parse_ok(code)
+    if_node = ast.functions[0].body[0]
+
+    assert isinstance(if_node, IfNode)
+    assert if_node.if_chain[0][0].name == "instanced"
+
+
 def test_parse_nested_unbraced_for_loops_from_public_msl_example():
     code = """
     fragment float4 shader_day53(float4 pixPos [[position]]) {
