@@ -3760,6 +3760,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 saturate_call = self.generate_saturate_call(raw_args, args)
                 if saturate_call is not None:
                     return saturate_call
+        elif func_name == "step":
+            if len(args) == 2:
+                step_call = self.generate_step_call(raw_args, args)
+                if step_call is not None:
+                    return step_call
         elif func_name == "smoothstep":
             if len(args) == 3:
                 smoothstep_call = self.generate_smoothstep_call(raw_args, args)
@@ -4395,6 +4400,99 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             ],
             [args[0], "0.0", "1.0"],
         )
+
+    def generate_step_call(self, raw_args, args):
+        edge_type = self.expression_result_type(raw_args[0])
+        value_type = self.expression_result_type(raw_args[1])
+        edge_info = self.vector_type_info(edge_type)
+        value_info = self.vector_type_info(value_type)
+
+        if edge_info is None and value_info is None:
+            scalar_type = self.step_scalar_type(raw_args)
+            if scalar_type is None:
+                return None
+            return self.format_step_component(scalar_type, args[0], args[1])
+
+        result_info = value_info or edge_info
+        if result_info["component_type"] not in {"float", "double"}:
+            return None
+        if not self.compatible_step_operand(edge_info, result_info):
+            return None
+        if not self.compatible_step_operand(value_info, result_info):
+            return None
+        if edge_info is None and not self.compatible_step_scalar(edge_type):
+            return None
+        if value_info is None and not self.compatible_step_scalar(value_type):
+            return None
+
+        helper_name = self.require_vector_step_helper(
+            result_info,
+            edge_is_vector=edge_info is not None,
+            value_is_vector=value_info is not None,
+        )
+        return f"{helper_name}({args[0]}, {args[1]})"
+
+    def step_scalar_type(self, raw_args):
+        component_types = []
+        for raw_arg in raw_args:
+            arg_type = self.expression_result_type(raw_arg)
+            if self.vector_type_info(arg_type) is not None:
+                return None
+            component_type = self.scalar_component_type(arg_type)
+            if component_type not in {"float", "double", None}:
+                return None
+            component_types.append(component_type)
+        return "double" if "double" in component_types else "float"
+
+    def compatible_step_operand(self, operand_info, result_info):
+        if operand_info is None:
+            return True
+        return operand_info["component_type"] == result_info["component_type"] and len(
+            operand_info["components"]
+        ) == len(result_info["components"])
+
+    def compatible_step_scalar(self, type_name):
+        component_type = self.scalar_component_type(type_name)
+        return component_type in {"float", "double", None}
+
+    def require_vector_step_helper(self, result_info, edge_is_vector, value_is_vector):
+        edge_shape = "vector" if edge_is_vector else "scalar"
+        value_shape = "vector" if value_is_vector else "scalar"
+        helper_name = (
+            f"cgl_{result_info['type']}_step_{edge_shape}_edge_{value_shape}_value"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        scalar_type = self.vector_scalar_parameter_type(result_info)
+        edge_type = result_info["type"] if edge_is_vector else scalar_type
+        value_type = result_info["type"] if value_is_vector else scalar_type
+        components = []
+        for component in result_info["components"]:
+            edge = f"edge.{component}" if edge_is_vector else "edge"
+            value = f"value.{component}" if value_is_vector else "value"
+            components.append(
+                self.format_step_component(result_info["component_type"], edge, value)
+            )
+
+        helper = (
+            f"__device__ inline {result_info['type']} {helper_name}"
+            f"({edge_type} edge, {value_type} value)\n"
+            "{\n"
+            f"    return {result_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_step_component(self, scalar_type, edge, value):
+        if scalar_type == "double":
+            zero = "0.0"
+            one = "1.0"
+        else:
+            zero = "0.0f"
+            one = "1.0f"
+        return f"(({value}) < ({edge}) ? {zero} : {one})"
 
     def generate_mix_call(self, raw_args, args):
         left_type = self.expression_result_type(raw_args[0])
@@ -8568,6 +8666,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 )
             if func_name == "ReportHit":
                 return "bool"
+            raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
+            if func_name == "step" and len(raw_args) == 2:
+                return self.step_result_type(raw_args)
             buffer_result_type = self.buffer_call_result_type(node)
             if buffer_result_type is not None:
                 return buffer_result_type
@@ -8597,6 +8698,17 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if isinstance(node, MatchNode):
             return infer_match_expression_result_type(self, node)
         return super().expression_result_type(node)
+
+    def step_result_type(self, raw_args):
+        edge_type = self.expression_result_type(raw_args[0])
+        value_type = self.expression_result_type(raw_args[1])
+        value_info = self.vector_type_info(value_type)
+        if value_info is not None:
+            return value_type
+        edge_info = self.vector_type_info(edge_type)
+        if edge_info is not None:
+            return edge_type
+        return self.step_scalar_type(raw_args)
 
     def struct_member_lookup_type(self, type_name):
         """Return the struct key after HIP pointer/reference wrappers."""

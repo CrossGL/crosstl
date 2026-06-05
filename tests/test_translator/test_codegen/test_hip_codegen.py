@@ -2386,6 +2386,88 @@ class TestHipCodeGen:
         )
         assert " = saturate(" not in hip_code
 
+    def test_step_builtin_lowers_to_hip_scalar_and_vector_helpers(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                float edgeValue() {
+                    return 0.4;
+                }
+
+                vec3 edgeVector() {
+                    return vec3(0.1, 0.2, 0.3);
+                }
+
+                vec3 valueVector() {
+                    return vec3(0.2, 0.1, 0.4);
+                }
+
+                void main() {
+                    float scalar = 0.75;
+                    float scalarGate = step(0.5, scalar);
+                    double precise = 0.75;
+                    double preciseGate = step(0.5, precise);
+                    vec3 value = vec3(0.2, 0.1, 0.4);
+                    vec3 vectorGate = step(0.25, value);
+                    vec3 vectorEdgeGate = step(edgeVector(), edgeValue());
+                    vec3 vectorBoth = step(edgeVector(), valueVector());
+                    vec3 nested = fract(step(0.25, value));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float scalarGate = ((scalar) < (0.5) ? 0.0f : 1.0f);" in hip_code
+        assert "double preciseGate = ((precise) < (0.5) ? 0.0 : 1.0);" in hip_code
+        assert (
+            "__device__ inline float3 "
+            "cgl_float3_step_scalar_edge_vector_value"
+            "(float edge, float3 value)" in hip_code
+        )
+        assert (
+            "__device__ inline float3 "
+            "cgl_float3_step_vector_edge_scalar_value"
+            "(float3 edge, float value)" in hip_code
+        )
+        assert (
+            "__device__ inline float3 "
+            "cgl_float3_step_vector_edge_vector_value"
+            "(float3 edge, float3 value)" in hip_code
+        )
+        assert (
+            "return make_float3(((value.x) < (edge) ? 0.0f : 1.0f), "
+            "((value.y) < (edge) ? 0.0f : 1.0f), "
+            "((value.z) < (edge) ? 0.0f : 1.0f));" in hip_code
+        )
+        assert (
+            "float3 vectorGate = "
+            "cgl_float3_step_scalar_edge_vector_value(0.25, value);" in hip_code
+        )
+        assert (
+            "float3 vectorEdgeGate = "
+            "cgl_float3_step_vector_edge_scalar_value(edgeVector(), edgeValue());"
+            in hip_code
+        )
+        assert (
+            "float3 vectorBoth = "
+            "cgl_float3_step_vector_edge_vector_value(edgeVector(), valueVector());"
+            in hip_code
+        )
+        assert (
+            "float3 nested = cgl_float3_fract("
+            "cgl_float3_step_scalar_edge_vector_value(0.25, value));" in hip_code
+        )
+        assert " = step(" not in hip_code
+
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
     def test_mix_builtin_lowers_to_hip_arithmetic(self):
         source_code = """
         shader TestShader {

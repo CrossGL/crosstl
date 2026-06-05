@@ -3938,6 +3938,9 @@ class RustToCrossGLConverter:
         if not args and method_name in self.SCALAR_ZERO_ARG_METHOD_MAP:
             return f"{self.SCALAR_ZERO_ARG_METHOD_MAP[method_name]}({obj})"
 
+        if method_name == "recip" and not args:
+            return f"(1.0 / {obj})"
+
         if len(args) == 1 and method_name in self.SCALAR_ONE_ARG_METHOD_MAP:
             return f"{self.SCALAR_ONE_ARG_METHOD_MAP[method_name]}({obj}, {args[0]})"
 
@@ -8053,6 +8056,12 @@ class RustToCrossGLConverter:
             )
             if associated_call is not None:
                 return args_code, associated_call
+            expression_call = self.format_unary_expression_intrinsic_call(
+                expression.name,
+                args,
+            )
+            if expression_call is not None:
+                return args_code, expression_call
             func_name = self.map_function(expression.name)
             return args_code, f"{func_name}({', '.join(args)})"
 
@@ -8097,17 +8106,24 @@ class RustToCrossGLConverter:
                 constructor = self.format_path_constructor_call(expr.name, expr.args)
                 if constructor is not None:
                     return constructor
+                arg_values = [self.generate_expression(arg) for arg in expr.args]
                 associated_call = self.format_associated_impl_function_call(
                     expr.name,
-                    [self.generate_expression(arg) for arg in expr.args],
+                    arg_values,
                 )
                 if associated_call is not None:
                     return associated_call
+                expression_call = self.format_unary_expression_intrinsic_call(
+                    expr.name,
+                    arg_values,
+                )
+                if expression_call is not None:
+                    return expression_call
                 func_name = self.map_function(expr.name)
+                args = ", ".join(arg_values)
             else:
                 func_name = self.generate_expression(expr.name)
-
-            args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             return f"{func_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
@@ -9068,6 +9084,33 @@ class RustToCrossGLConverter:
             expr.args,
             receiver_type,
         )
+
+    def format_unary_expression_intrinsic_call(self, function_name, args):
+        if len(args) != 1 or not isinstance(function_name, str):
+            return None
+
+        resolved_name = self.resolve_imported_module_path(function_name)
+        if self.is_user_defined_function(resolved_name):
+            return None
+
+        current_module_function = self.current_module_user_function_name(resolved_name)
+        if current_module_function is not None:
+            return None
+
+        if resolved_name == "recip":
+            return f"(1.0 / {args[0]})"
+
+        if "::" not in resolved_name:
+            return None
+
+        qualifier, intrinsic_name = resolved_name.rsplit("::", 1)
+        if intrinsic_name != "recip":
+            return None
+
+        if self.is_module_qualified_function_path(qualifier.split("::")):
+            return f"(1.0 / {args[0]})"
+
+        return None
 
     def format_path_constructor_call(self, function_name, args):
         arg_values = [self.generate_expression(arg) for arg in args]

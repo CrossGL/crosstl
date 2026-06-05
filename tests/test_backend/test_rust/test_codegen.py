@@ -16,6 +16,7 @@ from crosstl.backend.Rust.RustAst import (
 from crosstl.backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
 from crosstl.backend.Rust.RustLexer import RustLexer
 from crosstl.backend.Rust.RustParser import RustParser
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 
 
 def parse_and_generate(code: str) -> str:
@@ -2205,6 +2206,60 @@ def test_unary_math_intrinsic_calls_convert_to_crossgl_intrinsics():
     assert "crate::math::fract" not in result
     assert ".sqrt()" not in result
     assert ".fract()" not in result
+
+
+def test_recip_calls_lower_to_crossgl_division_and_target_glsl():
+    # Rust exposes recip() on f32/f64, while shader math also commonly uses the
+    # same reciprocal shape on vectors such as inverse ray directions.
+    code = """
+    fn reciprocal_ops(x: f32, normal: Vec3<f32>) -> Vec3<f32> {
+        let scalar_method = x.recip();
+        let scalar_ufcs = f32::recip(x);
+        let std_ufcs = std::f32::recip(x);
+        let core_ufcs = core::f32::recip(x);
+        let helper_ufcs = crate::math::recip(x);
+        let vector_method = normal.recip();
+        vector_method * (scalar_method + scalar_ufcs + std_ufcs + core_ufcs + helper_ufcs)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "scalar_method = (1.0 / x);" in result
+    assert "scalar_ufcs = (1.0 / x);" in result
+    assert "std_ufcs = (1.0 / x);" in result
+    assert "core_ufcs = (1.0 / x);" in result
+    assert "helper_ufcs = (1.0 / x);" in result
+    assert "vector_method = (1.0 / normal);" in result
+    assert ".recip(" not in result
+    assert "std::f32::recip" not in result
+    assert "core::f32::recip" not in result
+    assert "crate::math::recip" not in result
+
+    ast = crosstl.translator.parse(result)
+    glsl = GLSLCodeGen().generate(ast)
+    assert ".recip(" not in glsl
+    assert "::recip(" not in glsl
+    assert "1.0 / x" in glsl
+    assert "1.0 / normal" in glsl
+
+
+def test_user_defined_recip_call_does_not_lower_to_division():
+    code = """
+    fn recip(x: f32) -> f32 {
+        x + 1.0
+    }
+
+    fn call_recip(x: f32) -> f32 {
+        recip(x)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "float recip(float x)" in result
+    assert "return recip(x);" in result
+    assert "return (1.0 / x);" not in result
 
 
 def test_rounding_intrinsic_calls_convert_to_crossgl_intrinsics():

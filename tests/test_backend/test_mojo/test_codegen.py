@@ -2334,6 +2334,23 @@ def test_generic_simd_constructor_codegen():
     assert "let color = vec4(1.0, 2.0, 3.0, 4.0);" in generated_code
 
 
+def test_float64_simd_constructor_from_modular_docs_reparses_crossgl():
+    code = """
+    fn reduce_example() -> SIMD[DType.float64, 4]:
+        var data = SIMD[DType.float64, 4](10.5, 20.3, 30.1, 40.7)
+        return data
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "dvec4 reduce_example()" in generated_code
+    assert "var data = dvec4(10.5, 20.3, 30.1, 40.7);" in generated_code
+    assert "SIMD[DType.float64, 4]" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_generic_inline_array_constructor_codegen():
     code = """
     fn main():

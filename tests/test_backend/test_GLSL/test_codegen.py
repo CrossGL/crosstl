@@ -376,6 +376,87 @@ def test_codegen_explicit_typecast_from_glslang_nv_extension():
     assert "func(float(u_0), vec2(v4_0));" in output
 
 
+def test_codegen_two_argument_atan_from_khronos_docs_maps_to_crossgl_atan2():
+    # Khronos GLSL docs define atan(y, x) as the quadrant-aware form; CrossGL
+    # uses atan2 for that portable builtin spelling.
+    code = textwrap.dedent("""
+        #version 450
+
+        layout(location = 0) in vec2 direction;
+        layout(location = 0) out vec4 fragColor;
+
+        void main()
+        {
+            float angle = atan(direction.y, direction.x);
+            float slope = atan(direction.y);
+            fragColor = vec4(angle, slope, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float angle = atan2(input.direction.y, input.direction.x);" in crossgl
+    assert "float slope = atan(input.direction.y);" in crossgl
+    assert "atan(input.direction.y, input.direction.x)" not in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "float angle = atan(direction.y, direction.x);" in glsl
+    assert "float slope = atan(direction.y);" in glsl
+
+
+def test_codegen_user_defined_two_argument_atan_is_preserved():
+    code = textwrap.dedent("""
+        #version 450
+
+        layout(location = 0) in vec2 direction;
+        layout(location = 0) out vec4 fragColor;
+
+        float atan(float y, float x)
+        {
+            return y + x;
+        }
+
+        void main()
+        {
+            float angle = atan(direction.y, direction.x);
+            fragColor = vec4(angle, 0.0, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float atan(float y, float x)" in crossgl
+    assert "float angle = atan(input.direction.y, input.direction.x);" in crossgl
+    assert "atan2(" not in crossgl
+
+
+def test_codegen_user_defined_one_argument_atan_does_not_shadow_builtin_two_argument_atan():
+    code = textwrap.dedent("""
+        #version 450
+
+        layout(location = 0) in vec2 direction;
+        layout(location = 0) out vec4 fragColor;
+
+        float atan(float y)
+        {
+            return y + 1.0;
+        }
+
+        void main()
+        {
+            float custom = atan(direction.y);
+            float angle = atan(direction.y, direction.x);
+            fragColor = vec4(angle, custom, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float atan(float y)" in crossgl
+    assert "float custom = atan(input.direction.y);" in crossgl
+    assert "float angle = atan2(input.direction.y, input.direction.x);" in crossgl
+
+
 def test_codegen_resource_function_descriptors():
     converter = GLSLToCrossGLConverter(shader_type="fragment")
 

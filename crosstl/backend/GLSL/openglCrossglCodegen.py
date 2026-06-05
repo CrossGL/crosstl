@@ -534,6 +534,7 @@ class GLSLToCrossGLConverter:
         self.task_payload_shared_names = set()
         self.variable_type_scopes = []
         self.function_name_renames = {}
+        self.user_function_arities = set()
 
     def indent(self):
         return self.indent_str * self.indent_level
@@ -1365,6 +1366,14 @@ class GLSLToCrossGLConverter:
         self.function_name_renames = self.collect_function_name_renames(
             getattr(node, "functions", []) or []
         )
+        self.user_function_arities = {
+            (
+                getattr(function, "name", None),
+                len(getattr(function, "params", []) or []),
+            )
+            for function in getattr(node, "functions", []) or []
+            if getattr(function, "name", None)
+        }
         self.prepare_structured_buffers(node)
 
         for var in node.io_variables:
@@ -2400,11 +2409,7 @@ class GLSLToCrossGLConverter:
             return f"{name}{{{args}}}"
 
         descriptor = self.resource_function_descriptor(name)
-        mapped_name = (
-            descriptor["function"]
-            if descriptor is not None
-            else self.function_map.get(name, self.format_function_name(name))
-        )
+        mapped_name = self.mapped_function_name(name, node.args, descriptor)
 
         if descriptor is not None and descriptor.get("resource") == "texture":
             args = ", ".join(
@@ -2414,6 +2419,17 @@ class GLSLToCrossGLConverter:
             args = ", ".join(self.generate_expression(arg) for arg in node.args)
 
         return f"{mapped_name}({args})"
+
+    def mapped_function_name(self, name, args, descriptor=None):
+        if descriptor is not None:
+            return descriptor["function"]
+        if (
+            name == "atan"
+            and len(args) == 2
+            and (name, len(args)) not in self.user_function_arities
+        ):
+            return "atan2"
+        return self.function_map.get(name, self.format_function_name(name))
 
     def generate_ray_query_method_call(self, name, args):
         if name in self.RAY_QUERY_SIMPLE_METHODS and args:

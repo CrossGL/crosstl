@@ -839,6 +839,32 @@ class TestHipCodeGen:
         assert "out[1] = atan2(y, x);" in result
         assert "atan2f" not in result
 
+    def test_rocm_docs_scalar_fma_builtins_convert_to_crossgl_fma(self):
+        # Source: ROCm HIP math API, HIP 6.4.43484 docs.
+        # URL: https://rocm.docs.amd.com/projects/HIP/en/docs-6.4.3/reference/math_api.html
+        code = """
+        __global__ void fused(float* out, double* precise, float a, float b, float c,
+                              double x, double y, double z) {
+            out[0] = fmaf(a, b, c);
+            out[1] = __fmaf_rn(a, b, c);
+            precise[0] = __fma_rn(x, y, z);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = fma(a, b, c);" in result
+        assert "out[1] = fma(a, b, c);" in result
+        assert "precise[0] = fma(x, y, z);" in result
+        assert "fmaf" not in result
+        assert "__fma" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_threadfence_converts_to_crossgl_memory_barrier(self):
         code = """
         __global__ void fence(float* out) {

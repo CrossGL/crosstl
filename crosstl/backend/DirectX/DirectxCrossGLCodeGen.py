@@ -3243,6 +3243,10 @@ class HLSLToCrossGLConverter:
                 right = self.maybe_parenthesize(expr.args[1], rendered_args[1])
                 addend = self.maybe_parenthesize(expr.args[2], rendered_args[2])
                 return f"(({left} * {right}) + {addend})"
+            if func_name == "dst" and len(expr.args) == 2:
+                src0 = self.maybe_parenthesize(expr.args[0], rendered_args[0])
+                src1 = self.maybe_parenthesize(expr.args[1], rendered_args[1])
+                return f"vec4(1.0, {src0}.y * {src1}.y, {src0}.z, {src1}.w)"
             if func_name == "saturate":
                 if expr.args:
                     return f"clamp({self.generate_expression(expr.args[0], is_main)}, 0.0, 1.0)"

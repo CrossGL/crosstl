@@ -677,6 +677,28 @@ def test_codegen_mad_intrinsic_from_microsoft_docs_imports_to_arithmetic_express
     assert "((base + 1.0) * scale) + bias" in glsl
 
 
+def test_codegen_dst_intrinsic_from_microsoft_docs_imports_to_distance_vector_expression():
+    # Sources: Microsoft Learn HLSL dst intrinsic and vertex-shader dst instruction.
+    # URLs:
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dst
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dst---vs
+    crossgl = generate_crossgl("""
+        float4 main(float4 src0 : TEXCOORD0, float4 src1 : TEXCOORD1) : SV_Target0 {
+            float4 distanceVector = dst(src0, src1);
+            return distanceVector;
+        }
+    """)
+
+    assert (
+        "vec4 distanceVector = vec4(1.0, src0.y * src1.y, src0.z, src1.w);" in crossgl
+    )
+    assert "dst(" not in crossgl
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "dst(" not in glsl
+    assert "vec4 distanceVector = vec4(1.0, (src0.y * src1.y), src0.z, src1.w);" in glsl
+
+
 def test_codegen_bit_scan_intrinsics_from_microsoft_docs_reparse():
     # Source: Microsoft Learn HLSL intrinsic functions and firstbitlow docs.
     # URLs:

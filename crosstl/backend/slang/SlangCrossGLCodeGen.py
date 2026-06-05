@@ -1154,6 +1154,22 @@ class SlangToCrossGLConverter:
         right = self.maybe_parenthesize_expression(expr.args[1], right)
         return f"({left} * {right})"
 
+    def generate_mad_call(self, expr, is_main):
+        if (
+            expr.name != "mad"
+            or len(expr.args) != 3
+            or expr.name in self.user_function_names
+        ):
+            return None
+
+        multiplier = self.generate_expression(expr.args[0], is_main)
+        multiplicand = self.generate_expression(expr.args[1], is_main)
+        addend = self.generate_expression(expr.args[2], is_main)
+        multiplier = self.maybe_parenthesize_expression(expr.args[0], multiplier)
+        multiplicand = self.maybe_parenthesize_expression(expr.args[1], multiplicand)
+        addend = self.maybe_parenthesize_expression(expr.args[2], addend)
+        return f"(({multiplier} * {multiplicand}) + {addend})"
+
     def generate_expression(self, expr, is_main=False):
         """Render a Slang backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
@@ -1192,6 +1208,9 @@ class SlangToCrossGLConverter:
             mul_call = self.generate_hlsl_mul_call(expr, is_main)
             if mul_call is not None:
                 return mul_call
+            mad_call = self.generate_mad_call(expr, is_main)
+            if mad_call is not None:
+                return mad_call
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )

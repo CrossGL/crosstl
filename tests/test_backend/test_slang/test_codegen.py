@@ -2266,6 +2266,47 @@ def test_user_defined_mul_function_is_not_lowered_to_binary_operator():
     assert "return (1.0 * 2.0);" not in generated_code
 
 
+def test_slang_mad_builtin_from_core_module_reference_lowers_to_arithmetic():
+    # Source: Slang core module reference for mad.
+    # URL: https://docs.shader-slang.org/en/latest/external/core-module-reference/global-decls/mad.html
+    code = """
+    void main() {
+        float value = mad(x + 1.0, scale, bias);
+        float3 color = mad(float3(0.5, 0.6, 0.7), tint, offset);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float value = (((x + 1.0) * scale) + bias);" in generated_code
+    assert "vec3 color = ((vec3(0.5, 0.6, 0.7) * tint) + offset);" in generated_code
+    assert "mad(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_user_defined_mad_function_is_not_lowered_to_arithmetic():
+    code = """
+    float mad(float a, float b, float c) {
+        return a + b + c;
+    }
+
+    float main() {
+        return mad(1.0, 2.0, 3.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float mad(float a, float b, float c)" in generated_code
+    assert "return mad(1.0, 2.0, 3.0);" in generated_code
+    assert "return ((1.0 * 2.0) + 3.0);" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_slang_rsqrt_builtin_lowers_to_crossgl_inversesqrt():
     code = """
     void main() {
