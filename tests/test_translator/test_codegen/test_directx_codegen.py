@@ -30952,6 +30952,60 @@ def test_directx_gather_red_green_blue_alpha_from_component_literals():
     assert "textureGather(" not in generated_code
 
 
+def test_directx_component_gathers_and_uav_store_in_one_pass():
+    shader = """
+    shader GatherAndStore {
+        sampler2D colorMap;
+        sampler linearSampler;
+        image2D outImage;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            ivec2 pixel @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 red = textureGather(colorMap, linearSampler, input.uv, 0);
+                vec4 green = textureGather(colorMap, linearSampler, input.uv, 1);
+                vec4 blue = textureGather(colorMap, linearSampler, input.uv, 2);
+                vec4 alpha = textureGather(colorMap, linearSampler, input.uv, 3);
+                vec4 offsetGreen = textureGatherOffset(
+                    colorMap,
+                    linearSampler,
+                    input.uv,
+                    input.offset,
+                    1
+                );
+                vec4 color = red + green + blue + alpha + offsetGreen;
+                imageStore(outImage, input.pixel, color);
+                return color;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2D colorMap : register(t0);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "RWTexture2D<float4> outImage : register(u0);" in generated_code
+    assert "colorMap.GatherRed(linearSampler, input.uv)" in generated_code
+    assert "colorMap.GatherGreen(linearSampler, input.uv)" in generated_code
+    assert "colorMap.GatherBlue(linearSampler, input.uv)" in generated_code
+    assert "colorMap.GatherAlpha(linearSampler, input.uv)" in generated_code
+    assert (
+        "colorMap.GatherGreen(linearSampler, input.uv, input.offset)" in generated_code
+    )
+    assert "outImage[input.pixel] = color;" in generated_code
+    assert "textureGather(" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
 def test_directx_gather_offset_emits_gather_with_offset_parameter():
     shader = """
     shader GatherOffsetTest {

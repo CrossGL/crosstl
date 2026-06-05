@@ -21581,6 +21581,94 @@ class TestVulkanSPIRVCodeGen:
         assert f"OpImageRead {uint_type.group(1)}" in spv_code
         assert "WARNING" not in spv_code
 
+    def test_separate_texture_sampler_arrays_use_sampled_image_nonuniform(
+        self, tmp_path
+    ):
+        source_code = """
+        shader Resources {
+            texture2D textures[8];
+            sampler samplers[8];
+
+            vec4 sampleMaterial(
+                texture2D textures[8],
+                sampler samplers[8],
+                int materialIndex,
+                vec2 uv
+            ) {
+                return texture(
+                    textures[nonuniformEXT(materialIndex)],
+                    samplers[nonuniformEXT(materialIndex)],
+                    uv
+                );
+            }
+
+            compute {
+                void main() {
+                    int materialIndex = 1;
+                    vec2 uv = vec2(0.5, 0.25);
+                    vec4 sampled = sampleMaterial(textures, samplers, materialIndex, uv);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen(
+            include_resource_interface_variables=True
+        ).generate(Parser(Lexer(source_code).tokens).parse())
+
+        image_type = re.search(
+            r"(%\d+) = OpTypeImage %\d+ 2D 0 0 0 1 Unknown", spv_code
+        )
+        sampler_type = re.search(r"(%\d+) = OpTypeSampler", spv_code)
+
+        assert image_type is not None
+        assert sampler_type is not None
+
+        sampled_image_type = re.search(
+            r"(%\d+) = OpTypeSampledImage " rf"{image_type.group(1)}",
+            spv_code,
+        )
+
+        assert sampled_image_type is not None
+        assert "OpCapability ShaderNonUniform" in spv_code
+        assert 'OpExtension "SPV_EXT_descriptor_indexing"' in spv_code
+        assert spv_code.count("NonUniform") >= 5
+        assert "OpSampledImage" in spv_code
+        assert re.search(
+            rf"OpSampledImage {re.escape(sampled_image_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert "OpImageSampleExplicitLod" in spv_code
+        assert re.search(
+            rf"OpImageSampleExplicitLod %\d+ %\d+ %\d+ Lod %\d+",
+            spv_code,
+        )
+
+        for resource_name, element_type in [
+            ("textures", image_type.group(1)),
+            ("samplers", sampler_type.group(1)),
+        ]:
+            array_type = re.search(
+                rf"(%\d+) = OpTypeArray {re.escape(element_type)} %\d+",
+                spv_code,
+            )
+            variable = spirv_named_variable(
+                spv_code, resource_name, storage_class="UniformConstant"
+            )
+            element_pointer = re.search(
+                rf"(%\d+) = OpTypePointer UniformConstant {re.escape(element_type)}",
+                spv_code,
+            )
+
+            assert array_type is not None
+            assert element_pointer is not None
+            assert f"OpAccessChain {element_pointer.group(1)}" in spv_code
+            assert f"OpLoad {array_type.group(1)} {variable}" not in spv_code
+
+        assert "OpTexture" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.2")
+
     def test_resource_array_parameters_pass_and_index_uniform_constant_pointers(self):
         source_code = """
         shader Resources {

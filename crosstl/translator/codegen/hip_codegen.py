@@ -252,6 +252,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "double": "double",
             "bool": "bool",
             "void": "void",
+            "i8": "char",
+            "u8": "unsigned char",
+            "i16": "short",
+            "u16": "unsigned short",
+            "i32": "int",
+            "u32": "unsigned int",
+            "i64": "long long",
+            "u64": "unsigned long long",
+            "f32": "float",
+            "f64": "double",
             "uint": "unsigned int",
             "str": "int",
             # Vector types
@@ -1708,8 +1718,29 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.current_function_is_kernel_entry = False
 
         qualifiers = []
-        if hasattr(node, "qualifiers") and node.qualifiers:
-            for qualifier in node.qualifiers:
+        source_qualifiers = list(getattr(node, "qualifiers", []) or [])
+        stage_attribute_names = {
+            "compute",
+            "fragment",
+            "geometry",
+            "kernel",
+            "task",
+            "mesh",
+            "vertex",
+        } | self.hip_ray_stage_names()
+        source_qualifiers.extend(
+            attribute_name
+            for attribute_name in (
+                getattr(attribute, "name", None)
+                for attribute in getattr(node, "attributes", []) or []
+            )
+            if normalize_stage_name(attribute_name) in stage_attribute_names
+        )
+        source_qualifiers = [
+            qualifier for qualifier in source_qualifiers if qualifier is not None
+        ]
+        if source_qualifiers:
+            for qualifier in source_qualifiers:
                 qualifier_name = normalize_stage_name(qualifier)
                 if qualifier_name in {"kernel", "compute"}:
                     qualifiers.append("__global__")
@@ -2120,6 +2151,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         qualifier = getattr(node, "qualifier", None)
         if qualifier:
             qualifiers.append(qualifier)
+        qualifiers.extend(
+            getattr(attribute, "name", None)
+            for attribute in getattr(node, "attributes", []) or []
+        )
         supported_stage_names = (
             {
                 "compute",

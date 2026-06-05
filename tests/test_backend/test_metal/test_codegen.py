@@ -1829,24 +1829,40 @@ def test_codegen_function_constants_and_argument_buffers():
     using namespace metal;
 
     struct Args {
-        float4x4 mvp;
+        texture2d<float> albedo [[id(0)]];
+        sampler linearSampler [[id(1)]];
+        device float* weights [[id(2)]];
     };
 
-    constant Args& args [[buffer(0), id(3), argument_buffer]];
-    constant int gMode [[function_constant(0)]];
+    constant Args& args [[buffer(4), id(3), argument_buffer]];
+    constant bool useFastPath [[function_constant(7)]];
 
-    vertex float4 vertex_main(float3 pos [[attribute(0)]]) {
-        if (gMode == 1) {
-            return args.mvp * float4(pos, 1.0);
+    fragment float4 fragment_main(float2 uv [[stage_in]]) {
+        if (useFastPath) {
+            return args.albedo.sample(args.linearSampler, uv) * args.weights[0];
         }
-        return float4(pos, 1.0);
+        return float4(0.0);
     }
     """
-    result = convert(code)
-    assert "@buffer(0)" in result
-    assert "@id(3)" in result
-    assert "@argument_buffer" in result
-    assert "@function_constant(0)" in result
+    crossgl = convert(code)
+    assert "@buffer(4)" in crossgl
+    assert "@id(3)" in crossgl
+    assert "@argument_buffer" in crossgl
+    assert "@function_constant(7)" in crossgl
+    assert "@id(0)" in crossgl
+    assert "@id(1)" in crossgl
+    assert "@id(2)" in crossgl
+
+    regenerated = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "constant Args& args" in regenerated
+    assert "[[buffer(4)]]" in regenerated
+    assert "[[id(3)]]" in regenerated
+    assert "[[argument_buffer]]" in regenerated
+    assert "[[function_constant(7)]]" in regenerated
+    assert "texture2d<float> albedo [[id(0)]];" in regenerated
+    assert "sampler linearSampler [[id(1)]];" in regenerated
+    assert "device float* weights [[id(2)]];" in regenerated
+    assert "constant Args args" not in regenerated
 
 
 def test_codegen_argument_buffer_array_of_device_pointers_from_apple_sample():

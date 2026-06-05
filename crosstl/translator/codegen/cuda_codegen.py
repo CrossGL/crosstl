@@ -1148,24 +1148,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.stage_builtin_aliases = {}
         self.current_function_is_kernel_entry = False
         qualifiers = []
+        stage_qualifiers = self.function_stage_qualifier_names(node)
 
-        if hasattr(node, "qualifiers") and node.qualifiers:
-            for qualifier in node.qualifiers:
-                qualifier_name = normalize_stage_name(qualifier)
+        if stage_qualifiers:
+            for qualifier_name in stage_qualifiers:
                 if qualifier_name == "compute":
                     qualifiers.append("__global__")
                 elif qualifier_name in ["vertex", "fragment"]:
                     qualifiers.append("__device__")
                 else:
                     qualifiers.append("__device__")
-        elif hasattr(node, "qualifier") and node.qualifier:
-            qualifier_name = normalize_stage_name(node.qualifier)
-            if qualifier_name == "compute":
-                qualifiers.append("__global__")
-            elif qualifier_name in ["vertex", "fragment"]:
-                qualifiers.append("__device__")
-            else:
-                qualifiers.append("__device__")
         else:
             qualifiers.append("__device__")
 
@@ -1737,10 +1729,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def function_stage_name(self, node):
         if self.current_stage_name:
             return self.current_stage_name
-        qualifiers = list(getattr(node, "qualifiers", []) or [])
-        qualifier = getattr(node, "qualifier", None)
-        if qualifier:
-            qualifiers.append(qualifier)
+        for qualifier_name in self.function_stage_qualifier_names(node):
+            return qualifier_name
+        return None
+
+    def function_stage_qualifier_names(self, node):
+        """Return normalized stage qualifiers from legacy qualifiers and attributes."""
         supported_stage_names = {
             "compute",
             "fragment",
@@ -1749,11 +1743,23 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "tessellation_evaluation",
             "vertex",
         } | self.cuda_mesh_task_stage_names()
-        for qualifier in qualifiers:
-            qualifier_name = normalize_stage_name(qualifier)
-            if qualifier_name in supported_stage_names:
-                return qualifier_name
-        return None
+        qualifiers = list(getattr(node, "qualifiers", []) or [])
+        qualifier = getattr(node, "qualifier", None)
+        if qualifier:
+            qualifiers.append(qualifier)
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name:
+                qualifiers.append(attr_name)
+
+        return [
+            qualifier_name
+            for qualifier_name in (
+                normalize_stage_name(qualifier) for qualifier in qualifiers
+            )
+            if qualifier_name in supported_stage_names
+        ]
 
     def cuda_stage_attribute_arguments(self, func, attribute_name):
         requested = str(attribute_name).strip().lower().replace("-", "_")

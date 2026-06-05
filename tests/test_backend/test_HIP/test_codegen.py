@@ -1,3 +1,5 @@
+import re
+
 from crosstl import translate
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.backend.HIP.HipLexer import HipLexer
@@ -16065,6 +16067,44 @@ class TestHipCodeGen:
             "pub fn kernel(mut data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
         )
         assert "data[indices[0] as usize] = value;" in result
+
+    def test_native_kernel_roundtrip_to_hip_emits_native_types_and_builtins(
+        self, tmp_path
+    ):
+        code = """
+        #include <hip/hip_runtime.h>
+
+        __global__ void scale_mask(float* out,
+                                   const float* in,
+                                   unsigned int* flags,
+                                   unsigned int n,
+                                   float scale) {
+            unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+            if (tid < n) {
+                float value = in[tid] * scale;
+                flags[tid] = tid & 255u;
+                out[tid] = value;
+            }
+        }
+        """
+        source_path = tmp_path / "scale_mask.hip"
+        source_path.write_text(code, encoding="utf-8")
+
+        result = translate(str(source_path), backend="hip", format_output=False)
+
+        assert "__global__ void scale_mask(" in result
+        assert "float* out" in result
+        assert "float* in_" in result
+        assert "unsigned int* flags" in result
+        assert "unsigned int n" in result
+        assert "float scale" in result
+        assert "unsigned int tid = ((blockIdx.x * blockDim.x) + threadIdx.x);" in result
+        assert "float value = (in_[tid] * scale);" in result
+        assert "flags[tid] = (tid & 255u);" in result
+        assert not re.search(r"\b(?:f32|u32)\b", result)
+        assert "gl_LocalInvocationID" not in result
+        assert "gl_WorkGroupID" not in result
+        assert "gl_WorkGroupSize" not in result
 
     def test_qualified_declaration_conversion(self):
         code = """

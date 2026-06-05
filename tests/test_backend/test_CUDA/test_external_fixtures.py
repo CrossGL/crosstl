@@ -1,3 +1,7 @@
+import re
+import shutil
+import subprocess
+
 from crosstl.backend.CUDA.CudaAst import (
     AtomicOperationNode,
     ForNode,
@@ -12,6 +16,7 @@ from crosstl.backend.CUDA.CudaAst import (
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
+from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -114,12 +119,70 @@ def assert_crossgl_reparse(source):
     CrossGLParser(CrossGLLexer(source).tokens).parse()
 
 
+def crossgl_to_cuda(source):
+    return CudaCodeGen().generate(CrossGLParser(CrossGLLexer(source).tokens).parse())
+
+
+def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
+    nvcc = shutil.which("nvcc")
+    if nvcc is None:
+        return False
+
+    source_path = tmp_path / "roundtrip.cu"
+    object_path = tmp_path / "roundtrip.o"
+    source_path.write_text(cuda_code, encoding="utf-8")
+
+    result = subprocess.run(
+        [nvcc, "-std=c++17", "-c", str(source_path), "-o", str(object_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr + "\n\n" + cuda_code
+    return True
+
+
 def test_external_fixture_metadata_records_repositories_and_commits():
     assert all(
         sample["repo"].startswith("https://github.com/") for sample in EXTERNAL_SAMPLES
     )
     assert all(len(sample["commit"]) == 40 for sample in EXTERNAL_SAMPLES)
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
+
+
+def test_cuda_native_saxpy_round_trip_regenerates_native_cuda(tmp_path):
+    source = """
+    __global__ void saxpy(float* y, const float* x, float a, unsigned int n) {
+        unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx < n) {
+            y[idx] = a * x[idx] + y[idx];
+        }
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+    regenerated_cuda = crossgl_to_cuda(crossgl)
+
+    assert "f32 a" in crossgl
+    assert "u32 n" in crossgl
+    assert "gl_WorkGroupID.x" in crossgl
+    assert "gl_WorkGroupSize.x" in crossgl
+    assert "gl_LocalInvocationID.x" in crossgl
+
+    assert 'extern "C" __global__ void saxpy(' in regenerated_cuda
+    assert re.search(r"\bfloat\s+a\b", regenerated_cuda)
+    assert re.search(r"\bunsigned\s+int\s+n\b", regenerated_cuda)
+    assert re.search(r"\bunsigned\s+int\s+idx\b", regenerated_cuda)
+    assert "threadIdx.x" in regenerated_cuda
+    assert "blockIdx.x" in regenerated_cuda
+    assert "blockDim.x" in regenerated_cuda
+    assert "gl_GlobalInvocationID" not in regenerated_cuda
+    assert "gl_WorkGroupID" not in regenerated_cuda
+    assert "gl_WorkGroupSize" not in regenerated_cuda
+    assert "gl_LocalInvocationID" not in regenerated_cuda
+    assert not re.search(r"\bf32\b", regenerated_cuda)
+    assert not re.search(r"\bu32\b", regenerated_cuda)
+
+    compile_cuda_if_nvcc_available(regenerated_cuda, tmp_path)
 
 
 def test_tiny_cuda_nn_unroll_macro_markers_before_for_loops_parse_and_codegen():

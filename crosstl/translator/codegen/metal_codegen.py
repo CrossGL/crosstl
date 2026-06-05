@@ -1459,6 +1459,23 @@ class MetalCodeGen:
             if self.is_metal_function_constant_variable(node):
                 continue
 
+            if self.is_metal_argument_buffer_global(node):
+                binding = self.metal_argument_buffer_binding(node)
+                declaration = self.format_metal_argument_buffer_global(
+                    node, vtype, var_name
+                )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "buffer",
+                    binding,
+                    resource_count,
+                    var_name,
+                )
+                code += declaration
+                buffer_register = max(buffer_register, binding + resource_count)
+                continue
+
             lowered_block = self.lowered_glsl_buffer_blocks.get(var_name)
             if lowered_block is not None:
                 binding = self.explicit_resource_binding_index(
@@ -2020,6 +2037,15 @@ class MetalCodeGen:
     def is_metal_function_constant_variable(self, node):
         return bool(self.metal_function_constant_attributes(node))
 
+    def normalized_metal_abi_attribute_name(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return None
+        normalized = str(attr_name).lower()
+        if normalized.startswith("metal_") or normalized.startswith("msl_"):
+            normalized = normalized.split("_", 1)[1]
+        return normalized
+
     def metal_function_constant_id(self, node):
         attributes = self.metal_function_constant_attributes(node)
         if not attributes:
@@ -2085,13 +2111,62 @@ class MetalCodeGen:
         return False
 
     def is_metal_struct_member_abi_attribute(self, attr):
-        attr_name = getattr(attr, "name", None)
-        if not attr_name:
-            return False
-        normalized = str(attr_name).lower()
-        if normalized.startswith("metal_") or normalized.startswith("msl_"):
-            normalized = normalized.split("_", 1)[1]
-        return normalized == "id"
+        return self.normalized_metal_abi_attribute_name(attr) == "id"
+
+    def is_metal_argument_buffer_global(self, node):
+        attributes = getattr(node, "attributes", []) or []
+        return any(
+            self.normalized_metal_abi_attribute_name(attr) == "argument_buffer"
+            for attr in attributes
+        )
+
+    def format_metal_argument_buffer_global(self, node, mapped_type, name):
+        if not name:
+            return None
+
+        attributes = []
+        seen_attributes = set()
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = self.normalized_metal_abi_attribute_name(attr)
+            if attr_name not in {"buffer", "id", "argument_buffer"}:
+                continue
+            if attr_name in seen_attributes:
+                raise ValueError(
+                    f"Metal argument buffer global '{name}' has multiple "
+                    f"{attr_name} attributes"
+                )
+            seen_attributes.add(attr_name)
+
+            arguments = getattr(attr, "arguments", []) or []
+            if attr_name in {"buffer", "id"}:
+                attr_value = (
+                    self.binding_index_value(arguments[0])
+                    if len(arguments) == 1
+                    else None
+                )
+                if attr_value is None:
+                    raise ValueError(
+                        f"Metal argument buffer global '{name}' requires an "
+                        f"integer {attr_name} attribute"
+                    )
+                attributes.append(f"[[{attr_name}({attr_value})]]")
+            else:
+                attributes.append("[[argument_buffer]]")
+
+        if "buffer" not in seen_attributes:
+            raise ValueError(
+                f"Metal argument buffer global '{name}' requires a buffer attribute"
+            )
+
+        base_type = str(mapped_type).strip().rstrip("&").strip()
+        abi_attributes = " ".join(attributes)
+        qualifier = self.metal_unused_declaration_qualifier("constant")
+        return f"{qualifier} {base_type}& {name} {abi_attributes};\n"
+
+    def metal_argument_buffer_binding(self, node):
+        if not self.is_metal_argument_buffer_global(node):
+            return None
+        return self.explicit_resource_binding_index(node, {"buffer"}, ("b",))
 
     def format_metal_struct_member_abi_attributes(self, member):
         attributes = []
@@ -2102,9 +2177,7 @@ class MetalCodeGen:
                 continue
 
             arguments = getattr(attr, "arguments", []) or []
-            attr_name = str(getattr(attr, "name", "")).lower()
-            if attr_name.startswith("metal_") or attr_name.startswith("msl_"):
-                attr_name = attr_name.split("_", 1)[1]
+            attr_name = self.normalized_metal_abi_attribute_name(attr)
 
             if attr_name in seen_attributes:
                 raise ValueError(

@@ -1008,7 +1008,7 @@ class MetalToCrossGLConverter:
                         self.global_storage_texture_names.add(glob.name)
                     if self.structured_buffer_pointer_type(glob):
                         self.global_structured_buffer_names.add(glob.name)
-                    decl = self.format_decl(glob, include_semantic=True)
+                    decl = self.format_global_decl(glob, include_semantic=True)
                     code += f"    {decl};\n"
             code += "\n"
 
@@ -1227,6 +1227,16 @@ class MetalToCrossGLConverter:
         if access:
             parts.append(access)
         return " ".join(part for part in parts if part)
+
+    def format_global_decl(self, var, include_semantic=False):
+        declaration = self.format_decl(var, include_semantic=include_semantic)
+        attributes = getattr(var, "attributes", []) or []
+        if any(
+            isinstance(attr, AttributeNode) and attr.name == "argument_buffer"
+            for attr in attributes
+        ):
+            declaration = re.sub(r"(?<=\S)&\s+(\w+)", r" \1", declaration, count=1)
+        return declaration
 
     def generate_function(self, func, indent=2, stage_entry=False):
         """Render one Metal function node as a CrossGL function block."""

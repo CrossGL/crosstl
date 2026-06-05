@@ -103,8 +103,9 @@ class SpirvId:
 class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
-    def __init__(self):
+    def __init__(self, *, include_resource_interface_variables: bool = False):
         """Initialize an empty SPIR-V module-generation state."""
+        self.include_resource_interface_variables = include_resource_interface_variables
         self.reset_generation_state()
 
     def reset_generation_state(self):
@@ -162,6 +163,7 @@ class VulkanSPIRVCodeGen:
         self.precise_local_variables = set()
         self.no_contraction_ids = set()
         self.precise_expression_depth = 0
+        self.non_uniform_ids = set()
 
         self.functions = {}
         self.function_nodes = {}
@@ -267,6 +269,22 @@ class VulkanSPIRVCodeGen:
     def require_extension(self, extension: str):
         """Request a SPIR-V extension for instructions emitted later."""
         self.required_extensions.add(extension)
+
+    def require_non_uniform_descriptor_indexing(self):
+        self.require_capability("ShaderNonUniform")
+        self.require_extension("SPV_EXT_descriptor_indexing")
+
+    def is_non_uniform_value(self, value_id) -> bool:
+        id_number = value_id.id if isinstance(value_id, SpirvId) else value_id
+        return id_number in self.non_uniform_ids
+
+    def mark_non_uniform_result(self, value_id):
+        id_number = value_id.id if isinstance(value_id, SpirvId) else value_id
+        if id_number in self.non_uniform_ids:
+            return
+        self.require_non_uniform_descriptor_indexing()
+        self.non_uniform_ids.add(id_number)
+        self.decorations.append(f"OpDecorate %{id_number} NonUniform")
 
     def require_compute_derivatives(self):
         """Enable compute shader derivatives for derivative-dependent image ops."""
@@ -936,6 +954,8 @@ class VulkanSPIRVCodeGen:
         resource_metadata = self.resource_metadata_for_pointer(variable_id)
         if resource_metadata is not None:
             self.resource_type_metadata[id_value] = resource_metadata
+        if self.is_non_uniform_value(variable_id):
+            self.mark_non_uniform_result(spirv_id)
         return spirv_id
 
     def convert_value_for_store(
@@ -1202,6 +1222,10 @@ class VulkanSPIRVCodeGen:
         )
 
         spirv_id = SpirvId(id_value, result_type.type)
+        if self.is_non_uniform_value(base_id) or any(
+            self.is_non_uniform_value(index) for index in indices
+        ):
+            self.mark_non_uniform_result(spirv_id)
         return spirv_id
 
     def composite_extract(
@@ -2662,10 +2686,12 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId], extra_arg_count: int = 0
     ):
         coord_index = 1
+        sampler_id = None
         if len(args) > 1:
             sampler_metadata = self.resource_metadata_for_value(args[1])
             if sampler_metadata and sampler_metadata.get("kind") == "sampler":
                 coord_index = 2
+                sampler_id = args[1]
 
         required_arg_count = coord_index + 1 + extra_arg_count
         if len(args) < required_arg_count:
@@ -2679,11 +2705,103 @@ class VulkanSPIRVCodeGen:
         coord_id = args[coord_index]
         extra_args = args[coord_index + 1 :]
         metadata = self.resource_metadata_for_value(sampled_image_id)
+        if metadata and metadata.get("kind") == "texture":
+            if sampler_id is None:
+                self.emit(
+                    f"; WARNING: {function_name} requires a sampler for separate "
+                    "texture operands"
+                )
+                return None
+            sampled_image_id = self.combine_texture_and_sampler(
+                function_name, sampled_image_id, sampler_id, metadata
+            )
+            if sampled_image_id is None:
+                return None
+            metadata = self.resource_metadata_for_value(sampled_image_id)
+
         if not metadata or metadata.get("kind") != "sampled_image":
             self.emit(f"; WARNING: {function_name} requires a sampled image operand")
             return None
 
         return sampled_image_id, coord_id, extra_args, metadata
+
+    def combine_texture_and_sampler(
+        self,
+        function_name: str,
+        texture_id: SpirvId,
+        sampler_id: SpirvId,
+        texture_metadata,
+    ) -> Optional[SpirvId]:
+        sampler_metadata = self.resource_metadata_for_value(sampler_id)
+        if not sampler_metadata or sampler_metadata.get("kind") != "sampler":
+            self.emit(f"; WARNING: {function_name} requires a sampler operand")
+            return None
+
+        image_type_id = texture_metadata.get("image_type_id")
+        if image_type_id is None:
+            image_type_id = self.value_types.get(texture_id.id, texture_id).id
+        sampled_image_type = self.register_sampled_image_type_for_image(
+            image_type_id, texture_metadata
+        )
+        if sampled_image_type is None:
+            self.emit(
+                f"; WARNING: {function_name} could not construct a sampled image "
+                "from separate texture and sampler operands"
+            )
+            return None
+
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpSampledImage %{sampled_image_type.id} "
+            f"%{texture_id.id} %{sampler_id.id}"
+        )
+        self.value_types[id_value] = sampled_image_type
+        self.resource_type_metadata[id_value] = (
+            self.sampled_image_metadata_from_texture(
+                sampled_image_type, texture_metadata
+            )
+        )
+        sampled_image = SpirvId(id_value, sampled_image_type.type)
+        if self.is_non_uniform_value(texture_id) or self.is_non_uniform_value(
+            sampler_id
+        ):
+            self.mark_non_uniform_result(sampled_image)
+        return sampled_image
+
+    def register_sampled_image_type_for_image(
+        self, image_type_id: int, texture_metadata
+    ) -> Optional[SpirvId]:
+        image_type = self.find_registered_type_by_id(image_type_id)
+        if image_type is None:
+            return None
+
+        type_name = f"{texture_metadata.get('type_name', 'texture')}_sampled"
+        cache_key = (
+            type_name,
+            "sampled_image",
+            texture_metadata.get("component_type", "float"),
+            texture_metadata.get("format", "Unknown"),
+            image_type_id,
+        )
+        if cache_key in self.resource_types:
+            return self.resource_types[cache_key]
+
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpTypeSampledImage %{image_type.id}")
+        sampled_image_type = SpirvId(id_value, SpirvType(type_name), type_name)
+        self.resource_types[cache_key] = sampled_image_type
+        self.resource_type_metadata[id_value] = (
+            self.sampled_image_metadata_from_texture(
+                sampled_image_type, texture_metadata
+            )
+        )
+        return sampled_image_type
+
+    def sampled_image_metadata_from_texture(self, sampled_image_type, texture_metadata):
+        metadata = dict(texture_metadata)
+        metadata["kind"] = "sampled_image"
+        metadata["type_name"] = sampled_image_type.type.base_type
+        return metadata
 
     def sampled_texture_excess_operand_warning(self, function_name: str) -> str:
         operation_operands = {
@@ -9330,6 +9448,66 @@ class VulkanSPIRVCodeGen:
     def resource_type_info(self, type_str: str):
         sampler_info = {
             "sampler": {"kind": "sampler"},
+            "texture1D": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "1D",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "texture2D": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "2D",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "texture3D": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "3D",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "textureCube": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "Cube",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "texture2DArray": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "2D",
+                "depth": 0,
+                "arrayed": 1,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "textureCubeArray": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "Cube",
+                "depth": 0,
+                "arrayed": 1,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
             "sampler1D": {
                 "kind": "sampled_image",
                 "component_type": "float",
@@ -18192,6 +18370,26 @@ class VulkanSPIRVCodeGen:
             return old_value
         return new_value
 
+    def process_non_uniform_function_call(self, function_name, args) -> SpirvId:
+        if len(args) != 1:
+            self.emit(f"; WARNING: {function_name} requires exactly one operand")
+            return self.register_constant(0, self.register_primitive_type("int"))
+
+        value = self.process_expression(args[0])
+        if value is None:
+            self.emit(f"; WARNING: {function_name} operand could not be evaluated")
+            return self.register_constant(0, self.register_primitive_type("int"))
+
+        result_type = self.value_types.get(value.id) or self.ensure_registered_type(
+            value.type
+        )
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpCopyObject %{result_type.id} %{value.id}")
+        copied = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        self.mark_non_uniform_result(copied)
+        return copied
+
     def process_expression(self, expr) -> Optional[SpirvId]:
         """Process a CrossGL expression."""
         if expr is None:
@@ -18224,6 +18422,7 @@ class VulkanSPIRVCodeGen:
                 return self.named_constants[expr]
             elif expr in self.global_variables:
                 var_id = self.global_variables[expr]
+                self.mark_interface_variable_if_needed(var_id)
                 self.mark_builtin_interface_variable(var_id)
                 return self.get_variable_value(var_id)
             elif expr in self.cbuffer_members:
@@ -18286,6 +18485,7 @@ class VulkanSPIRVCodeGen:
                 return self.named_constants[expr.name]
             elif expr.name in self.global_variables:
                 var_id = self.global_variables[expr.name]
+                self.mark_interface_variable_if_needed(var_id)
                 self.mark_builtin_interface_variable(var_id)
                 return self.get_variable_value(var_id)
             elif expr.name in self.cbuffer_members:
@@ -18420,6 +18620,9 @@ class VulkanSPIRVCodeGen:
                 callee_name = callee_expr.name
             elif isinstance(callee_expr, str):
                 callee_name = callee_expr
+
+            if isinstance(callee_name, str) and callee_name.lower() == "nonuniformext":
+                return self.process_non_uniform_function_call(callee_name, expr.args)
 
             if callee_name in {"SetVertex", "SetPrimitive"}:
                 return self.process_mesh_output_function_call(callee_name, expr.args)
@@ -18902,6 +19105,15 @@ class VulkanSPIRVCodeGen:
             if interface_variable.id == variable.id:
                 self.mark_function_interface_variable(interface_variable)
                 return
+        if (
+            self.include_resource_interface_variables
+            and variable.type.storage_class in {"Uniform", "UniformConstant"}
+            and any(
+                global_variable.id == variable.id
+                for global_variable in self.global_variables.values()
+            )
+        ):
+            self.mark_function_interface_variable(variable)
 
     def merge_function_interface_variables_from_callee(
         self, function_name: str, function_id: Optional[int] = None
@@ -19706,6 +19918,8 @@ class VulkanSPIRVCodeGen:
             self.require_extension("SPV_KHR_ray_tracing")
 
     def spirv_module_version(self) -> str:
+        if self.include_resource_interface_variables:
+            return "1.4"
         if "MeshShadingEXT" in self.required_capabilities:
             return "1.4"
         if "RayTracingKHR" in self.required_capabilities:
