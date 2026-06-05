@@ -1,6 +1,7 @@
 from crosstl.backend.CUDA.CudaAst import (
     AtomicOperationNode,
     FunctionCallNode,
+    ReturnNode,
     SharedMemoryNode,
     StructNode,
     TypeAliasNode,
@@ -1301,6 +1302,38 @@ def test_external_cccl_bit_reverse_brevll_codegen_reparse():
     assert_crossgl_reparse(crossgl)
     assert "return reverseBits(value);" in crossgl
     assert "__brevll" not in crossgl
+
+
+def test_external_cccl_bit_reverse_macro_block_is_skipped():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 5a9ea633bfe63f113f4e99ecd505985ec2c38206
+    # path: libcudacxx/include/cuda/__bit/bit_reverse.h
+    source = """
+    template <typename _Tp>
+    [[nodiscard]] _CCCL_API constexpr _Tp bit_reverse(_Tp __value) noexcept
+    {
+      static_assert(::cuda::std::__cccl_is_cv_unsigned_integer_v<_Tp>,
+                    "bit_reverse() requires unsigned integer types");
+      _CCCL_IF_NOT_CONSTEVAL_DEFAULT
+      {
+        NV_IF_TARGET(
+            NV_IS_DEVICE,
+            (return ::cuda::__bit_reverse_device(__value);))
+      }
+      return ::cuda::__bit_reverse_generic(__value);
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+
+    assert ast.functions[0].name == "bit_reverse"
+    assert isinstance(body[0], FunctionCallNode)
+    assert body[0].name == "static_assert"
+    assert len(body) == 2
+    assert isinstance(body[1], ReturnNode)
+    assert body[1].value.name == "::cuda::__bit_reverse_generic"
 
 
 def test_cuda_math_api_sad_intrinsics_codegen_reparse():

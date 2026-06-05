@@ -1755,6 +1755,7 @@ class CudaParser:
         return (
             self.is_macro_block_invocation_at_index(self.current_index)
             or self.is_bare_macro_before_block_invocation()
+            or self.is_object_like_macro_before_block_invocation()
         )
 
     def is_macro_block_invocation_at_index(self, index):
@@ -1779,6 +1780,14 @@ class CudaParser:
             and self.is_macro_block_invocation_at_index(self.current_index + 1)
         )
 
+    def is_object_like_macro_before_block_invocation(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.is_macro_like_identifier(self.current_token[1])
+            and self.current_index + 1 < len(self.tokens)
+            and self.tokens[self.current_index + 1][0] == "LBRACE"
+        )
+
     def is_macro_like_identifier(self, name):
         return any(character.isupper() for character in name) and all(
             character.isupper() or character.isdigit() or character == "_"
@@ -1790,7 +1799,8 @@ class CudaParser:
             self.eat("IDENTIFIER")
 
         self.eat("IDENTIFIER")
-        self.skip_balanced_parentheses()
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_parentheses()
         if self.current_token[0] == "LBRACE":
             self.skip_balanced_brace_block()
         if self.current_token[0] == "SEMICOLON":
@@ -2612,6 +2622,9 @@ class CudaParser:
             return declaration
         elif self.is_struct_or_class_declaration_start():
             return self.parse_struct()
+        elif self.is_macro_block_invocation_start():
+            self.skip_macro_block_invocation()
+            return None
         elif self.is_variable_declaration():
             declarations = self.parse_variable_declaration_list()
             self.eat("SEMICOLON")

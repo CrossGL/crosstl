@@ -138,6 +138,41 @@ EXTERNAL_FIXTURES = [
         ],
     },
     {
+        "id": "slang_empty_switch_unlabeled_statement",
+        "repo": "shader-slang/slang",
+        "path": "tests/bugs/empty-switch.slang",
+        "source": (
+            """
+            RWStructuredBuffer<int> outputBuffer;
+
+            [numthreads(4, 1, 1)]
+            void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+            {
+                int index = int(dispatchThreadID.x);
+                int a = index;
+
+                switch (++a)
+                {
+                }
+
+                switch (index)
+                {
+                    a += 10;
+                }
+
+                outputBuffer[index] = a;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "switch (++a) {",
+            "switch (index) {",
+            "a += 10;",
+            "outputBuffer[index] = a;",
+        ],
+    },
+    {
         "id": "slang_generated_sizeof_type_operand",
         "repo": "shader-slang/slang-current",
         "path": (

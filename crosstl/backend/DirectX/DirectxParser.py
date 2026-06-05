@@ -402,6 +402,18 @@ class HLSLParser:
     def current_token_is_double_colon(self):
         return self.current_token[0] == "COLON" and self.peek()[0] == "COLON"
 
+    def token_at_is_double_colon(self, index):
+        return (
+            index + 1 < len(self.tokens)
+            and self.tokens[index][0] == "COLON"
+            and self.tokens[index + 1][0] == "COLON"
+        )
+
+    def is_type_start_at(self, index):
+        if self.token_at_is_double_colon(index):
+            index += 2
+        return index < len(self.tokens) and self.is_type_token(self.tokens[index][0])
+
     def is_template_declaration_prefix(self):
         return (
             self.current_token[0] == "IDENTIFIER"
@@ -687,6 +699,9 @@ class HLSLParser:
         return False
 
     def parse_type(self):
+        if self.current_token_is_double_colon():
+            self.eat_double_colon()
+
         if not self.is_type_token(self.current_token[0]):
             raise SyntaxError(f"Expected type, got {self.current_token[0]}")
 
@@ -742,7 +757,7 @@ class HLSLParser:
                     self.parse_array_suffixes()
                 )
                 args.append(arg_type)
-            elif self.is_type_token(self.current_token[0]):
+            elif self.is_type_start_at(self.current_index):
                 arg_type = self.parse_type()
                 arg_type += self.format_array_suffixes_for_type(
                     self.parse_array_suffixes()
@@ -1790,6 +1805,9 @@ class HLSLParser:
         return idx
 
     def skip_type_name_at(self, idx):
+        if self.token_at_is_double_colon(idx):
+            idx += 2
+
         if idx >= len(self.tokens) or not self.is_type_token(self.tokens[idx][0]):
             return None
 

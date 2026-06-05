@@ -1349,6 +1349,36 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_NONSEMANTIC_DEBUG_PRINTF_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/diff/diff_files/string_in_ext_inst_src.spvasm
+; Reduced from OpString used as a NonSemantic.DebugPrintf OpExtInst argument.
+OpCapability Shader
+OpExtension "SPV_KHR_non_semantic_info"
+%std450 = OpExtInstImport "GLSL.std.450"
+%debug_printf = OpExtInstImport "NonSemantic.DebugPrintf"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %main "main"
+OpName %foo "foo"
+%fmt = OpString "unsigned == %u"
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%ptr_function_uint = OpTypePointer Function %uint
+%uint_127 = OpConstant %uint 127
+%main = OpFunction %void None %fn
+%label = OpLabel
+%foo = OpVariable %ptr_function_uint Function
+OpStore %foo %uint_127
+%loaded = OpLoad %uint %foo
+%call = OpExtInst %void %debug_printf 1 %fmt %loaded
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
@@ -1878,6 +1908,25 @@ def test_spirv_glslang_void_function_call_parse():
     assert main.body[0].args == []
     assert isinstance(main.body[1], AssignmentNode)
     assert isinstance(main.body[2], ReturnNode)
+
+
+def test_spirv_tools_nonsemantic_debug_printf_opstring_extinst_parse():
+    tokens = tokenize_code(SPIRV_TOOLS_NONSEMANTIC_DEBUG_PRINTF_ASSEMBLY)
+    ast = parse_code(tokens)
+    main = ast.functions[0]
+    call = main.body[2]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_constants["%fmt"] == '"unsigned == %u"'
+    assert ast.spirv_extended_instruction_imports["%debug_printf"] == (
+        "NonSemantic.DebugPrintf"
+    )
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "debugPrintfEXT"
+    assert call.args[0] == '"unsigned == %u"'
+    assert isinstance(call.args[1], VariableNode)
+    assert call.args[1].name == "foo"
+    assert isinstance(main.body[3], ReturnNode)
 
 
 def test_spirv_assembly_function_only_module_is_preserved():

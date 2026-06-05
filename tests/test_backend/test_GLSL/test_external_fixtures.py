@@ -280,6 +280,36 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/spv.coopmat.comp.
+    # Reduced from GL_NV_cooperative_matrix declarations with expression template
+    # arguments and templated constructor calls.
+    ExternalFixture(
+        name="glslang-spv-coopmat-expression-template-declarations",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.coopmat.comp",
+        shader_type="compute",
+        code=textwrap.dedent("""
+            #version 450 core
+            #extension GL_KHR_memory_scope_semantics : enable
+            #extension GL_NV_cooperative_matrix : enable
+            #extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+
+            layout (local_size_x = 64) in;
+
+            const int Z = 16;
+            fcoopmatNV<32, gl_ScopeSubgroup, Z, 8> mD =
+                fcoopmatNV<32, gl_ScopeSubgroup, Z, 8>(0.0);
+
+            void main()
+            {
+                fcoopmatNV<32, gl_ScopeSubgroup, 16, (2>1?8:4)> m =
+                    fcoopmatNV<32, gl_ScopeSubgroup, 16, (2>1?8:4)>(0.0);
+                fcoopmatNV<16, gl_ScopeSubgroup, 8, 8> p1;
+                p1 = fcoopmatNV<16, gl_ScopeSubgroup, 8, 8>(0.0);
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="glslang-420-tese-anonymous-struct-initializer",
         repo="https://github.com/KhronosGroup/glslang",
@@ -1105,6 +1135,45 @@ def test_codegen_glslang_long_vector_template_declarations_fixture():
     assert "vector<float, 4> v4 = vector<float, 4>(1.0, 2.0, 3.0, 4.0);" in crossgl
     assert "v4 = (v4 + vector<float, 4>(0.0));" in crossgl
     parse_crossgl(crossgl)
+
+
+def test_parse_glslang_coopmat_expression_template_declarations_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-coopmat-expression-template-declarations"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    global_matrix = next(var for var in ast.global_variables if var.name == "mD")
+    main = next(function for function in ast.functions if function.name == "main")
+    declarations = [
+        statement for statement in main.body if isinstance(statement, VariableNode)
+    ]
+
+    assert global_matrix.vtype == "fcoopmatNV<32, gl_ScopeSubgroup, Z, 8>"
+    assert global_matrix.value.name.name == ("fcoopmatNV<32, gl_ScopeSubgroup, Z, 8>")
+    assert [(decl.vtype, decl.name) for decl in declarations[:2]] == [
+        ("fcoopmatNV<32, gl_ScopeSubgroup, 16, ( 2> 1 ? 8 : 4 )>", "m"),
+        ("fcoopmatNV<16, gl_ScopeSubgroup, 8, 8>", "p1"),
+    ]
+    assert declarations[0].value.name.name == (
+        "fcoopmatNV<32, gl_ScopeSubgroup, 16, ( 2> 1 ? 8 : 4 )>"
+    )
+
+
+def test_codegen_glslang_coopmat_expression_template_declarations_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-coopmat-expression-template-declarations"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "fcoopmatNV<32, gl_ScopeSubgroup, Z, 8> mD =" in crossgl
+    assert "fcoopmatNV<32, gl_ScopeSubgroup, 16, ( 2> 1 ? 8 : 4 )> m =" in crossgl
+    assert "fcoopmatNV<32, gl_ScopeSubgroup, 16, ( 2> 1 ? 8 : 4 )>(0.0)" in crossgl
 
 
 def test_parse_glslang_patch_contextual_identifier_fixture():

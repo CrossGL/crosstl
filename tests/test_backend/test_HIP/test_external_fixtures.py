@@ -1,5 +1,6 @@
 from crosstl.backend.HIP.HipAst import (
     AtomicOperationNode,
+    BinaryOpNode,
     FunctionCallNode,
     HipAsmNode,
     KernelLaunchNode,
@@ -25,6 +26,7 @@ EXTERNAL_FIXTURE_SOURCES = {
             "HIP-Basic/warp_shuffle/main.hip",
             "HIP-Doc/Reference/HIP-Complex-Math-API/complex_math/main.hip",
             "HIP-Doc/Tutorials/graph_api/src/filtering.hip",
+            "HIP-Doc/Tutorials/graph_api/src/phantom.hip",
             "HIP-Doc/Tutorials/Programming-Patterns/image_convolution/main.hip",
             "HIP-Doc/Programming-Guide/HIP-C++-Language-Extensions/warp_size_reduction/popcount.hpp",
         ],
@@ -397,6 +399,38 @@ def test_external_rocm_graph_api_variable_template_constant_crossgl_reparse():
     assert pi.value == "std::numbers::pi_v<float>"
     assert "var pi: auto = std::numbers::pi_v<float>;" in crossgl
     assert "var x: auto = ((pi * i) / N_hFFT);" in crossgl
+
+
+def test_external_rocm_graph_api_variable_template_arithmetic_crossgl_reparse():
+    # Upstream: ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
+    # HIP-Doc/Tutorials/graph_api/src/phantom.hip.
+    source = """
+    struct spheroid {
+        float theta;
+    };
+
+    constexpr __device__ spheroid shepp_logan_phantom[] = {{0.f}};
+
+    __global__ void create_phantom_kernel(float* out) {
+        auto theta_rad =
+            -shepp_logan_phantom[0].theta * std::numbers::pi_v<float> / 180.0f;
+        out[0] = theta_rad;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    theta_rad = ast.statements[2].body[0]
+
+    assert isinstance(theta_rad, VariableNode)
+    assert isinstance(theta_rad.value, BinaryOpNode)
+    assert theta_rad.value.op == "/"
+    assert isinstance(theta_rad.value.left, BinaryOpNode)
+    assert theta_rad.value.left.op == "*"
+    assert theta_rad.value.left.right == "std::numbers::pi_v<float>"
+    assert (
+        "var theta_rad: auto = (((-shepp_logan_phantom[0].theta) * "
+        "std::numbers::pi_v<float>) / 180.0f);"
+    ) in crossgl
 
 
 def test_external_hip_examples_histogram_dynamic_shared_crossgl_reparse():
