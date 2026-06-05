@@ -5228,6 +5228,71 @@ def test_validate_project_report_records_failed_artifacts(tmp_path):
     assert "unsupported target backend" in diagnostic["message"]
 
 
+def test_validate_project_report_deduplicates_regenerated_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "portability-report.json"
+    generated_message = (
+        "Artifact translation failed before validation: "
+        "out/not-a-backend/simple.out: unsupported target backend"
+    )
+    distinct_message = (
+        "Artifact translation failed before validation: "
+        "out/not-a-backend/other.out: unsupported target backend"
+    )
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["not-a-backend"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "not-a-backend",
+                        "path": "out/not-a-backend/simple.out",
+                        "status": "failed",
+                        "error": "unsupported target backend",
+                    }
+                ],
+                "diagnostics": [
+                    {
+                        "severity": "error",
+                        "code": "project.validate.failed-artifact",
+                        "message": generated_message,
+                        "location": _diagnostic_location("simple.cgl"),
+                        "target": "not-a-backend",
+                        "missingCapabilities": ["batch.translation"],
+                    },
+                    {
+                        "severity": "error",
+                        "code": "project.validate.failed-artifact",
+                        "message": distinct_message,
+                        "location": _diagnostic_location("other.cgl"),
+                        "target": "not-a-backend",
+                        "missingCapabilities": ["batch.translation"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["diagnosticsByCode"] == {"project.validate.failed-artifact": 2}
+    assert payload["missingCapabilityCounts"] == {"batch.translation": 2}
+    assert [diagnostic["message"] for diagnostic in payload["diagnostics"]] == [
+        generated_message,
+        distinct_message,
+    ]
+
+
 def test_validate_project_report_rejects_artifacts_outside_project(
     tmp_path, monkeypatch
 ):

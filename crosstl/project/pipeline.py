@@ -1968,10 +1968,53 @@ def validate_project_report(
         for diagnostic in report.get("diagnostics", [])
         if isinstance(diagnostic, Mapping)
     ]
-    diagnostics = source_diagnostics + [
-        diagnostic.to_json() for diagnostic in diagnostic_objects
-    ]
+    diagnostics = _validation_diagnostics(
+        source_diagnostics,
+        [diagnostic.to_json() for diagnostic in diagnostic_objects],
+    )
     return _validation_report_payload(path, diagnostics, validation)
+
+
+def _diagnostic_identity_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return tuple(
+            (str(key), _diagnostic_identity_value(value[key]))
+            for key in sorted(value, key=str)
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(_diagnostic_identity_value(item) for item in value)
+    return value
+
+
+def _diagnostic_identity(diagnostic: Mapping[str, Any]) -> tuple[Any, ...]:
+    return tuple(
+        (field_name, _diagnostic_identity_value(diagnostic.get(field_name)))
+        for field_name in (
+            "severity",
+            "code",
+            "message",
+            "location",
+            "target",
+            "missingCapabilities",
+        )
+    )
+
+
+def _validation_diagnostics(
+    source_diagnostics: Sequence[Mapping[str, Any]],
+    generated_diagnostics: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    diagnostics = [dict(diagnostic) for diagnostic in source_diagnostics]
+    seen_identities = {
+        _diagnostic_identity(diagnostic) for diagnostic in source_diagnostics
+    }
+    for diagnostic in generated_diagnostics:
+        identity = _diagnostic_identity(diagnostic)
+        if identity in seen_identities:
+            continue
+        diagnostics.append(dict(diagnostic))
+        seen_identities.add(identity)
+    return diagnostics
 
 
 def inspect_project_report(
