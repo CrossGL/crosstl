@@ -1297,6 +1297,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_STRUCT_COMPOSITE_EXTRACT_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/main/include/spirv/unified1/spirv.core.grammar.json
+; Reduced from the core OpCompositeExtract instruction definition where Composite
+; is an OpTypeStruct value and Indexes select a structure member.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %Pair "Pair"
+OpMemberName %Pair 0 "weight"
+OpMemberName %Pair 1 "index"
+OpName %pair "pair"
+OpName %out_value "outValue"
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%uint = OpTypeInt 32 0
+%Pair = OpTypeStruct %float %uint
+%ptr_function_pair = OpTypePointer Function %Pair
+%ptr_output_float = OpTypePointer Output %float
+%out_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%pair = OpVariable %ptr_function_pair Function
+%loaded_pair = OpLoad %Pair %pair
+%weight = OpCompositeExtract %float %loaded_pair 0
+OpStore %out_value %weight
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SPEC_VECTOR_INSERT_DYNAMIC_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
@@ -1975,6 +2008,28 @@ def test_spirv_tools_gl_pervertex_access_chain_parse():
     assert assignment.left.name == "gl_Position"
     assert isinstance(assignment.right, VariableNode)
     assert assignment.right.name == "_ua_position"
+
+
+def test_spirv_spec_struct_composite_extract_parse():
+    tokens = tokenize_code(SPIRV_SPEC_STRUCT_COMPOSITE_EXTRACT_ASSEMBLY)
+    ast = parse_code(tokens)
+    declaration = ast.functions[0].body[0]
+    assignment = ast.functions[0].body[1]
+
+    assert ast.spirv_assembly is True
+    assert ast.structs[0].name == "Pair"
+    assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+        ("float", "weight"),
+        ("uint", "index"),
+    ]
+    assert isinstance(declaration, VariableNode)
+    assert declaration.vtype == "Pair"
+    assert declaration.name == "pair"
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.right, MemberAccessNode)
+    assert assignment.right.member == "weight"
+    assert isinstance(assignment.right.object, VariableNode)
+    assert assignment.right.object.name == "pair"
 
 
 def test_spirv_spec_vector_insert_dynamic_parse():

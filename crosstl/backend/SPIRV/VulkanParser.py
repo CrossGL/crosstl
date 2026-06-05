@@ -1494,16 +1494,20 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpCompositeExtract" and len(operands) >= 2:
-                expression = self.spirv_assembly_operand_expression(
-                    operands[1],
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
+                expressions[result_id] = (
+                    self.spirv_assembly_composite_extract_expression(
+                        operands[1],
+                        operands[2:],
+                        expressions,
+                        expression_type_ids,
+                        names,
+                        decorations,
+                        member_names,
+                        types,
+                        constants,
+                        constant_types,
+                    )
                 )
-                for index_operand in operands[2:]:
-                    expression = ArrayAccessNode(expression, index_operand)
-                expressions[result_id] = expression
                 expression_type_ids[result_id] = operands[0]
                 continue
 
@@ -2066,6 +2070,66 @@ class VulkanParser:
                 ),
             )
         return access
+
+    def spirv_assembly_composite_extract_expression(
+        self,
+        composite_operand,
+        index_operands,
+        expressions,
+        expression_type_ids,
+        names,
+        decorations,
+        member_names,
+        types,
+        constants,
+        constant_types,
+    ):
+        expression = self.spirv_assembly_operand_expression(
+            composite_operand,
+            expressions,
+            names,
+            decorations,
+            constants,
+        )
+        current_type_id = expression_type_ids.get(
+            composite_operand
+        ) or constant_types.get(composite_operand)
+
+        for index_operand in index_operands:
+            type_info = types.get(current_type_id, {})
+            if type_info.get("kind") == "struct":
+                member_index = self.spirv_integer_constant_operand(index_operand, {})
+                member_types = type_info.get("member_types", [])
+                if member_index is not None and 0 <= member_index < len(member_types):
+                    member_key = str(member_index)
+                    member_name = member_names.get(current_type_id, {}).get(member_key)
+                    if member_name is not None:
+                        expression = MemberAccessNode(expression, member_name)
+                        current_type_id = member_types[member_index]
+                        continue
+
+            expression = ArrayAccessNode(expression, index_operand)
+            current_type_id = self.spirv_composite_index_type_id(
+                current_type_id, index_operand, types
+            )
+
+        return expression
+
+    def spirv_composite_index_type_id(self, type_id, index_operand, types):
+        type_info = types.get(type_id, {})
+        kind = type_info.get("kind")
+        if kind in {"array", "runtime_array"}:
+            return type_info.get("element_type")
+        if kind == "matrix":
+            return type_info.get("column_type")
+        if kind == "vector":
+            return type_info.get("component_type")
+        if kind == "struct":
+            member_index = self.spirv_integer_constant_operand(index_operand, {})
+            member_types = type_info.get("member_types", [])
+            if member_index is not None and 0 <= member_index < len(member_types):
+                return member_types[member_index]
+        return None
 
     def spirv_assembly_struct_member_access_expression(
         self,

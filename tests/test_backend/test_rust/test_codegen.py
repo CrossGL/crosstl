@@ -812,6 +812,34 @@ def test_rust_gpu_sample_with_and_depth_project_methods_codegen_from_upstream():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_glam_vec3a_constructor_codegen_from_depth_sample_compiletest():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/image/sample_depth_reference/sample.rs.
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::{Image, Sampler};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] image_array: &Image!(2D, type=f32, arrayed, sampled),
+        #[spirv(descriptor_set = 1, binding = 1)] sampler: &Sampler,
+        output: &mut f32,
+    ) {
+        let v3 = glam::Vec3A::new(0.0, 0.0, 1.0);
+        *output = image_array.sample_depth_reference(*sampler, v3, 1.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "sampler2DArray image_array @ set(0) @ binding(0)" in result
+    assert "let v3 = vec3(0.0, 0.0, 1.0);" in result
+    assert "output = textureCompare(image_array, sampler_, v3, 1.0);" in result
+    assert "glam_Vec3A" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_sampled_image_generic_type_drives_resource_parameter():
     code = """
     use spirv_std::{spirv, Image};

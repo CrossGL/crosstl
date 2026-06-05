@@ -1150,4 +1150,6 @@ class MojoToCrossGLConverter:
             return "=="
         if op == "is not":
             return "!="
+        if op == "@":
+            return "*"
         return op

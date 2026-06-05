@@ -1483,6 +1483,26 @@ def test_parse_leading_decimal_float_literals_in_constexpr_arrays():
     parse_ok(code)
 
 
+def test_parse_cxx14_digit_separator_numeric_literals_from_msl_spec():
+    # The Metal Shading Language Specification defines MSL as C++14 based.
+    code = """
+    kernel void main(device uint* out [[buffer(0)]]) {
+        uint count = 1'024u;
+        uint mask = 0xFF'00u;
+        uint bits = 0b1010'0011u;
+        float coeff = 1.602'176e-19f;
+        out[0] = count + mask + bits + uint(coeff);
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert body[0].right == "1'024u"
+    assert body[1].right == "0xFF'00u"
+    assert body[2].right == "0b1010'0011u"
+    assert body[3].right == "1.602'176e-19f"
+
+
 def test_parse_as_type_template_call():
     code = """
     static inline float fp32_from_bits(uint32_t bits) {

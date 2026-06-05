@@ -385,6 +385,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_STRUCT_COMPOSITE_EXTRACT_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/main/include/spirv/unified1/spirv.core.grammar.json
+; Reduced from the core OpCompositeExtract instruction definition where Composite
+; is an OpTypeStruct value and Indexes select a structure member.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %Pair "Pair"
+OpMemberName %Pair 0 "weight"
+OpMemberName %Pair 1 "index"
+OpName %pair "pair"
+OpName %out_value "outValue"
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%uint = OpTypeInt 32 0
+%Pair = OpTypeStruct %float %uint
+%ptr_function_pair = OpTypePointer Function %Pair
+%ptr_output_float = OpTypePointer Output %float
+%out_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%pair = OpVariable %ptr_function_pair Function
+%loaded_pair = OpLoad %Pair %pair
+%weight = OpCompositeExtract %float %loaded_pair 0
+OpStore %out_value %weight
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SPEC_VECTOR_INSERT_DYNAMIC_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
@@ -3160,6 +3193,22 @@ def test_spirv_tools_vector_negate_then_extract_codegen_reparse():
     assert "outValue = -inputVec[0];" not in generated_code
     assert "outValue = component;" not in generated_code
     assert "OpFNegate" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_spec_struct_composite_extract_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SPEC_STRUCT_COMPOSITE_EXTRACT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "struct Pair" in generated_code
+    assert "float weight;" in generated_code
+    assert "uint index;" in generated_code
+    assert "Pair pair;" in generated_code
+    assert "outValue = pair.weight;" in generated_code
+    assert "outValue = pair[0];" not in generated_code
+    assert "OpCompositeExtract" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

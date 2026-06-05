@@ -199,6 +199,7 @@ class RustToCrossGLConverter:
             # Simplified vector names
             "Vec2": "vec2",
             "Vec3": "vec3",
+            "Vec3A": "vec3",
             "Vec4": "vec4",
             "IVec2": "ivec2",
             "IVec3": "ivec3",

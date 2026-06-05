@@ -2802,6 +2802,24 @@ def test_nested_expressions_parsing():
         pytest.fail("Nested expressions parsing not implemented.")
 
 
+def test_matrix_multiplication_operator_parsing_from_official_docs():
+    # Reduced from https://docs.modular.com/mojo/manual/operators/
+    # "Matrix multiplication" documents @ as Mojo's matrix multiplication operator.
+    code = """
+    fn main(lhs: Matrix[DType.float32, 4, 4], rhs: Matrix[DType.float32, 4, 4]):
+        var result = lhs @ rhs
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+
+    assert isinstance(declaration.initial_value, BinaryOpNode)
+    assert declaration.initial_value.op == "@"
+    assert declaration.initial_value.left.name == "lhs"
+    assert declaration.initial_value.right.name == "rhs"
+    assert declaration.attributes == []
+
+
 def test_mod_parsing():
     code = """
     fn main():

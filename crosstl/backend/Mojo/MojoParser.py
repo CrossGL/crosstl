@@ -1822,7 +1822,13 @@ class MojoParser:
     def parse_multiplicative(self):
         left = self.parse_unary()
         self.skip_expression_layout()
-        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "FLOOR_DIVIDE", "MOD"]:
+        while self.current_token[0] in [
+            "MULTIPLY",
+            "AT",
+            "DIVIDE",
+            "FLOOR_DIVIDE",
+            "MOD",
+        ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_unary()

@@ -558,6 +558,21 @@ def test_multiline_parenthesized_boolean_condition_codegen_from_layout_tensor_do
     ) in generated_code
 
 
+def test_matrix_multiplication_operator_codegen_from_official_docs_reparses_crossgl():
+    # Reduced from https://docs.modular.com/mojo/manual/operators/
+    # "Matrix multiplication" documents @ as Mojo's matrix multiplication operator.
+    code = """
+    fn main(lhs: Matrix[DType.float32, 4, 4], rhs: Matrix[DType.float32, 4, 4]):
+        var result = lhs @ rhs
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var result = (lhs * rhs);" in generated_code
+    assert " @ rhs" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_modular_image_pipeline_blur_chained_bounds_codegen():
     # Reduced from modularml/mojo commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,

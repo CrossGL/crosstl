@@ -2486,6 +2486,8 @@ class HLSLParser:
             return False
         if self.current_token[1] not in {"vector", "matrix"}:
             return False
+        if self.peek()[0] == "LPAREN":
+            return True
         if self.peek()[0] != "LESS_THAN":
             return False
 

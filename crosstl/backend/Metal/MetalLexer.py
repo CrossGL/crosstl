@@ -8,6 +8,18 @@ from .preprocessor import MetalPreprocessor
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
+_DECIMAL_DIGITS = r"\d(?:'?\d)*"
+_HEX_DIGITS = r"[0-9a-fA-F](?:'?[0-9a-fA-F])*"
+_BINARY_DIGITS = r"[01](?:'?[01])*"
+_NUMBER_PATTERN = (
+    rf"0[xX]{_HEX_DIGITS}[uUlL]*|"
+    rf"0[bB]{_BINARY_DIGITS}[uUlL]*|"
+    rf"(?:{_DECIMAL_DIGITS}\.(?:{_DECIMAL_DIGITS})?|\.{_DECIMAL_DIGITS})"
+    rf"(?:[eE][+-]?{_DECIMAL_DIGITS})?[fFhH]?|"
+    rf"{_DECIMAL_DIGITS}[eE][+-]?{_DECIMAL_DIGITS}[fFhH]?|"
+    rf"{_DECIMAL_DIGITS}[fFhHuUlL]*"
+)
+
 # Token definitions - order matters! More specific patterns should come first
 TOKENS = tuple(
     [
@@ -138,10 +150,7 @@ TOKENS = tuple(
         # Identifiers (must come after all keywords)
         ("IDENTIFIER", r"[^\W\d]\w*"),
         # Numeric literals (decimal/hex/binary with suffixes)
-        (
-            "NUMBER",
-            r"0[xX][0-9a-fA-F]+[uUlL]*|0[bB][01]+[uUlL]*|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFhH]?|\d+[eE][+-]?\d+[fFhH]?|\d+[fFhHuUlL]*",
-        ),
+        ("NUMBER", _NUMBER_PATTERN),
         # Brackets and braces
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),

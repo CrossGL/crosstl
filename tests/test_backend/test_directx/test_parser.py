@@ -1274,6 +1274,40 @@ def test_parse_template_style_vector_matrix_types_and_constructors():
     assert func.body[-1].value.type_name == "vector<double, 4>"
 
 
+def test_parse_default_template_style_vector_matrix_constructors_from_hlsl_docs():
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-matrix
+    ast = parse_code("""
+    vector MakeDefaultVector(float value) {
+        vector local = vector(value, value, value, value);
+        return local;
+    }
+
+    matrix MakeDefaultMatrix(float value) {
+        matrix local = matrix(
+            value, value, value, value,
+            value, value, value, value,
+            value, value, value, value,
+            value, value, value, value
+        );
+        return local;
+    }
+    """)
+
+    vector_function, matrix_function = ast.functions
+    vector_local = vector_function.body[0]
+    matrix_local = matrix_function.body[0]
+
+    assert vector_function.return_type == "vector"
+    assert vector_local.vtype == "vector"
+    assert isinstance(vector_local.value, VectorConstructorNode)
+    assert vector_local.value.type_name == "vector"
+    assert matrix_function.return_type == "matrix"
+    assert matrix_local.vtype == "matrix"
+    assert isinstance(matrix_local.value, VectorConstructorNode)
+    assert matrix_local.value.type_name == "matrix"
+
+
 def test_parse_function_array_return_declarator_from_dxc_longvec_decls():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/CodeGenDXIL/hlsl/types/longvec-decls.hlsl
