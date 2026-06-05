@@ -424,6 +424,23 @@ def test_external_hip_examples_histogram_dynamic_shared_crossgl_reparse():
     assert "var binCount: vec4<u32> = vec4<u32>(0, 0, 0, 0);" in crossgl
 
 
+def test_external_hip_examples_histogram_newline_split_c_style_cast_reparse():
+    source = """
+    __global__ void histogram256(unsigned int* binResult) {
+        HIP_DYNAMIC_SHARED(unsigned char, sharedArray);
+        uchar4* input = (uchar4*)
+            sharedArray;
+        uint result = input[threadIdx.x].x;
+        binResult[threadIdx.x] = result;
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "var input: ptr<vec4<u8>> = ptr<vec4<u8>>(sharedArray);" in crossgl
+    assert "sharedArray;" not in crossgl
+
+
 def test_external_hpc_training_double2_launch_codegen():
     source = """
     __launch_bounds__(256,1)

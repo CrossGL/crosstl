@@ -1131,12 +1131,14 @@ class HLSLParser:
 
         alias_type = self.parse_type()
         qualifiers.extend(self.parse_post_type_qualifiers())
+        attributes = self.parse_attribute_list()
         name = self.parse_identifier()
         array_sizes = self.parse_array_suffixes()
         self.eat("SEMICOLON")
         alias = TypeAliasNode(alias_type, name)
         alias.qualifiers = qualifiers
         alias.array_sizes = array_sizes
+        alias.attributes = attributes
         return alias
 
     def is_struct_typedef_with_body(self):
@@ -1490,6 +1492,7 @@ class HLSLParser:
                     )
                 param_type = self.parse_type()
                 qualifiers.extend(self.parse_post_type_qualifiers())
+                attributes.extend(self.parse_attribute_list())
 
                 if self.is_identifier_token(self.current_token[0]):
                     name = self.parse_identifier()
@@ -1680,6 +1683,10 @@ class HLSLParser:
         while idx < len(self.tokens) and self.is_post_type_qualifier_token_at(idx):
             idx += 1
 
+        idx = self.skip_attribute_lists_at(idx)
+        if idx is None:
+            return False
+
         if idx >= len(self.tokens) or not self.is_identifier_token_at(idx):
             return False
         idx += 1
@@ -1705,6 +1712,9 @@ class HLSLParser:
             return False
         while idx < len(self.tokens) and self.is_post_type_qualifier_token_at(idx):
             idx += 1
+        idx = self.skip_attribute_lists_at(idx)
+        if idx is None:
+            return False
         if not self.is_identifier_token_at(idx):
             return False
 
@@ -1730,6 +1740,35 @@ class HLSLParser:
                 return True
 
         return False
+
+    def skip_attribute_lists_at(self, idx):
+        while (
+            idx + 1 < len(self.tokens)
+            and self.tokens[idx][0] == "LBRACKET"
+            and self.tokens[idx + 1][0] == "LBRACKET"
+        ):
+            idx += 2
+            depth = 1
+            while idx < len(self.tokens):
+                token_type = self.tokens[idx][0]
+                if token_type == "EOF":
+                    return None
+                if token_type == "LBRACKET":
+                    depth += 1
+                elif token_type == "RBRACKET":
+                    depth -= 1
+                    if depth == 0:
+                        idx += 1
+                        break
+                idx += 1
+            else:
+                return None
+
+            if idx >= len(self.tokens) or self.tokens[idx][0] != "RBRACKET":
+                return None
+            idx += 1
+
+        return idx
 
     def skip_array_suffixes_at(self, idx):
         while idx < len(self.tokens) and self.tokens[idx][0] == "LBRACKET":
@@ -1804,6 +1843,7 @@ class HLSLParser:
         attributes = attributes or []
         vtype = self.parse_type()
         qualifiers.extend(self.parse_post_type_qualifiers())
+        attributes.extend(self.parse_attribute_list())
         name = self.parse_identifier()
         declarations = self.parse_variable_declaration_list_rest(
             vtype,

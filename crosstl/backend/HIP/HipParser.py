@@ -3362,6 +3362,7 @@ class HipParser:
                 self.consume("LPAREN")
                 target_type = self.parse_type()
                 self.consume("RPAREN")
+                self.skip_newlines()
                 expr = self.parse_unary_expression()
                 return CastNode(target_type, expr)
 

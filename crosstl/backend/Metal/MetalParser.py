@@ -2843,7 +2843,7 @@ class MetalParser:
             return False
         name = node.name if isinstance(node, VariableNode) else node.member
         if not (
-            self.is_scoped_variable_template_name(name)
+            self.is_variable_template_name(name)
             or name in self.known_variable_templates
         ):
             return False
@@ -2852,8 +2852,8 @@ class MetalParser:
             require_type_like_argument=True,
         )
 
-    def is_scoped_variable_template_name(self, name):
-        if not isinstance(name, str) or "::" not in name:
+    def is_variable_template_name(self, name):
+        if not isinstance(name, str):
             return False
         return name.split("::")[-1].endswith("_v")
 

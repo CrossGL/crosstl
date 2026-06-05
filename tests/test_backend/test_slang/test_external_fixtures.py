@@ -1059,6 +1059,31 @@ def test_generated_type_equality_property_syntax_parse():
     assert function.generic_constraints[0].constraint_type == "int"
 
 
+def test_core_meta_interface_static_const_value_requirements_parse():
+    # Source: shader-slang/slang source/slang/core.meta.slang at
+    # 564ac9f050d6569efd773e2f74e7d067a4e54baa.
+    source = """
+        interface IRangedValue
+        {
+            static const This maxValue;
+            static const This minValue;
+        }
+    """
+
+    ast = parse_slang(source)
+    interface = ast.interfaces[0]
+
+    assert interface.name == "IRangedValue"
+    assert [
+        (requirement.qualifiers, requirement.vtype, requirement.name)
+        for requirement in interface.value_requirements
+    ] == [
+        (["static", "const"], "This", "maxValue"),
+        (["static", "const"], "This", "minValue"),
+    ]
+    assert interface.methods == []
+
+
 def test_core_meta_generic_vector_conversion_constructor_parse():
     # Source: shader-slang/slang source/slang/core.meta.slang at
     # 564ac9f050d6569efd773e2f74e7d067a4e54baa.

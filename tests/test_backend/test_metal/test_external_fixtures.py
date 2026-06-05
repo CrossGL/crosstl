@@ -36,6 +36,7 @@ MLX_FP_QUANTIZED_COMMIT = "c52b04b650be06291e3a6ff6e98b0ef1af3ff56b"
 MLX_FP_QUANTIZED_VALUE_TEMPLATE_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
 MLX_STEEL_DEPENDENT_TEMPLATE_COMMIT = "e1a3f2f31fc298cfd7f017d19e8165d88a0c3c59"
 MLX_UNARY_OPS_COMMIT = "e1a3f2f31fc298cfd7f017d19e8165d88a0c3c59"
+MLX_STEEL_ATTENTION_TYPE_TRAIT_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
 PYTORCH_REPO = "https://github.com/pytorch/pytorch"
 PYTORCH_BUCKETIZATION_COMMIT = "5ee1f788c7098ae5e50e49543ee7822f73cd8990"
 CANDLE_REPO = "https://github.com/huggingface/candle"
@@ -856,6 +857,32 @@ EXTERNAL_FIXTURES = [
                 using selem_t = typename stile_t::elem_type;
                 constexpr auto neg_inf = Limits<selem_t>::finite_min;
                 constexpr short kRowsPT = stile_t::kRowsPerThread;
+            }
+        """
+        ),
+    },
+    {
+        "name": "mlx_steel_attention_unscoped_type_trait_variable_template",
+        "repo_url": MLX_REPO,
+        "commit": MLX_STEEL_ATTENTION_TYPE_TRAIT_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/steel/attn/kernels/steel_attention.h",
+        "roundtrip": True,
+        "contains": [
+            "const bool is_bool = is_same_v_u3cMaskType_u2cbool_u3e;",
+        ],
+        "not_contains": ["is_same_v<"],
+        "source": (
+            """
+            using namespace mlx::steel;
+
+            template <typename MaskType>
+            void resolve_mask_type() {
+                // Reduced from MLX Steel attention mask handling:
+                // constexpr bool is_bool = is_same_v<MaskType, bool>;
+                constexpr bool is_bool = is_same_v<MaskType, bool>;
+                if (is_bool) {
+                    return;
+                }
             }
         """
         ),
