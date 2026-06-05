@@ -703,6 +703,34 @@ def test_rust_gpu_image_query_and_fetch_methods_codegen_from_upstream_compiletes
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_image_gather_method_codegen_from_spirv_std_api():
+    # Reduced from spirv_std::image::Image gather API:
+    # https://embarkstudios.github.io/rust-gpu/api/spirv_std/image/type.Image2dArray.html
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::{Image, Sampler};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] tex: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
+        output: &mut Vec4,
+    ) {
+        let uv = Vec2::new(0.0, 1.0);
+        let gathered: Vec4 = tex.gather(*sampler, uv, 2);
+        *output = gathered;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "sampler2D tex @ set(0) @ binding(0)" in result
+    assert "sampler sampler_ @ set(0) @ binding(1)" in result
+    assert "gathered = textureGather(tex, sampler_, uv, 2);" in result
+    assert ".gather(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_vector_splat_codegen_from_image_components_compiletest():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

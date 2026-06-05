@@ -5225,6 +5225,53 @@ def test_vertex_entry_structs_infer_metal_stage_io_attributes():
     assert "float4 position [[position]];" in generated_code
 
 
+def test_metal_stage_io_lowered_matrix_and_array_members_preserve_attributes():
+    shader = """
+    shader ExpandedVertexAttributes {
+        struct VertexInput {
+            mat4 explicitTransform @ TEXCOORD0;
+            mat2 inferredTransform;
+            vec4 weights[2] @ TEXCOORD4;
+            vec2 uv;
+        };
+
+        struct VertexOutput {
+            vec4 position @ gl_Position;
+        };
+
+        vertex {
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                mat2 localTransform = input.inferredTransform;
+                output.position =
+                    input.explicitTransform *
+                    vec4(input.uv, localTransform[0].x + input.weights[1].x, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "vertex"
+    )
+
+    assert "float4 explicitTransform_0 [[attribute(5)]];" in generated_code
+    assert "float4 explicitTransform_1 [[attribute(6)]];" in generated_code
+    assert "float4 explicitTransform_2 [[attribute(7)]];" in generated_code
+    assert "float4 explicitTransform_3 [[attribute(8)]];" in generated_code
+    assert "float2 inferredTransform_0 [[attribute(0)]];" in generated_code
+    assert "float2 inferredTransform_1 [[attribute(1)]];" in generated_code
+    assert "float4 weights_0 [[attribute(9)]];" in generated_code
+    assert "float4 weights_1 [[attribute(10)]];" in generated_code
+    assert "float2 uv [[attribute(2)]];" in generated_code
+    assert (
+        "float2x2 localTransform = "
+        "float2x2(input.inferredTransform_0, input.inferredTransform_1);"
+    ) in generated_code
+    assert "input.weights_1.x" in generated_code
+
+
 def test_trait_self_return_does_not_emit_generic_enum_specialization():
     shader = """
     shader TraitSelfOption {

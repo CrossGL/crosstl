@@ -695,6 +695,24 @@ def test_external_rocm_histogram_ffs_codegen_reparse():
     assert "__ffs" not in crossgl
 
 
+def test_rocm_hip_math_api_ffsll_intrinsic_codegen_reparse():
+    # ROCm HIP math API lists __ffsll as the 64-bit sibling of __ffs.
+    source = """
+    __global__ void ffsll_kernel(unsigned int* out,
+                                 unsigned long long mask) {
+        out[threadIdx.x] = __ffsll(mask);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    assignment = ast.statements[0].body[0]
+
+    assert isinstance(assignment.right, FunctionCallNode)
+    assert assignment.right.name == "__ffsll"
+    assert "out[gl_LocalInvocationID.x] = (findLSB(mask) + 1);" in crossgl
+    assert "__ffsll" not in crossgl
+
+
 def test_external_rocm_rocjpeg_alignment_bitwise_not_codegen_reparse():
     # Upstream: ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
     # Common/rocjpeg_utils.hpp.

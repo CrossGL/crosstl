@@ -5810,6 +5810,30 @@ def test_hlsl_lowers_glsl_fractional_mix_and_simple_atomic_names():
     assert "atomicAdd(" not in generated_code
 
 
+def test_hlsl_lowers_glsl_mod_to_fmod_intrinsic():
+    shader = """
+    shader HlslModBuiltinLowering {
+        compute {
+            void main() {
+                let wrapped = mod(5.0, 2.0);
+                let v = vec3(5.0, 7.0, 9.0);
+                let wrappedVec = mod(v, vec3(2.0));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # Microsoft HLSL docs list floating-point remainder as ret fmod(x, y).
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-fmod
+    assert "float wrapped = fmod(5.0, 2.0);" in generated_code
+    assert "float3 v = float3(5.0, 7.0, 9.0);" in generated_code
+    assert "float3 wrappedVec = fmod(v, float3(2.0, 2.0, 2.0));" in generated_code
+    assert "wrapped = mod(" not in generated_code
+    assert "wrappedVec = mod(" not in generated_code
+
+
 def test_hlsl_two_argument_atan_lowers_to_atan2_intrinsic():
     shader = """
     shader HlslAtanBuiltinLowering {

@@ -104,6 +104,20 @@ class SlangToCrossGLConverter:
         "ByteAddressBuffer",
         "RWByteAddressBuffer",
     }
+    BYTE_ADDRESS_BUFFER_RESOURCE_TYPES = {
+        "ByteAddressBuffer",
+        "RWByteAddressBuffer",
+    }
+    BYTE_ADDRESS_BUFFER_METHOD_MAP = {
+        "Load": "buffer_load",
+        "Load2": "buffer_load2",
+        "Load3": "buffer_load3",
+        "Load4": "buffer_load4",
+        "Store": "buffer_store",
+        "Store2": "buffer_store2",
+        "Store3": "buffer_store3",
+        "Store4": "buffer_store4",
+    }
     GET_DIMENSIONS_TEXTURE_DIMENSIONS = {
         "Texture1D": 1,
         "Texture1DArray": 2,
@@ -1208,6 +1222,12 @@ class SlangToCrossGLConverter:
             if image_call is not None:
                 return image_call
 
+            byte_address_buffer_call = self.generate_byte_address_buffer_method_call(
+                expr, obj, is_main
+            )
+            if byte_address_buffer_call is not None:
+                return byte_address_buffer_call
+
             texture_call = self.generate_texture_method_call(expr, obj, is_main)
             if texture_call is not None:
                 return texture_call
@@ -1537,6 +1557,26 @@ class SlangToCrossGLConverter:
             return None
         args = [self.generate_expression(arg, is_main) for arg in expr.args or []]
         return f"imageLoad({', '.join([obj] + args)})"
+
+    def generate_byte_address_buffer_method_call(self, expr, obj, is_main=False):
+        method = self.method_base_name(expr.method)
+        helper = self.BYTE_ADDRESS_BUFFER_METHOD_MAP.get(method)
+        if helper is None:
+            return None
+
+        resource_type = self.buffer_resource_expression_type(expr.object)
+        if (
+            self.resource_type_base(resource_type)
+            not in self.BYTE_ADDRESS_BUFFER_RESOURCE_TYPES
+        ):
+            return None
+
+        args = [self.generate_expression(arg, is_main) for arg in expr.args or []]
+        if method.startswith("Load") and len(args) != 1:
+            return None
+        if method.startswith("Store") and len(args) != 2:
+            return None
+        return f"{helper}({', '.join([obj] + args)})"
 
     def generate_structured_buffer_method_call(self, expr, obj, is_main=False):
         if self.method_base_name(expr.method) != "Load":

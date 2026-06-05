@@ -5042,7 +5042,7 @@ class HipToCrossGLConverter:
             return self.format_hip_byte_perm(args[0], args[1], args[2])
         if function_name == "__bitextract_u32" and len(args) == 3:
             return self.format_hip_unsigned_bit_extract(args[0], args[1], args[2])
-        if function_name == "__ffs" and len(args) == 1:
+        if function_name in {"__ffs", "__ffsll"} and len(args) == 1:
             return f"(findLSB({args[0]}) + 1)"
         if function_name in {"__clz", "__clzll"} and len(args) == 1:
             return f"countLeadingZeros({args[0]})"

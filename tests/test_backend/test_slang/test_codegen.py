@@ -1814,6 +1814,45 @@ def test_structured_buffer_load_method_codegen_from_core_module_docs():
     cgl_translator.parse(generated_code)
 
 
+def test_byte_address_buffer_load_store_methods_codegen_from_upstream_compute_test():
+    # Source: shader-slang/slang@fbf41e87a3493bfe4417b3b3a92c814dde391960
+    # tests/compute/byte-address-buffer.slang
+    code = """
+    ByteAddressBuffer inputBuffer;
+    RWByteAddressBuffer outputBuffer;
+
+    void test(uint val)
+    {
+        uint tmp = inputBuffer.Load<uint>(uint(val * 4));
+        uint2 pair = inputBuffer.Load2(uint(tmp * 4));
+        uint3 triple = inputBuffer.Load3(0);
+        uint4 quad = inputBuffer.Load4(16);
+
+        outputBuffer.Store(val * 4, tmp);
+        outputBuffer.Store2(8, pair);
+        outputBuffer.Store3(12, triple);
+        outputBuffer.Store4(16, quad);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "ByteAddressBuffer inputBuffer;" in generated_code
+    assert "RWByteAddressBuffer outputBuffer;" in generated_code
+    assert "uint tmp = buffer_load(inputBuffer, uint(val * 4));" in generated_code
+    assert "uvec2 pair = buffer_load2(inputBuffer, uint(tmp * 4));" in generated_code
+    assert "uvec3 triple = buffer_load3(inputBuffer, 0);" in generated_code
+    assert "uvec4 quad = buffer_load4(inputBuffer, 16);" in generated_code
+    assert "buffer_store(outputBuffer, val * 4, tmp);" in generated_code
+    assert "buffer_store2(outputBuffer, 8, pair);" in generated_code
+    assert "buffer_store3(outputBuffer, 12, triple);" in generated_code
+    assert "buffer_store4(outputBuffer, 16, quad);" in generated_code
+    assert ".Load" not in generated_code
+    assert ".Store" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_buffer_getdimensions_statement_codegen_from_core_module_docs():
     code = """
     StructuredBuffer<float4> lookupTable;

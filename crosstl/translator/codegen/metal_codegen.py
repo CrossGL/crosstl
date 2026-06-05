@@ -2454,16 +2454,24 @@ class MetalCodeGen:
             struct_name = getattr(struct, "name", None)
             if struct_name not in stage_io_names:
                 continue
+            default_member_semantics = self.metal_default_struct_member_semantics(
+                struct
+            )
             for member in getattr(struct, "members", []) or []:
-                lowering = self.metal_stage_io_member_lowering(member)
+                lowering = self.metal_stage_io_member_lowering(
+                    member, default_member_semantics
+                )
                 if lowering is not None:
                     lowerings.setdefault(struct_name, {})[member.name] = lowering
         return lowerings
 
-    def metal_stage_io_member_lowering(self, member):
+    def metal_stage_io_member_lowering(self, member, default_member_semantics=None):
         member_name = getattr(member, "name", None)
         if not member_name:
             return None
+        semantic = self.semantic_from_node(member)
+        if semantic is None:
+            semantic = (default_member_semantics or {}).get(member_name)
 
         array_info = self.metal_stage_io_member_array_info(member)
         if array_info is not None:
@@ -2477,6 +2485,9 @@ class MetalCodeGen:
                 "element_type": element_type,
                 "size": size,
                 "fields": fields,
+                "field_semantics": self.metal_stage_io_lowered_field_semantics(
+                    semantic, len(fields)
+                ),
             }
 
         raw_type = self.struct_member_raw_type(member)
@@ -2496,7 +2507,16 @@ class MetalCodeGen:
             "columns": columns,
             "rows": rows,
             "fields": fields,
+            "field_semantics": self.metal_stage_io_lowered_field_semantics(
+                semantic, len(fields)
+            ),
         }
+
+    def metal_stage_io_lowered_field_semantics(self, semantic, field_count):
+        attribute_index = self.metal_attribute_index_from_semantic(semantic)
+        if attribute_index is None:
+            return [None] * field_count
+        return [f"attribute({attribute_index + index})" for index in range(field_count)]
 
     def metal_stage_io_member_array_info(self, member):
         if self.canonical_metal_semantic(self.semantic_from_node(member)) in {
@@ -2634,8 +2654,13 @@ class MetalCodeGen:
         )
         if lowering is not None:
             code = ""
-            for field_name, field_type in lowering["fields"]:
-                code += f"    {field_type} {field_name};\n"
+            field_semantics = lowering.get("field_semantics", [])
+            for index, (field_name, field_type) in enumerate(lowering["fields"]):
+                semantic = (
+                    field_semantics[index] if index < len(field_semantics) else None
+                )
+                semantic_attr = self.map_semantic(semantic) if semantic else ""
+                code += f"    {field_type} {field_name}{semantic_attr};\n"
                 dependencies.update(self.metal_struct_type_dependencies(field_type))
             return code, dependencies
 
@@ -12003,7 +12028,8 @@ class MetalCodeGen:
             semantic = self.semantic_from_node(member)
             attribute_index = self.metal_attribute_index_from_semantic(semantic)
             if attribute_index is not None:
-                used_attributes.add(attribute_index)
+                span = self.metal_stage_io_member_attribute_span(member)
+                used_attributes.update(range(attribute_index, attribute_index + span))
 
         defaults = {}
         next_attribute = 0
@@ -12019,9 +12045,23 @@ class MetalCodeGen:
             while next_attribute in used_attributes:
                 next_attribute += 1
             defaults[member_name] = f"attribute({next_attribute})"
-            used_attributes.add(next_attribute)
-            next_attribute += 1
+            span = self.metal_stage_io_member_attribute_span(member)
+            used_attributes.update(range(next_attribute, next_attribute + span))
+            next_attribute += span
         return defaults
+
+    def metal_stage_io_member_attribute_span(self, member):
+        array_info = self.metal_stage_io_member_array_info(member)
+        if array_info is not None:
+            _element_type, size = array_info
+            return size
+
+        mapped_type = self.map_type(self.struct_member_raw_type(member))
+        dimensions = self.metal_matrix_dimensions(mapped_type)
+        if dimensions is not None:
+            _component_prefix, columns, _rows = dimensions
+            return columns
+        return 1
 
     def metal_default_vertex_output_member_semantics(self, struct_node):
         defaults = {}

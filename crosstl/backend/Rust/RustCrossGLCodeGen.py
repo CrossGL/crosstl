@@ -95,6 +95,7 @@ class RustToCrossGLConverter:
     RESOURCE_METHOD_NAMES = {
         "fetch",
         "fetch_with",
+        "gather",
         "query_levels",
         "query_samples",
         "query_size",
@@ -115,6 +116,7 @@ class RustToCrossGLConverter:
         "RWByteAddressBuffer",
     )
     RUST_GPU_SAMPLE_METHOD_MAP = {
+        "gather": "textureGather",
         "sample_by_lod": "textureLod",
         "sample_by_gradient": "textureGrad",
         "sample_with_project_coordinate": "textureProj",

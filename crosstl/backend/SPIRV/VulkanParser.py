@@ -1090,6 +1090,7 @@ class VulkanParser:
         expression_type_ids = {}
         variables_by_id = {variable["id"]: variable for variable in variables}
         phi_contexts = self.spirv_assembly_phi_contexts(raw_instructions)
+        used_result_ids = self.spirv_assembly_used_result_ids(raw_instructions)
         current_label = None
 
         for result_id, opcode, operands, _line_number in raw_instructions:
@@ -1338,6 +1339,21 @@ class VulkanParser:
                     names,
                     decorations,
                     constants,
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode == "OpImageTexelPointer" and len(operands) >= 4:
+                expressions[result_id] = (
+                    self.spirv_assembly_image_texel_pointer_expression(
+                        operands[1],
+                        operands[2],
+                        operands[3],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
                 )
                 expression_type_ids[result_id] = operands[0]
                 continue
@@ -1633,6 +1649,8 @@ class VulkanParser:
                         )
                     )
                     expression_type_ids[result_id] = operands[0]
+                    if result_id not in used_result_ids:
+                        statements.append(expressions[result_id])
                     continue
 
             if result_id and opcode in self.SPIRV_ATOMIC_RMW_FUNCTIONS:
@@ -1647,6 +1665,8 @@ class VulkanParser:
                         constants,
                     )
                     expression_type_ids[result_id] = operands[0]
+                    if result_id not in used_result_ids:
+                        statements.append(expressions[result_id])
                     continue
 
             if result_id and opcode in {
@@ -1666,6 +1686,8 @@ class VulkanParser:
                         )
                     )
                     expression_type_ids[result_id] = operands[0]
+                    if result_id not in used_result_ids:
+                        statements.append(expressions[result_id])
                     continue
 
             if result_id and opcode == "OpGroupNonUniformBroadcastFirst":
@@ -2248,6 +2270,14 @@ class VulkanParser:
                 raw_instructions
             )
             if result_id and opcode == "OpLabel"
+        }
+
+    def spirv_assembly_used_result_ids(self, raw_instructions):
+        return {
+            operand
+            for _result_id, _opcode, operands, _line_number in raw_instructions
+            for operand in operands
+            if isinstance(operand, str) and operand.startswith("%")
         }
 
     def spirv_assembly_phi_contexts(self, raw_instructions):
@@ -3218,6 +3248,43 @@ class VulkanParser:
         if sample is not None:
             args.append(sample)
         return FunctionCallNode("imageLoad", args)
+
+    def spirv_assembly_image_texel_pointer_expression(
+        self,
+        image_operand,
+        coordinate_operand,
+        sample_operand,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        return FunctionCallNode(
+            "spirvImageTexelPointer",
+            [
+                self.spirv_assembly_operand_expression(
+                    image_operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                ),
+                self.spirv_assembly_operand_expression(
+                    coordinate_operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                ),
+                self.spirv_assembly_operand_expression(
+                    sample_operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                ),
+            ],
+        )
 
     def spirv_assembly_image_write_statement(
         self,

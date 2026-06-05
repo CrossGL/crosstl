@@ -1268,6 +1268,43 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_IMAGE_TEXEL_POINTER_ATOMIC_IADD_ASSEMBLY = """
+; Reduced from glslangValidator 16.3.0 -V -H output for:
+; layout(r32ui, set = 0, binding = 0) uniform uimage2D img;
+; imageAtomicAdd(img, ivec2(0, 1), 3u);
+; SPIRV-Headers unified1 grammar declares OpImageTexelPointer as
+; Result Type, Result, Image, Coordinate, Sample.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %img "img"
+OpName %old "old"
+OpDecorate %img Binding 0
+OpDecorate %img DescriptorSet 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%int = OpTypeInt 32 1
+%v2int = OpTypeVector %int 2
+%image = OpTypeImage %uint 2D 0 0 0 2 R32ui
+%ptr_image_uniform = OpTypePointer UniformConstant %image
+%ptr_image_uint = OpTypePointer Image %uint
+%int_0 = OpConstant %int 0
+%int_1 = OpConstant %int 1
+%uint_0 = OpConstant %uint 0
+%uint_1 = OpConstant %uint 1
+%uint_3 = OpConstant %uint 3
+%coord = OpConstantComposite %v2int %int_0 %int_1
+%img = OpVariable %ptr_image_uniform UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+%texel_ptr = OpImageTexelPointer %ptr_image_uint %img %coord %uint_0
+%old = OpAtomicIAdd %uint %texel_ptr %uint_1 %uint_0 %uint_3
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_WEB_COMP_ATOMIC_COMPARE_EXCHANGE_ASSEMBLY = """
 ; Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
 ; Test/baseResults/web.comp.out OpAtomicCompareExchange on a buffer-block member.
@@ -3913,6 +3950,20 @@ def test_glslang_web_comp_atomic_iadd_codegen_reparse():
     assert "int oldValue @output @location(0);" in generated_code
     assert "oldValue = atomicAdd(counterBlock[0], 2);" in generated_code
     assert "oldValue = old;" not in generated_code
+    assert "OpAtomicIAdd" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_image_texel_pointer_atomic_iadd_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_IMAGE_TEXEL_POINTER_ATOMIC_IADD_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "RWTexture2D<uint> img @set(0) @binding(0) @r32ui;" in generated_code
+    assert "atomicAdd(spirvImageTexelPointer(img, int2(0, 1), 0), 3);" in generated_code
+    assert "texelPtr" not in generated_code
+    assert "OpImageTexelPointer" not in generated_code
     assert "OpAtomicIAdd" not in generated_code
     assert "Unhandled statement type" not in generated_code
 

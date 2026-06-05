@@ -763,6 +763,7 @@ class HLSLCodeGen:
             "dFdy": "ddy",
             "fract": "frac",
             "mix": "lerp",
+            "mod": "fmod",
         }
 
         self.semantic_map = {
@@ -4119,7 +4120,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.hlsl_transpose_result_type(
                     self.expression_result_type(args[0])
                 )
-            if func_name == "fract" and args:
+            if func_name in {"fract", "mod"} and args:
                 return self.expression_result_type(args[0])
             if func_name == "mix" and args:
                 return self.expression_result_type(args[0])
