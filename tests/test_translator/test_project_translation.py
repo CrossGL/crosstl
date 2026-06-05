@@ -1020,6 +1020,10 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["artifacts"][0]["path"] == (
         "translated/opengl/shaders/graphics/simple.glsl"
     )
+    assert payload["artifacts"][0]["provenance"] == {
+        "pipeline": "single-file-translate",
+        "intermediate": None,
+    }
     assert payload["artifacts"][0]["sourceHash"]["algorithm"] == "sha256"
     assert payload["artifacts"][0]["generatedHash"] == project_pipeline._source_hash(
         output
@@ -3799,6 +3803,40 @@ def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
     assert "artifacts[0].provenance.intermediate must be a string or null" in (
         diagnostic["message"]
     )
+
+
+def test_validate_project_report_rejects_missing_or_forged_artifact_provenance(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl", "opengl"], output_dir="out")
+    payload = report.to_json()
+    payload["artifacts"][0].pop("provenance")
+    payload["artifacts"][1]["provenance"] = {
+        "pipeline": "manual-copy",
+        "intermediate": "crossgl",
+    }
+    report_path = repo / "out" / "forged-provenance-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].provenance must be an object" in diagnostic["message"]
+    assert (
+        "artifacts[1].provenance.pipeline must be one of single-file-translate"
+        in diagnostic["message"]
+    )
+    assert (
+        "artifacts[1].provenance.intermediate must match "
+        "artifacts[1].sourceBackend and artifacts[1].target"
+    ) in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_current_translated_artifacts_without_hashes(

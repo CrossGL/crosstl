@@ -27,6 +27,8 @@ REPORT_KIND = "crosstl-project-portability-report"
 REPORT_INSPECTION_KIND = "crosstl-project-report-inspection"
 REPORT_SCHEMA_VERSION = 1
 REPORT_GENERATOR_PIPELINE = "project-porting"
+REPORT_ARTIFACT_PROVENANCE_PIPELINES = ("single-file-translate",)
+REPORT_ARTIFACT_PROVENANCE_INTERMEDIATES = ("crossgl",)
 REPORT_MIGRATION_SCOPE = "shader-kernel-translation"
 REPORT_MIGRATION_NON_GOALS = (
     "automatic runtime API migration",
@@ -2078,8 +2080,28 @@ def _generated_hash_contract_reasons(
     )
 
 
-def _provenance_contract_reasons(index: int, artifact: Mapping[str, Any]) -> list[str]:
+def _expected_provenance_intermediate(artifact: Mapping[str, Any]) -> str | None:
+    source_backend = artifact.get("sourceBackend")
+    target = artifact.get("target")
+    if not _is_non_empty_string(source_backend) or not _is_non_empty_string(target):
+        return None
+
+    normalized_source_backend = _normalized_targets([source_backend])[0]
+    normalized_target = _normalized_targets([target])[0]
+    if (
+        normalized_source_backend not in CROSSL_TARGETS
+        and normalized_target not in CROSSL_TARGETS
+    ):
+        return "crossgl"
+    return None
+
+
+def _provenance_contract_reasons(
+    index: int, artifact: Mapping[str, Any], *, required: bool = False
+) -> list[str]:
     if "provenance" not in artifact:
+        if required:
+            return [f"artifacts[{index}].provenance must be an object"]
         return []
 
     prefix = f"artifacts[{index}].provenance"
@@ -2088,11 +2110,35 @@ def _provenance_contract_reasons(index: int, artifact: Mapping[str, Any]) -> lis
         return [f"{prefix} must be an object"]
 
     reasons = []
-    if not _is_non_empty_string(provenance.get("pipeline")):
+    pipeline = provenance.get("pipeline")
+    if not _is_non_empty_string(pipeline):
         reasons.append(f"{prefix}.pipeline must be a string")
+    elif pipeline not in REPORT_ARTIFACT_PROVENANCE_PIPELINES:
+        reasons.append(
+            "{}.pipeline must be one of {}".format(
+                prefix, ", ".join(REPORT_ARTIFACT_PROVENANCE_PIPELINES)
+            )
+        )
     intermediate = provenance.get("intermediate")
     if intermediate is not None and not _is_non_empty_string(intermediate):
         reasons.append(f"{prefix}.intermediate must be a string or null")
+    elif intermediate is not None and intermediate not in (
+        REPORT_ARTIFACT_PROVENANCE_INTERMEDIATES
+    ):
+        reasons.append(
+            "{}.intermediate must be one of {} or null".format(
+                prefix, ", ".join(REPORT_ARTIFACT_PROVENANCE_INTERMEDIATES)
+            )
+        )
+    elif (
+        _is_non_empty_string(artifact.get("sourceBackend"))
+        and _is_non_empty_string(artifact.get("target"))
+        and intermediate != _expected_provenance_intermediate(artifact)
+    ):
+        reasons.append(
+            f"{prefix}.intermediate must match artifacts[{index}].sourceBackend "
+            f"and artifacts[{index}].target"
+        )
     return reasons
 
 
@@ -3822,7 +3868,9 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     required=require_artifact_hashes,
                 )
             )
-            reasons.extend(_provenance_contract_reasons(index, artifact))
+            reasons.extend(
+                _provenance_contract_reasons(index, artifact, required=has_summary)
+            )
             reasons.extend(_source_map_contract_reasons(index, artifact))
 
     diagnostics = report.get("diagnostics", [])
