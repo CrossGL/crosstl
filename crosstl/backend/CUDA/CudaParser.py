@@ -2964,7 +2964,27 @@ class CudaParser:
             is_constexpr = True
             self.eat("CONSTEXPR")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+
+        condition_or_init = None
+        if self.current_token[0] != "SEMICOLON":
+            if self.is_variable_declaration():
+                init_declarations = self.parse_variable_declaration_list()
+                condition_or_init = (
+                    init_declarations
+                    if len(init_declarations) > 1
+                    else init_declarations[0]
+                )
+            else:
+                condition_or_init = self.parse_expression()
+
+        init = None
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            init = condition_or_init
+            condition = self.parse_expression()
+        else:
+            condition = condition_or_init
+
         self.eat("RPAREN")
 
         if_body = self.parse_statement()
@@ -2976,6 +2996,8 @@ class CudaParser:
 
         node = IfNode(condition, if_body, else_body)
         node.is_constexpr = is_constexpr
+        if init is not None:
+            return [*init, node] if isinstance(init, list) else [init, node]
         return node
 
     def parse_for_statement(self):

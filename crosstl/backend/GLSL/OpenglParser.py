@@ -483,7 +483,9 @@ class GLSLParser:
                     and self.peek(1)[0] == "LPAREN"
                 ):
                     function = self.parse_function(
-                        self.type_name_with_array_suffixes(type_name, type_array_sizes)
+                        self.type_name_with_array_suffixes(type_name, type_array_sizes),
+                        qualifiers=qualifiers,
+                        layout=layout,
                     )
                     functions.append(function)
                     continue
@@ -1207,7 +1209,7 @@ class GLSLParser:
             str(qualifier).lower() for qualifier in qualifiers or []
         }
 
-    def parse_function(self, return_type):
+    def parse_function(self, return_type, qualifiers=None, layout=None):
         name = self.current_token[1]
         qualifier = None
         if name == "main" and not self.should_infer_shader_type:
@@ -1218,14 +1220,30 @@ class GLSLParser:
 
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-            return FunctionNode(return_type, name, params, body=[])
+            return FunctionNode(
+                return_type,
+                name,
+                params,
+                body=[],
+                qualifiers=list(qualifiers or []),
+                layout=layout,
+            )
 
         self.eat("LBRACE")
         body = self.parse_block()
         self.eat("RBRACE")
 
-        qualifiers = [qualifier] if qualifier else []
-        return FunctionNode(return_type, name, params, body, qualifiers=qualifiers)
+        function_qualifiers = list(qualifiers or [])
+        if qualifier:
+            function_qualifiers.append(qualifier)
+        return FunctionNode(
+            return_type,
+            name,
+            params,
+            body,
+            qualifiers=function_qualifiers,
+            layout=layout,
+        )
 
     def parse_parameters(self):
         self.eat("LPAREN")

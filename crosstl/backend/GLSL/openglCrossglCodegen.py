@@ -918,6 +918,7 @@ class GLSLToCrossGLConverter:
             for qualifier, attribute in self.VARIABLE_QUALIFIER_ATTRIBUTES.items()
             if qualifier in qualifiers and qualifier not in excluded_qualifiers
         ]
+        attributes.extend(self.subroutine_qualifier_attributes(var))
         return f" {' '.join(attributes)}" if attributes else ""
 
     def vulkan_memory_model_qualifier_attributes(self, var):
@@ -932,6 +933,28 @@ class GLSLToCrossGLConverter:
     def vulkan_memory_model_qualifier_attribute_suffix(self, var):
         attributes = self.vulkan_memory_model_qualifier_attributes(var)
         return f" {' '.join(attributes)}" if attributes else ""
+
+    def subroutine_qualifier_attributes(self, node):
+        attributes = []
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            qualifier_text = str(qualifier)
+            lowered = qualifier_text.lower()
+            if lowered == "subroutine":
+                attributes.append("@subroutine")
+            elif lowered.startswith("subroutine(") and qualifier_text.endswith(")"):
+                arguments = qualifier_text[qualifier_text.find("(") + 1 : -1]
+                attributes.append(f"@subroutine({arguments})")
+        return attributes
+
+    def subroutine_qualifier_attribute_suffix(self, node):
+        attributes = self.subroutine_qualifier_attributes(node)
+        return f" {' '.join(attributes)}" if attributes else ""
+
+    def is_subroutine_qualified(self, node):
+        return any(
+            str(qualifier).lower().startswith("subroutine")
+            for qualifier in getattr(node, "qualifiers", []) or []
+        )
 
     def is_qualifier_only_builtin_declaration(self, var):
         if not isinstance(var, VariableNode):
@@ -1382,8 +1405,17 @@ class GLSLToCrossGLConverter:
             resource_uniforms = [
                 u for u in self.uniform_vars if self._is_resource_type(u.vtype)
             ]
+            subroutine_uniforms = [
+                u for u in self.uniform_vars if self.is_subroutine_qualified(u)
+            ]
+            resource_uniforms = [
+                u for u in resource_uniforms if not self.is_subroutine_qualified(u)
+            ]
             data_uniforms = [
-                u for u in self.uniform_vars if not self._is_resource_type(u.vtype)
+                u
+                for u in self.uniform_vars
+                if not self._is_resource_type(u.vtype)
+                and not self.is_subroutine_qualified(u)
             ]
             push_constant_blocks = {}
             ordinary_data_uniforms = []
@@ -1402,6 +1434,13 @@ class GLSLToCrossGLConverter:
                 result += (
                     self.indent_str
                     + f"{var_type} {var_name}{array_suffix}{attributes};\n"
+                )
+
+            for uniform in subroutine_uniforms:
+                result += (
+                    self.indent_str
+                    + self.generate_variable_declaration(uniform)
+                    + ";\n"
                 )
 
             for block_name, uniforms in push_constant_blocks.items():
@@ -1668,6 +1707,11 @@ class GLSLToCrossGLConverter:
         try:
             return_type = self.convert_type(node.return_type)
             name = self.format_function_name(node.name)
+            attributes = (
+                self.variable_layout_attribute_suffix(node)
+                + self.subroutine_qualifier_attribute_suffix(node)
+            ).strip()
+            attribute_prefix = f"{attributes} " if attributes else ""
 
             params = []
             for param in node.params:
@@ -1677,7 +1721,7 @@ class GLSLToCrossGLConverter:
 
             params_str = ", ".join(params)
 
-            result = f"{return_type} {name}({params_str}) {{\n"
+            result = f"{attribute_prefix}{return_type} {name}({params_str}) {{\n"
 
             self.increase_indent()
             for statement in self.generate_statement_sequence(node.body):

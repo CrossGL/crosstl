@@ -580,6 +580,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_PRIVATE_GLOBAL_ASSEMBLY = """
+; Reduced from glslangValidator -V -H output for GLSL module-scope globals:
+; vec4 privateColor; float privateWeight = 1.0;
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %private_color "privateColor"
+OpName %private_weight "privateWeight"
+OpName %out_color "outColor"
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_private_v4float = OpTypePointer Private %v4float
+%ptr_private_float = OpTypePointer Private %float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%one = OpConstant %float 1.0
+%zero = OpConstant %float 0.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%private_color = OpVariable %ptr_private_v4float Private
+%private_weight = OpVariable %ptr_private_float Private %one
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpStore %private_color %red
+%loaded = OpLoad %v4float %private_color
+OpStore %out_color %loaded
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_PUSH_CONSTANT_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -1461,6 +1494,26 @@ def test_spirv_assembly_matrix_interface_parse():
     assert input_layout.data_type == "mat4"
     assert input_layout.variable_name == "model"
     assert input_layout.qualifiers == [("location", "0")]
+
+
+def test_glslang_private_global_variables_parse():
+    tokens = tokenize_code(SPIRV_GLSLANG_PRIVATE_GLOBAL_ASSEMBLY)
+    ast = parse_code(tokens)
+
+    output_layout = ast.global_variables[0]
+    private_color = ast.global_variables[1]
+    private_weight = ast.global_variables[2]
+
+    assert isinstance(output_layout, LayoutNode)
+    assert output_layout.variable_name == "outColor"
+    assert isinstance(private_color, VariableNode)
+    assert private_color.vtype == "vec4"
+    assert private_color.name == "privateColor"
+    assert isinstance(private_weight, AssignmentNode)
+    assert isinstance(private_weight.left, VariableNode)
+    assert private_weight.left.vtype == "float"
+    assert private_weight.left.name == "privateWeight"
+    assert private_weight.right == "1.0"
 
 
 def test_spirv_assembly_push_constant_block_parse():

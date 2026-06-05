@@ -8904,6 +8904,24 @@ def test_rust_gpu_mouse_shader_tuple_struct_destructure_codegen():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_mouse_shader_glam_distance_method_codegen():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/mouse-shader/src/lib.rs Line::distance.
+    code = """
+    fn line_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+        let proj = dot(p - a, b - a) / dot(b - a, b - a);
+        p.distance(a.lerp(b, proj))
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "return distance(p, mix(a, b, proj));" in result
+    assert ".distance(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_mouse_shader_impl_trait_parameter_codegen():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

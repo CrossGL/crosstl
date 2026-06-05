@@ -3,6 +3,7 @@ from crosstl.backend.HIP.HipAst import (
     BinaryOpNode,
     FunctionCallNode,
     HipAsmNode,
+    IfNode,
     KernelLaunchNode,
     UnaryOpNode,
     VariableNode,
@@ -1095,3 +1096,36 @@ def test_external_rocm_hip_tests_byte_perm_intrinsic_codegen_reparse():
     assert "((s >> 12) & 0xf)" in crossgl
     assert "y[1] = (((x1 >> 24) & 0xffu)" in crossgl
     assert "= __byte_perm(" not in crossgl
+
+
+def test_public_cuda_kernel_if_init_statement_hip_parity_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/InternLM/lmdeploy
+    # commit: 51334f09560a3432c434ad39c5ea67cc379ad995
+    # path: src/turbomind/kernels/quantization.cu
+    source = """
+    __global__ void guarded_store(int* out,
+                                  int num,
+                                  int dim,
+                                  int rows,
+                                  int row) {
+        int di = threadIdx.x;
+        int ti = blockIdx.x;
+        for (int s = 0; s < 2; ++s) {
+            if (auto r = ti + s * rows + row; r < num && di < dim) {
+                out[r] = di;
+            }
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    loop_body = ast.statements[0].body[2].body
+
+    assert isinstance(loop_body[0], VariableNode)
+    assert loop_body[0].name == "r"
+    assert loop_body[0].vtype == "auto"
+    assert isinstance(loop_body[1], IfNode)
+    assert "var r: auto = ((ti + (s * rows)) + row);" in crossgl
+    assert "if (((r < num) && (di < dim))) {" in crossgl
+    assert "out[r] = di;" in crossgl

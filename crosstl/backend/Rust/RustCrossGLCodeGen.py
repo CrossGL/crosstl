@@ -3918,6 +3918,13 @@ class RustToCrossGLConverter:
             return f"{method_name}({obj}, {args[0]})"
 
         if (
+            method_name == "distance"
+            and len(args) == 1
+            and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
+        ):
+            return f"distance({obj}, {args[0]})"
+
+        if (
             method_name in {"map", "filter", "for_each", "any", "all"}
             and len(args) == 1
             and isinstance(arg_nodes[0], ClosureNode)

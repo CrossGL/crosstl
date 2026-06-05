@@ -612,6 +612,33 @@ def test_codegen_external_yuv_sampler_uniforms_are_resources_from_glslang():
     assert "texture(highExt, vec2(0.2))" in crossgl
 
 
+def test_codegen_subroutine_metadata_from_khronos_shader_subroutine():
+    code = textwrap.dedent("""
+        #version 400 core
+        subroutine vec4 ColorFunc();
+        layout(index = 2) subroutine(ColorFunc) vec4 redColor()
+        {
+            return vec4(1.0, 0.0, 0.0, 1.0);
+        }
+        layout(location = 1) subroutine uniform ColorFunc materialColor;
+        out vec4 outColor;
+
+        void main()
+        {
+            outColor = materialColor();
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "@subroutine vec4 ColorFunc()" in crossgl
+    assert "@index(2) @subroutine(ColorFunc) vec4 redColor()" in crossgl
+    assert "ColorFunc materialColor @location(1) @subroutine;" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert "outColor = materialColor();" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_nonuniform_ext_qualifier_from_glslang_is_preserved():
     # Reduced from KhronosGroup/glslang Test/spv.nonuniform.frag.
     code = textwrap.dedent("""

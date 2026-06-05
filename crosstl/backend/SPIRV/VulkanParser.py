@@ -832,6 +832,7 @@ class VulkanParser:
                         "id": result_id,
                         "pointer_type_id": operands[0],
                         "storage_class": operands[1],
+                        "initializer": operands[2] if len(operands) >= 3 else None,
                     }
                 )
 
@@ -860,6 +861,11 @@ class VulkanParser:
             member_names,
             types,
             constants,
+        )
+        global_variables.extend(
+            self.spirv_assembly_private_global_variables(
+                variables, names, decorations, types, constants
+            )
         )
         global_variables = (
             self.spirv_assembly_specialization_constants(
@@ -3118,6 +3124,50 @@ class VulkanParser:
             )
 
         return layouts
+
+    def spirv_assembly_private_global_variables(
+        self, variables, names, decorations, types, constants
+    ):
+        declarations = []
+        for variable in variables:
+            pointer_type = types.get(variable["pointer_type_id"], {})
+            storage_class = variable["storage_class"] or pointer_type.get(
+                "storage_class"
+            )
+            if storage_class != "Private" or pointer_type.get("kind") != "pointer":
+                continue
+
+            data_type, array_suffix = self.spirv_type_name_and_suffix(
+                pointer_type.get("type_id"), types, constants, names=names
+            )
+            if data_type is None:
+                continue
+
+            declaration = VariableNode(
+                data_type,
+                f"{self.spirv_assembly_value_name(variable['id'], names, decorations)}"
+                f"{array_suffix}",
+                spirv_id=variable["id"],
+                spirv_type_id=pointer_type.get("type_id"),
+            )
+            initializer = variable.get("initializer")
+            if initializer is not None:
+                declarations.append(
+                    AssignmentNode(
+                        declaration,
+                        self.spirv_assembly_operand_expression(
+                            initializer,
+                            {},
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                    )
+                )
+            else:
+                declarations.append(declaration)
+
+        return declarations
 
     def spirv_assembly_uniform_constant_layout(
         self, variable, pointer_type, names, decorations, types, constants

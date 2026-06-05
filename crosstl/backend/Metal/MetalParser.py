@@ -392,6 +392,8 @@ class MetalParser:
                 global_variables.append(self.parse_static_assert())
             elif self.is_operator_function_definition():
                 self.skip_operator_function_definition()
+            elif self.is_decltype_template_instantiation_declaration():
+                self.skip_decltype_template_instantiation_declaration()
             elif self.is_top_level_parameter_fragment_start():
                 self.parse_top_level_parameter_fragment()
             elif self.current_token[0] == "CONSTANT":
@@ -760,6 +762,63 @@ class MetalParser:
             return
         if self.current_token[0] == "LBRACE":
             self.skip_balanced_block()
+
+    def is_decltype_template_instantiation_declaration(self):
+        idx = self.skip_leading_attribute_tokens_at(self.pos)
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
+
+        if not self.is_decltype_start_at(idx):
+            return False
+        idx = self.skip_decltype_type_at(idx)
+
+        while idx < len(self.tokens):
+            if self.is_qualifier_token_at(idx):
+                idx += 1
+                continue
+            if self.tokens[idx][0] in {"MULTIPLY", "BITWISE_AND"}:
+                idx += 1
+                continue
+            break
+
+        idx = self.skip_leading_attribute_tokens_at(idx)
+        if idx >= len(self.tokens) or not self.is_name_token_at(idx):
+            return False
+        idx += 1
+
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "LESS_THAN":
+            return False
+        idx = self.skip_template_argument_list_at(idx)
+        return idx < len(self.tokens) and self.tokens[idx][0] == "SEMICOLON"
+
+    def skip_decltype_template_instantiation_declaration(self):
+        while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+            self.eat(self.current_token[0])
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+    def is_decltype_start_at(self, idx):
+        return (
+            idx + 1 < len(self.tokens)
+            and self.tokens[idx] == ("IDENTIFIER", "decltype")
+            and self.tokens[idx + 1][0] == "LPAREN"
+        )
+
+    def skip_decltype_type_at(self, idx):
+        if not self.is_decltype_start_at(idx):
+            return idx
+        idx += 2
+        depth = 1
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return idx + 1
+            idx += 1
+        return idx
 
     def is_function_definition(self):
         idx = self.skip_leading_attribute_tokens_at(self.pos)
@@ -2141,6 +2200,8 @@ class MetalParser:
             return True
         if token_type in TYPE_TOKENS:
             if token_type == "IDENTIFIER":
+                if self.is_decltype_start_at(idx):
+                    return True
                 if (
                     token_value in SIGNED_TYPE_PREFIXES
                     and idx + 1 < len(self.tokens)

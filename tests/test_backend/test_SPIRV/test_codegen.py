@@ -122,6 +122,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_PRIVATE_GLOBAL_ASSEMBLY = """
+; Reduced from glslangValidator -V -H output for GLSL module-scope globals:
+; vec4 privateColor; float privateWeight = 1.0;
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %private_color "privateColor"
+OpName %private_weight "privateWeight"
+OpName %out_color "outColor"
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_private_v4float = OpTypePointer Private %v4float
+%ptr_private_float = OpTypePointer Private %float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%one = OpConstant %float 1.0
+%zero = OpConstant %float 0.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%private_color = OpVariable %ptr_private_v4float Private
+%private_weight = OpVariable %ptr_private_float Private %one
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpStore %private_color %red
+%loaded = OpLoad %v4float %private_color
+OpStore %out_color %loaded
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_SIMPLE_MAT_MATRIX_TIMES_VECTOR_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -2919,6 +2952,21 @@ def test_spirv_assembly_matrix_interface_codegen():
 
     assert "float4x4 model @input @location(0);" in generated_code
     assert "%model" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_private_global_variables_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_PRIVATE_GLOBAL_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "float4 privateColor;" in generated_code
+    assert "float privateWeight = 1.0;" in generated_code
+    assert "privateColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "outColor = privateColor;" in generated_code
+    assert "outColor = loaded;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

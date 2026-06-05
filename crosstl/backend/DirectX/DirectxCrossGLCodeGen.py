@@ -1266,6 +1266,20 @@ class HLSLToCrossGLConverter:
                 rendered.append(f"@ {attr_name}")
         return " ".join(rendered)
 
+    def format_inline_resource_qualifier_attributes(self, parameter):
+        if not self.is_uav_resource_type(getattr(parameter, "vtype", None)):
+            return ""
+
+        qualifiers = {
+            str(q).lower() for q in getattr(parameter, "qualifiers", []) or []
+        }
+        rendered = []
+        if "globallycoherent" in qualifiers:
+            rendered.append("@ globallycoherent")
+        if "reordercoherent" in qualifiers:
+            rendered.append("@ reordercoherent")
+        return " ".join(rendered)
+
     def format_geometry_primitive_parameter_qualifier(self, parameter):
         for attr in getattr(parameter, "attributes", []) or []:
             if str(getattr(attr, "name", "")).lower() != "primitive":
@@ -1303,6 +1317,11 @@ class HLSLToCrossGLConverter:
         attributes = self.format_inline_parameter_attributes(parameter)
         if attributes:
             prefixes.append(attributes)
+        resource_attributes = self.format_inline_resource_qualifier_attributes(
+            parameter
+        )
+        if resource_attributes:
+            prefixes.append(resource_attributes)
         qualifier_prefix = self.format_storage_qualifier_prefix(
             parameter, {"in", "out", "inout", "const", "precise"}
         ).strip()

@@ -302,6 +302,22 @@ def test_parse_block_scope_using_decltype_alias_from_mlx_steel_attention():
     assert body[2].right.name == "stile_t::kRowsPerThread"
 
 
+def test_parse_block_scope_decltype_variable_declaration():
+    code = """
+    void prepare_shape() {
+        int lane_count = 4;
+        decltype(lane_count) active_lanes = lane_count;
+    }
+    """
+    ast = parse_ok(code)
+
+    decl = ast.functions[0].body[1]
+    assert isinstance(decl, AssignmentNode)
+    assert decl.left.vtype == "decltype(lane_count)"
+    assert decl.left.name == "active_lanes"
+    assert decl.right.name == "lane_count"
+
+
 def test_parse_block_scope_typedef_alias_from_mlx_fp_quantized():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
@@ -1734,6 +1750,25 @@ def test_parse_decltype_template_typedef_and_explicit_instantiations_from_llama_
     assert ast.typedefs[0].alias_type == "decltype(kernel_unary_impl<float>)"
     assert len(ast.functions) == 1
     assert ast.functions[0].name == "kernel_unary_impl"
+
+
+def test_parse_decltype_kernel_template_id_instantiation_from_mlx_jit_indexing():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Path: mlx/backend/metal/jit/indexing.h
+    code = """
+    template <typename T>
+    [[kernel]] void slice_update_op_impl(device T* out [[buffer(0)]]) {
+        out[0] = T(0);
+    }
+
+    [[kernel]] decltype(slice_update_op_impl<float>) slice_update_op_impl<float>;
+    """
+    ast = parse_ok(code)
+
+    assert len(ast.functions) == 1
+    assert ast.functions[0].name == "slice_update_op_impl"
+    assert ast.global_variables == []
 
 
 def test_parse_pragma_and_type_trait_expression_from_llama_cpp():

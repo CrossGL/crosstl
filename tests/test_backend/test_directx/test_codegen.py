@@ -1968,6 +1968,31 @@ def test_codegen_preserves_uav_coherency_and_register_space():
     )
 
 
+def test_codegen_preserves_globallycoherent_uav_parameter_from_hlsl_specs():
+    # Source: Microsoft HLSL Specifications proposal 0021, vk cooperative matrix.
+    # It declares CoherentStore(globallycoherent RWStructuredBuffer<Type> data, ...).
+    code = textwrap.dedent("""
+        struct Payload {
+            uint value;
+        };
+
+        void CoherentStore(
+            globallycoherent RWStructuredBuffer<Payload> data,
+            uint index
+        ) {
+            data[index].value = 1u;
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert (
+        "void CoherentStore(@ globallycoherent "
+        "RWStructuredBuffer<Payload> data, uint index)" in output
+    )
+    assert "data[index].value = 1;" in output
+
+
 def test_codegen_preserves_reordercoherent_uav_from_dxc_dxil_69():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/CodeGenDXIL/hlsl/attributes/reordercoherent_uav.hlsl

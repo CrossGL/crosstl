@@ -2,10 +2,12 @@ from crosstl.backend.CUDA.CudaAst import (
     AtomicOperationNode,
     ForNode,
     FunctionCallNode,
+    IfNode,
     ReturnNode,
     SharedMemoryNode,
     StructNode,
     TypeAliasNode,
+    VariableNode,
 )
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
@@ -1557,3 +1559,38 @@ def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():
         "cooperative_groups thread_block_tile.sync not directly supported"
         not in crossgl
     )
+
+
+def test_public_cuda_kernel_if_init_statement_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/InternLM/lmdeploy
+    # commit: 51334f09560a3432c434ad39c5ea67cc379ad995
+    # path: src/turbomind/kernels/quantization.cu
+    source = """
+    __global__ void guarded_store(int* out,
+                                  int num,
+                                  int dim,
+                                  int rows,
+                                  int row) {
+        int di = threadIdx.x;
+        int ti = blockIdx.x;
+        for (int s = 0; s < 2; ++s) {
+            if (auto r = ti + s * rows + row; r < num && di < dim) {
+                out[r] = di;
+            }
+        }
+    }
+    """
+
+    ast = parse_cuda(source)
+    loop_body = ast.kernels[0].body[2].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(loop_body[0], VariableNode)
+    assert loop_body[0].name == "r"
+    assert loop_body[0].vtype == "auto"
+    assert isinstance(loop_body[1], IfNode)
+    assert "var r: auto = ((ti + (s * rows)) + row);" in crossgl
+    assert "if (((r < num) && (di < dim))) {" in crossgl
+    assert "out[r] = di;" in crossgl
+    assert_crossgl_reparse(crossgl)

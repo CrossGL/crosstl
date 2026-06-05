@@ -1882,6 +1882,26 @@ def test_codegen_mlx_steel_const_function_constants_from_fft():
     parse_crossgl(crossgl)
 
 
+def test_codegen_skips_mlx_decltype_kernel_template_id_instantiation():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Path: mlx/backend/metal/jit/indexing.h
+    code = """
+    template <typename T>
+    [[kernel]] void slice_update_op_impl(device T* out [[buffer(0)]]) {
+        out[0] = T(0);
+    }
+
+    [[kernel]] decltype(slice_update_op_impl<float>) slice_update_op_impl<float>;
+    """
+    crossgl = convert(code)
+
+    assert "slice_update_op_impl" in crossgl
+    assert "decltype" not in crossgl
+    assert "slice_update_op_impl<float>" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_sanitizes_crossgl_keyword_identifiers_from_real_msl():
     code = """
     #include <metal_stdlib>

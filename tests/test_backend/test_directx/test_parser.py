@@ -2766,6 +2766,29 @@ def test_parse_reordercoherent_local_resource_from_dxc_dxil_69():
     assert isinstance(ast.functions[0].body[1], AssignmentNode)
 
 
+def test_parse_globallycoherent_uav_parameter_from_hlsl_specs():
+    # Source: Microsoft HLSL Specifications proposal 0021, vk cooperative matrix.
+    # It declares CoherentStore(globallycoherent RWStructuredBuffer<Type> data, ...).
+    ast = parse_code("""
+        struct Payload {
+            uint value;
+        };
+
+        void CoherentStore(
+            globallycoherent RWStructuredBuffer<Payload> data,
+            uint index
+        ) {
+            data[index].value = 1u;
+        }
+    """)
+
+    param = ast.functions[0].params[0]
+
+    assert param.vtype == "RWStructuredBuffer<Payload>"
+    assert param.name == "data"
+    assert param.qualifiers == ["globallycoherent"]
+
+
 def test_parse_struct_operator_methods_from_dxc_intrinsics_tests():
     code = textwrap.dedent("""
         struct Vector {
