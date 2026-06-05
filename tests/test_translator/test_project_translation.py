@@ -5564,7 +5564,25 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
     }
     assert payload["failedArtifacts"] == []
-    assert payload["migration"]["actions"][0]["kind"] == ("manual-runtime-integration")
+    assert payload["migration"]["scope"] == "shader-kernel-translation"
+    assert payload["migration"]["nonGoals"] == [
+        "automatic runtime API migration",
+        "application build-system rewrites",
+        "backend framework integration",
+    ]
+    assert payload["migration"]["actionCount"] == 1
+    assert payload["migration"]["actions"] == [
+        {
+            "kind": "manual-runtime-integration",
+            "severity": "note",
+            "message": (
+                "CrossTL translated shader/kernel source artifacts only; review "
+                "host runtime API calls, resource binding setup, build scripts, "
+                "and backend framework integration separately."
+            ),
+            "targets": ["cgl"],
+        }
+    ]
 
 
 def test_inspect_project_report_records_truncation_metadata(tmp_path):

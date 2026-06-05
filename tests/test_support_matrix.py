@@ -136,6 +136,9 @@ def test_project_report_inspection_is_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_reports_truncated_sections"
         ) in backend_support["evidence"]
+        assert "migration scope, non-goals, action counts, actions" in (
+            backend_support["notes"]
+        )
 
 
 def test_project_migration_actions_are_first_class_support_feature():

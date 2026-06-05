@@ -1912,13 +1912,20 @@ def inspect_project_report(
 
     migration = report.get("migration")
     if isinstance(migration, Mapping):
+        actions = (
+            list(migration.get("actions", []))
+            if isinstance(migration.get("actions"), list)
+            else []
+        )
         payload["migration"] = {
             "scope": migration.get("scope"),
-            "actions": (
-                list(migration.get("actions", []))
-                if isinstance(migration.get("actions"), list)
+            "nonGoals": (
+                list(migration.get("nonGoals", []))
+                if isinstance(migration.get("nonGoals"), list)
                 else []
             ),
+            "actionCount": len(actions),
+            "actions": actions,
         }
 
     external_corpus = report.get("externalCorpus")
