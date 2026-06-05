@@ -244,9 +244,11 @@ Project reports are JSON documents with:
   artifact output paths to match the target/variant directory plus the
   source-relative path with the target backend suffix, artifact source paths
   to match declared translation units, and artifact source backend names to
-  match those units. Full reports also require artifact define maps to match
-  the project-level defines merged with the artifact variant's define
-  overrides.
+  match those units. Full reports with translated or failed artifacts must
+  include the expected artifact matrix for each declared translation unit,
+  target, and configured variant. Full reports also require artifact define
+  maps to match the project-level defines merged with the artifact variant's
+  define overrides.
   Successful artifact records in full reports must include file-level
   source-map anchors.
   Artifact provenance records the
@@ -257,6 +259,9 @@ Project reports are JSON documents with:
   records. Full reports also reject translated artifacts that carry error
   metadata. Invalid project output directories are recorded as failed artifacts
   without writing files.
+- ``artifactMatrix``: translation-report metadata with the expected artifact
+  count for the unit, target, and variant matrix. Scan-only reports omit this
+  object because they intentionally contain no translated or failed artifacts.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, valid/invalid manifest-entry counts, and translated/failed artifact
@@ -278,11 +283,12 @@ Project reports are JSON documents with:
   validation report artifact target, hash-status, toolchain status, and
   toolchain-run status rollups, source-root and include-directory status record
   and count consistency checks, unit source hash shape and current-file checks,
-  full-report artifact define map checks, full-report source-map granularity,
-  target, and source-backend rollup checks, source hash checks, failed artifact
-  error metadata checks, translated artifact error metadata rejection, required
-  artifact provenance and provenance value checks, failed artifact generated
-  metadata rejection, required translated artifact source maps, source-map
+  full-report artifact matrix coverage and artifact define map checks,
+  full-report source-map granularity, target, and source-backend rollup checks,
+  source hash checks, failed artifact error metadata checks, translated artifact
+  error metadata rejection, required artifact provenance and provenance value
+  checks, failed artifact generated metadata rejection, required translated
+  artifact source maps, source-map
   record shape, non-empty mapping list, single file-level mapping, span
   consistency, and anchor consistency checks, external
   corpus record, per-entry artifact count, and summary checks, summary

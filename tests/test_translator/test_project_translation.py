@@ -66,6 +66,28 @@ def _generated_hash_status_counts(**overrides):
     return counts
 
 
+def _refresh_artifact_summary(payload):
+    artifacts = payload["artifacts"]
+    summary = payload["summary"]
+    summary["artifactCount"] = len(artifacts)
+    summary["translatedCount"] = sum(
+        1 for artifact in artifacts if artifact.get("status") == "translated"
+    )
+    summary["failedCount"] = sum(
+        1 for artifact in artifacts if artifact.get("status") == "failed"
+    )
+    summary["artifactsBySourceBackend"] = (
+        project_pipeline._artifact_counts_by_source_backend(artifacts)
+    )
+    summary["artifactsByVariant"] = project_pipeline._artifact_counts_by_variant(
+        artifacts
+    )
+    summary["artifactsByTarget"] = project_pipeline._artifact_counts_by_target(
+        artifacts
+    )
+    summary.update(project_pipeline._source_map_rollups(artifacts))
+
+
 def _diagnostic_location(file):
     return {
         "file": file,
@@ -1078,6 +1100,75 @@ def test_translate_project_expands_named_variants_with_merged_defines(
     )["defines"] == {"MODE": "base", "USE_FAST_PATH": "1"}
 
 
+def test_translate_project_records_artifact_matrix_metadata(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "first.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "second.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl", "opengl"]
+            output_dir = "translated"
+
+            [project.variants.debug]
+            MODE = "debug"
+
+            [project.variants.release]
+            MODE = "release"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_artifact(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del format_output, source_backend, include_paths
+        text = json.dumps(
+            {
+                "source": Path(file_path).name,
+                "target": backend,
+                "defines": dict(defines or {}),
+            },
+            sort_keys=True,
+        )
+        Path(save_shader).write_text(text, encoding="utf-8")
+        return text
+
+    monkeypatch.setattr(project_pipeline, "translate", write_artifact)
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["artifactMatrix"] == {
+        "unitCount": 2,
+        "targetCount": 2,
+        "variantCount": 2,
+        "variantMode": "named",
+        "expectedArtifactCount": 8,
+    }
+    assert payload["summary"]["artifactCount"] == 8
+    assert {
+        (artifact["source"], artifact["target"], artifact.get("variant"))
+        for artifact in payload["artifacts"]
+    } == {
+        ("first.cgl", "cgl", "debug"),
+        ("first.cgl", "cgl", "release"),
+        ("first.cgl", "opengl", "debug"),
+        ("first.cgl", "opengl", "release"),
+        ("second.cgl", "cgl", "debug"),
+        ("second.cgl", "cgl", "release"),
+        ("second.cgl", "opengl", "debug"),
+        ("second.cgl", "opengl", "release"),
+    }
+
+
 def test_validate_project_report_rejects_artifacts_with_undeclared_variants(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1109,6 +1200,146 @@ def test_validate_project_report_rejects_artifacts_with_undeclared_variants(tmp_
     assert "artifacts[0].variant must be listed in project.variants" in (
         diagnostic["message"]
     )
+
+
+def test_validate_project_report_rejects_missing_target_artifact_matrix_entries(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl", "opengl"], output_dir="out")
+    payload = report.to_json()
+    payload["artifacts"] = [
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "cgl"
+    ]
+    _refresh_artifact_summary(payload)
+    report_path = repo / "out" / "missing-target-artifact-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts must include units[0].path simple.cgl target opengl" in (
+        diagnostic["message"]
+    )
+    assert "summary.artifactCount must match" not in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_empty_translated_artifact_matrix(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["artifacts"] = []
+    _refresh_artifact_summary(payload)
+    report_path = repo / "out" / "empty-artifact-matrix-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts must include units[0].path simple.cgl target cgl" in (
+        diagnostic["message"]
+    )
+    assert "summary.artifactCount must match" not in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_artifact_matrix_count_mismatches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["artifactMatrix"]["expectedArtifactCount"] = 2
+    report_path = repo / "out" / "invalid-artifact-matrix-count-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifactMatrix.expectedArtifactCount must match expected artifact matrix"
+        in (diagnostic["message"])
+    )
+
+
+def test_validate_project_report_rejects_missing_variant_artifact_matrix_entries(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.variants.debug]
+            MODE = "debug"
+
+            [project.variants.release]
+            MODE = "release"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    payload["artifacts"] = [
+        artifact
+        for artifact in payload["artifacts"]
+        if artifact.get("variant") == "debug"
+    ]
+    _refresh_artifact_summary(payload)
+    report_path = repo / "out" / "missing-variant-artifact-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts must include units[0].path simple.cgl target cgl variant release"
+        in diagnostic["message"]
+    )
+    assert "summary.artifactCount must match" not in diagnostic["message"]
+
+
+def test_validate_project_report_allows_scan_reports_without_artifacts(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = scan_project(repo).to_report(targets=["cgl", "opengl"])
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert validation["validation"]["artifacts"] == []
+    assert validation["validation"]["summary"] == {
+        "artifactCount": 0,
+        "okCount": 0,
+        "failedCount": 0,
+        "sourceHashStatusCounts": _source_hash_status_counts(),
+        "generatedHashStatusCounts": _generated_hash_status_counts(),
+    }
 
 
 def test_validate_project_report_rejects_missing_artifact_defines(tmp_path):

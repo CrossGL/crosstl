@@ -326,6 +326,9 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         )
         assert "translated artifacts with error metadata" in backend_support["notes"]
         assert "source-relative target/variant layout" in backend_support["notes"]
+        assert "unit-target-variant artifact matrix entries" in (
+            backend_support["notes"]
+        )
         assert "applied define map" in backend_support["notes"]
         assert "missing or mismatched artifact define maps" in (
             backend_support["notes"]
@@ -334,6 +337,7 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         assert "full report units or artifacts without source hashes" in (
             backend_support["notes"]
         )
+        assert "artifactMatrix metadata" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_current_translated_artifacts_"
@@ -348,6 +352,30 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_failed_artifacts_without_"
             "source_hash"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_target_artifact_"
+            "matrix_entries"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_variant_artifact_"
+            "matrix_entries"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_records_artifact_matrix_metadata"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_empty_translated_artifact_"
+            "matrix"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_matrix_count_"
+            "mismatches"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -421,6 +449,8 @@ def test_project_validation_hooks_document_migration_contract_checks():
         ) in backend_support["notes"]
         assert "unit source hash checks" in backend_support["notes"]
         assert "unit extension/path consistency" in backend_support["notes"]
+        assert "artifactMatrix metadata" in backend_support["notes"]
+        assert "artifact matrix coverage" in backend_support["notes"]
         assert "applied define map consistency" in backend_support["notes"]
         assert "target/variant directory containment" in backend_support["notes"]
         assert "source-root status record and count consistency" in (
@@ -460,6 +490,30 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_define_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_target_artifact_"
+            "matrix_entries"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_variant_artifact_"
+            "matrix_entries"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_empty_translated_artifact_"
+            "matrix"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_matrix_count_"
+            "mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_allows_scan_reports_without_artifacts"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

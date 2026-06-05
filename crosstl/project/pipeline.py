@@ -1291,6 +1291,7 @@ class ProjectPortabilityReport:
     diagnostics: Sequence[ProjectDiagnostic]
     validation: Mapping[str, Any]
     migration_actions: Sequence[dict[str, Any]]
+    artifact_matrix: Mapping[str, Any] | None = None
     generated_at: int = field(default_factory=lambda: int(time.time()))
 
     def to_json(self) -> dict[str, Any]:
@@ -1384,6 +1385,8 @@ class ProjectPortabilityReport:
                 "actions": list(self.migration_actions),
             },
         }
+        if self.artifact_matrix is not None:
+            payload["artifactMatrix"] = dict(self.artifact_matrix)
         if external_corpus is not None:
             payload["externalCorpus"] = external_corpus
         return payload
@@ -1612,6 +1615,23 @@ def _variant_jobs(
     ]
 
 
+def _artifact_matrix_report(
+    units: Sequence[ProjectTranslationUnit],
+    targets: Sequence[str],
+    variants: Mapping[str, Mapping[str, str]],
+) -> dict[str, Any]:
+    variant_count = len(variants)
+    variant_factor = variant_count if variant_count else 1
+    normalized_targets = _normalized_targets(targets)
+    return {
+        "unitCount": len(units),
+        "targetCount": len(normalized_targets),
+        "variantCount": variant_count,
+        "variantMode": "named" if variant_count else "none",
+        "expectedArtifactCount": len(units) * len(normalized_targets) * variant_factor,
+    }
+
+
 def _artifact_source_map(
     config: ProjectConfig,
     unit: ProjectTranslationUnit,
@@ -1815,6 +1835,9 @@ def translate_project(
         validation=validation,
         migration_actions=_runtime_migration_actions(
             scan.units, selected_targets, artifacts
+        ),
+        artifact_matrix=_artifact_matrix_report(
+            scan.units, selected_targets, config.variants
         ),
     )
 
@@ -2909,6 +2932,160 @@ def _artifact_identity(record: Mapping[str, Any]) -> ArtifactIdentity | None:
     else:
         variant_identity = None
     return source, _normalized_targets([target])[0], path, variant_identity
+
+
+def _expected_artifact_identity(
+    root_path: Path,
+    project_output_path: Path,
+    source: str,
+    target: str,
+    variant: str | None,
+) -> ArtifactIdentity | None:
+    normalized_target = _normalized_targets([target])[0]
+    output_base = project_output_path / normalized_target
+    if variant is not None:
+        output_base = output_base / _variant_output_segment(variant)
+    expected_relative = Path(source.replace("\\", "/")).with_suffix(
+        _artifact_target_extension(normalized_target)
+    )
+    expected_path = (output_base / expected_relative).resolve()
+    if not _is_relative_to(expected_path, root_path):
+        return None
+    return source, normalized_target, _relpath(expected_path, root_path), variant
+
+
+def _artifact_matrix_contract_reasons(
+    project: Mapping[str, Any],
+    units: Any,
+    artifacts: Any,
+    *,
+    root_path: Path | None,
+    project_output_path: Path | None,
+) -> list[str]:
+    if (
+        not isinstance(units, list)
+        or not isinstance(artifacts, list)
+        or root_path is None
+        or project_output_path is None
+    ):
+        return []
+
+    targets = project.get("targets", [])
+    if not isinstance(targets, list) or any(
+        not _is_non_empty_string(target) for target in targets
+    ):
+        return []
+    normalized_targets = _normalized_targets(targets)
+    if not normalized_targets:
+        return []
+
+    variants = project.get("variants", {})
+    if not isinstance(variants, Mapping) or any(
+        not _is_non_empty_string(name) for name in variants
+    ):
+        return []
+    variant_names: list[str | None] = sorted(variants) if variants else [None]
+
+    artifact_identities = {
+        identity
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+        for identity in (_artifact_identity(artifact),)
+        if identity is not None
+    }
+    reasons = []
+    for unit_index, unit in enumerate(units):
+        if not isinstance(unit, Mapping):
+            continue
+        source = unit.get("path")
+        if not (
+            _is_non_empty_string(source) and _is_repository_relative_report_path(source)
+        ):
+            continue
+        for target in normalized_targets:
+            for variant in variant_names:
+                identity = _expected_artifact_identity(
+                    root_path, project_output_path, source, target, variant
+                )
+                if identity is not None and identity not in artifact_identities:
+                    suffix = f" target {target}"
+                    if variant is not None:
+                        suffix = f"{suffix} variant {variant}"
+                    reasons.append(
+                        f"artifacts must include units[{unit_index}].path {source}"
+                        f"{suffix}"
+                    )
+    return reasons
+
+
+def _expected_artifact_matrix_metadata(
+    project: Mapping[str, Any],
+    units: Any,
+) -> dict[str, Any] | None:
+    if not isinstance(units, list):
+        return None
+
+    targets = project.get("targets", [])
+    if not isinstance(targets, list) or any(
+        not _is_non_empty_string(target) for target in targets
+    ):
+        return None
+
+    variants = project.get("variants", {})
+    if not isinstance(variants, Mapping) or any(
+        not _is_non_empty_string(name) for name in variants
+    ):
+        return None
+
+    variant_count = len(variants)
+    variant_factor = variant_count if variant_count else 1
+    normalized_targets = _normalized_targets(targets)
+    return {
+        "unitCount": len(units),
+        "targetCount": len(normalized_targets),
+        "variantCount": variant_count,
+        "variantMode": "named" if variant_count else "none",
+        "expectedArtifactCount": len(units) * len(normalized_targets) * variant_factor,
+    }
+
+
+def _artifact_matrix_metadata_contract_reasons(
+    project: Mapping[str, Any],
+    units: Any,
+    artifact_matrix: Any,
+    *,
+    required: bool,
+) -> list[str]:
+    if artifact_matrix is None and not required:
+        return []
+    if not isinstance(artifact_matrix, Mapping):
+        return ["artifactMatrix must be an object"]
+
+    expected = _expected_artifact_matrix_metadata(project, units)
+    if expected is None:
+        return []
+
+    reasons = []
+    for field_name in ("unitCount", "targetCount", "variantCount"):
+        reasons.extend(
+            _count_field_contract_reasons(
+                f"artifactMatrix.{field_name}",
+                artifact_matrix.get(field_name),
+                expected[field_name],
+                f"expected {field_name}",
+            )
+        )
+    if artifact_matrix.get("variantMode") != expected["variantMode"]:
+        reasons.append("artifactMatrix.variantMode must match project.variants")
+    reasons.extend(
+        _count_field_contract_reasons(
+            "artifactMatrix.expectedArtifactCount",
+            artifact_matrix.get("expectedArtifactCount"),
+            expected["expectedArtifactCount"],
+            "expected artifact matrix",
+        )
+    )
+    return reasons
 
 
 def _duplicate_identity_contract_reasons(
@@ -4851,6 +5028,16 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
     if not isinstance(artifacts, list):
         reasons.append("artifacts must be a list")
     else:
+        artifact_matrix = report.get("artifactMatrix")
+        if has_summary and isinstance(project, Mapping):
+            reasons.extend(
+                _artifact_matrix_metadata_contract_reasons(
+                    project,
+                    units,
+                    artifact_matrix,
+                    required=bool(artifacts),
+                )
+            )
         declared_units_by_path = _declared_units_by_path(
             units, require_full_metadata=has_summary
         )
@@ -5034,6 +5221,20 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     index,
                     artifact,
                     required=has_summary and status == "translated",
+                )
+            )
+        if (
+            has_summary
+            and isinstance(project, Mapping)
+            and (bool(artifacts) or isinstance(artifact_matrix, Mapping))
+        ):
+            reasons.extend(
+                _artifact_matrix_contract_reasons(
+                    project,
+                    units,
+                    artifacts,
+                    root_path=root_path,
+                    project_output_path=project_output_path,
                 )
             )
 
