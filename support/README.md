@@ -21,9 +21,10 @@ The matrix is intentionally data-driven:
   markers from implementation paths for each backend.
 - Project-porting support rows track repository scan, batch translation,
   project configuration, artifact reports, provenance, validation hooks, and
-  structured diagnostics. The implementation emits JSON portability reports
-  through `python -m crosstl._crosstl scan`, `translate-project`, and
-  `validate-project`.
+  structured diagnostics. The implementation emits scan and portability reports
+  through `python -m crosstl._crosstl scan`, `report`, and `translate-project`,
+  validates reports through `validate-project`, and summarizes reports through
+  `inspect-report`.
 
 Status values are conservative. Do not mark a feature `supported` unless there is
 implementation and test evidence. Use `partial`, `diagnostic`, `unsupported`,

@@ -36,6 +36,14 @@ Scan a repository and print a JSON report:
 
    python -m crosstl._crosstl scan /path/to/repo --target metal
 
+Emit the same scan-only portability report with an explicit output path:
+
+.. code-block:: bash
+
+   python -m crosstl._crosstl report /path/to/repo \
+     --target metal \
+     --output crosstl-out/portability-report.json
+
 Scan and report commands exit nonzero when the generated report contains error
 diagnostics, while still writing the JSON report to stdout or the requested
 output file.

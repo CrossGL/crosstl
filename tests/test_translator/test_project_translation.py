@@ -5233,6 +5233,26 @@ def test_project_cli_translate_project_writes_report(tmp_path):
     assert (repo / "out" / "opengl" / "simple.glsl").exists()
 
 
+def test_project_cli_report_help_has_clean_stderr():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "report",
+            "--help",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stderr == ""
+    assert "usage:" in result.stdout
+    assert "report" in result.stdout
+
+
 def test_project_cli_scan_resolves_relative_config_path_from_root(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
