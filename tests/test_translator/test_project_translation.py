@@ -5717,6 +5717,12 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     assert payload["report"]["summary"]["unitCount"] == 1
     assert payload["report"]["summary"]["translatedCount"] == 1
     assert payload["report"]["project"]["targets"] == ["cgl"]
+    assert payload["sourceMaps"] == {
+        "available": True,
+        "sourceMapCount": 1,
+        "fileLevelSourceMapCount": 1,
+        "fineGrainedSourceMapCount": 0,
+    }
     assert payload["validation"]["success"] is True
     assert payload["validation"]["toolchainStatusCounts"] == {
         "available": 0,
@@ -5846,6 +5852,12 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     assert payload["report"]["summary"]["diagnosticsByCode"] == {}
     assert payload["report"]["summary"]["missingCapabilityCounts"] == {}
     assert payload["report"]["generator"]["pipeline"] == "project-porting"
+    assert payload["sourceMaps"] == {
+        "available": True,
+        "sourceMapCount": 1,
+        "fileLevelSourceMapCount": 1,
+        "fineGrainedSourceMapCount": 0,
+    }
 
 
 def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):

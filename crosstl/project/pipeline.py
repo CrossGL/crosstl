@@ -1896,6 +1896,7 @@ def inspect_project_report(
         "generatedAt": int(time.time()),
         "success": bool(validation_report.get("success")),
         "report": {"available": False},
+        "sourceMaps": {"available": False},
         "diagnosticCount": len(diagnostics),
         "truncatedDiagnosticCount": max(0, len(diagnostics) - diagnostic_limit),
         "failedArtifactCount": 0,
@@ -1953,6 +1954,7 @@ def inspect_project_report(
         "project": _inspection_project_summary(project),
         "summary": dict(summary) if isinstance(summary, Mapping) else {},
     }
+    payload["sourceMaps"] = _inspection_source_map_summary(summary)
 
     artifacts = report.get("artifacts", [])
     failed_artifacts_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -2054,6 +2056,29 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         if field_name in project:
             summary[field_name] = project[field_name]
     return summary
+
+
+def _inspection_source_map_summary(summary: Any) -> dict[str, Any]:
+    if not isinstance(summary, Mapping):
+        return {"available": False}
+
+    source_map_count = summary.get("sourceMapCount")
+    fine_grained_count = summary.get("fineGrainedSourceMapCount")
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in (source_map_count, fine_grained_count)
+    ):
+        return {"available": False}
+    if fine_grained_count > source_map_count:
+        return {"available": False}
+
+    file_level_count = source_map_count - fine_grained_count
+    return {
+        "available": True,
+        "sourceMapCount": source_map_count,
+        "fileLevelSourceMapCount": file_level_count,
+        "fineGrainedSourceMapCount": fine_grained_count,
+    }
 
 
 def _inspection_failed_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
