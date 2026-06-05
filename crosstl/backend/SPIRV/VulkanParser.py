@@ -1294,6 +1294,17 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode == "OpAtomicLoad" and len(operands) >= 4:
+                expressions[result_id] = self.spirv_assembly_atomic_load_expression(
+                    operands[1],
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             if (
                 result_id
                 and (
@@ -1780,6 +1791,19 @@ class VulkanParser:
                 else:
                     expressions[result_id] = call
                 expression_type_ids[result_id] = operands[0]
+                continue
+
+            if opcode == "OpAtomicStore" and len(operands) >= 4:
+                statements.append(
+                    self.spirv_assembly_atomic_store_statement(
+                        operands[0],
+                        operands[3],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                )
                 continue
 
             if opcode == "OpImageWrite" and len(operands) >= 3:
@@ -2630,6 +2654,56 @@ class VulkanParser:
     ):
         return FunctionCallNode(
             self.SPIRV_ATOMIC_RMW_FUNCTIONS[opcode],
+            [
+                self.spirv_assembly_operand_expression(
+                    pointer_operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                ),
+                self.spirv_assembly_operand_expression(
+                    value_operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                ),
+            ],
+        )
+
+    def spirv_assembly_atomic_load_expression(
+        self,
+        pointer_operand,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        return FunctionCallNode(
+            "atomicLoad",
+            [
+                self.spirv_assembly_operand_expression(
+                    pointer_operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+            ],
+        )
+
+    def spirv_assembly_atomic_store_statement(
+        self,
+        pointer_operand,
+        value_operand,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        return FunctionCallNode(
+            "atomicStore",
             [
                 self.spirv_assembly_operand_expression(
                     pointer_operand,

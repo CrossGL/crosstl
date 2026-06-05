@@ -281,6 +281,37 @@ def test_cuda_samples_interval_bit_reinterpret_intrinsics_codegen_reparse():
     assert "__float_as_uint" not in crossgl
 
 
+def test_cupy_double_longlong_bit_reinterpret_intrinsics_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/cupy/cupy
+    # commit: 554b3835f905ceae3dd1335f42a16563510b9812
+    # path: cupy/_core/include/cupy/atomics.cuh
+    source = """
+    __device__ double cupy_double_bits(double val,
+                                       unsigned long long assumed) {
+        unsigned long long bits =
+            __double_as_longlong(val + __longlong_as_double(assumed));
+        return __longlong_as_double(bits);
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].value.name == "__double_as_longlong"
+    assert body[0].value.args[0].right.name == "__longlong_as_double"
+    assert body[1].value.name == "__longlong_as_double"
+    assert (
+        "var bits: u64 = doubleBitsToLong((val + longBitsToDouble(assumed)));"
+        in crossgl
+    )
+    assert "return longBitsToDouble(bits);" in crossgl
+    assert "__double_as_longlong" not in crossgl
+    assert "__longlong_as_double" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_monte_carlo_reserved_in_parameter_codegen_reparse():
     source = """
     namespace cg = cooperative_groups;

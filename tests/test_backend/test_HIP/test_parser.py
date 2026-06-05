@@ -376,6 +376,29 @@ class TestHipParser:
         assert isinstance(assignment, AssignmentNode)
         assert assignment.right.op == ">>"
 
+    def test_public_rocm_floyd_warshall_multiline_sizeof_type_operand_parse(self):
+        code = """
+        void host(unsigned int* verificationPathMatrix, int numNodes) {
+            verificationPathMatrix = (unsigned int *) malloc(
+                numNodes * numNodes * sizeof(
+                    int));
+        }
+        """
+        ast = self.parse_code(code)
+
+        assignment = ast.statements[0].body[0]
+        allocation = assignment.right.expression
+        size_expr = allocation.args[0].right
+
+        assert isinstance(assignment, AssignmentNode)
+        assert isinstance(assignment.right, CastNode)
+        assert assignment.right.target_type == "unsigned int *"
+        assert isinstance(allocation, FunctionCallNode)
+        assert allocation.name == "malloc"
+        assert isinstance(size_expr, FunctionCallNode)
+        assert size_expr.name == "sizeof"
+        assert size_expr.args == ["int"]
+
     def test_public_hpc_training_template_constant_symbols_parse(self):
         code = """
         template <int R> __constant__ float d_dx[2 * R + 1];

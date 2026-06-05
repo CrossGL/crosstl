@@ -5753,6 +5753,29 @@ def test_byte_literal_conversion():
         pytest.fail(f"Byte literal conversion failed: {e}")
 
 
+def test_c_string_literal_codegen_from_rust_gpu_ash_runner():
+    # examples/runners/ash/src/device.rs uses c"..." in a const array of
+    # validation layer pointers.
+    code = r"""
+    fn validation_layers() {
+        let layer_names: &'static [_] = const {
+            &[c"VK_LAYER_KHRONOS_validation".as_ptr()]
+        };
+        let raw_layer = cr#"VK_LAYER_KHRONOS_validation"#;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert '"VK_LAYER_KHRONOS_validation".as_ptr()' in result
+        assert 'raw_layer = "VK_LAYER_KHRONOS_validation";' in result
+        assert 'c"VK_LAYER' not in result
+        assert 'cr#"' not in result
+        crosstl.translator.parse(result)
+    except Exception as e:
+        pytest.fail(f"C string literal conversion failed: {e}")
+
+
 def test_option_result_constructor_conversion():
     code = """
     use std::option::Option::{Some, None};

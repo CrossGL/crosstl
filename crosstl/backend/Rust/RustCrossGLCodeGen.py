@@ -17,8 +17,10 @@ RUST_NUMERIC_LITERAL_RE = re.compile(
 )
 RUST_RAW_STRING_RE = re.compile(r'^r(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
 RUST_BYTE_RAW_STRING_RE = re.compile(r'^br(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
+RUST_C_RAW_STRING_RE = re.compile(r'^cr(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
 RUST_STRING_RE = re.compile(r'^"((?:[^"\\]|\\(.|\n))*)"$', re.DOTALL)
 RUST_BYTE_STRING_RE = re.compile(r'^b"((?:[^"\\]|\\.)*)"$', re.DOTALL)
+RUST_C_STRING_RE = re.compile(r'^c"((?:[^"\\]|\\.)*)"$', re.DOTALL)
 RUST_BYTE_CHAR_RE = re.compile(r"^b'((?:[^'\\]|\\.)*)'$", re.DOTALL)
 
 TRANSPARENT_BLOCK_NODE_TYPES = (AsyncBlockNode, UnsafeBlockNode, ConstBlockNode)
@@ -8871,6 +8873,10 @@ class RustToCrossGLConverter:
         if byte_raw_string:
             return self.normalize_raw_string_literal(byte_raw_string.group(2))
 
+        c_raw_string = RUST_C_RAW_STRING_RE.match(value)
+        if c_raw_string:
+            return self.normalize_raw_string_literal(c_raw_string.group(2))
+
         raw_string = RUST_RAW_STRING_RE.match(value)
         if raw_string:
             return self.normalize_raw_string_literal(raw_string.group(2))
@@ -8882,6 +8888,10 @@ class RustToCrossGLConverter:
         byte_string = RUST_BYTE_STRING_RE.match(value)
         if byte_string:
             return self.normalize_byte_string_literal(byte_string.group(1))
+
+        c_string = RUST_C_STRING_RE.match(value)
+        if c_string:
+            return self.normalize_string_literal(c_string.group(1))
 
         byte_char = RUST_BYTE_CHAR_RE.match(value)
         if byte_char:

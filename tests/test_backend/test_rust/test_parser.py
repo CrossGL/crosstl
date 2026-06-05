@@ -2020,6 +2020,31 @@ def test_byte_literal_expression_parsing():
         pytest.fail(f"Byte literal expression parsing failed: {e}")
 
 
+def test_c_string_literal_expression_parsing_from_rust_gpu_ash_runner():
+    # examples/runners/ash/src/device.rs uses Rust C string literals for
+    # Vulkan layer names inside a const block.
+    code = r"""
+    fn validation_layers() {
+        let layer_names: &'static [_] = const {
+            &[c"VK_LAYER_KHRONOS_validation".as_ptr()]
+        };
+        let raw_layer = cr#"VK_LAYER_KHRONOS_validation"#;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        array_ref = body[0].value.block.returns_value
+        array = array_ref.expression
+        c_string_call = array.elements[0]
+        assert c_string_call.name.object == 'c"VK_LAYER_KHRONOS_validation"'
+        assert c_string_call.name.member == "as_ptr"
+        assert body[1].value == 'cr#"VK_LAYER_KHRONOS_validation"#'
+    except Exception as e:
+        pytest.fail(f"C string literal expression parsing failed: {e}")
+
+
 def test_turbofish_path_expression_parsing():
     code = """
     type Vector<T> = Vec3<T>;

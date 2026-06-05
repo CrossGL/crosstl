@@ -216,6 +216,32 @@ def test_function_optional_argument_default_codegen_preserves_default():
     assert "return (base ** exp);" in generated_code
 
 
+def test_default_keyword_parameter_name_codegen_from_modular_stdlib():
+    # Reduced from https://github.com/modular/modular.git commit
+    # daa47bb846cc213723a54c51844ea4e923eb5e13,
+    # mojo/stdlib/std/memory/unsafe_nullable_pointer.mojo UnsafeNullablePointer.gather.
+    code = """
+    def gather[
+        dtype: DType,
+        width: SIMDSize = 1,
+    ](
+        mask: SIMD[DType.bool, width] = SIMD[DType.bool, width](fill=True),
+        default: SIMD[dtype, width] = 0,
+    ) -> SIMD[dtype, width]:
+        return default
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "SIMD[dtype, width] gather("
+        "SIMD[DType.bool, width] mask = SIMD[DType.bool, width](fill = true), "
+        "SIMD[dtype, width] default = 0)"
+    ) in generated_code
+    assert "return default;" in generated_code
+    assert "Unhandled expression" not in generated_code
+
+
 def test_comptime_expression_prefix_codegen_drops_mojo_marker():
     code = """
     def main():

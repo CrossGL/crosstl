@@ -121,6 +121,8 @@ class RustParser:
         "STRING",
         "BYTE_STRING",
         "BYTE_RAW_STRING",
+        "C_STRING",
+        "C_RAW_STRING",
         "RAW_STRING",
         "BYTE_CHAR",
         "CHAR_LIT",
@@ -3069,6 +3071,14 @@ class RustParser:
         elif self.current_token[0] == "BYTE_RAW_STRING":
             value = self.current_token[1]
             self.eat("BYTE_RAW_STRING")
+            return value
+        elif self.current_token[0] == "C_STRING":
+            value = self.current_token[1]
+            self.eat("C_STRING")
+            return value
+        elif self.current_token[0] == "C_RAW_STRING":
+            value = self.current_token[1]
+            self.eat("C_RAW_STRING")
             return value
         elif self.current_token[0] == "RAW_STRING":
             value = self.current_token[1]

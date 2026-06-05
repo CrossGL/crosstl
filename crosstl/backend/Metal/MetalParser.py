@@ -287,6 +287,7 @@ class MetalParser:
         self.local_variable_scopes = []
         self.pending_block_scope_names = []
         self.known_variable_templates = set()
+        self.known_function_templates = set()
 
     def skip_comments(self):
         while self.pos < len(self.tokens) and self.current_token[0] in [
@@ -567,6 +568,7 @@ class MetalParser:
 
             function = self.parse_function()
             if function is not None:
+                self.known_function_templates.add(function.name)
                 function.generics = [
                     name for _kind, name in template_parameters if name
                 ]
@@ -2824,6 +2826,12 @@ class MetalParser:
             return False
         if not isinstance(node, (VariableNode, MemberAccessNode)):
             return False
+        name = node.name if isinstance(node, VariableNode) else node.member
+        if name in self.known_function_templates:
+            return self.template_argument_list_followed_by_call(
+                follow_token_types={"LPAREN", "SCOPE"},
+                require_type_like_argument=False,
+            )
         return self.template_argument_list_followed_by_call(
             follow_token_types={"LPAREN", "SCOPE"}, require_type_like_argument=True
         )

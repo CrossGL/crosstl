@@ -296,6 +296,26 @@ def test_codegen_macro_declaration_prefixes_from_filament_sources():
     assert "vec4 material" in output
 
 
+def test_codegen_precision_qualified_custom_type_local_from_filament_fsr():
+    # Reduced from google/filament@6221f22a79597006b98e329f7267ee59f8ff354c
+    # filament/src/materials/fsr/ffx_fsr1_mobile.fs.
+    code = textwrap.dedent("""
+        #version 450
+
+        AF3 FsrEasuSampleF(highp AF2 p);
+
+        void main()
+        {
+            highp AF2 pp = AF2(0.5);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "AF3 FsrEasuSampleF(AF2 p @highp)" in crossgl
+    assert "AF2 pp @highp = AF2(0.5);" in crossgl
+
+
 def test_codegen_explicit_typecast_from_glslang_nv_extension():
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/spv.nv.explicittypecast.frag, which uses GL_NV_explicit_typecast.

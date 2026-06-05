@@ -33,6 +33,7 @@ MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
 MLX_CURRENT_COMMIT = "b155224b9963cd9476363b464a559232a0868000"
 MLX_FP_QUANTIZED_COMMIT = "c52b04b650be06291e3a6ff6e98b0ef1af3ff56b"
+MLX_FP_QUANTIZED_VALUE_TEMPLATE_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
 MLX_STEEL_DEPENDENT_TEMPLATE_COMMIT = "e1a3f2f31fc298cfd7f017d19e8165d88a0c3c59"
 MLX_UNARY_OPS_COMMIT = "e1a3f2f31fc298cfd7f017d19e8165d88a0c3c59"
 PYTORCH_REPO = "https://github.com/pytorch/pytorch"
@@ -740,6 +741,31 @@ EXTERNAL_FIXTURES = [
                 typedef float U;
                 thread U x_thread[values_per_thread];
                 thread U result[8] = {0};
+            }
+            """
+        ),
+    },
+    {
+        "name": "mlx_fp_quantized_value_template_function_call",
+        "repo_url": MLX_REPO,
+        "commit": MLX_FP_QUANTIZED_VALUE_TEMPLATE_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/fp_quantized.h",
+        "roundtrip": True,
+        "contains": [
+            "const int bytes_per_pack = get_bytes_per_pack_u3c32_u3e();",
+        ],
+        "not_contains": ["get_bytes_per_pack<32>"],
+        "source": (
+            """
+            // Reduced from MLX fp_qmv_fast_impl:
+            // constexpr int bytes_per_pack = get_bytes_per_pack<32>();
+            template <int wsize = 8>
+            inline constexpr short get_bytes_per_pack() {
+                return wsize / 8;
+            }
+
+            void qmv_quad_impl() {
+                constexpr int bytes_per_pack = get_bytes_per_pack<32>();
             }
         """
         ),

@@ -827,18 +827,22 @@ class MojoParser:
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
                 vtype = ""
-            elif self.current_token[0] in self.TYPE_START_TOKENS:
+            elif self.is_identifier_like_token():
                 if self.peek_token()[0] == "COLON":
                     name = self.current_token[1]
                     self.eat(self.current_token[0])
                     self.eat("COLON")
                     vtype = self.parse_type()
-                else:
+                elif self.current_token[0] in self.TYPE_START_TOKENS:
                     vtype = self.parse_type()
                     name = ""
                     if self.current_token[0] == "IDENTIFIER":
                         name = self.current_token[1]
                         self.eat("IDENTIFIER")
+                else:
+                    raise SyntaxError(
+                        f"Unexpected token in parameter list: {self.current_token[0]}"
+                    )
 
             else:
                 raise SyntaxError(

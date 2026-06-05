@@ -957,14 +957,19 @@ class GLSLParser:
             )
         if self.current_token[0] not in QUALIFIER_TOKENS:
             return False
-        if self.is_name_token_at(self.index):
-            next_token = self.peek_non_newline()
-            return (
-                next_token[0] in QUALIFIER_TOKENS
-                or next_token[0] in TYPE_TOKENS
-                or next_token[0] == "STRUCT"
-            )
-        return True
+
+        index = self.skip_newline_index(self.index)
+        while self.token_at(index)[0] in QUALIFIER_TOKENS:
+            index = self.skip_newline_index(index + 1)
+
+        if self.token_at(index)[0] == "STRUCT":
+            return True
+        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
+            return False
+
+        index = self.skip_type_template_suffix_index(index + 1)
+        index = self.skip_array_suffixes_index(index)
+        return self.is_name_token_at(index)
 
     def is_constructor_expression_start(self):
         index = self.skip_newline_index(self.index)
