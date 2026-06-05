@@ -1028,6 +1028,66 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_DESCRIPTOR_INDEXING_NONUNIFORM_ASSEMBLY = """
+; Reduced from descriptor-indexed sampled texture SPIR-V emitted by Vulkan
+; toolchains for GL_EXT_nonuniform_qualifier/nonuniformEXT material indexing.
+OpCapability Shader
+OpCapability ShaderNonUniform
+OpExtension "SPV_EXT_descriptor_indexing"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %material_index %uv %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %textures "textures"
+OpName %linear_sampler "linearSampler"
+OpName %material_index "materialIndex"
+OpName %uv "uv"
+OpName %out_color "outColor"
+OpDecorate %textures DescriptorSet 0
+OpDecorate %textures Binding 0
+OpDecorate %linear_sampler DescriptorSet 0
+OpDecorate %linear_sampler Binding 1
+OpDecorate %material_index Location 0
+OpDecorate %uv Location 1
+OpDecorate %out_color Location 0
+OpDecorate %idx NonUniform
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2float = OpTypeVector %float 2
+%v4float = OpTypeVector %float 4
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%sampler = OpTypeSampler
+%array_count = OpConstant %int 4
+%zero = OpConstant %float 0.0
+%texture_array = OpTypeArray %image %array_count
+%ptr_textures = OpTypePointer UniformConstant %texture_array
+%ptr_texture = OpTypePointer UniformConstant %image
+%ptr_sampler = OpTypePointer UniformConstant %sampler
+%ptr_input_int = OpTypePointer Input %int
+%ptr_input_v2float = OpTypePointer Input %v2float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%textures = OpVariable %ptr_textures UniformConstant
+%linear_sampler = OpVariable %ptr_sampler UniformConstant
+%material_index = OpVariable %ptr_input_int Input
+%uv = OpVariable %ptr_input_v2float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_index = OpLoad %int %material_index
+%idx = OpCopyObject %int %loaded_index
+%texture_ptr = OpAccessChain %ptr_texture %textures %idx
+%loaded_texture = OpLoad %image %texture_ptr
+%loaded_sampler = OpLoad %sampler %linear_sampler
+%combined = OpSampledImage %sampled %loaded_texture %loaded_sampler
+%loaded_uv = OpLoad %v2float %uv
+%sample = OpImageSampleExplicitLod %v4float %combined %loaded_uv Lod %zero
+OpStore %out_color %sample
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_IMPLICIT_LOD_BIAS_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
@@ -1876,6 +1936,30 @@ def test_spirv_tools_implicit_lod_bias_parse():
     assert isinstance(assignment.right.args[1], VariableNode)
     assert assignment.right.args[1].name == "uv"
     assert assignment.right.args[2] == "0.25"
+
+
+def test_spirv_descriptor_indexing_nonuniform_parse():
+    tokens = tokenize_code(SPIRV_DESCRIPTOR_INDEXING_NONUNIFORM_ASSEMBLY)
+    ast = parse_code(tokens)
+    assignment = ast.functions[0].body[0]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_decorations["%idx"] == [("NonUniform", [])]
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.right, FunctionCallNode)
+    assert assignment.right.name == "textureLod"
+
+    sampled_texture = assignment.right.args[0]
+    assert isinstance(sampled_texture, FunctionCallNode)
+    assert sampled_texture.name == "sampler2D"
+    assert len(sampled_texture.args) == 2
+
+    indexed_texture = sampled_texture.args[0]
+    assert isinstance(indexed_texture, ArrayAccessNode)
+    assert isinstance(indexed_texture.index, FunctionCallNode)
+    assert indexed_texture.index.name == "nonuniformEXT"
+    assert isinstance(indexed_texture.index.args[0], VariableNode)
+    assert indexed_texture.index.args[0].name == "materialIndex"
 
 
 def test_spirv_implicit_lod_min_lod_offset_parse():

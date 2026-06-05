@@ -2030,6 +2030,17 @@ class GLSLCodeGen:
         self.stage_entry_functions_by_stage = {}
         self.current_identifier_aliases = {}
         self.current_target_stage = target_stage
+        stage_names = {
+            stage_name
+            for stage_name in self.glsl_stage_names(ast, target_stage)
+            if stage_name is not None
+        }
+        if target_stage is not None:
+            self.current_global_stage_io_stage = target_stage
+        elif len(stage_names) == 1:
+            self.current_global_stage_io_stage = next(iter(stage_names))
+        else:
+            self.current_global_stage_io_stage = None
         self.emit_stage_guards = self.should_emit_stage_guards(ast, target_stage)
         self.task_payload_shared_variables = []
         self.stage_io_used_locations = {}
@@ -7660,11 +7671,21 @@ class GLSLCodeGen:
                 f" = {self.generate_expression_with_expected(initial_value, vtype)}"
             )
         layout = self.glsl_variable_layout_prefix(node)
+        mapped_type = (
+            mapped_type_for_layout if mapped_type_for_layout is not None else vtype
+        )
+        stage_name = getattr(
+            self, "current_global_stage_io_stage", self.current_target_stage
+        )
+        if self.global_stage_io_layout_direction(
+            qualifier
+        ) == "input" and self.requires_flat_stage_input(stage_name, mapped_type):
+            qualifier = f"{self.with_flat_stage_input_qualifier(qualifier.strip())} "
         self.reserve_global_stage_io_layout(
             node,
             qualifier,
             layout,
-            mapped_type_for_layout if mapped_type_for_layout is not None else vtype,
+            mapped_type,
         )
         return f"{layout}{qualifier}{declaration}{initializer};\n"
 

@@ -2397,6 +2397,31 @@ def test_glsl_stage_interface_interpolation_precision_qualifiers():
     )
 
 
+def test_glsl_global_fragment_integer_input_adds_required_flat_qualifier():
+    # Reduced from KhronosGroup/glslang Test/spv.nonuniform.frag, where
+    # fragment-stage integer varyings are declared with flat interpolation.
+    code = """
+    shader FragmentIntegerInput {
+        in int primitiveId @location(1);
+        out vec4 fragColor @location(0);
+
+        fragment {
+            void main() {
+                fragColor = vec4(float(primitiveId));
+            }
+        }
+    }
+    """
+
+    combined_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 1) flat in int primitiveId;" in combined_code
+    assert "layout(location = 1) flat in int primitiveId;" in fragment_code
+
+
 def test_glsl_stage_interface_extended_layout_qualifiers():
     code = """
     shader LayoutQualifierSmoke {

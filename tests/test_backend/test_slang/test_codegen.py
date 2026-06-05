@@ -264,6 +264,32 @@ def test_entry_point_parameter_block_parameter_unwraps_to_struct_codegen():
     cgl_translator.parse(generated_code)
 
 
+def test_uppercase_hlsl_system_semantics_codegen_from_vireo_fixture():
+    # Source style: HenriMichelon/vireo_samples src/shaders/deferred_lighting.frag.slang.
+    code = """
+    struct VertexOutput {
+        float4 position : SV_POSITION;
+        float2 uv : TEXCOORD;
+    };
+
+    [shader("fragment")]
+    float4 fragmentMain(VertexOutput input) : SV_TARGET
+    {
+        return input.position;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 position @ Out_Position;" in generated_code
+    assert "vec4 fragmentMain(VertexOutput input) @ Out_Color" in generated_code
+    assert "@ SV_POSITION" not in generated_code
+    assert "@ SV_TARGET" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_struct_methods_do_not_break_field_codegen():
     code = """
     struct Primitive {

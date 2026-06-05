@@ -423,6 +423,11 @@ class SlangToCrossGLConverter:
             "SV_Depth6": "Out_Depth6",
             "SV_Depth7": "Out_Depth7",
         }
+        self.hlsl_system_semantic_map = {
+            semantic.lower(): mapped
+            for semantic, mapped in self.semantic_map.items()
+            if semantic.lower().startswith("sv_")
+        }
 
     def generate(self, ast):
         self.raise_for_unsupported_conformance_constructs(ast)
@@ -1993,7 +1998,10 @@ class SlangToCrossGLConverter:
         ray_payload_access = self.map_ray_payload_access_semantic(semantic)
         if ray_payload_access:
             return ray_payload_access
-        return f"@ {self.semantic_map.get(semantic, semantic)}"
+        mapped_semantic = self.semantic_map.get(semantic)
+        if mapped_semantic is None:
+            mapped_semantic = self.hlsl_system_semantic_map.get(str(semantic).lower())
+        return f"@ {mapped_semantic or semantic}"
 
     def map_ray_payload_access_semantic(self, semantic):
         access_parts = self.split_semantic_chain(semantic)

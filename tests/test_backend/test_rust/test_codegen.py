@@ -1140,7 +1140,8 @@ def test_rust_gpu_reduce_subgroup_builtins_codegen_from_upstream_example():
     assert "uint shared_[256] @ groupshared" in result
     assert "@numthreads(256, 1, 1)" in result
     assert "sum = subgroup_add(sum);" in result
-    assert "spirv_std::arch::workgroup_memory_barrier_with_group_sync();" in result
+    assert "GroupMemoryBarrierWithGroupSync();" in result
+    assert "workgroup_memory_barrier_with_group_sync" not in result
     assert "output[workgroup_id_x] = sum_;" in result
     crosstl.translator.parse(result)
 

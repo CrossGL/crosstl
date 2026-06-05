@@ -505,6 +505,9 @@ class RustToCrossGLConverter:
             "tanh": "tanh",
             "degrees": "degrees",
             "radians": "radians",
+            "workgroup_memory_barrier_with_group_sync": (
+                "GroupMemoryBarrierWithGroupSync"
+            ),
             # Vector operations
             "dot": "dot",
             "cross": "cross",

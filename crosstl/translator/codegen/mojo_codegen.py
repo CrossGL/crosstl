@@ -50,7 +50,7 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
-from .array_utils import get_array_size_from_node, parse_array_type
+from .array_utils import get_array_size_from_node
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_generic_enum_specializations,
@@ -13074,8 +13074,25 @@ class MojoCodeGen:
         return type_name
 
     def is_array_type_name(self, type_name):
-        type_text = str(type_name or "")
-        return "[" in type_text and type_text.endswith("]")
+        return self.array_type_suffix(type_name) is not None
+
+    def array_type_suffix(self, type_name):
+        type_text = str(type_name or "").strip()
+        if not type_text.endswith("]"):
+            return None
+
+        open_bracket = type_text.rfind("[")
+        if open_bracket <= 0:
+            return None
+
+        size_text = type_text[open_bracket + 1 : -1].strip()
+        if (
+            not size_text
+            or re.fullmatch(r"\d+", size_text)
+            or re.fullmatch(r"[A-Z_][A-Z0-9_]*", size_text)
+        ):
+            return open_bracket, size_text
+        return None
 
     def is_pointer_type_name(self, type_name):
         type_text = str(type_name or "").strip()
@@ -13089,15 +13106,12 @@ class MojoCodeGen:
 
     def parse_array_type_name(self, type_name):
         type_text = str(type_name)
-        if not self.is_array_type_name(type_text) or not type_text.endswith("]"):
+        array_suffix = self.array_type_suffix(type_text)
+        if array_suffix is None:
             return type_text, None
 
-        open_bracket = type_text.rfind("[")
-        if open_bracket == -1:
-            return parse_array_type(type_text)
-
+        open_bracket, size_text = array_suffix
         element_type = type_text[:open_bracket]
-        size_text = type_text[open_bracket + 1 : -1]
         if not size_text:
             return element_type, None
 
@@ -14062,10 +14076,38 @@ class MojoCodeGen:
         if vtype_str in self.enum_types:
             return vtype_str
 
-        mapped_type = self.type_mapping.get(vtype_str, vtype_str)
+        mapped_type = self.type_mapping.get(vtype_str)
+        if mapped_type is not None:
+            if self.is_mojo_resource_type(mapped_type):
+                self.required_resource_types.add(mapped_type)
+            return mapped_type
+
+        mojo_generic_type = self.mojo_native_generic_mapped_type(vtype_str)
+        if mojo_generic_type is not None:
+            return mojo_generic_type
+
+        mapped_type = vtype_str
         if self.is_mojo_resource_type(mapped_type):
             self.required_resource_types.add(mapped_type)
         return mapped_type
+
+    def mojo_native_generic_mapped_type(self, type_name):
+        generic = self.parse_generic_type_name(type_name)
+        if generic is None:
+            return None
+
+        base_type, generic_args = generic
+        mapped_args = ", ".join(
+            self.mojo_native_generic_argument(arg) for arg in generic_args
+        )
+        return f"{self.type_mapping.get(base_type, base_type)}[{mapped_args}]"
+
+    def mojo_native_generic_argument(self, arg):
+        arg = str(arg).strip()
+        nested_generic = self.mojo_native_generic_mapped_type(arg)
+        if nested_generic is not None:
+            return nested_generic
+        return self.type_mapping.get(arg, arg)
 
     def is_resource_type_name(self, type_name):
         if self.is_array_type_name(type_name):

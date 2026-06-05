@@ -17669,6 +17669,42 @@ def test_pointer_type_nodes_emit_mojo_pointer_types_without_ast_repr():
     assert "PrimitiveType(" not in generated_code
 
 
+def test_mojo_gpu_pointer_generics_restore_square_bracket_signatures():
+    # Reduced from Modular GPU kernels such as
+    # max/examples/custom_ops/kernels/histogram.mojo kernel UnsafePointer params.
+    codegen = MojoCodeGen()
+
+    assert (
+        codegen.map_type("UnsafePointer[Int64, MutAnyOrigin]")
+        == "UnsafePointer[Int64, MutAnyOrigin]"
+    )
+    assert (
+        codegen.map_type("UnsafePointer<Scalar<dtype>, MutAnyOrigin>")
+        == "UnsafePointer[Scalar[dtype], MutAnyOrigin]"
+    )
+    assert codegen.map_type("SIMD[DType.float32, 4]") == "SIMD[DType.float32, 4]"
+    assert (
+        codegen.map_type("TileTensor[mut=True, dtype, OutLayout, MutAnyOrigin]")
+        == "TileTensor[mut=True, dtype, OutLayout, MutAnyOrigin]"
+    )
+
+    code = """
+    UnsafePointer<Int64, MutAnyOrigin> passthrough(
+        UnsafePointer<Int64, MutAnyOrigin> output
+    ) {
+        return output;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn passthrough(output: UnsafePointer[Int64, MutAnyOrigin]) "
+        "-> UnsafePointer[Int64, MutAnyOrigin]:" in generated_code
+    )
+    assert "UnsafePointer<" not in generated_code
+    assert "List[UnsafePointer]" not in generated_code
+
+
 def test_direct_texture_nodes_emit_mojo_sample_helpers_without_ast_repr():
     codegen = MojoCodeGen()
     tex = VariableNode("tex", PrimitiveType("sampler2D"))

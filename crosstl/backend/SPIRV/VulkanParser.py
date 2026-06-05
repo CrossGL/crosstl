@@ -3110,18 +3110,40 @@ class VulkanParser:
         constants,
     ):
         if operand in expressions:
-            return expressions[operand]
+            return self.spirv_maybe_non_uniform_expression(
+                operand, expressions[operand], decorations
+            )
 
         if operand in constants:
-            return self.spirv_constant_operand_expression(operand, names, constants)
+            expression = self.spirv_constant_operand_expression(
+                operand, names, constants
+            )
+            return self.spirv_maybe_non_uniform_expression(
+                operand, expression, decorations
+            )
 
         if isinstance(operand, str) and operand.startswith("%"):
-            return VariableNode(
+            expression = VariableNode(
                 "",
                 self.spirv_assembly_value_name(operand, names, decorations),
             )
+            return self.spirv_maybe_non_uniform_expression(
+                operand, expression, decorations
+            )
 
         return operand
+
+    def spirv_maybe_non_uniform_expression(self, operand, expression, decorations):
+        if not isinstance(operand, str):
+            return expression
+        if not self.spirv_has_decoration(decorations.get(operand, []), "NonUniform"):
+            return expression
+        if (
+            isinstance(expression, FunctionCallNode)
+            and expression.name == "nonuniformEXT"
+        ):
+            return expression
+        return FunctionCallNode("nonuniformEXT", [expression])
 
     def spirv_assembly_value_name(
         self,
