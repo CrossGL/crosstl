@@ -5872,7 +5872,14 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
-    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out")
     report_path = repo / "out" / "portability-report.json"
     report.write_json(report_path)
 
@@ -5884,6 +5891,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     assert payload["report"]["available"] is True
     assert payload["report"]["summary"]["unitCount"] == 1
     assert payload["report"]["summary"]["translatedCount"] == 1
+    assert payload["report"]["project"]["config"] == str(repo / "crosstl.toml")
     assert payload["report"]["project"]["targets"] == ["cgl"]
     assert payload["sourceMaps"] == {
         "available": True,
@@ -6020,6 +6028,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     assert payload["report"]["summary"]["diagnosticsByCode"] == {}
     assert payload["report"]["summary"]["missingCapabilityCounts"] == {}
     assert payload["report"]["generator"]["pipeline"] == "project-porting"
+    assert payload["report"]["project"]["config"] is None
     assert payload["sourceMaps"] == {
         "available": True,
         "sourceMapCount": 1,
@@ -6106,6 +6115,7 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
     )
 
     assert result.returncode == 0
+    assert f"Config file: {repo / 'crosstl.toml'}" in result.stdout
     assert (
         "Project config: sourceRoots=1, includePatterns=0, excludePatterns="
         f"{len(project_pipeline.DEFAULT_EXCLUDE_PATTERNS)}, sourceOverrides=1, "

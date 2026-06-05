@@ -418,6 +418,18 @@ def _format_project_config_counts(project):
     return "Project config: " + ", ".join(entries)
 
 
+def _format_project_config_path(project):
+    if not isinstance(project, Mapping) or "config" not in project:
+        return None
+
+    config_path = project.get("config")
+    if config_path is None:
+        return "Config file: (none)"
+    if isinstance(config_path, str):
+        return f"Config file: {config_path or '(empty)'}"
+    return None
+
+
 def _format_source_map_counts(summary):
     if not isinstance(summary, Mapping):
         return None
@@ -486,6 +498,9 @@ def _format_project_report_inspection(payload):
     project_config_counts = _format_project_config_counts(project)
     if project_config_counts:
         lines.insert(3, project_config_counts)
+    project_config_path = _format_project_config_path(project)
+    if project_config_path:
+        lines.insert(1, project_config_path)
     source_maps = _format_source_map_counts(summary)
     if source_maps:
         lines.append(source_maps)

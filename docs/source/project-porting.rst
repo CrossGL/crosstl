@@ -112,7 +112,7 @@ Inspect an existing report as a concise JSON or text summary:
      --format text
 
 Report inspection includes validation status, project counts, project
-configuration counts, failed artifacts, diagnostic code and missing-capability
+configuration path and counts, failed artifacts, diagnostic code and missing-capability
 rollups, validation diagnostic-code, missing-capability, and artifact target
 rollups, report source-backend, file-extension, and artifact target rollups,
 source-map count rollups, diagnostics, diagnostic and failed-artifact truncation

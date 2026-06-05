@@ -2161,6 +2161,8 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         ),
         "outputDir": project.get("outputDir"),
     }
+    if "config" in project:
+        summary["config"] = project.get("config")
     for field_name in (
         "sourceRootCount",
         "includePatternCount",
