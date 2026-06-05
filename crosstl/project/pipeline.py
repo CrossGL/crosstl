@@ -144,8 +144,10 @@ def _as_str_mapping(value: Any, *, field_name: str) -> dict[str, str]:
 
     result: dict[str, str] = {}
     for key, item in value.items():
-        if not isinstance(key, str) or not isinstance(item, str):
-            raise ValueError(f"{field_name} entries must map strings to strings")
+        if not isinstance(key, str) or not key.strip() or not isinstance(item, str):
+            raise ValueError(
+                f"{field_name} entries must map non-empty strings to strings"
+            )
         result[key] = item
     return result
 
@@ -3531,6 +3533,27 @@ def _repository_path_contract_reasons(prefix: str, value: Any) -> list[str]:
     return []
 
 
+def _source_backend_contract_reasons(
+    prefix: str,
+    value: Any,
+    *,
+    require_registered: bool,
+) -> list[str]:
+    if not _is_non_empty_string(value):
+        return [f"{prefix} must be a string"]
+    if not require_registered:
+        return []
+
+    register_default_sources()
+    discover_backend_plugins()
+    canonical_name = SOURCE_REGISTRY.resolve_name(value)
+    if canonical_name is None:
+        return [f"{prefix} must be a registered source backend"]
+    if canonical_name != value:
+        return [f"{prefix} must use canonical source backend name {canonical_name}"]
+    return []
+
+
 def _unit_source_hash_contract_reasons(
     index: int,
     unit: Mapping[str, Any],
@@ -3573,6 +3596,7 @@ def _unit_contract_reasons(
     root_path: Path | None = None,
     require_source_hash: bool = False,
     check_current_source_hash: bool = False,
+    require_registered_source_backend: bool = False,
 ) -> list[str]:
     prefix = f"units[{index}]"
     if not isinstance(unit, Mapping):
@@ -3588,8 +3612,13 @@ def _unit_contract_reasons(
     elif _is_non_empty_string(path) and unit_id != path:
         reasons.append(f"{prefix}.id must match {prefix}.path")
 
-    if not _is_non_empty_string(unit.get("sourceBackend")):
-        reasons.append(f"{prefix}.sourceBackend must be a string")
+    reasons.extend(
+        _source_backend_contract_reasons(
+            f"{prefix}.sourceBackend",
+            unit.get("sourceBackend"),
+            require_registered=require_registered_source_backend,
+        )
+    )
     extension = unit.get("extension")
     if not isinstance(extension, str):
         reasons.append(f"{prefix}.extension must be a string")
@@ -3640,6 +3669,8 @@ def _config_string_list_contract_reasons(prefix: str, value: Any) -> list[str]:
 def _string_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
+    if any(not _is_non_empty_string(key) for key in value):
+        return [f"{prefix} keys must be non-empty strings"]
     if any(not isinstance(item, str) for item in value.values()):
         return [f"{prefix} values must be strings"]
     return []
@@ -3654,17 +3685,14 @@ def _variant_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
         variant_prefix = f"{prefix}.{variant_name}"
         if not _is_non_empty_string(variant_name):
             reasons.append(f"{prefix} keys must be non-empty strings")
-        if not isinstance(defines, Mapping):
-            reasons.append(f"{variant_prefix} must be an object")
-            continue
-        if any(not isinstance(item, str) for item in defines.values()):
-            reasons.append(f"{variant_prefix} values must be strings")
+        reasons.extend(_string_mapping_contract_reasons(variant_prefix, defines))
     return reasons
 
 
 def _valid_string_mapping(value: Any) -> bool:
     return isinstance(value, Mapping) and all(
-        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+        _is_non_empty_string(key) and isinstance(item, str)
+        for key, item in value.items()
     )
 
 
@@ -5238,6 +5266,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         unit,
                         root_path=root_path,
                         require_source_hash=has_summary,
+                        require_registered_source_backend=has_summary,
                         check_current_source_hash=(
                             has_summary
                             and isinstance(report.get("artifacts", []), list)
@@ -5367,10 +5396,15 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         )
             source_backend = artifact.get("sourceBackend")
             if has_summary or "sourceBackend" in artifact:
-                if not _is_non_empty_string(source_backend):
-                    reasons.append(f"artifacts[{index}].sourceBackend must be a string")
-                elif (
-                    declared_units_by_path is not None
+                source_backend_reasons = _source_backend_contract_reasons(
+                    f"artifacts[{index}].sourceBackend",
+                    source_backend,
+                    require_registered=has_summary,
+                )
+                reasons.extend(source_backend_reasons)
+                if (
+                    not source_backend_reasons
+                    and declared_units_by_path is not None
                     and _is_non_empty_string(source)
                     and source in declared_units_by_path
                 ):

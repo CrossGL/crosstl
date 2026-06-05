@@ -198,8 +198,10 @@ name is recorded on validation records. Native preprocessor behavior remains
 backend-dependent.
 
 Configuration scalar values and define/source-override maps are type checked
-when ``crosstl.toml`` is loaded. Malformed values are rejected before scan or
-translation so reports do not silently stringify invalid project metadata.
+when ``crosstl.toml`` is loaded. Define names, source override patterns, named
+variants, and variant define names must be non-empty strings. Malformed values
+are rejected before scan or translation so reports do not silently stringify
+invalid project metadata.
 
 ``external_corpus_manifest`` points at an optional repository-relative JSON
 manifest of pinned upstream shader or GPU-source reductions. Project reports use
@@ -249,8 +251,9 @@ Project reports are JSON documents with:
   hashes,
   artifact output paths to match the target/variant directory plus the
   source-relative path with the target backend suffix, artifact source paths
-  to match declared translation units, and artifact source backend names to
-  match those units. Full reports with translated or failed artifacts must
+  to match declared translation units, unit source backend names to be
+  registered canonical source backend names, and artifact source backend names
+  to match those units. Full reports with translated or failed artifacts must
   include the expected artifact matrix for each declared translation unit,
   target, and configured variant. Full reports also require artifact define
   maps to match the project-level defines merged with the artifact variant's

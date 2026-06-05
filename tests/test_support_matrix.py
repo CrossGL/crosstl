@@ -288,12 +288,19 @@ def test_project_macro_variants_document_artifact_define_maps():
     for backend_support in feature["support"].values():
         assert backend_support["status"] == "partial"
         assert "records each artifact applied define map" in backend_support["notes"]
+        assert "malformed define/variant metadata including empty mapping keys" in (
+            backend_support["notes"]
+        )
         assert "artifact define maps that do not match base defines merged" in (
             backend_support["notes"]
         )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_define_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_empty_project_mapping_keys"
         ) in backend_support["evidence"]
 
 
@@ -420,6 +427,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
     for backend_support in feature["support"].values():
         assert "unit source hashes" in backend_support["notes"]
         assert "unit source hash records that are missing" in backend_support["notes"]
+        assert "unregistered or non-canonical unit source backend names" in (
+            backend_support["notes"]
+        )
         assert "artifact source hashes that do not match declared" in (
             backend_support["notes"]
         )
@@ -435,6 +445,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_source_hash_"
             "mismatches_unit_source_hash"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_invalid_unit_source_backends"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -467,6 +481,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "declarations"
         ) in backend_support["notes"]
         assert "unit source hash checks" in backend_support["notes"]
+        assert "canonical source backend declarations" in backend_support["notes"]
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "artifactMatrix metadata" in backend_support["notes"]
         assert "artifact matrix coverage" in backend_support["notes"]
@@ -643,6 +658,14 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_project_config_count_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_invalid_unit_source_backends"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_empty_project_mapping_keys"
         ) in backend_support["evidence"]
 
 

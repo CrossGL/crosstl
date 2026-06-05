@@ -650,14 +650,40 @@ def test_project_config_rejects_malformed_variant_entries(tmp_path):
             [project.sources]
             "gpu/*.shader" = 1
             """,
-            "crosstl.toml [project.sources] entries must map strings to strings",
+            (
+                "crosstl.toml [project.sources] entries must map non-empty "
+                "strings to strings"
+            ),
+        ),
+        (
+            """
+            [project.sources]
+            "" = "cgl"
+            """,
+            (
+                "crosstl.toml [project.sources] entries must map non-empty "
+                "strings to strings"
+            ),
         ),
         (
             """
             [project.defines]
             USE_FAST_PATH = 1
             """,
-            "crosstl.toml [project.defines] entries must map strings to strings",
+            (
+                "crosstl.toml [project.defines] entries must map non-empty "
+                "strings to strings"
+            ),
+        ),
+        (
+            """
+            [project.defines]
+            "" = "1"
+            """,
+            (
+                "crosstl.toml [project.defines] entries must map non-empty "
+                "strings to strings"
+            ),
         ),
         (
             """
@@ -666,7 +692,17 @@ def test_project_config_rejects_malformed_variant_entries(tmp_path):
             """,
             (
                 "crosstl.toml [project.variants.debug] entries must map "
-                "strings to strings"
+                "non-empty strings to strings"
+            ),
+        ),
+        (
+            """
+            [project.variants.debug]
+            "" = "1"
+            """,
+            (
+                "crosstl.toml [project.variants.debug] entries must map "
+                "non-empty strings to strings"
             ),
         ),
         (
@@ -1461,6 +1497,54 @@ def test_validate_project_report_rejects_artifacts_with_mismatched_source_backen
         "artifacts[0].sourceBackend must match units[0].sourceBackend"
         in diagnostic["message"]
     )
+
+
+@pytest.mark.parametrize(
+    ("source_backend", "message"),
+    [
+        (
+            "crossgl",
+            "units[0].sourceBackend must use canonical source backend name cgl",
+        ),
+        (
+            "not-a-source",
+            "units[0].sourceBackend must be a registered source backend",
+        ),
+    ],
+)
+def test_validate_project_report_rejects_invalid_unit_source_backends(
+    tmp_path,
+    source_backend,
+    message,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["units"][0]["sourceBackend"] = source_backend
+    payload["artifacts"][0]["sourceBackend"] = source_backend
+    payload["summary"]["unitsBySourceBackend"] = {source_backend: 1}
+    payload["summary"]["artifactsBySourceBackend"] = {
+        source_backend: {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+    }
+    payload["summary"]["sourceMapsBySourceBackend"] = {source_backend: 1}
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path, run_toolchains=True)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert message in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_noncanonical_project_targets(tmp_path):
@@ -2318,6 +2402,44 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     assert "project.variants.debug must be an object" in diagnostic["message"]
     assert "project.variants. values must be strings" in diagnostic["message"]
     assert "project.variantCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_empty_project_mapping_keys(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "empty-project-mapping-key-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "defines": {"": "1"},
+                    "sourceOverrides": {"": "cgl"},
+                    "variants": {"debug": {"": "1"}},
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.defines keys must be non-empty strings" in diagnostic["message"]
+    assert "project.sourceOverrides keys must be non-empty strings" in (
+        diagnostic["message"]
+    )
+    assert "project.variants.debug keys must be non-empty strings" in (
         diagnostic["message"]
     )
 
