@@ -252,7 +252,8 @@ Project reports are JSON documents with:
   artifact output paths to match the target/variant directory plus the
   source-relative path with the target backend suffix, artifact source paths
   to match declared translation units, unit source backend names to be
-  registered canonical source backend names, and artifact source backend names
+  registered canonical source backend names, unit source override metadata to
+  match the configured source override map, and artifact source backend names
   to match those units. Full reports with translated or failed artifacts must
   include the expected artifact matrix for each declared translation unit,
   target, and configured variant. Full reports also require artifact define

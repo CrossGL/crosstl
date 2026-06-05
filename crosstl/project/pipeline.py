@@ -3589,14 +3589,61 @@ def _unit_source_hash_contract_reasons(
     return reasons
 
 
+def _unit_source_override_contract_reasons(
+    index: int,
+    unit: Mapping[str, Any],
+    project: Mapping[str, Any] | None,
+    *,
+    require_declared_override: bool,
+) -> list[str]:
+    if "sourceOverride" not in unit:
+        return []
+
+    prefix = f"units[{index}].sourceOverride"
+    source_override = unit.get("sourceOverride")
+    if not _is_non_empty_string(source_override):
+        return [f"{prefix} must be a string"]
+    if not require_declared_override or not isinstance(project, Mapping):
+        return []
+
+    source_path = unit.get("path")
+    source_backend = unit.get("sourceBackend")
+    source_overrides = project.get("sourceOverrides")
+    if (
+        not _is_non_empty_string(source_path)
+        or not _is_repository_relative_report_path(source_path)
+        or not _is_non_empty_string(source_backend)
+        or not _valid_string_mapping(source_overrides)
+    ):
+        return []
+
+    matching_override = any(
+        source_override == backend and fnmatch.fnmatch(source_path, pattern)
+        for pattern, backend in source_overrides.items()
+    )
+    if not matching_override:
+        return [f"{prefix} must match project.sourceOverrides for units[{index}].path"]
+
+    register_default_sources()
+    discover_backend_plugins()
+    canonical_name = SOURCE_REGISTRY.resolve_name(source_override)
+    if canonical_name is None:
+        return [f"{prefix} must be a registered source backend"]
+    if canonical_name != source_backend:
+        return [f"{prefix} must resolve to units[{index}].sourceBackend"]
+    return []
+
+
 def _unit_contract_reasons(
     index: int,
     unit: Any,
     *,
     root_path: Path | None = None,
+    project: Mapping[str, Any] | None = None,
     require_source_hash: bool = False,
     check_current_source_hash: bool = False,
     require_registered_source_backend: bool = False,
+    require_declared_source_override: bool = False,
 ) -> list[str]:
     prefix = f"units[{index}]"
     if not isinstance(unit, Mapping):
@@ -3626,10 +3673,14 @@ def _unit_contract_reasons(
         expected_extension = Path(path).suffix.lower()
         if extension != expected_extension:
             reasons.append(f"{prefix}.extension must match {prefix}.path suffix")
-    if "sourceOverride" in unit and not _is_non_empty_string(
-        unit.get("sourceOverride")
-    ):
-        reasons.append(f"{prefix}.sourceOverride must be a string")
+    reasons.extend(
+        _unit_source_override_contract_reasons(
+            index,
+            unit,
+            project,
+            require_declared_override=require_declared_source_override,
+        )
+    )
     reasons.extend(
         _unit_source_hash_contract_reasons(
             index,
@@ -5265,8 +5316,10 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         index,
                         unit,
                         root_path=root_path,
+                        project=project if isinstance(project, Mapping) else None,
                         require_source_hash=has_summary,
                         require_registered_source_backend=has_summary,
+                        require_declared_source_override=has_summary,
                         check_current_source_hash=(
                             has_summary
                             and isinstance(report.get("artifacts", []), list)

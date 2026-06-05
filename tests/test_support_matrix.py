@@ -430,6 +430,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "unregistered or non-canonical unit source backend names" in (
             backend_support["notes"]
         )
+        assert "inconsistent unit source override provenance" in (
+            backend_support["notes"]
+        )
         assert "artifact source hashes that do not match declared" in (
             backend_support["notes"]
         )
@@ -449,6 +452,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_invalid_unit_source_backends"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_inconsistent_unit_source_overrides"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -482,6 +489,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         ) in backend_support["notes"]
         assert "unit source hash checks" in backend_support["notes"]
         assert "canonical source backend declarations" in backend_support["notes"]
+        assert "source override provenance" in backend_support["notes"]
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "artifactMatrix metadata" in backend_support["notes"]
         assert "artifact matrix coverage" in backend_support["notes"]
@@ -662,6 +670,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_invalid_unit_source_backends"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_inconsistent_unit_source_overrides"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

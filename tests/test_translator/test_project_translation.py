@@ -1547,6 +1547,65 @@ def test_validate_project_report_rejects_invalid_unit_source_backends(
     assert message in diagnostic["message"]
 
 
+@pytest.mark.parametrize(
+    ("source_overrides", "source_override", "message"),
+    [
+        (
+            {"gpu/*.shader": "cgl"},
+            "directx",
+            (
+                "units[0].sourceOverride must match project.sourceOverrides "
+                "for units[0].path"
+            ),
+        ),
+        (
+            {"gpu/*.shader": "directx"},
+            "directx",
+            "units[0].sourceOverride must resolve to units[0].sourceBackend",
+        ),
+    ],
+)
+def test_validate_project_report_rejects_inconsistent_unit_source_overrides(
+    tmp_path,
+    source_overrides,
+    source_override,
+    message,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.sources]
+            "gpu/*.shader" = "cgl"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    payload["project"]["sourceOverrides"] = source_overrides
+    payload["project"]["sourceOverrideCount"] = len(source_overrides)
+    payload["units"][0]["sourceOverride"] = source_override
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path, run_toolchains=True)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert message in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_noncanonical_project_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
