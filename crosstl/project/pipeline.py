@@ -2052,7 +2052,7 @@ def inspect_project_report(
         "sourceReport": str(path),
         "generatedAt": int(time.time()),
         "success": bool(validation_report.get("success")),
-        "report": {"available": False},
+        "report": {"available": False, "valid": False},
         "sourceMaps": {"available": False},
         "diagnosticCount": len(diagnostics),
         "truncatedDiagnosticCount": max(0, len(diagnostics) - diagnostic_limit),
@@ -2103,8 +2103,14 @@ def inspect_project_report(
     summary = report.get("summary")
     project = report.get("project")
     generator = report.get("generator")
+    validation_codes = validation_report.get("diagnosticsByCode", {})
+    report_is_valid = not (
+        isinstance(validation_codes, Mapping)
+        and validation_codes.get("project.validate.invalid-report", 0)
+    )
     payload["report"] = {
         "available": True,
+        "valid": report_is_valid,
         "kind": report.get("kind"),
         "generatedAt": report.get("generatedAt"),
         "generator": dict(generator) if isinstance(generator, Mapping) else {},

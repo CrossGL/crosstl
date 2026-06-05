@@ -476,6 +476,8 @@ def _format_external_corpus_accounting(summary):
 
 
 def _format_report_status(report, validation_diagnostic_codes):
+    if isinstance(report, Mapping) and report.get("valid") is False:
+        return "Report: invalid" if report.get("available") else "Report: unavailable"
     if isinstance(validation_diagnostic_codes, Mapping) and (
         validation_diagnostic_codes.get("project.validate.invalid-report", 0)
     ):

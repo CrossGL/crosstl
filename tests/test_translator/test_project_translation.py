@@ -5961,6 +5961,10 @@ def test_project_cli_inspect_report_text_marks_invalid_reports(tmp_path):
     )
     assert "project.validate.invalid-report" in result.stdout
 
+    payload = inspect_project_report(report_path)
+    assert payload["report"]["available"] is True
+    assert payload["report"]["valid"] is False
+
 
 def test_inspect_project_report_summarizes_generated_report(tmp_path):
     repo = tmp_path / "repo"
@@ -5983,6 +5987,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     assert payload["sourceReport"] == str(report_path)
     assert payload["success"] is True
     assert payload["report"]["available"] is True
+    assert payload["report"]["valid"] is True
     assert payload["report"]["summary"]["unitCount"] == 1
     assert payload["report"]["summary"]["translatedCount"] == 1
     assert payload["report"]["project"]["config"] == str(repo / "crosstl.toml")
@@ -6118,6 +6123,8 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     assert result.returncode == 0
     assert "Wrote" in result.stdout
     assert payload["success"] is True
+    assert payload["report"]["available"] is True
+    assert payload["report"]["valid"] is True
     assert payload["report"]["summary"]["artifactCount"] == 1
     assert payload["report"]["summary"]["diagnosticsByCode"] == {}
     assert payload["report"]["summary"]["missingCapabilityCounts"] == {}
