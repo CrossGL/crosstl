@@ -101,6 +101,23 @@ def _diagnostic_location(file):
     }
 
 
+def _write_count_balanced_artifact_gap_report(repo):
+    repo.mkdir()
+    (repo / "first.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "second.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    second_artifact = next(
+        artifact
+        for artifact in payload["artifacts"]
+        if artifact["source"] == "second.cgl"
+    )
+    second_artifact["path"] = "out/cgl/wrong.cgl"
+    report_path = repo / "out" / "count-balanced-artifact-gap-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+    return report_path
+
+
 def test_support_external_corpus_manifest_documents_pinned_reductions():
     manifest = json.loads(
         (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
@@ -6949,8 +6966,13 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "emittedArtifactCount": 1,
         "translatedCount": 1,
         "failedCount": 0,
+        "identityCoverageAvailable": True,
         "missingArtifactCount": 0,
         "extraArtifactCount": 0,
+        "missingArtifacts": [],
+        "extraArtifacts": [],
+        "truncatedMissingArtifactCount": 0,
+        "truncatedExtraArtifactCount": 0,
         "complete": True,
     }
     assert payload["validation"]["success"] is True
@@ -6997,6 +7019,37 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
             "targets": ["cgl"],
         }
     ]
+
+
+def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps(tmp_path):
+    report_path = _write_count_balanced_artifact_gap_report(tmp_path / "repo")
+
+    payload = inspect_project_report(report_path)
+
+    artifact_matrix = payload["artifactMatrix"]
+    assert payload["success"] is False
+    assert artifact_matrix["identityCoverageAvailable"] is True
+    assert artifact_matrix["expectedArtifactCount"] == 2
+    assert artifact_matrix["emittedArtifactCount"] == 2
+    assert artifact_matrix["complete"] is False
+    assert artifact_matrix["missingArtifactCount"] == 1
+    assert artifact_matrix["extraArtifactCount"] == 1
+    assert artifact_matrix["missingArtifacts"] == [
+        {
+            "source": "second.cgl",
+            "target": "cgl",
+            "path": "out/cgl/second.cgl",
+        }
+    ]
+    assert artifact_matrix["extraArtifacts"] == [
+        {
+            "source": "second.cgl",
+            "target": "cgl",
+            "path": "out/cgl/wrong.cgl",
+        }
+    ]
+    assert artifact_matrix["truncatedMissingArtifactCount"] == 0
+    assert artifact_matrix["truncatedExtraArtifactCount"] == 0
 
 
 def test_inspect_project_report_records_truncation_metadata(tmp_path):
@@ -7380,6 +7433,32 @@ def test_project_cli_inspect_report_text_includes_artifact_matrix(tmp_path):
     assert (
         "Artifact matrix: 1 emitted of 1 expected "
         "(1 translated, 0 failed, 0 missing, 0 extra; variants=none)"
+    ) in result.stdout
+
+
+def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps(tmp_path):
+    report_path = _write_count_balanced_artifact_gap_report(tmp_path / "repo")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "Artifact matrix: 2 emitted of 2 expected "
+        "(2 translated, 0 failed, 1 missing, 1 extra; variants=none)"
     ) in result.stdout
 
 

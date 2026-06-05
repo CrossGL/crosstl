@@ -131,8 +131,15 @@ def test_project_report_inspection_is_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_sarif_reports_diagnostics"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps"
+        ) in backend_support["evidence"]
         assert "JSON, text, and SARIF summaries" in backend_support["notes"]
         assert "source-map count and provenance rollups" in backend_support["notes"]
+        assert "sampled missing and extra artifact identities" in (
+            backend_support["notes"]
+        )
         assert (
             "validation hash-status, diagnostic-code, missing-capability, "
             "toolchain-status, toolchain-run, and artifact target rollups"
@@ -202,6 +209,10 @@ def test_project_report_inspection_documents_rollups():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_marks_invalid_reports"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

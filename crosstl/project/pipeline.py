@@ -39,6 +39,7 @@ REPORT_MIGRATION_ACTION_KINDS = ("manual-runtime-integration",)
 REPORT_PACKAGE_NAME = "crosstl"
 UNKNOWN_PACKAGE_VERSION = "unknown"
 EXTERNAL_CORPUS_SCHEMA_VERSION = 1
+ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT = 20
 DEFAULT_CONFIG_NAME = "crosstl.toml"
 DEFAULT_OUTPUT_DIR = "crosstl-out"
 OUTPUT_DIR_OUTSIDE_PROJECT_CODE = "project.config.output-dir-outside-project"
@@ -2374,6 +2375,8 @@ def inspect_project_report(
     payload["artifactMatrix"] = _inspection_artifact_matrix_summary(
         report.get("artifactMatrix"),
         report.get("artifacts"),
+        project=project,
+        units=report.get("units"),
     )
 
     artifacts = report.get("artifacts", [])
@@ -2456,7 +2459,11 @@ def inspect_project_report(
 
 
 def _inspection_artifact_matrix_summary(
-    artifact_matrix: Any, artifacts: Any
+    artifact_matrix: Any,
+    artifacts: Any,
+    *,
+    project: Any = None,
+    units: Any = None,
 ) -> dict[str, Any]:
     if not isinstance(artifact_matrix, Mapping):
         return {"available": False}
@@ -2489,6 +2496,32 @@ def _inspection_artifact_matrix_summary(
         1 for artifact in artifact_records if artifact.get("status") == "failed"
     )
     expected_count = fields["expectedArtifactCount"]
+    missing_identities, extra_identities = _inspection_artifact_matrix_identity_gaps(
+        project,
+        units,
+        artifact_records,
+    )
+    identity_coverage_available = (
+        missing_identities is not None and extra_identities is not None
+    )
+    if missing_identities is None or extra_identities is None:
+        missing_count = max(0, expected_count - emitted_count)
+        extra_count = max(0, emitted_count - expected_count)
+    else:
+        missing_count = len(missing_identities)
+        extra_count = len(extra_identities)
+    missing_samples = [
+        _artifact_identity_payload(identity)
+        for identity in (missing_identities or [])[
+            :ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT
+        ]
+    ]
+    extra_samples = [
+        _artifact_identity_payload(identity)
+        for identity in (extra_identities or [])[
+            :ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT
+        ]
+    ]
     return {
         "available": True,
         **fields,
@@ -2496,10 +2529,87 @@ def _inspection_artifact_matrix_summary(
         "emittedArtifactCount": emitted_count,
         "translatedCount": translated_count,
         "failedCount": failed_count,
-        "missingArtifactCount": max(0, expected_count - emitted_count),
-        "extraArtifactCount": max(0, emitted_count - expected_count),
-        "complete": emitted_count == expected_count,
+        "identityCoverageAvailable": identity_coverage_available,
+        "missingArtifactCount": missing_count,
+        "extraArtifactCount": extra_count,
+        "missingArtifacts": missing_samples,
+        "extraArtifacts": extra_samples,
+        "truncatedMissingArtifactCount": max(0, missing_count - len(missing_samples)),
+        "truncatedExtraArtifactCount": max(0, extra_count - len(extra_samples)),
+        "complete": missing_count == 0 and extra_count == 0,
     }
+
+
+def _inspection_artifact_matrix_identity_gaps(
+    project: Any,
+    units: Any,
+    artifact_records: Sequence[Mapping[str, Any]],
+) -> tuple[list[ArtifactIdentity] | None, list[ArtifactIdentity] | None]:
+    if not isinstance(project, Mapping) or not isinstance(units, list):
+        return None, None
+
+    root = project.get("root")
+    output_dir = project.get("outputDir")
+    targets = project.get("targets")
+    variants = project.get("variants", {})
+    if not (
+        _is_non_empty_string(root)
+        and _is_non_empty_string(output_dir)
+        and isinstance(targets, list)
+        and all(_is_non_empty_string(target) for target in targets)
+        and isinstance(variants, Mapping)
+        and all(_is_non_empty_string(name) for name in variants)
+    ):
+        return None, None
+
+    root_path = Path(root).resolve()
+    project_output_path = Path(output_dir)
+    if not project_output_path.is_absolute():
+        project_output_path = root_path / project_output_path
+    project_output_path = project_output_path.resolve()
+    variant_names: list[str | None] = sorted(variants) if variants else [None]
+    expected_identities = set()
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            continue
+        source = unit.get("path")
+        if not (
+            _is_non_empty_string(source) and _is_repository_relative_report_path(source)
+        ):
+            continue
+        for target in _normalized_targets(targets):
+            for variant in variant_names:
+                identity = _expected_artifact_identity(
+                    root_path,
+                    project_output_path,
+                    source,
+                    target,
+                    variant,
+                )
+                if identity is not None:
+                    expected_identities.add(identity)
+
+    emitted_identities = {
+        identity
+        for artifact in artifact_records
+        for identity in (_artifact_identity(artifact),)
+        if identity is not None
+    }
+    missing = sorted(expected_identities - emitted_identities)
+    extra = sorted(emitted_identities - expected_identities)
+    return missing, extra
+
+
+def _artifact_identity_payload(identity: ArtifactIdentity) -> dict[str, Any]:
+    source, target, path, variant = identity
+    payload = {
+        "source": source,
+        "target": target,
+        "path": path,
+    }
+    if variant is not None:
+        payload["variant"] = variant
+    return payload
 
 
 def _inspection_project_summary(project: Any) -> dict[str, Any]:
