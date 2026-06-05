@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import crosstl._crosstl as crosstl_cli
 import crosstl.project.pipeline as project_pipeline
 from crosstl.project import (
     inspect_project_report,
@@ -4765,8 +4766,7 @@ def test_validate_project_report_rejects_diagnostics_with_undeclared_targets(tmp
     )
 
 
-def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"
+def _write_opengl_toolchain_report(repo):
     repo.mkdir()
     artifact = repo / "out" / "opengl" / "simple.glsl"
     artifact.parent.mkdir(parents=True)
@@ -4794,7 +4794,11 @@ def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatc
         ),
         encoding="utf-8",
     )
+    return report_path
 
+
+def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatch):
+    report_path = _write_opengl_toolchain_report(tmp_path / "repo")
     monkeypatch.setattr(
         project_pipeline.shutil,
         "which",
@@ -4824,6 +4828,48 @@ def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatc
     assert payload["validation"]["toolchainRuns"][0]["stderr"] == (
         "shader validation failed"
     )
+
+
+def test_inspect_project_report_summarizes_toolchain_run_failures(
+    tmp_path, monkeypatch, capsys
+):
+    report_path = _write_opengl_toolchain_report(tmp_path / "repo")
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+    monkeypatch.setattr(
+        project_pipeline.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=2,
+            stdout="",
+            stderr="shader validation failed",
+        ),
+    )
+
+    inspection = inspect_project_report(report_path, run_toolchains=True)
+    assert inspection["success"] is False
+    assert inspection["validation"]["toolchainRunStatusCounts"] == {
+        "failed": 1,
+        "ok": 0,
+    }
+
+    exit_code = crosstl_cli.main(
+        [
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+            "--run-toolchains",
+        ]
+    )
+    assert exit_code == 1
+    stdout = capsys.readouterr().out
+    assert "Validation toolchain runs: failed=1" in stdout
 
 
 def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts(
@@ -5560,6 +5606,10 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "available": 0,
         "not-configured": 1,
         "unavailable": 0,
+    }
+    assert payload["validation"]["toolchainRunStatusCounts"] == {
+        "failed": 0,
+        "ok": 0,
     }
     assert payload["validation"]["result"]["summary"] == {
         "artifactCount": 1,

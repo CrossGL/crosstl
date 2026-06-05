@@ -393,6 +393,9 @@ def _format_project_report_inspection(payload):
     validation_toolchain_counts = payload.get("validation", {}).get(
         "toolchainStatusCounts"
     )
+    validation_toolchain_run_counts = payload.get("validation", {}).get(
+        "toolchainRunStatusCounts"
+    )
     validation_result = payload.get("validation", {}).get("result", {})
     validation_summary = (
         validation_result.get("summary")
@@ -450,6 +453,13 @@ def _format_project_report_inspection(payload):
     )
     if validation_toolchains:
         lines.append(validation_toolchains)
+    validation_toolchain_runs = _format_count_rollup(
+        "Validation toolchain runs",
+        validation_toolchain_run_counts,
+        include_zero=False,
+    )
+    if validation_toolchain_runs:
+        lines.append(validation_toolchain_runs)
     if isinstance(validation_summary, Mapping):
         lines.append(
             "Validation artifacts: "

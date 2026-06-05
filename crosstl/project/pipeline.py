@@ -77,6 +77,7 @@ SOURCE_HASH_VALIDATION_STATUSES = frozenset(
 GENERATED_HASH_VALIDATION_STATUSES = frozenset(
     ("ok", "missing", "mismatch", "not-applicable", "not-recorded", "outside-project")
 )
+VALIDATION_TOOLCHAIN_RUN_STATUSES = frozenset(("ok", "failed"))
 VARIANT_OUTPUT_SAFE_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 )
@@ -1584,6 +1585,10 @@ def _validation_toolchain_status_counts(toolchains: Sequence[Any]) -> dict[str, 
     )
 
 
+def _validation_toolchain_run_status_counts(runs: Sequence[Any]) -> dict[str, int]:
+    return _status_counts(runs, "status", VALIDATION_TOOLCHAIN_RUN_STATUSES)
+
+
 def _validate_artifacts(
     artifacts: Sequence[Mapping[str, Any]],
     targets: Sequence[str],
@@ -1836,6 +1841,11 @@ def inspect_project_report(
         if isinstance(validation_result, Mapping)
         else []
     )
+    validation_toolchain_runs = (
+        validation_result.get("toolchainRuns")
+        if isinstance(validation_result, Mapping)
+        else []
+    )
     payload: dict[str, Any] = {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": REPORT_INSPECTION_KIND,
@@ -1856,6 +1866,12 @@ def inspect_project_report(
                 validation_toolchains
                 if isinstance(validation_toolchains, Sequence)
                 and not isinstance(validation_toolchains, (str, bytes, bytearray))
+                else []
+            ),
+            "toolchainRunStatusCounts": _validation_toolchain_run_status_counts(
+                validation_toolchain_runs
+                if isinstance(validation_toolchain_runs, Sequence)
+                and not isinstance(validation_toolchain_runs, (str, bytes, bytearray))
                 else []
             ),
             "result": (
