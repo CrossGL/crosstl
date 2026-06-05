@@ -17594,15 +17594,20 @@ def test_direct_builtin_variable_nodes_emit_mojo_names_without_ast_repr():
     codegen = MojoCodeGen()
 
     position = BuiltinVariableNode("gl_Position")
+    dispatch = BuiltinVariableNode("SV_DispatchThreadID")
     dispatch_x = BuiltinVariableNode("SV_DispatchThreadID", "x")
 
     assert codegen.generate_expression(position) == "position"
     assert codegen.expression_result_type(position) == "vec4"
-    assert codegen.generate_expression(dispatch_x) == "global_invocation_id[0]"
+    assert (
+        codegen.generate_expression(dispatch) == "SIMD[DType.uint32, 4]("
+        "global_idx_uint.x, global_idx_uint.y, global_idx_uint.z, 0)"
+    )
+    assert codegen.generate_expression(dispatch_x) == "global_idx_uint.x"
     assert codegen.expression_result_type(dispatch_x) == "uint"
 
 
-def test_compute_builtin_identifiers_lower_to_mojo_placeholders():
+def test_compute_builtin_identifiers_lower_to_mojo_gpu_index_aliases():
     code = """
     shader BuiltinGlobals {
         compute {
@@ -17612,32 +17617,41 @@ def test_compute_builtin_identifiers_lower_to_mojo_placeholders():
                 int local_x = int(gl_LocalInvocationID.x);
                 int global_x = int(gl_GlobalInvocationID.x);
                 int group_count = int(gl_NumWorkGroups.x);
-                int total = matrix_size + local_x + global_x + group_count;
+                int group_size = int(gl_WorkGroupSize.x);
+                uvec3 global_id = gl_GlobalInvocationID;
+                uvec2 workgroup_xy = gl_WorkGroupID.xy;
+                int total = (
+                    matrix_size + local_x + global_x + group_count + group_size
+                );
             }
         }
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
+    # Mojo GPU docs expose kernel coordinates through x/y/z UInt aliases such as
+    # global_idx_uint, thread_idx_uint, block_idx_uint, block_dim_uint, and
+    # grid_dim_uint:
+    # https://mojolang.org/docs/std/gpu/primitives/id/
     assert "var matrix_size: Int32 = 0" in generated_code
+    assert "var local_x: Int32 = Int32(thread_idx_uint.x)" in generated_code
+    assert "var global_x: Int32 = Int32(global_idx_uint.x)" in generated_code
+    assert "var group_count: Int32 = Int32(grid_dim_uint.x)" in generated_code
+    assert "var group_size: Int32 = Int32(block_dim_uint.x)" in generated_code
     assert (
-        "var local_invocation_id: SIMD[DType.uint32, 4] = "
-        "SIMD[DType.uint32, 4](0, 0, 0, 0)" in generated_code
-    )
+        "var global_id: SIMD[DType.uint32, 4] = "
+        "SIMD[DType.uint32, 4]("
+        "global_idx_uint.x, global_idx_uint.y, global_idx_uint.z, 0)"
+    ) in generated_code
     assert (
-        "var global_invocation_id: SIMD[DType.uint32, 4] = "
-        "SIMD[DType.uint32, 4](0, 0, 0, 0)" in generated_code
-    )
-    assert (
-        "var num_workgroups: SIMD[DType.uint32, 4] = "
-        "SIMD[DType.uint32, 4](0, 0, 0, 0)" in generated_code
-    )
-    assert "Int32(local_invocation_id[0])" in generated_code
-    assert "Int32(global_invocation_id[0])" in generated_code
-    assert "Int32(num_workgroups[0])" in generated_code
+        "var workgroup_xy: SIMD[DType.uint32, 2] = "
+        "SIMD[DType.uint32, 2](block_idx_uint.x, block_idx_uint.y)"
+    ) in generated_code
+    assert "# CrossGL builtin placeholders" not in generated_code
     assert "gl_LocalInvocationID" not in generated_code
     assert "gl_GlobalInvocationID" not in generated_code
     assert "gl_NumWorkGroups" not in generated_code
+    assert "gl_WorkGroupSize" not in generated_code
     assert "var matrix_size: Int32\n" not in generated_code
 
 

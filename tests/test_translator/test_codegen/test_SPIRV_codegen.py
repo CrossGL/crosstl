@@ -24904,6 +24904,45 @@ class TestSpirvShaderValidation:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_fragment_depth_interface_output_declares_depth_replacing(self, tmp_path):
+        source_code = """
+        shader FragmentDepthReplacing {
+            struct FragmentOutput {
+                float depth @ gl_FragDepth;
+            };
+
+            fragment {
+                FragmentOutput main() {
+                    FragmentOutput output;
+                    output.depth = 0.5;
+                    return output;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        depth_id = spirv_named_variable(
+            spv_code, "gl_FragDepth", storage_class="Output"
+        )
+        entry_match = re.search(
+            rf'OpEntryPoint Fragment (%\d+) "main" {depth_id}', spv_code
+        )
+        assert entry_match is not None
+        entry_id = entry_match.group(1)
+
+        # Khronos FragDepth refpage:
+        # https://registry.khronos.org/vulkan/specs/latest/man/html/FragDepth.html
+        # A fragment shader output decorated FragDepth also needs DepthReplacing.
+        assert f"OpDecorate {depth_id} BuiltIn FragDepth" in spv_code
+        assert f"OpExecutionMode {entry_id} DepthReplacing" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_return_semantics_validate_builtin_types_and_stage_context_for_spirv(
         self,
     ):

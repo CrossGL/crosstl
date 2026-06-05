@@ -664,6 +664,55 @@ def test_fragment_system_value_builtin_combines_with_color_return_rewrite():
     assert "return (front ? float4(1.0) : float4(0.0));" in generated_code
 
 
+def test_fragment_point_coord_builtin_emits_implicit_slang_parameter():
+    # Source: Khronos lists gl_PointCoord as a fragment in vec2 builtin;
+    # Slang's SPIR-V system-value table maps SV_PointCoord to BuiltIn PointCoord.
+    # https://www.khronos.org/opengl/wiki/Built-in_Variable_(GLSL)
+    # https://docs.shader-slang.org/en/stable/external/slang/docs/user-guide/a2-01-spirv-target-specific.html
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                vec2 pointUv = gl_PointCoord;
+                gl_FragColor = vec4(pointUv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main(float2 gl_PointCoord : SV_PointCoord) : SV_Target" in (
+        generated_code
+    )
+    assert "float2 pointUv = gl_PointCoord;" in generated_code
+    assert "return float4(pointUv, 0.0, 1.0);" in generated_code
+
+
+def test_fragment_point_coord_uses_existing_semantic_parameter_alias():
+    # Source: Khronos defines gl_PointCoord as a fragment input, and Slang maps
+    # SV_PointCoord to the same PointCoord builtin, so reuse explicit params.
+    # https://www.khronos.org/opengl/wiki/Built-in_Variable_(GLSL)
+    # https://docs.shader-slang.org/en/stable/external/slang/docs/user-guide/a2-01-spirv-target-specific.html
+    code = """
+    shader main {
+        fragment {
+            void main(vec2 pointCoord @ gl_PointCoord) {
+                vec2 pointUv = gl_PointCoord;
+                gl_FragColor = vec4(pointUv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main(float2 pointCoord : SV_PointCoord) : SV_Target" in (
+        generated_code
+    )
+    assert "float2 gl_PointCoord : SV_PointCoord" not in generated_code
+    assert "float2 pointUv = pointCoord;" in generated_code
+    assert "gl_PointCoord" not in generated_code
+
+
 def test_fragment_sample_layer_and_viewport_builtins_emit_implicit_slang_parameters():
     code = """
     shader main {

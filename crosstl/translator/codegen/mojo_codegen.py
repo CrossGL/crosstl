@@ -1067,6 +1067,17 @@ MOJO_BUILTIN_PLACEHOLDERS = {
     "gl_PointCoord": ("point_coord", "vec2"),
 }
 
+MOJO_GPU_BUILTIN_ALIASES = {
+    "gl_GlobalInvocationID": ("global_idx_uint", "uvec3"),
+    "SV_DispatchThreadID": ("global_idx_uint", "uvec3"),
+    "gl_LocalInvocationID": ("thread_idx_uint", "uvec3"),
+    "SV_GroupThreadID": ("thread_idx_uint", "uvec3"),
+    "gl_WorkGroupID": ("block_idx_uint", "uvec3"),
+    "SV_GroupID": ("block_idx_uint", "uvec3"),
+    "gl_NumWorkGroups": ("grid_dim_uint", "uvec3"),
+    "gl_WorkGroupSize": ("block_dim_uint", "uvec3"),
+}
+
 MOJO_VECTOR_ARITHMETIC_OPS = {
     "+": "add",
     "-": "sub",
@@ -8098,6 +8109,9 @@ class MojoCodeGen:
             ray_builtin = self.mojo_ray_builtin_expression(expr)
             if ray_builtin is not None and expr not in self.variable_types:
                 return ray_builtin
+            gpu_builtin = self.mojo_gpu_builtin_expression(expr)
+            if gpu_builtin is not None:
+                return gpu_builtin
             builtin = self.mojo_builtin_placeholder_expression(expr)
             if builtin is not None:
                 return builtin
@@ -8114,6 +8128,9 @@ class MojoCodeGen:
                 ray_builtin = self.mojo_ray_builtin_expression(expr.name)
                 if ray_builtin is not None and expr.name not in self.variable_types:
                     return ray_builtin
+                gpu_builtin = self.mojo_gpu_builtin_expression(expr.name)
+                if gpu_builtin is not None:
+                    return gpu_builtin
                 builtin = self.mojo_builtin_placeholder_expression(expr.name)
                 if builtin is not None:
                     return builtin
@@ -8124,6 +8141,9 @@ class MojoCodeGen:
                 ray_builtin = self.mojo_ray_builtin_expression(expr.name)
                 if ray_builtin is not None and expr.name not in self.variable_types:
                     return ray_builtin
+                gpu_builtin = self.mojo_gpu_builtin_expression(expr.name)
+                if gpu_builtin is not None:
+                    return gpu_builtin
                 builtin = self.mojo_builtin_placeholder_expression(expr.name)
                 if builtin is not None:
                     return builtin
@@ -8401,6 +8421,9 @@ class MojoCodeGen:
             ray_builtin = self.mojo_ray_builtin_expression(name)
             if ray_builtin is not None and name not in self.variable_types:
                 return ray_builtin
+            gpu_builtin = self.mojo_gpu_builtin_expression(name)
+            if gpu_builtin is not None:
+                return gpu_builtin
             builtin = self.mojo_builtin_placeholder_expression(name)
             if builtin is not None:
                 return builtin
@@ -8703,6 +8726,11 @@ class MojoCodeGen:
         ray_builtin = self.mojo_ray_builtin_expression(expr.builtin_name)
         if ray_builtin is not None:
             return ray_builtin
+        gpu_builtin = self.mojo_gpu_builtin_expression(
+            expr.builtin_name, getattr(expr, "component", None)
+        )
+        if gpu_builtin is not None:
+            return gpu_builtin
         name = self.mojo_builtin_placeholder_expression(expr.builtin_name)
         if name is None:
             name = self.map_semantic(expr.builtin_name)
@@ -8724,10 +8752,69 @@ class MojoCodeGen:
         self.required_builtin_placeholders.add((placeholder_name, placeholder_type))
         return placeholder_name
 
+    def mojo_gpu_builtin_expression(self, name, component=None):
+        builtin = MOJO_GPU_BUILTIN_ALIASES.get(name)
+        if builtin is None or name in self.variable_types:
+            return None
+        alias_name, type_name = builtin
+        if component:
+            swizzle_indices = self.get_swizzle_indices(component)
+            if swizzle_indices is None:
+                return f"{alias_name}.{component}"
+            return self.generate_gpu_builtin_swizzle(
+                alias_name, type_name, swizzle_indices
+            )
+        return self.generate_gpu_builtin_vector(alias_name, type_name)
+
+    def generate_gpu_builtin_vector(self, alias_name, type_name):
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is None:
+            return alias_name
+        dtype, width, storage_width, pad_literal = vector_info
+        components = [
+            self.gpu_builtin_component_expression(alias_name, index, dtype)
+            for index in range(width)
+        ]
+        while len(components) < storage_width:
+            components.append(pad_literal)
+        return f"SIMD[{dtype}, {storage_width}]({', '.join(components)})"
+
+    def generate_gpu_builtin_swizzle(self, alias_name, type_name, swizzle_indices):
+        vector_info = self.vector_type_info(type_name)
+        dtype = vector_info[0] if vector_info is not None else "DType.uint32"
+        if len(swizzle_indices) == 1:
+            return self.gpu_builtin_component_expression(
+                alias_name, swizzle_indices[0], dtype
+            )
+
+        result_type = self.swizzle_result_type(type_name, len(swizzle_indices))
+        result_info = self.vector_type_info(result_type)
+        if result_info is None:
+            return alias_name
+        result_dtype, _, storage_width, pad_literal = result_info
+        components = [
+            self.gpu_builtin_component_expression(alias_name, index, result_dtype)
+            for index in swizzle_indices
+        ]
+        while len(components) < storage_width:
+            components.append(pad_literal)
+        return f"SIMD[{result_dtype}, {storage_width}]({', '.join(components)})"
+
+    def gpu_builtin_component_expression(self, alias_name, index, dtype):
+        component_names = ("x", "y", "z")
+        if 0 <= index < len(component_names):
+            return f"{alias_name}.{component_names[index]}"
+        return MOJO_DTYPE_INFO.get(dtype, MOJO_DTYPE_INFO["DType.uint32"])[2]
+
     def generate_builtin_member_access(self, expr):
         obj_name = self.identifier_expression_name(getattr(expr, "object", None))
         if obj_name is None:
             return None
+        gpu_builtin = self.mojo_gpu_builtin_expression(
+            obj_name, getattr(expr, "member", None)
+        )
+        if gpu_builtin is not None:
+            return gpu_builtin
         obj = self.mojo_builtin_placeholder_expression(obj_name)
         if obj is None:
             return None

@@ -9038,7 +9038,7 @@ class RustCodeGen:
         if arguments is not None:
             arg_count = len(arguments)
         has_sampler = self.call_has_explicit_sampler_argument(arguments)
-        if func_name == "textureSize":
+        if func_name in {"textureSize", "textureDimensions"}:
             return "texture_size" if arg_count == 1 else "texture_size_lod"
         if func_name == "texture":
             if self.call_uses_shadow_texture(arguments):
@@ -11303,6 +11303,9 @@ class RustCodeGen:
                 return "int"
             if operation in {"GetDimensions"}:
                 return "void"
+            if operation in {"textureDimensions"}:
+                texture_type = self.expression_result_type(expr.texture_expr)
+                return self.texture_dimensions_result_type(texture_type)
             if operation in {"textureSize"}:
                 texture_type = self.expression_result_type(expr.texture_expr)
                 return self.texture_size_result_type(texture_type)
@@ -11532,6 +11535,8 @@ class RustCodeGen:
             return "float"
 
         if mapped_name in {"texture_size", "texture_size_lod"} and arg_types:
+            if func_name == "textureDimensions":
+                return self.texture_dimensions_result_type(arg_types[0])
             return self.texture_size_result_type(arg_types[0])
 
         if mapped_name in {"texture_query_levels", "texture_samples"}:
@@ -11781,6 +11786,15 @@ class RustCodeGen:
         }:
             return "ivec3"
         return "ivec2"
+
+    def texture_dimensions_result_type(self, texture_type):
+        size_type = self.texture_size_result_type(texture_type)
+        size_info = self.vector_type_info(size_type)
+        if size_info is not None:
+            return self.vector_type_for_components("uint", size_info["size"])
+        if self.normalize_scalar_type(size_type) is not None:
+            return "uint"
+        return size_type
 
     def storage_image_value_result_type(self, image_type):
         image_type = str(image_type or "")

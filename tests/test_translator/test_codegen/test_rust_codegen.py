@@ -17199,6 +17199,34 @@ def test_texel_fetch_and_texture_query_calls_map_to_rust_helpers_and_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_wgsl_texture_dimensions_alias_maps_to_unsigned_rust_helpers_and_compile(
+    tmp_path,
+):
+    # W3C WGSL 17.7.1: textureDimensions returns u32/vecN<u32> and the
+    # mip level is optional. Source: https://www.w3.org/TR/WGSL/#texturedimensions
+    code = """
+    shader WgslTextureDimensionsProbe {
+        sampler2D mainTexture;
+        sampler3D volumeMap;
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                let size2D = textureDimensions(mainTexture);
+                uvec3 size3D = textureDimensions(volumeMap, 0u);
+                return vec4(float(size2D.x), float(size2D.y), float(size3D.z), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let size2D: Vec2<u32> = texture_size(*MAIN_TEXTURE);" in generated_code
+    assert "let size3D: Vec3<u32> = texture_size_lod(*VOLUME_MAP, 0);" in generated_code
+    assert "textureDimensions" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_multisample_texture_fetch_and_query_helpers_compile(tmp_path):
     code = """
     shader MultisampleTextureProbe {

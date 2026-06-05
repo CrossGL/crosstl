@@ -211,6 +211,7 @@ class VulkanSPIRVCodeGen:
         self.tessellation_patch_constant_interfaces = {}
         self.tessellation_patch_constant_output_variables = {}
         self.tessellation_patch_constant_input_variables = {}
+        self.fragment_depth_replacing_function_ids = set()
         self.mesh_output_member_variables = {}
         self.mesh_output_member_shadow_variables = {}
         self.mesh_output_member_locations = {}
@@ -10216,6 +10217,7 @@ class VulkanSPIRVCodeGen:
             cache_key = f"__return_semantic_builtin::{name}"
             if cache_key in self.global_variables:
                 variable = self.global_variables[cache_key]
+                self.mark_fragment_depth_replacing_if_needed(builtin_name, "Output")
                 self.mark_function_interface_variable(variable)
                 return variable
 
@@ -19133,6 +19135,18 @@ class VulkanSPIRVCodeGen:
         if variable.id in self.builtin_interface_variable_ids:
             self.mark_function_interface_variable(variable)
 
+    def mark_fragment_depth_replacing_if_needed(
+        self, builtin_name: str, storage_class: str
+    ):
+        if (
+            builtin_name != "FragDepth"
+            or storage_class != "Output"
+            or self.current_execution_model != "Fragment"
+            or self.current_function_id is None
+        ):
+            return
+        self.fragment_depth_replacing_function_ids.add(self.current_function_id)
+
     def ensure_builtin_variable(self, name: str) -> Optional[SpirvId]:
         builtin = self.ensure_compute_builtin(name)
         if builtin is not None:
@@ -19179,6 +19193,7 @@ class VulkanSPIRVCodeGen:
         cache_key = self.stage_builtin_cache_key(name, storage_spec, storage_class)
         if cache_key in self.global_variables:
             builtin_id = self.global_variables[cache_key]
+            self.mark_fragment_depth_replacing_if_needed(builtin_name, storage_class)
             self.mark_builtin_interface_variable(builtin_id)
             return builtin_id
 
@@ -19212,6 +19227,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{id_value} = OpVariable %{ptr_type.id} {storage_class}")
         self.emit(f'OpName %{id_value} "{name}"')
         self.decorations.append(f"OpDecorate %{id_value} BuiltIn {builtin_name}")
+        self.mark_fragment_depth_replacing_if_needed(builtin_name, storage_class)
 
         spirv_id = SpirvId(id_value, ptr_type.type, name)
         self.variable_value_types[id_value] = type_id
@@ -19876,6 +19892,8 @@ class VulkanSPIRVCodeGen:
         )
         if execution_model == "Fragment":
             self.emit(f"OpExecutionMode %{function_id.id} OriginUpperLeft")
+            if function_id.id in self.fragment_depth_replacing_function_ids:
+                self.emit(f"OpExecutionMode %{function_id.id} DepthReplacing")
         elif execution_model == "Geometry":
             self.emit_geometry_execution_modes(function_id, stage)
         elif execution_model in {"TessellationControl", "TessellationEvaluation"}:

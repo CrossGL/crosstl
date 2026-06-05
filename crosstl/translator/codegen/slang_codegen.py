@@ -261,6 +261,7 @@ class SlangCodeGen:
             "gl_Layer": "SV_RenderTargetArrayIndex",
             "gl_ViewportIndex": "SV_ViewportArrayIndex",
             "gl_FragCoord": "SV_Position",
+            "gl_PointCoord": "SV_PointCoord",
             "gl_FrontFacing": "SV_IsFrontFace",
             "gl_FragDepth": "SV_Depth",
             "gl_FragColor": "SV_Target",
@@ -3765,6 +3766,7 @@ class SlangCodeGen:
             "SV_INSTANCEID",
             "SV_ISFRONTFACE",
             "SV_OUTPUTCONTROLPOINTID",
+            "SV_POINTCOORD",
             "SV_SAMPLEINDEX",
             "SV_STARTINSTANCELOCATION",
             "SV_STARTVERTEXLOCATION",
@@ -3854,6 +3856,7 @@ class SlangCodeGen:
             },
             "fragment": {
                 "SV_POSITION": "float4",
+                "SV_POINTCOORD": "float2",
                 "SV_ISFRONTFACE": "bool",
                 "SV_PRIMITIVEID": "uint",
                 "SV_SAMPLEINDEX": "uint",
@@ -7257,6 +7260,7 @@ class SlangCodeGen:
         if shader_stage == "fragment":
             return {
                 "gl_FragCoord": ("vec4", "SV_Position"),
+                "gl_PointCoord": ("vec2", "SV_PointCoord"),
                 "gl_FrontFacing": ("bool", "SV_IsFrontFace"),
                 "gl_PrimitiveID": ("uint", "SV_PrimitiveID"),
                 "gl_SampleID": ("uint", "SV_SampleIndex"),
