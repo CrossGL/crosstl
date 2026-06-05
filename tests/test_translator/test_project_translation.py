@@ -322,7 +322,11 @@ def test_scan_report_records_unsupported_targets(tmp_path):
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
 
-    payload = scan_project(repo).to_report(targets=["not-a-backend"]).to_json()
+    report = scan_project(repo).to_report(targets=["not-a-backend"])
+    payload = report.to_json()
+    report_path = repo / "unsupported-target-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
 
     assert payload["project"]["targets"] == ["not-a-backend"]
     assert payload["summary"]["diagnosticCounts"]["error"] == 1
@@ -332,10 +336,14 @@ def test_scan_report_records_unsupported_targets(tmp_path):
     assert payload["summary"]["missingCapabilityCounts"] == {"target.backend": 1}
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.config.unsupported-target"
+    assert diagnostic["location"]["file"] == "."
     assert diagnostic["target"] == "not-a-backend"
     assert diagnostic["missingCapabilities"] == ["target.backend"]
     assert "Supported targets:" in diagnostic["message"]
     assert payload["migration"]["actions"] == []
+    assert "project.validate.invalid-report" not in {
+        diagnostic["code"] for diagnostic in validation["diagnostics"]
+    }
 
 
 def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
@@ -4367,6 +4375,57 @@ def test_validate_project_report_rejects_inconsistent_diagnostic_location_spans(
         "diagnostics[1].location.endColumn must be greater than or equal to "
         "diagnostics[1].location.column when endLine equals line"
     ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_diagnostic_locations_outside_project(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+    payload["diagnostics"] = [
+        {
+            "severity": "warning",
+            "code": "project.test.absolute-location",
+            "message": "Diagnostic location must be report-relative.",
+            "location": _diagnostic_location(str(repo / "simple.cgl")),
+            "missingCapabilities": ["repo.scan"],
+        },
+        {
+            "severity": "note",
+            "code": "project.test.parent-location",
+            "message": "Diagnostic location must not escape the project.",
+            "location": _diagnostic_location("../outside.cgl"),
+            "missingCapabilities": ["repo.scan"],
+        },
+    ]
+    diagnostic_counts = {"note": 1, "warning": 1, "error": 0}
+    payload["diagnosticCounts"] = diagnostic_counts
+    payload["summary"]["diagnosticCounts"] = diagnostic_counts
+    payload["summary"]["diagnosticsByCode"] = {
+        "project.test.absolute-location": 1,
+        "project.test.parent-location": 1,
+    }
+    payload["summary"]["missingCapabilityCounts"] = {"repo.scan": 2}
+    report_path = repo / "out" / "invalid-diagnostic-locations-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "diagnostics[0].location.file must be repository-relative" in (
+        diagnostic["message"]
+    )
+    assert "diagnostics[1].location.file must be repository-relative" in (
+        diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_diagnostics_with_undeclared_targets(tmp_path):

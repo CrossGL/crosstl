@@ -665,7 +665,7 @@ def _config_location(config: ProjectConfig) -> SourceLocation:
             else str(config.config_path)
         )
         return SourceLocation(file=file)
-    return SourceLocation(file=str(config.root))
+    return SourceLocation(file=".")
 
 
 @dataclass(frozen=True)
@@ -1276,7 +1276,7 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
                 severity="warning",
                 code="project.scan.empty",
                 message="No supported shader or GPU source files were discovered",
-                location=SourceLocation(file=str(config.root)),
+                location=_config_location(config),
                 missing_capabilities=["repo.scan"],
             )
         )
@@ -1747,7 +1747,7 @@ def _validate_artifacts(
                     severity="warning",
                     code="project.validate.toolchain-unavailable",
                     message=f"No validation toolchain is available for target {toolchain['target']}",
-                    location=SourceLocation(file=str(config.root)),
+                    location=_config_location(config),
                     target=toolchain["target"],
                     missing_capabilities=["toolchain.validation"],
                 )
@@ -2456,8 +2456,11 @@ def _diagnostic_location_contract_reasons(prefix: str, value: Any) -> list[str]:
         return [f"{prefix} must be an object"]
 
     reasons = []
-    if not _is_non_empty_string(value.get("file")):
+    file = value.get("file")
+    if not _is_non_empty_string(file):
         reasons.append(f"{prefix}.file must be a string")
+    elif not _is_repository_relative_report_path(file):
+        reasons.append(f"{prefix}.file must be repository-relative")
     for field_name in (
         "line",
         "column",

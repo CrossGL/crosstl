@@ -72,17 +72,18 @@ Validate artifacts referenced by a report:
 
 Validation exits nonzero when the report metadata is malformed, artifact
 records, source-map records, or preserved diagnostics are malformed, source-map
-or diagnostic location spans are internally inconsistent, artifact source paths
-are not repository-relative, project target lists are not normalized and
-deduplicated, diagnostic or artifact targets are not declared by the report,
-artifact sources are not declared translation units, embedded validation records
-reference artifacts not declared by the report, validation records contain
-duplicate identities or inconsistent status fields, summarized embedded
-validation omits declared artifacts, external corpus entry presence, discovery,
-or source-backend fields do not match the project root and declared units,
-translated outputs are missing, artifact paths resolve outside the repository,
-generated artifact hashes no longer match the files on disk, source files with
-recorded hashes are missing or changed, or opt-in toolchain smoke checks fail.
+or diagnostic location spans are internally inconsistent, diagnostic location
+file paths or artifact source paths are not repository-relative, project target
+lists are not normalized and deduplicated, diagnostic or artifact targets are
+not declared by the report, artifact sources are not declared translation units,
+embedded validation records reference artifacts not declared by the report,
+validation records contain duplicate identities or inconsistent status fields,
+summarized embedded validation omits declared artifacts, external corpus entry
+presence, discovery, or source-backend fields do not match the project root and
+declared units, translated outputs are missing, artifact paths resolve outside
+the repository, generated artifact hashes no longer match the files on disk,
+source files with recorded hashes are missing or changed, or opt-in toolchain
+smoke checks fail.
 Toolchain smoke checks only run for translated artifacts that still exist inside
 the repository.
 
@@ -219,10 +220,11 @@ Project reports are JSON documents with:
   consistency, and anchor consistency checks, external corpus record, per-entry
   artifact count, and summary checks, summary consistency checks, migration
   action shape and target declaration checks,
-  preserved diagnostic shape, span consistency, and target declaration checks,
-  validation toolchain status consistency checks, validation artifact and
-  toolchain run record shape and duplicate identity checks, validation artifact
-  coverage and status consistency checks, artifact source, source-backend,
+  preserved diagnostic shape, repository-relative file path, span consistency,
+  and target declaration checks, validation toolchain status consistency
+  checks, validation artifact and toolchain run record shape and duplicate
+  identity checks, validation artifact coverage and status consistency checks,
+  artifact source, source-backend,
   target, and variant declaration checks, translated artifact existence checks,
   escaped output directory and artifact-path checks, source artifact existence
   and hash mismatch checks, generated artifact hash mismatch checks, optional
