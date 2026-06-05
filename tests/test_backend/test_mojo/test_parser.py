@@ -2460,6 +2460,40 @@ def test_keyword_style_comptime_assert_statement_parse():
     assert size_assert.args[1] == '"bad size"'
 
 
+def test_backtick_comptime_names_parse_from_official_gpu_notebook_example():
+    # Reduced from https://docs.modular.com/mojo/tools/notebooks/
+    # "Example: Hello writing" uses escaped emoji comptime constants in a GPU
+    # kernel and host-side fill.
+    code = """
+    comptime `✅`: Int32 = 1
+    comptime `❌`: Int32 = 0
+
+    def kernel(value: UnsafePointer[Scalar[DType.int32], MutAnyOrigin]):
+        value[0] = `✅`
+
+    def main():
+        out.enqueue_fill(`❌`)
+    """
+
+    ast = parse_code(tokenize_code(code))
+    success, failure = ast.global_variables
+    kernel = find_function(ast, "kernel")
+    main = find_function(ast, "main")
+
+    assert success.name == "`✅`"
+    assert success.vtype == "Int32"
+    assert success.initial_value == "1"
+    assert getattr(success, "is_comptime", False)
+
+    assert failure.name == "`❌`"
+    assert failure.vtype == "Int32"
+    assert failure.initial_value == "0"
+    assert getattr(failure, "is_comptime", False)
+
+    assert kernel.body[0].right.name == "`✅`"
+    assert main.body[0].args[0].name == "`❌`"
+
+
 def test_keyword_style_runtime_assert_statement_parse_from_modular_packing_kernel():
     # Reduced from modular/modular commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,

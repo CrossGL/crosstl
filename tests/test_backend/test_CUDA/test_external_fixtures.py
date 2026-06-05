@@ -402,6 +402,32 @@ def test_cuda_tile_matmul_half2float_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_tile_matmul_float2half_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/9_CUDA_Tile/tileMatmul/tileMatmul.cu
+    # Semantics source:
+    # NVIDIA CUDA Math API, Half Precision Conversion and Data Movement.
+    source = """
+    void init_half_inputs(half* h_A, float value) {
+        h_A[0] = __float2half(value - 0.5f);
+        h_A[1] = ::__float2half_rn(value + 0.5f);
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].right.name == "__float2half"
+    assert body[1].right.name == "::__float2half_rn"
+    assert "h_A[0] = f16((value - 0.5f));" in crossgl
+    assert "h_A[1] = f16((value + 0.5f));" in crossgl
+    assert "__float2half" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_interval_bit_reinterpret_intrinsics_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cuda-samples

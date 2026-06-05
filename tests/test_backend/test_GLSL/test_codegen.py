@@ -163,6 +163,34 @@ def test_codegen_fragment_roundtrip():
         assert name in output
 
 
+def test_codegen_shadertoy_main_image_synthesizes_fragment_entrypoint():
+    # Shadertoy-style fragments provide mainImage instead of GLSL main.
+    code = textwrap.dedent("""
+        #version 300 es
+        precision highp float;
+        uniform vec3 iResolution;
+        uniform sampler2D iChannel0;
+
+        void mainImage(out vec4 fragColor, in vec2 fragCoord)
+        {
+            vec2 uv = fragCoord / iResolution.xy;
+            fragColor = texture(iChannel0, uv);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "void mainImage(out vec4 fragColor, in vec2 fragCoord)" in crossgl
+    assert "vec4 main() @ gl_FragColor" in crossgl
+    assert "mainImage(shadertoyFragColor, gl_FragCoord.xy);" in crossgl
+    assert "return shadertoyFragColor;" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "void main()" in glsl
+    assert "mainImage(shadertoyFragColor, gl_FragCoord.xy);" in glsl
+    assert "fragColor = shadertoyFragColor;" in glsl
+
+
 def test_codegen_block_scope_precision_statement_from_glslang_precision_frag():
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/precision.frag, which declares precision defaults inside nested blocks.

@@ -880,6 +880,23 @@ def test_codegen_nested_unbraced_for_loops_from_public_msl_example():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_unbraced_do_while_body_from_msl_cxx14_statement_grammar():
+    code = """
+    kernel void normalize(device float* values [[buffer(0)]], uint count) {
+        uint i = 0;
+        do
+            values[i++] = 0.0f;
+        while (i < count);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "do {" in crossgl
+    assert "buffer_store(values, i++, 0.0f);" in crossgl
+    assert "} while (i < count);" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_multi_declarator_for_header_from_mlx_conv_loader():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx

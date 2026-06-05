@@ -1628,6 +1628,10 @@ class GLSLToCrossGLConverter:
             else:
                 other_functions.append(function)
 
+        shadertoy_main_image = None
+        if main_function is None and self.shader_type == "fragment":
+            shadertoy_main_image = self.find_shadertoy_main_image(other_functions)
+
         # Generate auxiliary functions first
         for function in other_functions:
             self.increase_indent()
@@ -1635,7 +1639,7 @@ class GLSLToCrossGLConverter:
             self.decrease_indent()
 
         # Generate the main function if it exists
-        if main_function:
+        if main_function or shadertoy_main_image:
             self.increase_indent()
             input_parameter = (
                 f"{self.stage_struct_name()}Input input" if self.inputs else ""
@@ -1687,27 +1691,38 @@ class GLSLToCrossGLConverter:
                 self.shader_type == "fragment"
                 and self.outputs
                 and not fragment_uses_direct_outputs
+                and shadertoy_main_image is None
             ):
                 output_type = self.convert_type(self.outputs[0].vtype)
                 output_name = self.outputs[0].name
                 result += self.indent() + f"{output_type} {output_name};\n"
 
             # Generate statements for the main function
-            for statement in self.generate_statement_sequence(main_function.body):
-                result += self.indent() + statement + "\n"
+            if shadertoy_main_image is not None:
+                for statement in self.generate_shadertoy_main_image_entrypoint(
+                    shadertoy_main_image, fragment_uses_direct_outputs
+                ):
+                    result += self.indent() + statement + "\n"
+            else:
+                for statement in self.generate_statement_sequence(main_function.body):
+                    result += self.indent() + statement + "\n"
 
-            if self.shader_type in ("vertex",) and not any(
-                isinstance(stmt, ReturnNode) for stmt in main_function.body
-            ):
-                result += self.indent() + "return output;\n"
+                if self.shader_type in ("vertex",) and not any(
+                    isinstance(stmt, ReturnNode) for stmt in main_function.body
+                ):
+                    result += self.indent() + "return output;\n"
 
-            if (
-                self.shader_type == "fragment"
-                and not fragment_uses_direct_outputs
-                and not any(isinstance(stmt, ReturnNode) for stmt in main_function.body)
-            ):
-                output_name = self.outputs[0].name if self.outputs else "gl_FragColor"
-                result += self.indent() + f"return {output_name};\n"
+                if (
+                    self.shader_type == "fragment"
+                    and not fragment_uses_direct_outputs
+                    and not any(
+                        isinstance(stmt, ReturnNode) for stmt in main_function.body
+                    )
+                ):
+                    output_name = (
+                        self.outputs[0].name if self.outputs else "gl_FragColor"
+                    )
+                    result += self.indent() + f"return {output_name};\n"
 
             self.decrease_indent()
             result += self.indent() + "}\n"
@@ -1718,6 +1733,64 @@ class GLSLToCrossGLConverter:
         result += "}\n"
 
         return result
+
+    def find_shadertoy_main_image(self, functions):
+        for function in functions:
+            if self.is_shadertoy_main_image(function):
+                return function
+        return None
+
+    def is_shadertoy_main_image(self, function):
+        if getattr(function, "name", None) != "mainImage":
+            return False
+        if getattr(function, "return_type", None) != "void":
+            return False
+
+        params = getattr(function, "params", None) or []
+        if len(params) < 2:
+            return False
+
+        color_param, coord_param = params[:2]
+        if not isinstance(color_param, VariableNode) or not isinstance(
+            coord_param, VariableNode
+        ):
+            return False
+
+        color_qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(color_param, "qualifiers", []) or []
+        }
+        coord_qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(coord_param, "qualifiers", []) or []
+        }
+
+        return (
+            color_param.vtype == "vec4"
+            and coord_param.vtype == "vec2"
+            and bool(color_qualifiers & {"out", "inout"})
+            and "out" not in coord_qualifiers
+        )
+
+    def generate_shadertoy_main_image_entrypoint(
+        self, function, fragment_uses_direct_outputs
+    ):
+        color_param = function.params[0]
+        color_type = self.convert_type(getattr(color_param, "vtype", None) or "vec4")
+        local_color = "shadertoyFragColor"
+        call_name = self.format_function_name(function.name)
+        statements = [
+            f"{color_type} {local_color};",
+            f"{call_name}({local_color}, gl_FragCoord.xy);",
+        ]
+
+        if fragment_uses_direct_outputs:
+            output_name = self.outputs[0].name if self.outputs else "gl_FragColor"
+            statements.append(f"{output_name} = {local_color};")
+        else:
+            statements.append(f"return {local_color};")
+
+        return statements
 
     def generate_struct(self, node):
         result = f"{self.interface_block_attribute_prefix(node)}struct {node.name} {{\n"

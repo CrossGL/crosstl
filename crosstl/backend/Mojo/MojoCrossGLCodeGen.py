@@ -1094,7 +1094,11 @@ class MojoToCrossGLConverter:
     def sanitize_identifier(self, name):
         sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_")
         if not sanitized:
-            return "metadata"
+            sanitized = "_".join(
+                f"u{ord(char):x}" for char in name if not char.isspace()
+            )
+            if not sanitized:
+                return "metadata"
         if sanitized[0].isdigit():
             sanitized = f"_{sanitized}"
         if sanitized.lower() in self.CROSSGL_RESERVED_IDENTIFIERS:

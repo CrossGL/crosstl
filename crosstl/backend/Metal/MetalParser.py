@@ -2637,7 +2637,7 @@ class MetalParser:
 
     def parse_do_while_statement(self):
         self.eat("DO")
-        body = self.parse_block()
+        body = self.parse_statement_body()
         self.eat("WHILE")
         self.eat("LPAREN")
         condition = self.parse_expression(allow_comma=True)

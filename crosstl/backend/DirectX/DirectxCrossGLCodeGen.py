@@ -1517,12 +1517,97 @@ class HLSLToCrossGLConverter:
             return "float"
         return None
 
+    def resource_element_raw_type(self, type_name):
+        base = self.raw_type_base(type_name)
+        if not base:
+            return None
+        if not (
+            self.is_buffer_resource_type(type_name)
+            or base in self.structured_buffer_types
+            or base.startswith(
+                ("Texture", "RWTexture", "RasterizerOrderedTexture", "FeedbackTexture")
+            )
+        ):
+            return None
+        return self.first_template_argument(type_name)
+
+    def first_template_argument(self, type_name):
+        if not type_name:
+            return None
+        text = str(type_name).strip()
+        if "<" not in text or not text.endswith(">"):
+            return None
+        generic_type = text.split("<", 1)[1][:-1].strip()
+        args = self.split_generic_arguments(generic_type)
+        if not args:
+            return None
+        return self.canonical_composite_type(args[0])
+
+    def vector_element_raw_type(self, type_name):
+        base = self.canonical_composite_type(str(type_name or "").strip())
+        match = re.fullmatch(
+            r"(min16float|min10float|min16uint|min16int|min12int|float16_t|"
+            r"uint16_t|int16_t|double|float|half|uint|int|bool)[2-4]",
+            base,
+        )
+        if match:
+            return match.group(1)
+        return None
+
+    def indexed_value_raw_type(self, type_name):
+        return self.resource_element_raw_type(
+            type_name
+        ) or self.vector_element_raw_type(type_name)
+
+    def byte_address_load_raw_type(self, member):
+        templated_type = self.first_template_argument(member)
+        if templated_type is not None:
+            return templated_type
+        return {
+            "Load": "uint",
+            "Load2": "uint2",
+            "Load3": "uint3",
+            "Load4": "uint4",
+        }.get(member)
+
+    def function_call_value_raw_type(self, expr):
+        if not isinstance(expr.name, MemberAccessNode):
+            return None
+
+        member = self.templated_method_base(expr.name.member)
+        resource_type = self.expression_raw_type(expr.name.object)
+        resource_base = self.raw_type_base(resource_type)
+        if member in {"Load", "Load2", "Load3", "Load4"}:
+            if resource_base in {
+                "ByteAddressBuffer",
+                "RWByteAddressBuffer",
+                "RasterizerOrderedByteAddressBuffer",
+            }:
+                return self.byte_address_load_raw_type(expr.name.member)
+            return self.resource_element_raw_type(resource_type)
+        if member == "Consume":
+            return self.resource_element_raw_type(resource_type)
+        return None
+
+    def expression_value_raw_type(self, expr):
+        if isinstance(expr, MemberAccessNode):
+            object_type = self.expression_value_raw_type(expr.object)
+            member_type = self.member_access_raw_type(object_type, expr.member)
+            return member_type if member_type is not None else object_type
+        if isinstance(expr, ArrayAccessNode):
+            array_type = self.expression_value_raw_type(expr.array)
+            value_type = self.indexed_value_raw_type(array_type)
+            return value_type if value_type is not None else array_type
+        if isinstance(expr, FunctionCallNode):
+            return self.function_call_value_raw_type(expr)
+        return self.expression_raw_type(expr)
+
     def bitcast_intrinsic_expression(self, func_name, original_args, rendered_args):
         if len(original_args) != 1 or func_name not in {"asfloat", "asint", "asuint"}:
             return None
 
         source_family = self.numeric_type_family(
-            self.expression_raw_type(original_args[0])
+            self.expression_value_raw_type(original_args[0])
         )
         if func_name == "asfloat":
             if source_family == "uint":

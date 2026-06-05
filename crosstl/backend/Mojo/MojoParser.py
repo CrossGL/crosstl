@@ -1306,7 +1306,7 @@ class MojoParser:
         return self.parse_comptime_declaration(after_keyword=True)
 
     def is_comptime_declaration_start(self):
-        if self.current_token[0] != "IDENTIFIER":
+        if not self.is_identifier_name_token():
             return False
         next_token = self.peek_token()[0]
         if next_token in {"COLON", "EQUALS"}:
@@ -1367,8 +1367,7 @@ class MojoParser:
         if not after_keyword:
             self.eat("COMPTIME")
 
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_identifier_name("comptime declaration name")
         if self.current_token[0] == "LBRACKET":
             name += self.parse_generic_type_suffix()
 

@@ -8,6 +8,7 @@ from crosstl.backend.common_ast import (
     BinaryOpNode,
     CastNode,
     DiscardNode,
+    DoWhileNode,
     ForNode,
     FunctionCallNode,
     IfNode,
@@ -185,6 +186,23 @@ def test_parse_unbraced_while_body_from_msl_cxx14_statement_grammar():
     body = ast.functions[0].body
 
     assert isinstance(body[1], WhileNode)
+    assert len(body[1].body) == 1
+    assert isinstance(body[1].body[0], AssignmentNode)
+
+
+def test_parse_unbraced_do_while_body_from_msl_cxx14_statement_grammar():
+    code = """
+    kernel void normalize(device float* values [[buffer(0)]], uint count) {
+        uint i = 0;
+        do
+            values[i++] = 0.0f;
+        while (i < count);
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert isinstance(body[1], DoWhileNode)
     assert len(body[1].body) == 1
     assert isinstance(body[1].body[0], AssignmentNode)
 

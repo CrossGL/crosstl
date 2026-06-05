@@ -796,6 +796,32 @@ def test_gpu_fundamentals_launch_keyword_tuple_args_codegen():
     assert "comptime" not in generated_code
 
 
+def test_backtick_comptime_names_codegen_from_official_gpu_notebook_example():
+    # Reduced from https://docs.modular.com/mojo/tools/notebooks/
+    # "Example: Hello writing" uses escaped emoji comptime constants in a GPU
+    # kernel and host-side fill.
+    code = """
+    comptime `✅`: Int32 = 1
+    comptime `❌`: Int32 = 0
+
+    def kernel(value: UnsafePointer[Scalar[DType.int32], MutAnyOrigin]):
+        value[0] = `✅`
+
+    def main():
+        out.enqueue_fill(`❌`)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int u2705 = 1;" in generated_code
+    assert "int u274c = 0;" in generated_code
+    assert "value[0] = u2705;" in generated_code
+    assert "out.enqueue_fill(u274c);" in generated_code
+    assert "metadata" not in generated_code
+    assert "`" not in generated_code
+    assert "Unhandled expression" not in generated_code
+
+
 def test_not_in_membership_condition_codegen_from_mojo_gpu_puzzles_dispatch():
     # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
     # 87de51ac93bea662eba6f09d19e8744e56161027,

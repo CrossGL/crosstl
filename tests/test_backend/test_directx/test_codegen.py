@@ -758,6 +758,30 @@ def test_codegen_bitcast_intrinsics_from_microsoft_docs_reparse():
     parse_crossgl(crossgl)
 
 
+def test_codegen_bitcast_intrinsics_infer_resource_load_value_types():
+    # Sources: Microsoft Learn asfloat and ByteAddressBuffer::Load docs.
+    # URLs:
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-asfloat
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/sm5-object-byteaddressbuffer-load
+    crossgl = generate_crossgl("""
+        StructuredBuffer<uint4> packedVectors : register(t0);
+        ByteAddressBuffer rawData : register(t1);
+
+        float4 main(uint index : TEXCOORD0, uint offset : TEXCOORD1) : SV_Target0 {
+            float3 vectorValue = asfloat(packedVectors[index].xyz);
+            float scalarValue = asfloat(rawData.Load(offset));
+            return float4(vectorValue, scalarValue);
+        }
+    """)
+
+    assert "vec3 vectorValue = uintBitsToFloat(packedVectors[index].xyz);" in crossgl
+    assert (
+        "float scalarValue = uintBitsToFloat(buffer_load(rawData, offset));" in crossgl
+    )
+    assert "asfloat" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_sampler_state_initializer_block_imports_to_crossgl():
     crossgl = generate_crossgl(SAMPLER_STATE_BLOCK_HLSL)
 
