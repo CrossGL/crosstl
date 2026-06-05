@@ -1,6 +1,20 @@
 """Public package interface for CrossGL Translator."""
 
-__all__ = ["translate"]
+__all__ = ["translate", "supported_backends", "supported_sources"]
+
+
+def supported_backends():
+    """Return registered target backend names."""
+    from .translator import supported_backends as _supported_backends
+
+    return _supported_backends()
+
+
+def supported_sources():
+    """Return registered source backend names."""
+    from .translator import supported_sources as _supported_sources
+
+    return _supported_sources()
 
 
 def __getattr__(name):

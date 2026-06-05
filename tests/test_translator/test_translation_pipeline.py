@@ -67,6 +67,16 @@ def _assert_generated_output_is_usable(generated):
     assert "<crosstl." not in generated
 
 
+def test_root_package_exposes_documented_registry_helpers():
+    assert {"supported_backends", "supported_sources", "translate"}.issubset(
+        crosstl.__all__
+    )
+    assert crosstl.supported_backends() == crosstl.translator.supported_backends()
+    assert crosstl.supported_sources() == crosstl.translator.supported_sources()
+    assert "opengl" in crosstl.supported_backends()
+    assert "cgl" in crosstl.supported_sources()
+
+
 def test_registered_native_sources_have_reverse_codegen_factories():
     register_default_sources()
 
