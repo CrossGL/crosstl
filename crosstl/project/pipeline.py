@@ -453,6 +453,55 @@ def _source_map_counts(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, int]
     }
 
 
+def _source_map_counts_by_granularity(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for artifact in artifacts:
+        source_map = artifact.get("sourceMap")
+        if not isinstance(source_map, Mapping):
+            continue
+        granularity = source_map.get("mappingGranularity")
+        key = granularity if _is_non_empty_string(granularity) else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _source_map_counts_by_target(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for artifact in artifacts:
+        if not isinstance(artifact.get("sourceMap"), Mapping):
+            continue
+        target = artifact.get("target")
+        key = target if _is_non_empty_string(target) else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _source_map_counts_by_source_backend(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for artifact in artifacts:
+        if not isinstance(artifact.get("sourceMap"), Mapping):
+            continue
+        source_backend = artifact.get("sourceBackend")
+        key = source_backend if _is_non_empty_string(source_backend) else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _source_map_rollups(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    return {
+        **_source_map_counts(artifacts),
+        "sourceMapsByGranularity": _source_map_counts_by_granularity(artifacts),
+        "sourceMapsByTarget": _source_map_counts_by_target(artifacts),
+        "sourceMapsBySourceBackend": _source_map_counts_by_source_backend(artifacts),
+    }
+
+
 def _external_corpus_empty_summary() -> dict[str, Any]:
     return {
         "manifestEntryCount": 0,
@@ -1145,7 +1194,7 @@ class ProjectPortabilityReport:
             1 for artifact in self.artifacts if artifact.get("status") == "failed"
         )
         diagnostics = [diagnostic.to_json() for diagnostic in self.diagnostics]
-        source_map_counts = _source_map_counts(self.artifacts)
+        source_map_rollups = _source_map_rollups(self.artifacts)
         external_corpus = _external_corpus_report(
             self.config, self.units, self.artifacts, self.targets
         )
@@ -1203,7 +1252,7 @@ class ProjectPortabilityReport:
                 ),
                 "artifactsByVariant": _artifact_counts_by_variant(self.artifacts),
                 "artifactsByTarget": _artifact_counts_by_target(self.artifacts),
-                **source_map_counts,
+                **source_map_rollups,
             },
             "units": [unit.to_json() for unit in self.units],
             "skipped": list(self.skipped),
@@ -2248,12 +2297,21 @@ def _inspection_source_map_summary(summary: Any) -> dict[str, Any]:
         return {"available": False}
 
     file_level_count = source_map_count - fine_grained_count
-    return {
+    payload = {
         "available": True,
         "sourceMapCount": source_map_count,
         "fileLevelSourceMapCount": file_level_count,
         "fineGrainedSourceMapCount": fine_grained_count,
     }
+    for field_name in (
+        "sourceMapsByGranularity",
+        "sourceMapsByTarget",
+        "sourceMapsBySourceBackend",
+    ):
+        value = summary.get(field_name)
+        if isinstance(value, Mapping):
+            payload[field_name] = dict(value)
+    return payload
 
 
 def _inspection_failed_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
@@ -4026,12 +4084,12 @@ def _summary_contract_reasons(
                 "artifacts",
             )
         )
-        source_map_counts = _source_map_counts(artifact_records)
+        source_map_rollups = _source_map_rollups(artifact_records)
         reasons.extend(
             _count_field_contract_reasons(
                 "summary.sourceMapCount",
                 summary.get("sourceMapCount"),
-                source_map_counts["sourceMapCount"],
+                source_map_rollups["sourceMapCount"],
                 "artifact source maps",
             )
         )
@@ -4039,7 +4097,31 @@ def _summary_contract_reasons(
             _count_field_contract_reasons(
                 "summary.fineGrainedSourceMapCount",
                 summary.get("fineGrainedSourceMapCount"),
-                source_map_counts["fineGrainedSourceMapCount"],
+                source_map_rollups["fineGrainedSourceMapCount"],
+                "artifact source maps",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.sourceMapsByGranularity",
+                summary.get("sourceMapsByGranularity"),
+                source_map_rollups["sourceMapsByGranularity"],
+                "artifact source maps",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.sourceMapsByTarget",
+                summary.get("sourceMapsByTarget"),
+                source_map_rollups["sourceMapsByTarget"],
+                "artifact source maps",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.sourceMapsBySourceBackend",
+                summary.get("sourceMapsBySourceBackend"),
+                source_map_rollups["sourceMapsBySourceBackend"],
                 "artifact source maps",
             )
         )

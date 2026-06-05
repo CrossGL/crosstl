@@ -132,7 +132,7 @@ def test_project_report_inspection_is_first_class_support_feature():
             "test_project_cli_inspect_report_sarif_reports_diagnostics"
         ) in backend_support["evidence"]
         assert "JSON, text, and SARIF summaries" in backend_support["notes"]
-        assert "source-map count rollups" in backend_support["notes"]
+        assert "source-map count and provenance rollups" in backend_support["notes"]
         assert (
             "validation hash-status, diagnostic-code, missing-capability, "
             "toolchain-status, toolchain-run, and artifact target rollups"
@@ -277,6 +277,7 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
     for backend_support in feature["support"].values():
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "single file-level source-map mapping" in backend_support["notes"]
+        assert "source-map summary rollups" in backend_support["notes"]
         assert "source-relative target/variant layout" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -324,6 +325,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         )
         assert "required and canonical artifact provenance" in backend_support["notes"]
         assert "required translated artifact source maps" in backend_support["notes"]
+        assert "source-map summary rollups" in backend_support["notes"]
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "single file-level source-map mapping" in backend_support["notes"]
         assert "repository-relative file paths" in backend_support["notes"]

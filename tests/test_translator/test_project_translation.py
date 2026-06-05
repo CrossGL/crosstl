@@ -1132,6 +1132,9 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
 
     assert payload["summary"]["sourceMapCount"] == 1
     assert payload["summary"]["fineGrainedSourceMapCount"] == 0
+    assert payload["summary"]["sourceMapsByGranularity"] == {"file": 1}
+    assert payload["summary"]["sourceMapsByTarget"] == {"cgl": 1}
+    assert payload["summary"]["sourceMapsBySourceBackend"] == {"cgl": 1}
     assert source_map["schemaVersion"] == 1
     assert source_map["kind"] == "crosstl-artifact-source-map"
     assert source_map["mappingGranularity"] == "file"
@@ -3646,6 +3649,9 @@ def test_validate_project_report_rejects_failed_artifacts_without_source_hash(
     payload["summary"]["artifactsByTarget"]["cgl"]["translatedCount"] = 0
     payload["summary"]["artifactsByTarget"]["cgl"]["failedCount"] = 1
     payload["summary"]["sourceMapCount"] = 0
+    payload["summary"]["sourceMapsByGranularity"] = {}
+    payload["summary"]["sourceMapsByTarget"] = {}
+    payload["summary"]["sourceMapsBySourceBackend"] = {}
     report_path = repo / "out" / "failed-artifact-missing-source-hash-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -4350,6 +4356,9 @@ def test_validate_project_report_rejects_current_translated_artifacts_without_so
     payload["artifacts"][0].pop("sourceMap")
     payload["summary"]["sourceMapCount"] = 0
     payload["summary"]["fineGrainedSourceMapCount"] = 0
+    payload["summary"]["sourceMapsByGranularity"] = {}
+    payload["summary"]["sourceMapsByTarget"] = {}
+    payload["summary"]["sourceMapsBySourceBackend"] = {}
     report_path = repo / "out" / "missing-source-map-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -4413,6 +4422,9 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     },
                     "sourceMapCount": 1,
                     "fineGrainedSourceMapCount": 1,
+                    "sourceMapsByGranularity": {"line": 1},
+                    "sourceMapsByTarget": {"metal": 1},
+                    "sourceMapsBySourceBackend": {"unknown": 1},
                 },
                 "units": [
                     {
@@ -4490,6 +4502,15 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
         diagnostic["message"]
     )
     assert "summary.fineGrainedSourceMapCount must match artifact source maps" in (
+        diagnostic["message"]
+    )
+    assert "summary.sourceMapsByGranularity must match artifact source maps" in (
+        diagnostic["message"]
+    )
+    assert "summary.sourceMapsByTarget must match artifact source maps" in (
+        diagnostic["message"]
+    )
+    assert "summary.sourceMapsBySourceBackend must match artifact source maps" in (
         diagnostic["message"]
     )
     assert "diagnosticCounts must match diagnostics" in diagnostic["message"]
@@ -6116,6 +6137,9 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "sourceMapCount": 1,
         "fileLevelSourceMapCount": 1,
         "fineGrainedSourceMapCount": 0,
+        "sourceMapsByGranularity": {"file": 1},
+        "sourceMapsByTarget": {"cgl": 1},
+        "sourceMapsBySourceBackend": {"cgl": 1},
     }
     assert payload["validation"]["success"] is True
     assert payload["validation"]["toolchainStatusCounts"] == {
@@ -6254,6 +6278,9 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "sourceMapCount": 1,
         "fileLevelSourceMapCount": 1,
         "fineGrainedSourceMapCount": 0,
+        "sourceMapsByGranularity": {"file": 1},
+        "sourceMapsByTarget": {"cgl": 1},
+        "sourceMapsBySourceBackend": {"cgl": 1},
     }
 
 
@@ -6413,6 +6440,9 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
 
     assert result.returncode == 0
     assert "Source maps: 1 file-level, 0 fine-grained" in result.stdout
+    assert "Source maps by granularity: file=1" in result.stdout
+    assert "Source maps by target: cgl=1" in result.stdout
+    assert "Source maps by source backend: cgl=1" in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_report_rollups(tmp_path):

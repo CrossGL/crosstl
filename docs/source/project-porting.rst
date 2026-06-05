@@ -121,11 +121,12 @@ Report inspection includes validation status, invalid/unavailable report status,
 project counts, project configuration path and counts, failed artifacts,
 diagnostic code and missing-capability rollups, validation diagnostic-code,
 missing-capability, and artifact target rollups, report source-backend,
-file-extension, and artifact target rollups, source-map count rollups,
-diagnostics, configurable diagnostic and failed-artifact truncation counts,
-external corpus rollups, and migration actions. ``--format sarif`` emits the
-inspection diagnostics as SARIF for code-scanning workflows. Inspection exits
-nonzero when validation finds report errors.
+file-extension, and artifact target rollups, source-map count, granularity,
+target, and source-backend rollups, diagnostics, configurable diagnostic and
+failed-artifact truncation counts, external corpus rollups, and migration
+actions. ``--format sarif`` emits the inspection diagnostics as SARIF for
+code-scanning workflows. Inspection exits nonzero when validation finds report
+errors.
 
 Configuration
 -------------
@@ -218,7 +219,8 @@ Project reports are JSON documents with:
   defines, and variants.
 - ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
   unit source backend, unit file extension, skipped reason, skipped file
-  extension, artifact source backend, variant, target backend, diagnostic code
+  extension, artifact source backend, variant, target backend, source-map
+  granularity, source-map target, source-map source backend, diagnostic code
   (``diagnosticsByCode``), and missing capability (``missingCapabilityCounts``).
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, and source overrides.
@@ -261,7 +263,8 @@ Project reports are JSON documents with:
   aggregate validation artifact and hash-status summary counts, direct
   validation report artifact target, hash-status, toolchain status, and
   toolchain-run status rollups, full-report
-  source hash checks, failed artifact
+  source-map granularity, target, and source-backend rollup checks, source hash
+  checks, failed artifact
   error metadata checks, translated artifact error metadata rejection, required
   artifact provenance and provenance value checks, failed artifact generated
   metadata rejection, required translated artifact source maps, source-map

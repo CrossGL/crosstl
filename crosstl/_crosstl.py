@@ -731,6 +731,25 @@ def _format_project_report_inspection(payload):
     source_maps = _format_source_map_counts(summary)
     if source_maps:
         lines.append(source_maps)
+    for line in (
+        _format_count_rollup(
+            "Source maps by granularity",
+            summary.get("sourceMapsByGranularity"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Source maps by target",
+            summary.get("sourceMapsByTarget"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Source maps by source backend",
+            summary.get("sourceMapsBySourceBackend"),
+            include_zero=False,
+        ),
+    ):
+        if line:
+            lines.append(line)
     units_by_source_backend = _format_count_rollup(
         "Units by source backend",
         summary.get("unitsBySourceBackend"),
