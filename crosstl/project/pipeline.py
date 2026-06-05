@@ -3290,9 +3290,14 @@ def _migration_contract_reasons(
     )
     if migration.get("scope") != REPORT_MIGRATION_SCOPE:
         reasons.append(f"migration.scope must be {REPORT_MIGRATION_SCOPE}")
-    reasons.extend(
-        _string_list_contract_reasons("migration.nonGoals", migration.get("nonGoals"))
+    non_goal_reasons = _string_list_contract_reasons(
+        "migration.nonGoals", migration.get("nonGoals")
     )
+    reasons.extend(non_goal_reasons)
+    if not non_goal_reasons and list(migration["nonGoals"]) != list(
+        REPORT_MIGRATION_NON_GOALS
+    ):
+        reasons.append("migration.nonGoals must match documented report non-goals")
 
     actions = migration.get("actions")
     if not isinstance(actions, list):

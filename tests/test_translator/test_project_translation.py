@@ -3969,6 +3969,42 @@ def test_validate_project_report_rejects_migration_actions_with_undeclared_targe
     )
 
 
+def test_validate_project_report_rejects_altered_migration_non_goals(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "altered-migration-non-goals-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "migration": {
+                    "scope": "shader-kernel-translation",
+                    "nonGoals": ["automatic runtime API migration"],
+                    "actions": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "migration.nonGoals must match documented report non-goals" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_artifacts_with_undeclared_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

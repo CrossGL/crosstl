@@ -222,8 +222,10 @@ Project reports are JSON documents with:
   and hash mismatch checks, generated artifact hash mismatch checks, optional
   external toolchain availability, and opt-in toolchain smoke results.
 - ``migration``: actionable manual follow-up work outside shader/kernel
-  translation. Each action has a documented kind, severity, message, and target
-  list. Scan-only reports include supported requested targets when translation
-  units are present. Translation reports scope ``manual-runtime-integration`` to
-  targets that produced translated artifacts, covering host runtime API,
-  resource binding, build script, and backend integration review.
+  translation. The report records documented non-goals for runtime API
+  migration, build-system rewrites, and backend framework integration. Each
+  action has a documented kind, severity, message, and target list. Scan-only
+  reports include supported requested targets when translation units are
+  present. Translation reports scope ``manual-runtime-integration`` to targets
+  that produced translated artifacts, covering host runtime API, resource
+  binding, build script, and backend integration review.
