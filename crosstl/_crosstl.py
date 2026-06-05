@@ -144,11 +144,15 @@ def _run_single_file(args):
         return 1
 
     output_path = args.output or _derive_single_file_output(args.input, args.backend)
+    defines = _parse_project_define_overrides(getattr(args, "define", None))
     translate(
         args.input,
         backend=args.backend,
         save_shader=output_path,
         format_output=not args.no_format,
+        source_backend=getattr(args, "source_backend", None),
+        include_paths=getattr(args, "include_dir", None),
+        defines=defines or None,
     )
     print(f"Successfully translated to {output_path}")
     return 0
@@ -168,6 +172,17 @@ def _legacy_parser():
     parser.add_argument("--output", "-o", help="Output file path")
     parser.add_argument(
         "--no-format", action="store_true", help="Disable code formatting"
+    )
+    parser.add_argument("--source-backend", help="Override source parser backend")
+    parser.add_argument(
+        "--include-dir",
+        action="append",
+        help="Source parser include directory; repeatable",
+    )
+    parser.add_argument(
+        "--define",
+        action="append",
+        help="Source parser preprocessor define as NAME or NAME=VALUE; repeatable",
     )
     parser.set_defaults(func=_run_single_file)
     return parser
@@ -733,6 +748,19 @@ def _build_parser():
     translate_parser.add_argument("--output", "-o", help="Output file path")
     translate_parser.add_argument(
         "--no-format", action="store_true", help="Disable code formatting"
+    )
+    translate_parser.add_argument(
+        "--source-backend", help="Override source parser backend"
+    )
+    translate_parser.add_argument(
+        "--include-dir",
+        action="append",
+        help="Source parser include directory; repeatable",
+    )
+    translate_parser.add_argument(
+        "--define",
+        action="append",
+        help="Source parser preprocessor define as NAME or NAME=VALUE; repeatable",
     )
     translate_parser.set_defaults(func=_run_single_file)
 

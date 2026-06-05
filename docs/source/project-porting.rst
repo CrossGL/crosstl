@@ -30,6 +30,11 @@ The explicit single-file subcommand is equivalent:
 
    python -m crosstl._crosstl translate examples/graphics/SimpleShader.cgl --backend metal
 
+Both single-file forms also accept ``--source-backend``, repeatable
+``--include-dir``, and repeatable ``--define`` overrides. Use them when a file
+has a nonstandard extension or when the selected source frontend exposes
+include-path and preprocessor define options.
+
 Scan a repository and print a JSON report:
 
 .. code-block:: bash
