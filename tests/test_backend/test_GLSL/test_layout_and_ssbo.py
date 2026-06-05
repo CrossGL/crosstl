@@ -89,6 +89,33 @@ def test_parse_layout_integer_constant_expression_values():
     assert position.layout["component"].op == "-"
 
 
+def test_codegen_preserves_explicit_block_member_layout_from_khronos_docs():
+    # Reduced from the Khronos OpenGL Wiki Interface Block documentation
+    # examples for matrix storage order and explicit variable layout.
+    code = """
+    #version 450 core
+    layout(std140, binding = 0) uniform MatrixBlock
+    {
+        layout(row_major) mat4 projection;
+        layout(column_major) mat4 modelview;
+        layout(offset = 128, align = 16) vec4 tint;
+    } matrices;
+
+    void main() {
+        gl_Position = matrices.projection * matrices.modelview * vec4(1.0);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "vertex")
+
+    assert "mat4 projection @row_major;" in crossgl
+    assert "mat4 modelview @column_major;" in crossgl
+    assert "vec4 tint @offset(128) @align(16);" in crossgl
+
+    shader_ast = crosstl.translator.parse(crossgl)
+    assert shader_ast is not None
+
+
 def test_codegen_layout_integer_constant_expression_values():
     code = """
     #version 450 core

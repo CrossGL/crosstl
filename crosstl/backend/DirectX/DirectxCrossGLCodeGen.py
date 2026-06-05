@@ -42,6 +42,7 @@ class HLSLToCrossGLConverter:
             "int1": "int",
             "uint": "uint",
             "uint1": "uint",
+            "UINT": "uint",
             "dword": "uint",
             "float": "float",
             "float1": "float",
@@ -166,6 +167,7 @@ class HLSLToCrossGLConverter:
             "LineStream": "lineStream",
             "TriangleStream": "triangleStream",
             # Sampler Types
+            "Sampler": "sampler",
             "SamplerState": "sampler",
             "SamplerComparisonState": "sampler",
         }

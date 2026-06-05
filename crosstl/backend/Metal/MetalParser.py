@@ -1006,6 +1006,9 @@ class MetalParser:
                 self.parse_scoped_identifier()
             self.eat("SEMICOLON")
             return None
+        if self.is_using_declaration_start():
+            self.parse_using_declaration()
+            return None
         alias_name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("EQUALS")
@@ -1015,6 +1018,15 @@ class MetalParser:
         self.eat("SEMICOLON")
         self.known_types.add(alias_name)
         return TypeAliasNode(alias_type, alias_name)
+
+    def is_using_declaration_start(self):
+        return self.current_token[0] in {"IDENTIFIER", "METAL", "SCOPE"} and not (
+            self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "EQUALS"
+        )
+
+    def parse_using_declaration(self):
+        self.parse_scoped_identifier()
+        self.eat("SEMICOLON")
 
     def is_union_alias_start(self):
         return self.current_token == ("IDENTIFIER", "union")

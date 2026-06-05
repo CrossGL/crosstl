@@ -1323,6 +1323,32 @@ class TestCudaCodeGen:
         assert "exp2f" not in result
         assert "log2f" not in result
 
+    def test_public_cuda_samples_sincosf_output_parameters_convert(self):
+        """Covers cuda-samples convolutionFFT2D getTwiddle __sincosf usage."""
+        code = """
+        struct fComplex {
+            float x;
+            float y;
+        };
+
+        inline __device__ void getTwiddle(fComplex &twiddle, float phase) {
+            __sincosf(phase, &twiddle.y, &twiddle.x);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "twiddle.y = sin(phase);" in result
+        assert "twiddle.x = cos(phase);" in result
+        assert "__sincosf" not in result
+        assert "(&twiddle.y)" not in result
+        assert "(&twiddle.x)" not in result
+
     def test_kernel_launch_conversion(self):
         code = """
         void host(float* data, int stream) {

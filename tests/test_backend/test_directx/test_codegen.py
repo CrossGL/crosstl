@@ -1827,6 +1827,46 @@ def test_codegen_object_style_constant_and_texture_buffers_roundtrip():
     assert "return (frame.tint + lookup.tint);" in regenerated_hlsl
 
 
+def test_codegen_resource_binding_aliases_from_microsoft_docs():
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3d12/resource-binding-in-hlsl
+    hlsl = textwrap.dedent("""
+        Texture2D terrain[] : register(t8);
+        Sampler samp : register(s0);
+
+        struct Data
+        {
+            UINT index;
+            float4 color;
+        };
+
+        struct Stuff
+        {
+            float2 factor;
+            UINT drawID;
+        };
+
+        ConstantBuffer<Data> myData : register(b0);
+        ConstantBuffer<Stuff> myStuff[][3][8] : register(b2, space3);
+
+        float4 main(uint idx : TEXCOORD0, float2 uv : TEXCOORD1) : SV_Target0
+        {
+            return terrain[idx].Sample(samp, uv) + myData.color;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "sampler samp;" in output
+    assert "uint index;" in output
+    assert "uint drawID;" in output
+    assert "ConstantBuffer<Stuff> myStuff[][3][8];" in output
+    assert "Sampler samp" not in output
+    assert "UINT index" not in output
+    assert "UINT drawID" not in output
+
+    parse_crossgl(output)
+
+
 def test_codegen_waveops_include_helper_lanes_attribute_passthrough():
     hlsl = textwrap.dedent("""
         [WaveOpsIncludeHelperLanes]

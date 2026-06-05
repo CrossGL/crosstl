@@ -632,6 +632,8 @@ class CudaToCrossGLConverter:
 
         if self.emit_cuda_runtime_call_statement(stmt):
             return
+        if self.emit_cuda_output_parameter_call_statement(stmt):
+            return
 
         result = self.visit(stmt)
         if isinstance(result, str) and result.strip():
@@ -664,6 +666,52 @@ class CudaToCrossGLConverter:
         for comment in comments:
             self.emit(comment)
         return True
+
+    def emit_cuda_output_parameter_call_statement(self, stmt):
+        if not isinstance(stmt, FunctionCallNode):
+            return False
+
+        raw_name = stmt.name if isinstance(stmt.name, str) else self.visit(stmt.name)
+        if self.is_user_defined_function(raw_name):
+            return False
+
+        statements = self.format_cuda_output_parameter_call_statements(
+            raw_name, stmt.args
+        )
+        if statements is None:
+            return False
+
+        for statement in statements:
+            self.emit(statement)
+        return True
+
+    def format_cuda_output_parameter_call_statements(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
+        if function_name == "__sincosf" and len(args) == 3:
+            value = self.visit(args[0])
+            sin_target = self.format_cuda_output_pointer_target(args[1])
+            cos_target = self.format_cuda_output_pointer_target(args[2])
+            if sin_target is None or cos_target is None:
+                return None
+            return [
+                f"{sin_target} = sin({value});",
+                f"{cos_target} = cos({value});",
+            ]
+
+        return None
+
+    def format_cuda_output_pointer_target(self, arg):
+        if isinstance(arg, CastNode):
+            return self.format_cuda_output_pointer_target(arg.expression)
+        if isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.visit(arg.operand)
+
+        target = self.visit(arg)
+        if not target:
+            return None
+        return f"(*{target})"
 
     def format_cuda_runtime_status_expression(self, value):
         if not isinstance(value, FunctionCallNode):

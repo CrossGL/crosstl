@@ -1281,6 +1281,50 @@ def test_parse_using_alias():
     parse_ok(code)
 
 
+def test_parse_metal_namespace_using_declarations_from_chromium_hdr_shader():
+    # Reduced from:
+    # Repo: https://chromium.googlesource.com/chromium/src
+    # Commit: 137.0.7151.119
+    # Path: components/metal_util/hdr_copier_layer.mm
+    code = """
+    #include <metal_stdlib>
+    #include <simd/simd.h>
+    using metal::float2;
+    using metal::float3;
+    using metal::float4;
+    using metal::sampler;
+    using metal::texture2d;
+    using metal::abs;
+    using metal::max;
+    using metal::pow;
+    using metal::sign;
+
+    typedef struct {
+        float4 clipSpacePosition [[position]];
+        float2 texcoord;
+    } RasterizerData;
+
+    float ToLinearPQ(float v) {
+        v = max(0.0f, v);
+        float p = pow(v, 0.5f);
+        return sign(p) * abs(p);
+    }
+
+    fragment float4 fragmentShader(RasterizerData in [[stage_in]],
+                                   texture2d<float> plane0 [[texture(0)]]) {
+        constexpr sampler s(metal::mag_filter::nearest,
+                            metal::min_filter::nearest);
+        float4 color = plane0.sample(s, in.texcoord);
+        color.xyz = float3(ToLinearPQ(color.x));
+        return color;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert ast.structs[0].name == "RasterizerData"
+    assert [func.name for func in ast.functions] == ["ToLinearPQ", "fragmentShader"]
+
+
 def test_parse_gpuimage_typedef_struct_and_parenthesized_identifier_expression():
     code = """
     #include <metal_stdlib>

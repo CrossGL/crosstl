@@ -106,6 +106,8 @@ class GLSLToCrossGLConverter:
         "component",
         "index",
         "input_attachment_index",
+        "offset",
+        "align",
         "stream",
         "xfb_buffer",
         "xfb_offset",
@@ -130,12 +132,14 @@ class GLSLToCrossGLConverter:
         "blend_support_all_equations",
     )
     BARE_LAYOUT_ATTRIBUTE_NAMES = (
+        "column_major",
         "depth_any",
         "depth_greater",
         "depth_less",
         "depth_unchanged",
         "origin_upper_left",
         "pixel_center_integer",
+        "row_major",
         *BLEND_SUPPORT_LAYOUT_ATTRIBUTE_NAMES,
     )
     NON_STRUCT_STAGE_TYPES = {
@@ -1729,6 +1733,7 @@ class GLSLToCrossGLConverter:
                     semantic += self.interface_member_layout_attribute_suffix(field)
                     semantic += self.variable_qualifier_attribute_suffix(field)
                 else:
+                    semantic += self.interface_member_layout_attribute_suffix(field)
                     semantic += self.vulkan_memory_model_qualifier_attribute_suffix(
                         field
                     )

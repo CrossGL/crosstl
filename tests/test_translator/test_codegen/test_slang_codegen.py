@@ -760,6 +760,133 @@ def test_sample_system_value_builtin_uses_existing_semantic_parameter_alias():
     assert "gl_SampleID" not in generated_code
 
 
+def test_fragment_sample_mask_builtin_maps_to_slang_coverage_parameter():
+    # Microsoft documents SV_Coverage as the pixel-shader coverage mask input.
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                uint mask = gl_SampleMaskIn;
+                gl_FragColor = vec4(float(mask));
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main(uint gl_SampleMaskIn : SV_Coverage) : SV_Target" in (
+        generated_code
+    )
+    assert "uint mask = gl_SampleMaskIn;" in generated_code
+    assert "gl_SampleMaskIn :" not in generated_code.replace(
+        "uint gl_SampleMaskIn : SV_Coverage", ""
+    )
+
+
+def test_fragment_sample_mask_uses_existing_coverage_parameter_alias():
+    code = """
+    shader main {
+        fragment {
+            void main(uint coverage @ SV_Coverage) {
+                uint mask = gl_SampleMaskIn;
+                gl_FragColor = vec4(float(mask));
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main(uint coverage : SV_Coverage) : SV_Target" in generated_code
+    assert "uint gl_SampleMaskIn : SV_Coverage" not in generated_code
+    assert "uint mask = coverage;" in generated_code
+    assert "gl_SampleMaskIn" not in generated_code
+
+
+def test_fragment_sample_mask_output_rewrites_to_slang_coverage_return():
+    # Microsoft documents SV_Coverage as the pixel-shader coverage mask output.
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                gl_SampleMask[0] = 1u;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint main() : SV_Coverage" in generated_code
+    assert "return 1u;" in generated_code
+    assert "gl_SampleMask" not in generated_code
+
+
+def test_fragment_sample_mask_struct_output_maps_to_slang_coverage():
+    code = """
+    shader main {
+        struct FragmentOutput {
+            vec4 color @ gl_FragColor;
+            uint mask @ gl_SampleMask;
+        };
+
+        fragment {
+            FragmentOutput main() {
+                FragmentOutput output;
+                output.color = vec4(1.0);
+                output.mask = 1u;
+                return output;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint mask : SV_Coverage;" in generated_code
+    assert "gl_SampleMask" not in generated_code
+
+
+def test_fragment_sample_mask_rejects_non_uint_slang_type():
+    code = """
+    shader main {
+        fragment {
+            vec4 main(vec2 coverage @ SV_Coverage) @ gl_FragColor {
+                return vec4(coverage, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="SV_Coverage.*expected uint type"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_fragment_sample_mask_rejects_wrong_crossgl_direction():
+    input_code = """
+    shader main {
+        fragment {
+            vec4 main(uint mask @ gl_SampleMask) @ gl_FragColor {
+                return vec4(float(mask));
+            }
+        }
+    }
+    """
+    output_code = """
+    shader main {
+        fragment {
+            uint main() @ gl_SampleMaskIn {
+                return 1u;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="gl_SampleMask.*output-only"):
+        generate_code(parse_code(tokenize_code(input_code)))
+    with pytest.raises(ValueError, match="gl_SampleMaskIn.*input-only"):
+        generate_code(parse_code(tokenize_code(output_code)))
+
+
 def test_geometry_stage_builtins_emit_stage_specific_slang_parameters():
     code = """
     shader main {

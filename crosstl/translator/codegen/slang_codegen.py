@@ -266,6 +266,8 @@ class SlangCodeGen:
             "gl_FragDepth": "SV_Depth",
             "gl_FragColor": "SV_Target",
             "gl_SampleID": "SV_SampleIndex",
+            "gl_SampleMask": "SV_Coverage",
+            "gl_SampleMaskIn": "SV_Coverage",
             "gl_FragColor0": "SV_Target0",
             "gl_FragColor1": "SV_Target1",
             "gl_FragColor2": "SV_Target2",
@@ -3730,6 +3732,7 @@ class SlangCodeGen:
             "gl_localinvocationindex",
             "gl_pointcoord",
             "gl_sampleid",
+            "gl_samplemaskin",
             "gl_tesscoord",
             "gl_vertexid",
             "gl_workgroupid",
@@ -3743,6 +3746,8 @@ class SlangCodeGen:
             return "position"
         if lower_name == "gl_fragdepth" or mapped_upper == "SV_DEPTH":
             return "depth"
+        if lower_name == "gl_samplemask" or mapped_upper == "SV_COVERAGE":
+            return "coverage"
         if lower_name == "gl_tesslevelouter" or mapped_upper == "SV_TESSFACTOR":
             return "tess_factor"
         if lower_name == "gl_tesslevelinner" or mapped_upper == "SV_INSIDETESSFACTOR":
@@ -3782,6 +3787,13 @@ class SlangCodeGen:
         base_type, array_suffix = split_array_type_suffix(str(mapped_type))
         return not array_suffix and base_type == "float"
 
+    def is_slang_uint_scalar_type(self, type_name):
+        mapped_type = self.convert_type(type_name)
+        if mapped_type is None:
+            return False
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        return not array_suffix and base_type == "uint"
+
     def is_slang_float_vector_width(self, type_name, width):
         mapped_type = self.convert_type(type_name)
         if mapped_type is None:
@@ -3810,6 +3822,12 @@ class SlangCodeGen:
                 "expected float type"
             )
 
+        if kind == "coverage" and not self.is_slang_uint_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang codegen; "
+                "expected uint type"
+            )
+
     def validate_slang_output_semantic_stage(
         self, shader_type, semantic, context, stage_role=None
     ):
@@ -3836,6 +3854,7 @@ class SlangCodeGen:
         allowed_stages = {
             "position": {"domain", "geometry", "hull", "mesh", "vertex"},
             "color": {"fragment"},
+            "coverage": {"fragment"},
             "depth": {"fragment"},
         }[kind]
         if shader_stage not in allowed_stages:
@@ -3859,6 +3878,7 @@ class SlangCodeGen:
                 "SV_POINTCOORD": "float2",
                 "SV_ISFRONTFACE": "bool",
                 "SV_PRIMITIVEID": "uint",
+                "SV_COVERAGE": "uint",
                 "SV_SAMPLEINDEX": "uint",
                 "SV_RENDERTARGETARRAYINDEX": "uint",
                 "SV_VIEWPORTARRAYINDEX": "uint",
@@ -3943,6 +3963,13 @@ class SlangCodeGen:
             ):
                 continue
 
+            if str(semantic).lower() == "gl_samplemask":
+                raise ValueError(
+                    f"Unsupported {semantic} stage parameter semantic for Slang "
+                    f"{shader_type} stage; output-only builtin semantics cannot "
+                    "be used as inputs"
+                )
+
             mapped_semantic = self.map_semantic(semantic, shader_type)
             mapped_upper = str(mapped_semantic).upper()
             expected_type = rules.get(mapped_upper)
@@ -3969,7 +3996,13 @@ class SlangCodeGen:
                 )
 
             kind = self.slang_semantic_output_kind(semantic)
-            if kind in {"color", "depth", "inside_tess_factor", "tess_factor"}:
+            if kind in {
+                "color",
+                "coverage",
+                "depth",
+                "inside_tess_factor",
+                "tess_factor",
+            }:
                 raise ValueError(
                     f"Unsupported {semantic} stage parameter semantic for Slang "
                     f"{shader_type} stage; output-only builtin semantics cannot "
@@ -7264,6 +7297,7 @@ class SlangCodeGen:
                 "gl_FrontFacing": ("bool", "SV_IsFrontFace"),
                 "gl_PrimitiveID": ("uint", "SV_PrimitiveID"),
                 "gl_SampleID": ("uint", "SV_SampleIndex"),
+                "gl_SampleMaskIn": ("uint", "SV_Coverage"),
                 "gl_Layer": ("uint", "SV_RenderTargetArrayIndex"),
                 "gl_ViewportIndex": ("uint", "SV_ViewportArrayIndex"),
             }
@@ -7483,6 +7517,13 @@ class SlangCodeGen:
                         "non-negative literal render-target index"
                     )
                 return f"gl_FragColor{index}"
+            if array_name == "gl_SampleMask":
+                if index != 0:
+                    raise ValueError(
+                        "Slang fragment output gl_SampleMask requires literal "
+                        "index 0"
+                    )
+                return "gl_SampleMask"
 
         return None
 
@@ -7516,6 +7557,8 @@ class SlangCodeGen:
         if shader_type == "fragment":
             if target_name == "gl_FragDepth":
                 return "float"
+            if target_name == "gl_SampleMask":
+                return "uint"
             if target_name == "gl_FragColor" or (
                 target_name.startswith("gl_FragColor")
                 and target_name[len("gl_FragColor") :].isdigit()
