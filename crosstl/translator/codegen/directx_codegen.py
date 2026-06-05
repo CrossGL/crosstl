@@ -5030,7 +5030,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "min16uint4",
             ]:
                 return self.hlsl_constructor_expression(func_name, args)
-            builtin_callee = self.hlsl_builtin_function_name(func_name)
+            builtin_callee = self.hlsl_builtin_function_name(func_name, args)
             if builtin_callee is not None:
                 callee = builtin_callee
             self.validate_function_image_access_arguments(func_name, args)
@@ -5094,9 +5094,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def synchronization_intrinsic_name(self, func_name):
         return self.HLSL_SYNCHRONIZATION_INTRINSICS.get(func_name)
 
-    def hlsl_builtin_function_name(self, func_name):
+    def hlsl_builtin_function_name(self, func_name, args=None):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
+        if func_name == "atan" and args is not None and len(args) == 2:
+            return "atan2"
         return self.function_map.get(func_name)
 
     def interpolation_function_call(self, func_name, args):

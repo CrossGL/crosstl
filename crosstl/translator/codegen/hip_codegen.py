@@ -24,6 +24,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    PointerAccessNode,
     PrimitiveType,
     RangeNode,
     RayQueryOpNode,
@@ -6606,7 +6607,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def is_plain_atomic_lvalue(self, expr):
         """Return whether an expression can be addressed for a HIP atomic."""
-        return isinstance(expr, (IdentifierNode, ArrayAccessNode, MemberAccessNode))
+        return isinstance(
+            expr, (IdentifierNode, ArrayAccessNode, MemberAccessNode, PointerAccessNode)
+        )
 
     def hip_indirect_type_info(self, type_name):
         """Return pointer/reference metadata for HIP indirect type spellings."""
@@ -7539,6 +7542,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         return member_access
 
+    def visit_PointerAccessNode(self, node) -> str:
+        pointer_expr = self.visit(getattr(node, "pointer_expr", None))
+        return f"{pointer_expr}->{node.member}"
+
     def generate_vector_swizzle(self, node, object_expr):
         object_node = getattr(node, "object_expr", getattr(node, "object", None))
         vector_info = self.vector_type_info(self.expression_result_type(object_node))
@@ -8343,8 +8350,26 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             )
         return None
 
-    def resource_type_with_access(self, type_name, node):
+    def apply_readonly_qualifier_to_type(self, type_name, node):
+        """Apply readonly declaration qualifiers to pointer/reference types."""
         type_name = self.type_name_string(type_name)
+        if not type_name:
+            return type_name
+
+        if self.hip_pointer_or_reference_type_info(type_name) is None:
+            return type_name
+
+        if not (
+            self.declaration_qualifier_names(node) & {"const", "readonly", "constant"}
+        ):
+            return type_name
+
+        if type_name.startswith("const "):
+            return type_name
+        return f"const {type_name}"
+
+    def resource_type_with_access(self, type_name, node):
+        type_name = self.apply_readonly_qualifier_to_type(type_name, node)
         if not type_name:
             return type_name
 
@@ -8486,6 +8511,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if array_element_type is not None:
             return array_element_type
 
+        indirect_info = self.hip_indirect_type_info(type_name)
+        if indirect_info is not None and indirect_info["kind"] == "pointer":
+            return indirect_info["pointee_type"]
+
         parts = self.structured_buffer_type_parts(type_name)
         if parts is not None:
             return parts[1]
@@ -8554,6 +8583,13 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             )
             if builtin_member_type is not None:
                 return builtin_member_type
+            member_type = self.member_access_member_type(node)
+            if member_type is not None:
+                return member_type
+        if isinstance(node, PointerAccessNode):
+            member_type = self.pointer_access_member_type(node)
+            if member_type is not None:
+                return member_type
         if isinstance(node, ConstructorNode):
             return infer_enum_constructor_type(
                 self, node
@@ -8561,6 +8597,44 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if isinstance(node, MatchNode):
             return infer_match_expression_result_type(self, node)
         return super().expression_result_type(node)
+
+    def struct_member_lookup_type(self, type_name):
+        """Return the struct key after HIP pointer/reference wrappers."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+        indirect_info = self.hip_indirect_type_info(type_name)
+        if indirect_info is not None:
+            return indirect_info["pointee_type"]
+        return type_name
+
+    def member_access_member_type(self, node):
+        """Return the member type for object.field expressions."""
+        object_node = getattr(
+            node,
+            "object_expr",
+            getattr(node, "object", None),
+        )
+        object_type = self.struct_member_lookup_type(
+            self.expression_result_type(object_node)
+        )
+        return self.struct_member_types.get(object_type, {}).get(
+            getattr(node, "member", "")
+        )
+
+    def pointer_access_member_type(self, node):
+        """Return the member type for ptr->field expressions."""
+        pointer_expr = getattr(node, "pointer_expr", None)
+        pointer_info = self.hip_indirect_type_info(
+            self.expression_result_type(pointer_expr)
+        )
+        if pointer_info is None:
+            return None
+
+        struct_type = self.struct_member_lookup_type(pointer_info["pointee_type"])
+        return self.struct_member_types.get(struct_type, {}).get(
+            getattr(node, "member", "")
+        )
 
     def buffer_call_result_type(self, node):
         """Infer result type for structured and byte-address buffer read calls."""

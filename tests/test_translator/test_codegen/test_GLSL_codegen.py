@@ -23441,6 +23441,38 @@ def test_opengl_hlsl_texture_aliases_map_to_glsl_names():
     assert "tex2Dgrad(" not in generated_code
 
 
+def test_opengl_hlsl_saturate_alias_emits_three_argument_clamp():
+    # Microsoft HLSL saturate clamps to [0, 1]:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-saturate
+    # Khronos GLSL 4.60 section 8.3 defines clamp(x, minVal, maxVal)
+    # as min(max(x, minVal), maxVal):
+    # https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html#common-functions
+    shader = """
+    shader SaturateAlias {
+        struct FSInput {
+            float weight @ TEXCOORD0;
+            vec3 color @ COLOR0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float alpha = saturate(input.weight);
+                vec3 rgb = saturate(input.color);
+                return vec4(rgb, alpha);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float alpha = clamp(weight, 0.0, 1.0);" in generated_code
+    assert "vec3 rgb = clamp(color, 0.0, 1.0);" in generated_code
+    assert "saturate(" not in generated_code
+    assert "clamp(weight)" not in generated_code
+    assert "clamp(color)" not in generated_code
+
+
 def test_opengl_explicit_sampler_argument_is_dropped():
     shader = """
     shader ExplicitSampler {

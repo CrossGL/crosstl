@@ -5745,6 +5745,53 @@ def test_hlsl_lowers_glsl_fractional_mix_and_simple_atomic_names():
     assert "atomicAdd(" not in generated_code
 
 
+def test_hlsl_two_argument_atan_lowers_to_atan2_intrinsic():
+    shader = """
+    shader HlslAtanBuiltinLowering {
+        fragment {
+            vec4 main(vec2 direction @ TEXCOORD0) @ gl_FragColor {
+                float angle = atan(direction.y, direction.x);
+                float slope = atan(direction.y / direction.x);
+                return vec4(angle, slope, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # Microsoft HLSL docs list atan as ret atan(x) and the two-value form as
+    # ret atan2(y, x):
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-atan
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-atan2
+    assert "float angle = atan2(direction.y, direction.x);" in generated_code
+    assert "float slope = atan((direction.y / direction.x));" in generated_code
+    assert "atan(direction.y, direction.x)" not in generated_code
+
+
+def test_hlsl_user_defined_two_argument_atan_is_not_lowered():
+    shader = """
+    shader HlslAtanShadowing {
+        float atan(float y, float x) {
+            return y + x;
+        }
+
+        fragment {
+            vec4 main(vec2 direction @ TEXCOORD0) @ gl_FragColor {
+                float angle = atan(direction.y, direction.x);
+                return vec4(angle, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float atan(float y, float x)" in generated_code
+    assert "float angle = atan(direction.y, direction.x);" in generated_code
+    assert "atan2(" not in generated_code
+
+
 def test_directx_buffer_struct_qualifier_lowers_to_rwstructuredbuffer():
     shader = """
     shader HlslStructBuffer {

@@ -12012,6 +12012,56 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
     assert "float2 point [[point_coord]]" in fragment_code
 
 
+def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
+    # Microsoft Learn documents SV_Position/SV_Target/SV_Depth as HLSL
+    # system-value semantics:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics#system-value-semantics
+    # Apple MSL Spec 5.2.3.3 and 5.2.3.5 spell the corresponding Metal
+    # attributes as [[position]], [[color(m)]], and [[depth(depth_argument)]].
+    code = """
+    shader HlslSystemValuesForMetal {
+        struct VSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct VSOutput {
+            vec4 position @ SV_POSITION;
+        };
+
+        struct FSOutput {
+            vec4 color @ SV_Target1;
+            float depth @ SV_Depth;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                return output;
+            }
+        }
+
+        fragment {
+            FSOutput main(VSOutput input) {
+                FSOutput output;
+                output.color = vec4(input.position.xyz, 1.0);
+                output.depth = input.position.z;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float4 position [[position]];" in generated
+    assert "float4 color [[color(1)]];" in generated
+    assert "float depth [[depth(any)]];" in generated
+    assert "[[SV_POSITION]]" not in generated
+    assert "[[SV_Target1]]" not in generated
+    assert "[[SV_Depth]]" not in generated
+
+
 @pytest.mark.parametrize(
     ("stage", "param_type", "semantic", "metal_semantic", "expected_type"),
     [

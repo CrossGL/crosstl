@@ -8205,6 +8205,8 @@ class GLSLCodeGen:
                 if self.is_vector_value_type(right_type):
                     return right_type
                 return left_type or right_type
+            if func_name == "saturate" and args:
+                return self.expression_result_type(args[0])
             specialized_func_name = generic_function_call_name(self, func_name, args)
             if specialized_func_name in self.function_return_types:
                 return self.function_return_types[specialized_func_name]
@@ -9200,6 +9202,10 @@ class GLSLCodeGen:
 
             self.validate_glsl_buffer_block_atomic_call(original_func_name, expr.args)
 
+            saturate_call = self.generate_saturate_call(original_func_name, expr.args)
+            if saturate_call is not None:
+                return saturate_call
+
             func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
 
@@ -9302,6 +9308,26 @@ class GLSLCodeGen:
 
     def generate_glsl_wave_op_expression(self, node):
         return self.generate_glsl_wave_operation(node.operation, node.arguments)
+
+    def generate_saturate_call(self, func_name, args):
+        if func_name != "saturate":
+            return None
+        if len(args) != 1:
+            raise ValueError("OpenGL saturate alias requires 1 argument")
+
+        value = self.generate_expression(args[0])
+        zero, one = self.saturate_bound_literals(args[0])
+        return f"clamp({value}, {zero}, {one})"
+
+    def saturate_bound_literals(self, value_expr):
+        value_type = self.expression_result_type(value_expr)
+        mapped_type = self.map_type(value_type)
+        component_type = self.vector_component_type(mapped_type) or mapped_type
+        if component_type == "uint":
+            return "0u", "1u"
+        if component_type == "int":
+            return "0", "1"
+        return "0.0", "1.0"
 
     def generate_glsl_wave_operation(self, operation, arguments):
         expected_arity = self.GLSL_WAVE_INTRINSIC_ARITIES.get(operation)

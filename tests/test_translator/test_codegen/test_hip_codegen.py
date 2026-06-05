@@ -3163,6 +3163,59 @@ class TestHipCodeGen:
         assert "atomicCompareExchange(" not in hip_code
         assert "atomicCompSwap(" not in hip_code
 
+    def test_pointer_member_atomics_emit_hip_pointer_operands(self, tmp_path):
+        source_code = """
+        shader PointerMemberAtomicsHIP {
+            struct AtomicHolder {
+                uint* value;
+                const uint* readonly;
+            };
+
+            void bumpHolder(AtomicHolder* holder, uint index, uint amount) {
+                uint direct = atomicAdd(holder->value, amount);
+                uint indexed = atomicAdd(holder->value[index], amount);
+                uint blocked = atomicAdd(holder->readonly, amount);
+                uint blockedIndexed = atomicAdd(holder->readonly[index], amount);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        # HIP C++ language extensions specify TYPE atomicAdd(TYPE* address, TYPE val);
+        # CrossGL parser source emits PointerAccessNode for `->`, so pointer-held
+        # counters should lower to pointer/address operands.
+        # Source: https://rocmdocs.amd.com/projects/HIP/en/latest/how-to/hip_cpp_language_extensions.html#atomic-functions
+        assert "PointerAccessNode(" not in hip_code
+        assert "uint* value;" in hip_code
+        assert "const uint* readonly;" in hip_code
+        assert "__device__ void bumpHolder(AtomicHolder* holder," in hip_code
+        assert "unsigned int direct = atomicAdd(holder->value, amount);" in hip_code
+        assert (
+            "unsigned int indexed = atomicAdd(&holder->value[index], amount);"
+            in hip_code
+        )
+        assert (
+            "unsigned int blocked = /* unsupported HIP atomic: atomicAdd on "
+            "const uint* requires writable pointer target */ 0u;" in hip_code
+        )
+        assert (
+            "unsigned int blockedIndexed = /* unsupported HIP atomic: atomicAdd "
+            "on const uint* requires writable pointer target */ 0u;" in hip_code
+        )
+        assert "atomicAdd(holder->readonly" not in hip_code
+        assert "atomicAdd(&holder->readonly" not in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
     def test_synchronization_functions(self):
         source_code = """
         shader TestShader {
