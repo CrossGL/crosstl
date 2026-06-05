@@ -5933,6 +5933,35 @@ def test_project_cli_validate_project_reports_invalid_report_shape(tmp_path):
     assert payload["diagnostics"][0]["code"] == "project.validate.invalid-report"
 
 
+def test_project_cli_inspect_report_text_marks_invalid_reports(tmp_path):
+    report_path = tmp_path / "invalid-report.json"
+    report_path.write_text(json.dumps({"kind": "not-a-report"}), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Status: failed" in result.stdout
+    assert "Report: invalid" in result.stdout
+    assert "Validation diagnostic codes: project.validate.invalid-report=1" in (
+        result.stdout
+    )
+    assert "project.validate.invalid-report" in result.stdout
+
+
 def test_inspect_project_report_summarizes_generated_report(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

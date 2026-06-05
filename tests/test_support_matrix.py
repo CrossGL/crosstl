@@ -136,6 +136,7 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "skipped-reason" in backend_support["notes"]
         assert "source-extension" in backend_support["notes"]
         assert "skipped-extension" in backend_support["notes"]
+        assert "invalid-report markers" in backend_support["notes"]
         assert "scan-scope, project-config path, and project-config count rollups" in (
             backend_support["notes"]
         )
@@ -146,6 +147,10 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_skipped_reason_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_marks_invalid_reports"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

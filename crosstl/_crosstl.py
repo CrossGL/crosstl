@@ -475,6 +475,16 @@ def _format_external_corpus_accounting(summary):
     )
 
 
+def _format_report_status(report, validation_diagnostic_codes):
+    if isinstance(validation_diagnostic_codes, Mapping) and (
+        validation_diagnostic_codes.get("project.validate.invalid-report", 0)
+    ):
+        return "Report: invalid"
+    if isinstance(report, Mapping) and report.get("available") is False:
+        return "Report: unavailable"
+    return None
+
+
 def _format_project_report_inspection(payload):
     report = payload.get("report", {})
     summary = report.get("summary", {}) if isinstance(report, Mapping) else {}
@@ -522,6 +532,9 @@ def _format_project_report_inspection(payload):
             f"{diagnostic_counts.get('note', 0)} notes"
         ),
     ]
+    report_status = _format_report_status(report, validation_diagnostic_codes)
+    if report_status:
+        lines.insert(2, report_status)
     project_config_counts = _format_project_config_counts(project)
     if project_config_counts:
         lines.insert(3, project_config_counts)
