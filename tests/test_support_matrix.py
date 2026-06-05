@@ -279,7 +279,7 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         assert "current translated artifacts without source-map records" in (
             backend_support["notes"]
         )
-        assert "full report artifacts without source hashes" in (
+        assert "full report units or artifacts without source hashes" in (
             backend_support["notes"]
         )
         assert "failed artifacts missing error metadata or generated metadata" in (
@@ -289,6 +289,10 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         assert "source-relative target/variant layout" in backend_support["notes"]
         assert "applied define map" in backend_support["notes"]
         assert "missing or mismatched artifact define maps" in (
+            backend_support["notes"]
+        )
+        assert "discovered units with source hashes" in backend_support["notes"]
+        assert "full report units or artifacts without source hashes" in (
             backend_support["notes"]
         )
         assert (
@@ -320,6 +324,10 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_missing_artifact_defines"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_unit_source_hashes"
+        ) in backend_support["evidence"]
 
 
 def test_project_source_provenance_documents_source_map_mapping_checks():
@@ -332,10 +340,16 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
     feature = features["project.source_provenance"]
 
     for backend_support in feature["support"].values():
+        assert "unit source hashes" in backend_support["notes"]
+        assert "unit source hash records that are missing" in backend_support["notes"]
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "single file-level source-map mapping" in backend_support["notes"]
         assert "source-map summary rollups" in backend_support["notes"]
         assert "source-relative target/variant layout" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_detects_modified_unit_sources"
+        ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_empty_source_map_mappings"
@@ -366,6 +380,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "migration scope, non-goals, action kinds, and canonical target "
             "declarations"
         ) in backend_support["notes"]
+        assert "unit source hash checks" in backend_support["notes"]
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "applied define map consistency" in backend_support["notes"]
         assert "target/variant directory containment" in backend_support["notes"]
@@ -389,6 +404,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_define_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_detects_modified_unit_sources"
         ) in backend_support["evidence"]
         assert "failed artifact generated metadata rejection" in (
             backend_support["notes"]

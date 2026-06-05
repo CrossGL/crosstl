@@ -113,6 +113,7 @@ def test_scan_project_discovers_supported_sources_and_ignores_default_unsupporte
     (shader_dir / "README.txt").write_text("not shader code", encoding="utf-8")
 
     scan = scan_project(repo)
+    payload = scan.to_report(targets=["cgl"]).to_json()
 
     assert [unit.relative_path for unit in scan.units] == [
         "shaders/main.cgl",
@@ -120,6 +121,12 @@ def test_scan_project_discovers_supported_sources_and_ignores_default_unsupporte
     ]
     assert [unit.source_backend for unit in scan.units] == ["cgl", "opengl"]
     assert scan.skipped == []
+    assert payload["units"][0]["sourceHash"] == project_pipeline._source_hash(
+        shader_dir / "main.cgl"
+    )
+    assert payload["units"][1]["sourceHash"] == project_pipeline._source_hash(
+        shader_dir / "post.frag"
+    )
 
 
 def test_scan_project_reports_explicitly_included_unsupported_sources(tmp_path):
@@ -1237,6 +1244,9 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
         project_pipeline.DEFAULT_EXCLUDE_PATTERNS
     )
     assert payload["project"]["includeDirCount"] == 0
+    assert payload["units"][0]["sourceHash"] == project_pipeline._source_hash(
+        shader_dir / "simple.cgl"
+    )
     assert payload["artifacts"][0]["source"] == "shaders/graphics/simple.cgl"
     assert payload["artifacts"][0]["target"] == "opengl"
     assert payload["artifacts"][0]["path"] == (
@@ -2192,6 +2202,62 @@ def test_validate_project_report_rejects_malformed_unit_and_skipped_records(tmp_
     assert "skipped[0].reason must be a string" in diagnostic["message"]
     assert "skipped[0].sourceOverride must be a string" in diagnostic["message"]
     assert "skipped[1] must be an object" in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_missing_unit_source_hashes(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["units"][0].pop("sourceHash")
+    report_path = repo / "out" / "missing-unit-source-hash-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].sourceHash must be an object" in diagnostic["message"]
+
+
+def test_translate_project_preserves_discovered_unit_source_hash(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "simple.cgl"
+    source.write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    captured_hash = report.to_json()["units"][0]["sourceHash"]
+    source.write_text(
+        SIMPLE_CROSSL + "\n// edited before serialization\n", encoding="utf-8"
+    )
+
+    payload = report.to_json()
+
+    assert payload["units"][0]["sourceHash"] == captured_hash
+    assert payload["artifacts"][0]["sourceHash"] == captured_hash
+    assert project_pipeline._source_hash(source) != captured_hash
+
+
+def test_validate_project_report_detects_modified_unit_sources(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "simple.cgl"
+    source.write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = scan_project(repo).to_report(targets=["cgl"])
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    source.write_text(SIMPLE_CROSSL + "\n// edited\n", encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].sourceHash must match the current source file" in (
+        diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_unit_extension_mismatches(tmp_path):

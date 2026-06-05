@@ -1177,6 +1177,7 @@ class ProjectTranslationUnit:
     relative_path: str
     source_backend: str
     extension: str
+    source_hash: Mapping[str, str]
     source_override: str | None = None
 
     def to_json(self) -> dict[str, Any]:
@@ -1185,6 +1186,7 @@ class ProjectTranslationUnit:
             "path": self.relative_path,
             "sourceBackend": self.source_backend,
             "extension": self.extension,
+            "sourceHash": dict(self.source_hash),
         }
         if self.source_override:
             payload["sourceOverride"] = self.source_override
@@ -1496,6 +1498,7 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
                 relative_path=relative_path,
                 source_backend=source_spec.name,
                 extension=path.suffix.lower(),
+                source_hash=_source_hash(path),
                 source_override=override,
             )
         )
@@ -1681,7 +1684,7 @@ def translate_project(
                     "path": _artifact_report_path(output_path, config),
                     "status": "translated",
                     "defines": dict(sorted(defines.items())),
-                    "sourceHash": _source_hash(unit.path),
+                    "sourceHash": dict(unit.source_hash),
                     "provenance": {
                         "pipeline": "single-file-translate",
                         "intermediate": (
@@ -3041,7 +3044,49 @@ def _repository_path_contract_reasons(prefix: str, value: Any) -> list[str]:
     return []
 
 
-def _unit_contract_reasons(index: int, unit: Any) -> list[str]:
+def _unit_source_hash_contract_reasons(
+    index: int,
+    unit: Mapping[str, Any],
+    *,
+    root_path: Path | None = None,
+    required: bool = False,
+    check_current_file: bool = False,
+) -> list[str]:
+    if "sourceHash" not in unit and not required:
+        return []
+
+    prefix = f"units[{index}].sourceHash"
+    reasons = _hash_contract_reasons(prefix, unit.get("sourceHash"))
+    if reasons:
+        return reasons
+
+    source_path = unit.get("path")
+    if (
+        not check_current_file
+        or root_path is None
+        or not _is_non_empty_string(source_path)
+        or not _is_repository_relative_report_path(source_path)
+    ):
+        return reasons
+
+    absolute_source = root_path / source_path
+    if not absolute_source.exists() or not absolute_source.is_file():
+        reasons.append(
+            f"{prefix} cannot be checked because units[{index}].path is missing"
+        )
+    elif not _hash_matches_report(_source_hash(absolute_source), unit["sourceHash"]):
+        reasons.append(f"{prefix} must match the current source file")
+    return reasons
+
+
+def _unit_contract_reasons(
+    index: int,
+    unit: Any,
+    *,
+    root_path: Path | None = None,
+    require_source_hash: bool = False,
+    check_current_source_hash: bool = False,
+) -> list[str]:
     prefix = f"units[{index}]"
     if not isinstance(unit, Mapping):
         return [f"{prefix} must be an object"]
@@ -3069,6 +3114,15 @@ def _unit_contract_reasons(index: int, unit: Any) -> list[str]:
         unit.get("sourceOverride")
     ):
         reasons.append(f"{prefix}.sourceOverride must be a string")
+    reasons.extend(
+        _unit_source_hash_contract_reasons(
+            index,
+            unit,
+            root_path=root_path,
+            required=require_source_hash,
+            check_current_file=check_current_source_hash,
+        )
+    )
     return reasons
 
 
@@ -4578,7 +4632,19 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             reasons.append("units must be a list")
         else:
             for index, unit in enumerate(units):
-                reasons.extend(_unit_contract_reasons(index, unit))
+                reasons.extend(
+                    _unit_contract_reasons(
+                        index,
+                        unit,
+                        root_path=root_path,
+                        require_source_hash=has_summary,
+                        check_current_source_hash=(
+                            has_summary
+                            and isinstance(report.get("artifacts", []), list)
+                            and not report.get("artifacts", [])
+                        ),
+                    )
+                )
             reasons.extend(_duplicate_path_contract_reasons("units", units))
 
     skipped = report.get("skipped", [])

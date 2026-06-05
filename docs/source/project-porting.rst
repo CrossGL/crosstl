@@ -229,7 +229,8 @@ Project reports are JSON documents with:
   granularity, source-map target, source-map source backend, diagnostic code
   (``diagnosticsByCode``), and missing capability (``missingCapabilityCounts``).
 - ``units``: discovered translation units with repository-relative paths,
-  source backend names, path-derived extensions, and source overrides.
+  source backend names, path-derived extensions, source hashes, and source
+  overrides.
 - ``artifacts``: attempted outputs with source path, source backend, target,
   applied define map, optional variant name, target/variant-scoped output path
   with the target backend suffix, status, source hash, generated artifact hash,
@@ -271,9 +272,9 @@ Project reports are JSON documents with:
   aggregate validation artifact and hash-status summary counts, direct
   validation report artifact target, hash-status, toolchain status, and
   toolchain-run status rollups, include-directory status record and count
-  consistency checks, full-report artifact define map checks, full-report
-  source-map granularity, target, and source-backend rollup checks, source hash
-  checks, failed artifact
+  consistency checks, unit source hash shape and current-file checks,
+  full-report artifact define map checks, full-report source-map granularity,
+  target, and source-backend rollup checks, source hash checks, failed artifact
   error metadata checks, translated artifact error metadata rejection, required
   artifact provenance and provenance value checks, failed artifact generated
   metadata rejection, required translated artifact source maps, source-map
