@@ -200,8 +200,9 @@ Project reports are JSON documents with:
   and generator name/pipeline/package-version fields.
 - ``project`` metadata: root, config path, source roots, include/exclude
   patterns, targets, output directory, source override map, include
-  directories, define and variant maps, and counts for source overrides,
-  include directories, defines, and variants.
+  directories, define and variant maps, and counts for source roots,
+  include patterns, exclude patterns, source overrides, include directories,
+  defines, and variants.
 - ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
   unit source backend, artifact source backend, variant, target backend,
   diagnostic code (``diagnosticsByCode``), and missing capability
@@ -254,10 +255,10 @@ Project reports are JSON documents with:
   corpus record, per-entry artifact count, and summary checks, summary
   consistency checks, migration action shape and target declaration checks,
   preserved diagnostic shape, repository-relative file path, span consistency,
-  and target declaration checks, validation toolchain status consistency
-  checks, validation artifact and toolchain run record shape and duplicate
-  identity checks, validation artifact and toolchain target coverage and status
-  consistency checks,
+  target declaration checks, scan-scope count consistency, validation
+  toolchain status consistency checks, validation artifact and toolchain run
+  record shape and duplicate identity checks, validation artifact and
+  toolchain target coverage and status consistency checks,
   artifact source, source-backend,
   target, variant, and source-relative output layout declaration checks,
   translated artifact existence checks, escaped output directory and

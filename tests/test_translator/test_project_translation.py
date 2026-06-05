@@ -1063,6 +1063,11 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
             "failedCount": 0,
         }
     }
+    assert payload["project"]["sourceRootCount"] == 1
+    assert payload["project"]["includePatternCount"] == 0
+    assert payload["project"]["excludePatternCount"] == len(
+        project_pipeline.DEFAULT_EXCLUDE_PATTERNS
+    )
     assert payload["project"]["includeDirCount"] == 0
     assert payload["artifacts"][0]["source"] == "shaders/graphics/simple.cgl"
     assert payload["artifacts"][0]["target"] == "opengl"
@@ -1701,8 +1706,11 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
                     "root": str(repo),
                     "config": [],
                     "sourceRoots": "shaders",
+                    "sourceRootCount": "1",
                     "includePatterns": ["*.cgl", 1],
+                    "includePatternCount": [],
                     "excludePatterns": [False],
+                    "excludePatternCount": False,
                     "targets": ["opengl"],
                     "outputDir": "out",
                     "includeDirs": "include",
@@ -1734,6 +1742,15 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     assert "project.excludePatterns must be a list of strings" in (
         diagnostic["message"]
     )
+    assert "project.sourceRootCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "project.includePatternCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "project.excludePatternCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
     assert "project.includeDirs must be a list of strings" in diagnostic["message"]
     assert "project.includeDirCount must be a non-negative integer" in (
         diagnostic["message"]
@@ -1753,7 +1770,7 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     )
 
 
-def test_validate_project_report_rejects_include_dir_count_mismatches(tmp_path):
+def test_validate_project_report_rejects_project_config_count_mismatches(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     report_path = repo / "invalid-include-dir-count-report.json"
@@ -1765,8 +1782,11 @@ def test_validate_project_report_rejects_include_dir_count_mismatches(tmp_path):
                 "project": {
                     "root": str(repo),
                     "sourceRoots": ["."],
+                    "sourceRootCount": 2,
                     "includePatterns": [],
+                    "includePatternCount": 1,
                     "excludePatterns": [],
+                    "excludePatternCount": 1,
                     "targets": ["opengl"],
                     "outputDir": "out",
                     "sourceOverrides": {},
@@ -1790,6 +1810,15 @@ def test_validate_project_report_rejects_include_dir_count_mismatches(tmp_path):
     assert payload["validation"] == {"toolchains": [], "artifacts": []}
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.sourceRootCount must match project.sourceRoots" in (
+        diagnostic["message"]
+    )
+    assert "project.includePatternCount must match project.includePatterns" in (
+        diagnostic["message"]
+    )
+    assert "project.excludePatternCount must match project.excludePatterns" in (
+        diagnostic["message"]
+    )
     assert "project.includeDirCount must match project.includeDirs" in (
         diagnostic["message"]
     )
@@ -6042,8 +6071,9 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
 
     assert result.returncode == 0
     assert (
-        "Project config: sourceOverrides=1, includeDirs=0, defines=1, variants=2"
-        in result.stdout
+        "Project config: sourceRoots=1, includePatterns=0, excludePatterns="
+        f"{len(project_pipeline.DEFAULT_EXCLUDE_PATTERNS)}, sourceOverrides=1, "
+        "includeDirs=0, defines=1, variants=2" in result.stdout
     )
     assert (
         "Artifacts by variant: debug=1 artifact (1 translated, 0 failed), "

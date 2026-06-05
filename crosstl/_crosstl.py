@@ -387,6 +387,9 @@ def _format_project_config_counts(project):
 
     entries = []
     for label, field_name in (
+        ("sourceRoots", "sourceRootCount"),
+        ("includePatterns", "includePatternCount"),
+        ("excludePatterns", "excludePatternCount"),
         ("sourceOverrides", "sourceOverrideCount"),
         ("includeDirs", "includeDirCount"),
         ("defines", "defineCount"),

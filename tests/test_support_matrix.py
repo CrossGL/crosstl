@@ -133,6 +133,9 @@ def test_project_report_inspection_is_first_class_support_feature():
             "toolchain-status, toolchain-run, and artifact target rollups"
             in (backend_support["notes"])
         )
+        assert "scan-scope, and project-config count rollups" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_map_counts"
@@ -313,6 +316,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "required summarized validation toolchain target coverage" in (
             backend_support["notes"]
         )
+        assert "scan-scope count consistency" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_altered_migration_non_goals"
@@ -389,6 +393,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_migration_actions_with_"
             "undeclared_targets"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_project_config_count_mismatches"
         ) in backend_support["evidence"]
 
 

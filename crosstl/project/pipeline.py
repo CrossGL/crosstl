@@ -1104,8 +1104,11 @@ class ProjectPortabilityReport:
                     str(self.config.config_path) if self.config.config_path else None
                 ),
                 "sourceRoots": list(self.config.source_roots),
+                "sourceRootCount": len(self.config.source_roots),
                 "includePatterns": list(self.config.include_patterns),
+                "includePatternCount": len(self.config.include_patterns),
                 "excludePatterns": list(self.config.exclude_patterns),
+                "excludePatternCount": len(self.config.exclude_patterns),
                 "targets": list(self.targets),
                 "outputDir": str(self.config.output_path),
                 "sourceOverrides": dict(sorted(self.config.source_overrides.items())),
@@ -2108,6 +2111,9 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         "outputDir": project.get("outputDir"),
     }
     for field_name in (
+        "sourceRootCount",
+        "includePatternCount",
+        "excludePatternCount",
         "sourceOverrideCount",
         "includeDirCount",
         "defineCount",
@@ -2860,6 +2866,22 @@ def _project_metadata_contract_reasons(
                     f"project.{field_name}", project.get(field_name)
                 )
             )
+
+    for field_name, list_name in (
+        ("sourceRootCount", "sourceRoots"),
+        ("includePatternCount", "includePatterns"),
+        ("excludePatternCount", "excludePatterns"),
+    ):
+        list_value = project.get(list_name)
+        list_is_valid = isinstance(list_value, list) and all(
+            isinstance(item, str) for item in list_value
+        )
+        if _optional_project_field(project, field_name, required=require_full_metadata):
+            count = project.get(field_name)
+            if not _is_non_negative_int(count):
+                reasons.append(f"project.{field_name} must be a non-negative integer")
+            elif list_is_valid and count != len(list_value):
+                reasons.append(f"project.{field_name} must match project.{list_name}")
 
     include_dirs = project.get("includeDirs")
     include_dirs_is_list = isinstance(include_dirs, list) and all(
