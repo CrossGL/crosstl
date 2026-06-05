@@ -516,7 +516,9 @@ def _sarif_location(diagnostic):
     return {"physicalLocation": physical_location}
 
 
-def _format_project_diagnostics_sarif(payload):
+def _format_project_diagnostics_sarif(
+    payload, *, tool_name="CrossTL project validation"
+):
     diagnostics = payload.get("diagnostics", [])
     if not isinstance(diagnostics, list):
         diagnostics = []
@@ -560,7 +562,7 @@ def _format_project_diagnostics_sarif(payload):
             {
                 "tool": {
                     "driver": {
-                        "name": "CrossTL project validation",
+                        "name": tool_name,
                         "informationUri": "https://github.com/CrossGL/crosstl",
                         "rules": [rules[key] for key in sorted(rules)],
                     }
@@ -977,7 +979,14 @@ def _run_inspect_report(args):
         max_diagnostics=args.max_diagnostics,
         max_failed_artifacts=args.max_failed_artifacts,
     )
-    if args.format == "text":
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL project report inspection"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
         text = _format_project_report_inspection(payload)
         if args.output:
             path = Path(args.output)
@@ -1091,7 +1100,7 @@ def _build_parser():
     inspect_parser.add_argument("report", help="Project portability report JSON")
     inspect_parser.add_argument(
         "--format",
-        choices=("json", "text"),
+        choices=("json", "text", "sarif"),
         default="json",
         help="Inspection output format",
     )

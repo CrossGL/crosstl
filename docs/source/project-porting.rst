@@ -108,7 +108,7 @@ and toolchain-run status rollups for validation results. The default output is
 JSON; ``--format text`` prints a concise validation summary with the same
 rollups, and ``--format sarif`` emits validation diagnostics as SARIF.
 
-Inspect an existing report as a concise JSON or text summary:
+Inspect an existing report as a concise JSON, text, or SARIF summary:
 
 .. code-block:: bash
 
@@ -117,12 +117,14 @@ Inspect an existing report as a concise JSON or text summary:
      --max-diagnostics 20 \
      --max-failed-artifacts 20
 
-Report inspection includes validation status, invalid/unavailable report status, project
-counts, project configuration path and counts, failed artifacts, diagnostic code and missing-capability
-rollups, validation diagnostic-code, missing-capability, and artifact target
-rollups, report source-backend, file-extension, and artifact target rollups,
-source-map count rollups, diagnostics, configurable diagnostic and failed-artifact truncation
-counts, external corpus rollups, and migration actions. It exits
+Report inspection includes validation status, invalid/unavailable report status,
+project counts, project configuration path and counts, failed artifacts,
+diagnostic code and missing-capability rollups, validation diagnostic-code,
+missing-capability, and artifact target rollups, report source-backend,
+file-extension, and artifact target rollups, source-map count rollups,
+diagnostics, configurable diagnostic and failed-artifact truncation counts,
+external corpus rollups, and migration actions. ``--format sarif`` emits the
+inspection diagnostics as SARIF for code-scanning workflows. Inspection exits
 nonzero when validation finds report errors.
 
 Configuration

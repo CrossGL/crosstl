@@ -127,6 +127,11 @@ def test_project_report_inspection_is_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_writes_json_summary"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_sarif_reports_diagnostics"
+        ) in backend_support["evidence"]
+        assert "JSON, text, and SARIF summaries" in backend_support["notes"]
         assert "source-map count rollups" in backend_support["notes"]
         assert (
             "validation hash-status, diagnostic-code, missing-capability, "

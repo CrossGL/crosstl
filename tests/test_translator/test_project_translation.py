@@ -6639,6 +6639,65 @@ def test_project_cli_inspect_report_text_fails_on_error_diagnostics(tmp_path):
     assert "project.config.unsupported-target" in result.stdout
 
 
+def test_project_cli_inspect_report_sarif_reports_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = scan_project(repo).to_report(targets=["not-a-backend"])
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "sarif",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert payload["version"] == "2.1.0"
+    run = payload["runs"][0]
+    assert run["tool"]["driver"]["name"] == "CrossTL project report inspection"
+    assert run["invocations"][0]["executionSuccessful"] is False
+    assert run["invocations"][0]["properties"]["sourceReport"] == str(report_path)
+    assert run["tool"]["driver"]["rules"] == [
+        {
+            "id": "project.config.unsupported-target",
+            "name": "project.config.unsupported-target",
+        }
+    ]
+    assert len(run["results"]) == 1
+    sarif_result = run["results"][0]
+    assert sarif_result["ruleId"] == "project.config.unsupported-target"
+    assert sarif_result["level"] == "error"
+    assert "Target backend 'not-a-backend' is not supported" in (
+        sarif_result["message"]["text"]
+    )
+    assert sarif_result["locations"][0]["physicalLocation"] == {
+        "artifactLocation": {"uri": "."},
+        "region": {
+            "endColumn": 1,
+            "endLine": 1,
+            "startColumn": 1,
+            "startLine": 1,
+        },
+    }
+    assert sarif_result["properties"] == {
+        "target": "not-a-backend",
+        "missingCapabilities": ["target.backend"],
+    }
+
+
 def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
