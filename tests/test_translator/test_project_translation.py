@@ -5556,6 +5556,11 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     assert payload["report"]["summary"]["translatedCount"] == 1
     assert payload["report"]["project"]["targets"] == ["cgl"]
     assert payload["validation"]["success"] is True
+    assert payload["validation"]["toolchainStatusCounts"] == {
+        "available": 0,
+        "not-configured": 1,
+        "unavailable": 0,
+    }
     assert payload["validation"]["result"]["summary"] == {
         "artifactCount": 1,
         "okCount": 1,
@@ -5884,6 +5889,7 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
         }
     ]
     assert result.returncode == 1
+    assert "Validation toolchains: not-configured=1" in result.stdout
     assert "Validation artifacts: 0 ok, 1 failed" in result.stdout
     assert "Validation source hashes: ok=1" in result.stdout
     assert "Validation generated hashes: mismatch=1" in result.stdout

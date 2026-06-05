@@ -128,6 +128,9 @@ def test_project_report_inspection_is_first_class_support_feature():
             "test_project_cli_inspect_report_writes_json_summary"
         ) in backend_support["evidence"]
         assert "source-map count rollups" in backend_support["notes"]
+        assert "validation hash-status and toolchain-status rollups" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_map_counts"

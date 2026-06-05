@@ -1576,6 +1576,14 @@ def _validation_summary(artifact_checks: Sequence[Any]) -> dict[str, Any]:
     }
 
 
+def _validation_toolchain_status_counts(toolchains: Sequence[Any]) -> dict[str, int]:
+    return _status_counts(
+        toolchains,
+        "status",
+        frozenset(("available", "not-configured", "unavailable")),
+    )
+
+
 def _validate_artifacts(
     artifacts: Sequence[Mapping[str, Any]],
     targets: Sequence[str],
@@ -1822,6 +1830,12 @@ def inspect_project_report(
     diagnostic_limit = max(0, max_diagnostics)
     failed_artifact_limit = max(0, max_failed_artifacts)
     diagnostics = list(validation_report.get("diagnostics", []))
+    validation_result = validation_report.get("validation", {})
+    validation_toolchains = (
+        validation_result.get("toolchains")
+        if isinstance(validation_result, Mapping)
+        else []
+    )
     payload: dict[str, Any] = {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": REPORT_INSPECTION_KIND,
@@ -1838,7 +1852,17 @@ def inspect_project_report(
         "validation": {
             "success": bool(validation_report.get("success")),
             "diagnosticCounts": dict(validation_report.get("diagnosticCounts", {})),
-            "result": dict(validation_report.get("validation", {})),
+            "toolchainStatusCounts": _validation_toolchain_status_counts(
+                validation_toolchains
+                if isinstance(validation_toolchains, Sequence)
+                and not isinstance(validation_toolchains, (str, bytes, bytearray))
+                else []
+            ),
+            "result": (
+                dict(validation_result)
+                if isinstance(validation_result, Mapping)
+                else {}
+            ),
         },
     }
 
