@@ -420,6 +420,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
     for backend_support in feature["support"].values():
         assert "unit source hashes" in backend_support["notes"]
         assert "unit source hash records that are missing" in backend_support["notes"]
+        assert "artifact source hashes that do not match declared" in (
+            backend_support["notes"]
+        )
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "single file-level source-map mapping" in backend_support["notes"]
         assert "source-map summary rollups" in backend_support["notes"]
@@ -427,6 +430,11 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_detects_modified_unit_sources"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_source_hash_"
+            "mismatches_unit_source_hash"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

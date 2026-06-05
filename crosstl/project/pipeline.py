@@ -2863,6 +2863,38 @@ def _source_hash_contract_reasons(
     )
 
 
+def _artifact_unit_source_hash_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+    declared_units_by_path: Mapping[str, UnitDeclaration] | None,
+) -> list[str]:
+    if declared_units_by_path is None:
+        return []
+
+    source = artifact.get("source")
+    if not _is_non_empty_string(source):
+        return []
+
+    declaration = declared_units_by_path.get(source)
+    if declaration is None:
+        return []
+
+    unit_index, unit = declaration
+    artifact_hash = artifact.get("sourceHash")
+    unit_hash = unit.get("sourceHash")
+    if _hash_contract_reasons(f"artifacts[{index}].sourceHash", artifact_hash):
+        return []
+    if _hash_contract_reasons(f"units[{unit_index}].sourceHash", unit_hash):
+        return []
+
+    if dict(artifact_hash) != dict(unit_hash):
+        return [
+            f"artifacts[{index}].sourceHash must match "
+            f"units[{unit_index}].sourceHash"
+        ]
+    return []
+
+
 def _generated_hash_contract_reasons(
     index: int, artifact: Mapping[str, Any], *, required: bool = False
 ) -> list[str]:
@@ -5418,6 +5450,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     index,
                     artifact,
                     required=has_summary,
+                )
+            )
+            reasons.extend(
+                _artifact_unit_source_hash_contract_reasons(
+                    index,
+                    artifact,
+                    declared_units_by_path,
                 )
             )
             reasons.extend(

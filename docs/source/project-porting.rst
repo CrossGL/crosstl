@@ -245,6 +245,8 @@ Project reports are JSON documents with:
   with the target backend suffix, status, source hash, generated artifact hash,
   pipeline provenance, and file-granularity source-map anchors for successful
   translations. Full reports require every artifact to carry a source hash,
+  artifact source hashes to match their declared translation-unit source
+  hashes,
   artifact output paths to match the target/variant directory plus the
   source-relative path with the target backend suffix, artifact source paths
   to match declared translation units, and artifact source backend names to

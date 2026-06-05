@@ -2707,6 +2707,28 @@ def test_validate_project_report_rejects_missing_unit_source_hashes(tmp_path):
     assert "units[0].sourceHash must be an object" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_artifact_source_hash_mismatches_unit_source_hash(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["units"][0]["sourceHash"]["value"] = "0" * 64
+    report_path = repo / "out" / "artifact-unit-source-hash-mismatch-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].sourceHash must match units[0].sourceHash"
+        in diagnostic["message"]
+    )
+
+
 def test_translate_project_preserves_discovered_unit_source_hash(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
