@@ -1783,6 +1783,32 @@ def test_codegen_compute_builtins():
     assert "@gl_LocalInvocationIndex" in result
 
 
+def test_codegen_simdgroup_indices_from_public_pmetal_kernel():
+    # Reduced from:
+    # Repo: https://github.com/Epistates/pmetal
+    # Commit: 089171635d1b9c9b7a58b575cf7d522834022cd3
+    # Path: crates/pmetal-metal/src/kernels/metal/fused_lora.metal
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void fused_lora_forward(device const half* x [[buffer(0)]],
+                                   uint3 tid [[thread_position_in_threadgroup]],
+                                   uint simd_lane_id [[thread_index_in_simdgroup]],
+                                   uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
+        device const half* x_row = x + tid.x;
+        half value = *(x_row + simd_lane_id + simd_group_id);
+    }
+    """
+    result = convert(code)
+
+    assert "uint simd_lane_id @gl_SubgroupInvocationID" in result
+    assert "uint simd_group_id @gl_SubgroupID" in result
+    assert "@thread_index_in_simdgroup" not in result
+    assert "@simdgroup_index_in_threadgroup" not in result
+    assert parse_crossgl(result) is not None
+
+
 def test_codegen_packed_and_simd_types():
     code = """
     struct Types {

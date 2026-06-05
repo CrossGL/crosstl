@@ -95,6 +95,24 @@ class TestHipCodeGen:
         assert "var load_callback_dev: auto = load_callback;" in result
         assert "@group(0) @binding(0) var<uniform> c0: f32 = 299792458.0f;" in result
 
+    def test_public_gpu_template_scope_disambiguator_call_conversion(self):
+        code = """
+        template <typename OPERATOR>
+        __global__ void call_operator() {
+            OPERATOR::template apply<float>(threadIdx.x);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "OPERATOR::apply<float>(gl_LocalInvocationID.x);" in result
+        assert "::template" not in result
+
     def test_public_rocm_hipfft_complex_pointer_declarators_conversion(self):
         code = """
         void host() {

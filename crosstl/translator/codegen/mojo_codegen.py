@@ -1437,7 +1437,7 @@ class MojoCodeGen:
 
         header = "# Generated Mojo Shader Code\n"
         header += "from math import *\n"
-        header += "from gpu import *\n\n"
+        header += "from gpu import *\n"
         code = ""
 
         structs = getattr(ast, "structs", [])
@@ -1585,6 +1585,9 @@ class MojoCodeGen:
                         stage.entry_point, shader_type=stage_name, stage_node=stage
                     )
                     self.stage_local_function_extra_params = previous_extra_params
+        if self.required_reinterpret_helpers:
+            header += "from memory import bitcast\n"
+        header += "\n"
 
         return header + self.generate_required_helpers() + code
 
@@ -12108,9 +12111,20 @@ class MojoCodeGen:
 
     def generate_reinterpret_helper(self, func_name, arg_type, return_type):
         code = f"fn {func_name}(value: {arg_type}) -> {return_type}:\n"
-        return_match = re.fullmatch(r"SIMD\[(DType\.\w+), \d+\]", return_type)
+        return_match = re.fullmatch(r"SIMD\[(DType\.\w+), (\d+)\]", return_type)
         if arg_type.startswith("SIMD[") and return_match is not None:
-            code += f"    return value.cast[{return_match.group(1)}]()\n\n"
+            code += (
+                f"    return bitcast[{return_match.group(1)}, "
+                f"{return_match.group(2)}](value)\n\n"
+            )
+            return code
+        scalar_dtype = {
+            "Float32": "DType.float32",
+            "Int32": "DType.int32",
+            "UInt32": "DType.uint32",
+        }.get(return_type)
+        if scalar_dtype is not None:
+            code += f"    return bitcast[{scalar_dtype}](value)\n\n"
             return code
         code += f"    return {return_type}(value)\n\n"
         return code

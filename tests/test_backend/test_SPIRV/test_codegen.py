@@ -2557,6 +2557,34 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_RELAXED_PRECISION_INTERFACE_ASSEMBLY = """
+; Reduced from glslangValidator -V -H output for ESSL 310 mediump fragment IO.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color %in_color
+OpExecutionMode %main OriginUpperLeft
+OpName %out_color "outColor"
+OpName %in_color "color"
+OpDecorate %out_color RelaxedPrecision
+OpDecorate %out_color Location 0
+OpDecorate %in_color RelaxedPrecision
+OpDecorate %in_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%ptr_input_v4float = OpTypePointer Input %v4float
+%out_color = OpVariable %ptr_output_v4float Output
+%in_color = OpVariable %ptr_input_v4float Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %in_color
+OpStore %out_color %loaded
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_FRAGMENT_SAMPLE_AND_VIEW_BUILTINS_ASSEMBLY = """
 ; Reduced from Vulkan fragment interface built-ins found in SwiftShader/glslang output.
 OpCapability Shader
@@ -3972,6 +4000,20 @@ def test_spirv_assembly_flat_location_interface_codegen():
 
     assert "uint input_flat_u32 @input @location(0) @flat;" in generated_code
     assert "%input_flat_u32" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_relaxed_precision_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_RELAXED_PRECISION_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 color @input @location(0) @mediump;" in generated_code
+    assert "float4 outColor @output @location(0) @mediump;" in generated_code
+    assert "outColor = color;" in generated_code
+    assert "RelaxedPrecision" not in generated_code
+    assert "outColor = loaded;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

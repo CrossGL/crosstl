@@ -915,6 +915,24 @@ class TestHipParser:
         assert call.name.member == "operator()<float, float>"
         assert call.args == ["TensorLayout::NCHW"]
 
+    def test_public_gpu_template_scope_disambiguator_call_parse(self):
+        # Inspired by public CUDA/HIP template kernels using
+        # OPERATOR::template apply<T>(...) inside GPU wrappers.
+        code = """
+        template <typename OPERATOR>
+        __global__ void call_operator() {
+            OPERATOR::template apply<float>(threadIdx.x);
+        }
+        """
+        ast = self.parse_code(code)
+
+        call = ast.statements[0].body[0]
+
+        assert isinstance(call, FunctionCallNode)
+        assert call.name == "OPERATOR::apply<float>"
+        assert isinstance(call.args[0], HipBuiltinNode)
+        assert call.args[0].builtin_name == "threadIdx"
+
     def test_public_rocm_hiptensor_variable_template_condition_parse(self):
         # Upstream: ROCm/rocm-examples@cf369da, Common/hiptensor_utils.hpp.
         code = """

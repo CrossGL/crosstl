@@ -690,6 +690,24 @@ def test_codegen_derivative_intrinsics_from_microsoft_docs_reparse():
     parse_crossgl(crossgl)
 
 
+def test_codegen_sincos_intrinsic_from_microsoft_docs_reparse():
+    # Source: Microsoft Learn HLSL sincos intrinsic.
+    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-sincos
+    crossgl = generate_crossgl("""
+        float2 main(float angle : TEXCOORD0) : SV_Target0 {
+            float s;
+            float c;
+            sincos(angle, s, c);
+            return float2(s, c);
+        }
+    """)
+
+    assert "s = sin(angle);" in crossgl
+    assert "c = cos(angle);" in crossgl
+    assert "sincos(" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_bitcast_intrinsics_from_microsoft_docs_reparse():
     # Source: Microsoft Learn asfloat/asint/asuint docs.
     # URLs:

@@ -89,6 +89,7 @@ class VulkanParser:
         "NonWritable": "readonly",
         "NoPerspective": "noperspective",
         "Patch": "patch",
+        "RelaxedPrecision": "mediump",
         "Restrict": "restrict",
         "Sample": "sample",
         "Volatile": "volatile",

@@ -1208,6 +1208,34 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_RELAXED_PRECISION_INTERFACE_ASSEMBLY = """
+; Reduced from glslangValidator -V -H output for ESSL 310 mediump fragment IO.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color %in_color
+OpExecutionMode %main OriginUpperLeft
+OpName %out_color "outColor"
+OpName %in_color "color"
+OpDecorate %out_color RelaxedPrecision
+OpDecorate %out_color Location 0
+OpDecorate %in_color RelaxedPrecision
+OpDecorate %in_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%ptr_input_v4float = OpTypePointer Input %v4float
+%out_color = OpVariable %ptr_output_v4float Output
+%in_color = OpVariable %ptr_input_v4float Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %in_color
+OpStore %out_color %loaded
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_FORWARD_POINTER_STRUCT_ASSEMBLY = """
 ; Reduced from Khronos SPIRV-Tools test/diff/diff_files/OpTypeForwardPointer_basic_src.spvasm.
 OpCapability Kernel
@@ -1889,6 +1917,23 @@ def test_spirv_assembly_flat_location_interface_parse():
     assert layout.qualifiers == [("location", "0")]
     assert layout.declaration_qualifiers == ["flat"]
     assert layout.spirv_decorations == [("Flat", []), ("Location", ["0"])]
+
+
+def test_spirv_assembly_relaxed_precision_interface_parse():
+    tokens = tokenize_code(SPIRV_GLSLANG_RELAXED_PRECISION_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+
+    layouts = {layout.variable_name: layout for layout in ast.global_variables}
+    assert layouts["color"].declaration_qualifiers == ["mediump"]
+    assert layouts["outColor"].declaration_qualifiers == ["mediump"]
+    assert layouts["color"].spirv_decorations == [
+        ("RelaxedPrecision", []),
+        ("Location", ["0"]),
+    ]
+    assert layouts["outColor"].spirv_decorations == [
+        ("RelaxedPrecision", []),
+        ("Location", ["0"]),
+    ]
 
 
 def test_spirv_assembly_forward_pointer_structs_parse():

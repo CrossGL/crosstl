@@ -452,6 +452,31 @@ class TestCudaParser:
         ]
         assert main.body[0].vtype == "stackable_ctx"
 
+    def test_public_cuda_template_disambiguator_calls_parse(self):
+        # Inspired by LiterateLB CUDA template kernels using
+        # OPERATOR::template apply<T>(...) inside __global__ wrappers.
+        code = """
+        template <typename OPERATOR, typename F>
+        __global__ void call_operator(F f) {
+            OPERATOR::template apply<float>(threadIdx.x);
+            f.template operator()<float>(threadIdx.x);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        scope_call = ast.kernels[0].body[0]
+        member_call = ast.kernels[0].body[1]
+
+        assert isinstance(scope_call, FunctionCallNode)
+        assert scope_call.name == "OPERATOR::apply<float>"
+        assert isinstance(member_call, FunctionCallNode)
+        assert isinstance(member_call.name, MemberAccessNode)
+        assert member_call.name.object == "f"
+        assert member_call.name.member == "operator()<float>"
+
     def test_public_cub_macro_test_blocks_are_skipped_before_kernels(self):
         code = """
         C2H_TEST("DeviceAdjacentDifference::SubtractRight works with iterators",

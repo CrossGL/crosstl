@@ -3439,7 +3439,7 @@ class CudaParser:
                 left = MemberAccessNode(left, member, False)
             elif self.current_token[0] == "SCOPE":
                 self.eat("SCOPE")
-                member = self.parse_name_component()
+                member = self.parse_qualified_name_member()
                 left = self.append_qualified_name(left, "::", member)
             elif self.current_token[0] == "LESS_THAN" and self.is_template_suffix():
                 left = self.append_template_suffix(left)
@@ -3497,9 +3497,24 @@ class CudaParser:
         )
 
     def parse_member_name(self):
+        if self.current_token[0] == "TEMPLATE":
+            self.eat("TEMPLATE")
+            member = self.consume_function_name()
+            if self.current_token[0] == "LESS_THAN" and self.is_template_suffix():
+                member += self.parse_template_suffix()
+            return member
         if self.current_token[0] in self.NAME_COMPONENT_TOKENS:
             return self.parse_name_component()
         raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
+
+    def parse_qualified_name_member(self):
+        if self.current_token[0] == "TEMPLATE":
+            self.eat("TEMPLATE")
+            member = self.consume_function_name()
+            if self.current_token[0] == "LESS_THAN" and self.is_template_suffix():
+                member += self.parse_template_suffix()
+            return member
+        return self.parse_name_component()
 
     def parse_name_component(self):
         if self.current_token[0] not in self.NAME_COMPONENT_TOKENS:

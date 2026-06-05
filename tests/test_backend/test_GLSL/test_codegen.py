@@ -985,6 +985,29 @@ def test_codegen_invariant_builtin_redeclaration_from_glslang_150_vert():
     assert "output.gl_Position = input.iv4;" in crossgl
 
 
+def test_codegen_vertex_builtin_point_size_write_from_glslang_150_vert():
+    # Reduced from KhronosGroup/glslang Test/150.vert, which writes gl_PointSize
+    # without a separate redeclaration.
+    code = textwrap.dedent("""
+        #version 150 core
+
+        in vec4 iv4;
+        uniform float ps;
+
+        void main()
+        {
+            gl_Position = iv4;
+            gl_PointSize = ps;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "float gl_PointSize @ gl_PointSize;" in crossgl
+    assert "output.gl_PointSize = ps;" in crossgl
+    assert "\n        gl_PointSize = ps;" not in crossgl
+
+
 def test_codegen_reserved_helper_name_from_glslang_struct_sample_roundtrip():
     code = textwrap.dedent("""
         #version 450 core

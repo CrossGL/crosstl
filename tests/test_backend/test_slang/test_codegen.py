@@ -2175,6 +2175,32 @@ def test_slang_atan2_builtin_from_stdlib_reference_lowers_to_crossgl_atan():
     cgl_translator.parse(generated_code)
 
 
+def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignments():
+    # Source: Slang core module reference for sincos.
+    # URL: https://docs.shader-slang.org/en/latest/external/core-module-reference/global-decls/sincos.html
+    code = """
+    void main() {
+        float s;
+        float c;
+        sincos(1.0, s, c);
+        if (c > 0.0) {
+            sincos(c, s, c);
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "s = sin(1.0);" in generated_code
+    assert "c = cos(1.0);" in generated_code
+    assert "        s = sin(c);" in generated_code
+    assert "        c = cos(c);" in generated_code
+    assert "sincos(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_derivative_intrinsics_codegen_from_official_fragment_derivative_tests():
     # Source: shader-slang/slang tests/hlsl-intrinsic/fragment-derivative.slang
     # at 85c65f862c045c929814e1abe6b31828d78030ed exercises ddx/ddy,

@@ -2465,6 +2465,9 @@ class HLSLToCrossGLConverter:
         clip_statement = self.generate_clip_statement(stmt, indent, is_main)
         if clip_statement is not None:
             return clip_statement
+        sincos_statement = self.generate_sincos_statement(stmt, indent, is_main)
+        if sincos_statement is not None:
+            return sincos_statement
         lowered_sequence = self.generate_function_call_statement_sequence(stmt, indent)
         if lowered_sequence is not None:
             return lowered_sequence
@@ -2484,6 +2487,20 @@ class HLSLToCrossGLConverter:
             f"{indent_text}if ({condition}) {{\n"
             f"{indent_text}    discard;\n"
             f"{indent_text}}}\n"
+        )
+
+    def generate_sincos_statement(self, stmt, indent=0, is_main=False):
+        if not isinstance(stmt.name, str) or stmt.name != "sincos":
+            return None
+        if len(stmt.args) != 3:
+            return None
+        value = self.generate_expression(stmt.args[0], is_main)
+        sine_target = self.generate_expression(stmt.args[1], is_main)
+        cosine_target = self.generate_expression(stmt.args[2], is_main)
+        indent_text = "    " * indent
+        return (
+            f"{indent_text}{sine_target} = sin({value});\n"
+            f"{indent_text}{cosine_target} = cos({value});\n"
         )
 
     def generate_clip_condition(self, operand_expr, is_main=False):

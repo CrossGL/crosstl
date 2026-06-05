@@ -2955,6 +2955,41 @@ def test_literal_generic_type_arguments_parse():
     assert param_type.generic_args[1].value == 3
 
 
+def test_nested_generic_type_close_does_not_eat_shift_operator():
+    code = """
+    shader NestedGenericClosers {
+        void consume(InputPatch<vec2<f16>, 3> patch) { }
+
+        compute {
+            void main() {
+                array<vec2<f16>> values;
+                int shifted = 8 >> 1;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    assert any(token[0] == "BITWISE_SHIFT_RIGHT" for token in tokens)
+
+    ast = parse_code(tokens)
+
+    param_type = ast.functions[0].parameters[0].param_type
+    assert isinstance(param_type, NamedType)
+    assert param_type.name == "InputPatch"
+    assert isinstance(param_type.generic_args[0], VectorType)
+    assert param_type.generic_args[0].element_type.name == "f16"
+    assert isinstance(param_type.generic_args[1], LiteralNode)
+    assert param_type.generic_args[1].value == 3
+
+    values, shifted = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
+    assert isinstance(values.var_type, NamedType)
+    assert values.var_type.name == "array"
+    assert isinstance(values.var_type.generic_args[0], VectorType)
+    assert values.var_type.generic_args[0].element_type.name == "f16"
+    assert getattr(shifted.initial_value, "operator", None) == ">>"
+
+
 def test_hlsl_parameter_qualifiers_parse():
     code = """
     shader HLSLParameterQualifiers {

@@ -267,6 +267,20 @@ class Parser:
                 f"Expected {token_type}, got {self.current_token[0]} '{self.current_token[1]}'"
             )
 
+    def current_token_is_type_greater_than(self):
+        """Return whether current token can close a generic type argument."""
+        return self.current_token[0] in {"GREATER_THAN", "BITWISE_SHIFT_RIGHT"}
+
+    def eat_type_greater_than(self):
+        """Consume one generic ``>`` close, splitting lexer ``>>`` when needed."""
+        if self.current_token[0] == "BITWISE_SHIFT_RIGHT":
+            self.tokens[self.pos] = ("GREATER_THAN", ">")
+            self.tokens.insert(self.pos + 1, ("GREATER_THAN", ">"))
+            self.current_token = self.tokens[self.pos]
+            self.eat("GREATER_THAN")
+            return
+        self.eat("GREATER_THAN")
+
     def peek(self, offset=1):
         peek_pos = self.pos + offset
         if peek_pos < len(self.tokens):
@@ -1647,13 +1661,13 @@ class Parser:
 
         if self.current_token[0] == "LESS_THAN":
             self.eat("LESS_THAN")
-            while self.current_token[0] != "GREATER_THAN":
+            while not self.current_token_is_type_greater_than():
                 if self.current_token[0] != "COMMA":
                     resource_qualifiers.append(self.current_token[1])
                     self.eat(self.current_token[0])
                     continue
                 self.eat("COMMA")
-            self.eat("GREATER_THAN")
+            self.eat_type_greater_than()
 
         name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -1680,7 +1694,7 @@ class Parser:
                 self.eat("COMMA")
                 size = self.current_token[1]
                 self.eat(self.current_token[0])
-            self.eat("GREATER_THAN")
+            self.eat_type_greater_than()
             return ArrayType(element_type, size)
 
         return self.parse_type()
@@ -2204,7 +2218,7 @@ class Parser:
         self.eat("LESS_THAN")
         params = []
 
-        while self.current_token[0] != "GREATER_THAN":
+        while not self.current_token_is_type_greater_than():
             name = self.current_token[1]
             self.eat("IDENTIFIER")
 
@@ -2222,7 +2236,7 @@ class Parser:
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
 
-        self.eat("GREATER_THAN")
+        self.eat_type_greater_than()
         return params
 
     def parse_generic_arguments(self):
@@ -2230,7 +2244,7 @@ class Parser:
         self.eat("LESS_THAN")
         args = []
 
-        while self.current_token[0] != "GREATER_THAN":
+        while not self.current_token_is_type_greater_than():
             if self.current_token_starts_qualified_identifier():
                 args.append(IdentifierNode(self.parse_qualified_identifier()))
             elif self.current_token_starts_type():
@@ -2252,7 +2266,7 @@ class Parser:
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
 
-        self.eat("GREATER_THAN")
+        self.eat_type_greater_than()
         return args
 
     def current_token_starts_qualified_identifier(self):
@@ -3236,6 +3250,25 @@ class Parser:
                         "RPAREN",
                         "SEMICOLON",
                     }
+            elif token_type == "BITWISE_SHIFT_RIGHT" and not in_nested_expression:
+                angle_depth -= 2
+                if angle_depth == 0:
+                    index += 1
+                    while index < len(self.tokens) and self.tokens[index][0] in {
+                        "COMMENT_SINGLE",
+                        "COMMENT_MULTI",
+                    }:
+                        index += 1
+                    return index < len(self.tokens) and self.tokens[index][0] in {
+                        "COMMA",
+                        "DOT",
+                        "LBRACKET",
+                        "LPAREN",
+                        "RBRACE",
+                        "RBRACKET",
+                        "RPAREN",
+                        "SEMICOLON",
+                    }
 
             index += 1
 
@@ -3366,6 +3399,8 @@ class Parser:
                 angle_depth += 1
             elif token_type == "GREATER_THAN" and angle_depth > 0:
                 angle_depth -= 1
+            elif token_type == "BITWISE_SHIFT_RIGHT" and angle_depth > 0:
+                angle_depth = max(0, angle_depth - 2)
 
             self.eat(token_type)
 
@@ -3409,6 +3444,12 @@ class Parser:
                 if format_angle_depth > 0:
                     compact += value
                     format_angle_depth -= 1
+                else:
+                    compact += f" {value} "
+            elif value == ">>":
+                if format_angle_depth > 1:
+                    compact += value
+                    format_angle_depth -= 2
                 else:
                     compact += f" {value} "
             elif value == "{":
@@ -3708,6 +3749,8 @@ class Parser:
                     depth += 1
                 elif self.peek(offset)[0] == "GREATER_THAN":
                     depth -= 1
+                elif self.peek(offset)[0] == "BITWISE_SHIFT_RIGHT":
+                    depth -= 2
                 offset += 1
 
         return self.peek(offset)[0] == "LPAREN"
@@ -3770,8 +3813,12 @@ class Parser:
                         while depth > 0 and self.current_token[0] != "EOF":
                             if self.current_token[0] == "LESS_THAN":
                                 depth += 1
-                            elif self.current_token[0] == "GREATER_THAN":
+                                self.eat("LESS_THAN")
+                                continue
+                            if self.current_token_is_type_greater_than():
                                 depth -= 1
+                                self.eat_type_greater_than()
+                                continue
                             self.eat(self.current_token[0])
 
                     if self.current_token[0] == "LPAREN":
@@ -3906,8 +3953,12 @@ class Parser:
                 while depth > 0 and self.current_token[0] != "EOF":
                     if self.current_token[0] == "LESS_THAN":
                         depth += 1
-                    elif self.current_token[0] == "GREATER_THAN":
+                        self.eat("LESS_THAN")
+                        continue
+                    if self.current_token_is_type_greater_than():
                         depth -= 1
+                        self.eat_type_greater_than()
+                        continue
                     self.eat(self.current_token[0])
 
             while self.current_token[0] == "LBRACKET":

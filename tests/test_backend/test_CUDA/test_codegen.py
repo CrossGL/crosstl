@@ -172,6 +172,27 @@ class TestCudaCodeGen:
         assert "// CUDA to CrossGL conversion" in result
         assert "// Function: add" in result
 
+    def test_public_cuda_template_disambiguator_call_conversion(self):
+        code = """
+        template <typename OPERATOR, typename F>
+        __global__ void call_operator(F f) {
+            OPERATOR::template apply<float>(threadIdx.x);
+            f.template operator()<float>(threadIdx.x);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "OPERATOR::apply<float>(gl_LocalInvocationID.x);" in result
+        assert "f.operator()<float>(gl_LocalInvocationID.x);" in result
+        assert "::template" not in result
+        assert ".template" not in result
+
     def test_public_cuda_samples_device_global_variables_conversion(self):
         code = """
         __device__ int g_uids = 0;

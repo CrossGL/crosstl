@@ -800,6 +800,10 @@ class SlangToCrossGLConverter:
             if expanded_statement is not None:
                 code += expanded_statement
                 continue
+            sincos_statement = self.generate_sincos_statement(stmt, indent, is_main)
+            if sincos_statement is not None:
+                code += sincos_statement
+                continue
             code += "    " * indent
             if isinstance(stmt, VariableNode):
                 self.register_variable_type(stmt)
@@ -848,6 +852,20 @@ class SlangToCrossGLConverter:
             elif isinstance(stmt, DiscardNode):
                 code += "discard;\n"
         return code
+
+    def generate_sincos_statement(self, stmt, indent=0, is_main=False):
+        if not isinstance(stmt, FunctionCallNode) or stmt.name != "sincos":
+            return None
+        if len(stmt.args) != 3:
+            return None
+        value = self.generate_expression(stmt.args[0], is_main)
+        sine_target = self.generate_expression(stmt.args[1], is_main)
+        cosine_target = self.generate_expression(stmt.args[2], is_main)
+        indent_text = "    " * indent
+        return (
+            f"{indent_text}{sine_target} = sin({value});\n"
+            f"{indent_text}{cosine_target} = cos({value});\n"
+        )
 
     def generate_for_loop(self, node, indent, is_main):
         init = self.generate_for_clause(node.init, is_main)

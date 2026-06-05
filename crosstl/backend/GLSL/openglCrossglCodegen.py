@@ -1032,14 +1032,17 @@ class GLSLToCrossGLConverter:
             or fragment_writes_sample_mask
         )
 
-    def fragment_main_writes_name(self, node, name):
-        if self.shader_type != "fragment":
+    def main_writes_name(self, node, name, shader_type=None):
+        if shader_type is not None and self.shader_type != shader_type:
             return False
         for function in getattr(node, "functions", []) or []:
             if getattr(function, "name", None) != "main":
                 continue
             return self.statements_write_name(getattr(function, "body", []) or [], name)
         return False
+
+    def fragment_main_writes_name(self, node, name):
+        return self.main_writes_name(node, name, shader_type="fragment")
 
     def statements_write_name(self, statements, name):
         return any(
@@ -1307,6 +1310,9 @@ class GLSLToCrossGLConverter:
         fragment_writes_sample_mask = self.fragment_main_writes_name(
             node, "gl_SampleMask"
         )
+        vertex_writes_point_size = self.main_writes_name(
+            node, "gl_PointSize", shader_type="vertex"
+        )
 
         # Ensure vertex stages include gl_Position
         if self.shader_type == "vertex":
@@ -1326,9 +1332,9 @@ class GLSLToCrossGLConverter:
                 output_names.add("gl_Position")
 
             for name, vtype in self.VERTEX_BUILTIN_OUTPUT_TYPES.items():
-                if (
-                    name == "gl_Position"
-                    or name not in builtin_redeclaration_qualifiers
+                if name == "gl_Position" or (
+                    name not in builtin_redeclaration_qualifiers
+                    and not (name == "gl_PointSize" and vertex_writes_point_size)
                 ):
                     continue
                 if name in output_names:

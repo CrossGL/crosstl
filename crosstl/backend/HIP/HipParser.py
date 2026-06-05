@@ -3015,6 +3015,9 @@ class HipParser:
         self.error("Expected member name")
 
     def consume_qualified_name_member(self):
+        if self.match("TEMPLATE"):
+            self.advance()
+            return self.consume_function_name()
         if self.match("IDENTIFIER") or self.is_type_token(allow_identifier=False):
             member = self.current_token.value
             self.advance()

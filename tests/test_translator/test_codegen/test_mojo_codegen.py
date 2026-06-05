@@ -15386,6 +15386,39 @@ def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo(tmp_path)
     assert result.returncode == 0, result.stderr
 
 
+def test_reinterpret_helpers_use_mojo_bitcast_for_scalar_and_simd_values():
+    # Inspired by Modular's Mojo bitcast docs: shader bit reinterpret intrinsics
+    # need a bitcopy, not a numeric SIMD cast.
+    code = """
+    RWByteAddressBuffer rawVectors;
+
+    float readFloat(uint offset) {
+        return asfloat(rawVectors.Load(offset));
+    }
+
+    uint readUint(float value) {
+        return asuint(value);
+    }
+
+    vec2 readPair(uint offset) {
+        return asfloat(rawVectors.Load2(offset));
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "from memory import bitcast" in generated_code
+    assert "fn asfloat(value: UInt32) -> Float32:" in generated_code
+    assert "return bitcast[DType.float32](value)" in generated_code
+    assert "fn asuint(value: Float32) -> UInt32:" in generated_code
+    assert "return bitcast[DType.uint32](value)" in generated_code
+    assert (
+        "fn asfloat(value: SIMD[DType.uint32, 2]) -> SIMD[DType.float32, 2]:"
+        in generated_code
+    )
+    assert "return bitcast[DType.float32, 2](value)" in generated_code
+    assert ".cast[DType.float32]()" not in generated_code
+
+
 def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
     code = """
     ByteAddressBuffer rawBytes;
