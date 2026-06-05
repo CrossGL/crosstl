@@ -921,6 +921,36 @@ class TestHipCodeGen:
         assert "float adjusted = mix(0.0, 1.0, 0.25);" in hip_code
         assert "float adjusted = (0.0 + ((1.0 - 0.0) * 0.25));" not in hip_code
 
+    def test_user_defined_builtin_name_result_type_is_not_reinferred_as_hip_builtin(
+        self,
+    ):
+        source_code = """
+        shader TestShader {
+            compute {
+                float mix(vec3 x, vec3 y, float t) {
+                    return x.x + y.x + t;
+                }
+
+                void main() {
+                    vec3 a = vec3(1.0, 2.0, 3.0);
+                    vec3 b = vec3(4.0, 5.0, 6.0);
+                    float wrapped = fract(mix(a, b, 0.25));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__device__ float mix(float3 x, float3 y, float t)" in hip_code
+        assert "float wrapped = cgl_fract_float(mix(a, b, 0.25));" in hip_code
+        assert "float wrapped = cgl_float3_fract(mix(a, b, 0.25));" not in hip_code
+        assert "float wrapped = (mix(a, b, 0.25)" not in hip_code
+
     def test_hlsl_rsqrt_builtin_lowers_to_hip_inverse_sqrt_math(self):
         source_code = """
         shader TestShader {

@@ -5864,6 +5864,37 @@ def test_hlsl_lowers_glsl_fractional_mix_and_simple_atomic_names():
     assert "atomicAdd(" not in generated_code
 
 
+def test_hlsl_aliases_avoid_shadowed_frac_and_lerp_targets():
+    shader = """
+    shader HlslAliasTargetShadowing {
+        fragment {
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {
+                float frac = value;
+                float lerp = value;
+                let wrapped = fract(value) + frac(value) + frac;
+                let mixed = mix(0.0, 1.0, value) + lerp(1.0, 2.0, value) + lerp;
+                return vec4(wrapped + mixed, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float frac = value;" in generated_code
+    assert "float lerp = value;" in generated_code
+    assert (
+        "float wrapped = ((((value) - floor(value)) + "
+        "((value) - floor(value))) + frac);"
+    ) in generated_code
+    assert (
+        "float mixed = (((0.0 + ((1.0 - 0.0) * value)) + "
+        "(1.0 + ((2.0 - 1.0) * value))) + lerp);"
+    ) in generated_code
+    assert "frac(value)" not in generated_code
+    assert "lerp(1.0, 2.0, value)" not in generated_code
+
+
 def test_hlsl_lowers_glsl_mod_to_floor_semantics_expression():
     shader = """
     shader HlslModBuiltinLowering {

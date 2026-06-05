@@ -293,6 +293,10 @@ class SlangCodeGen:
             "dFdyFine": "ddy_fine",
             "inversesqrt": "rsqrt",
             "inverseSqrt": "rsqrt",
+            "floatBitsToInt": "asint",
+            "floatBitsToUint": "asuint",
+            "intBitsToFloat": "asfloat",
+            "uintBitsToFloat": "asfloat",
             "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
         }
 
@@ -8478,6 +8482,14 @@ class SlangCodeGen:
             generated_args.append(name)
         return ", ".join(generated_args)
 
+    def slang_bitcast_intrinsic_callee(self, callee):
+        if not isinstance(callee, str) or callee in self.user_function_names:
+            return None
+        mapped_callee = self.function_map.get(callee, callee)
+        if mapped_callee in {"asfloat", "asint", "asuint"}:
+            return mapped_callee
+        return None
+
     def generate_call_arguments(self, args, expected_types):
         return ", ".join(self.generate_call_argument_list(args, expected_types))
 
@@ -8723,9 +8735,10 @@ class SlangCodeGen:
             ):
                 args = self.generate_struct_constructor_arguments(callee, node.args)
                 return f"{self.convert_type(callee)}({args})"
+            bitcast_callee = self.slang_bitcast_intrinsic_callee(callee)
             if isinstance(callee, str) and callee in self.user_function_names:
                 args = self.generate_user_function_arguments(callee, node.args)
-            elif isinstance(callee, str) and callee in {"asfloat", "asint", "asuint"}:
+            elif bitcast_callee is not None:
                 args = ", ".join(
                     [
                         self.generate_expression_without_expected(arg)

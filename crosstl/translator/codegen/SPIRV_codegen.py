@@ -12641,6 +12641,20 @@ class VulkanSPIRVCodeGen:
             if callee_name in self.struct_types:
                 return self.struct_types[callee_name]
             return None
+        if isinstance(expr, ArrayAccessNode):
+            array_type = self.infer_expression_result_type(expr.array)
+            if array_type is None:
+                return None
+            element_type = self.array_element_type_from_type(array_type)
+            if element_type is not None:
+                return element_type
+            vector_info = self.vector_type_info_from_type(array_type)
+            if vector_info is not None:
+                return vector_info[0]
+            matrix_info = self.matrix_type_info_from_type(array_type)
+            if matrix_info is not None:
+                return matrix_info[0]
+            return None
         if isinstance(expr, MemberAccessNode):
             base_type = self.infer_expression_result_type(expr.object)
             if base_type is None:

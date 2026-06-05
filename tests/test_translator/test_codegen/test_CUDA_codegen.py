@@ -1398,6 +1398,54 @@ class TestCudaCodeGen:
         assert "gl_NumWorkGroups" not in cuda_code
         assert ".xy" not in cuda_code
 
+    def test_compute_builtin_names_shadowed_by_user_symbols_are_not_lowered(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                uint readX(uvec3 gl_GlobalInvocationID) {
+                    return gl_GlobalInvocationID.x;
+                }
+
+                void main() {
+                    vec3 gl_GlobalInvocationID = vec3(1.25, 2.5, 3.75);
+                    float x = gl_GlobalInvocationID.x;
+                    vec2 xy = gl_GlobalInvocationID.xy;
+                    vec3 wrapped = fract(gl_GlobalInvocationID);
+
+                    uvec3 SV_DispatchThreadID = uvec3(4u, 5u, 6u);
+                    uvec2 dispatchXY = uvec2(SV_DispatchThreadID.xy);
+                    uint paramX = readX(SV_DispatchThreadID);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ uint readX(uint3 gl_GlobalInvocationID)" in cuda_code
+        assert "return gl_GlobalInvocationID.x;" in cuda_code
+        assert (
+            "float3 gl_GlobalInvocationID = make_float3(1.25, 2.5, 3.75);" in cuda_code
+        )
+        assert "float x = gl_GlobalInvocationID.x;" in cuda_code
+        assert (
+            "float2 xy = make_float2(gl_GlobalInvocationID.x, "
+            "gl_GlobalInvocationID.y);" in cuda_code
+        )
+        assert "float3 wrapped = cgl_float3_fract(gl_GlobalInvocationID);" in cuda_code
+        assert "uint3 SV_DispatchThreadID = make_uint3(4u, 5u, 6u);" in cuda_code
+        assert (
+            "uint2 dispatchXY = make_uint2(SV_DispatchThreadID.x, "
+            "SV_DispatchThreadID.y);" in cuda_code
+        )
+        assert "uint paramX = readX(SV_DispatchThreadID);" in cuda_code
+        assert "threadIdx" not in cuda_code
+        assert "blockIdx" not in cuda_code
+
     def test_hlsl_compute_builtin_parameters_lower_to_cuda_expressions(self):
         source_code = """
         shader TestShader {

@@ -9244,6 +9244,8 @@ class RustCodeGen:
         if arguments is not None:
             arg_count = len(arguments)
         has_sampler = self.call_has_explicit_sampler_argument(arguments)
+        if func_name == "atan" and arg_count == 2:
+            return "atan2"
         if func_name in {"textureSize", "textureDimensions"}:
             return "texture_size" if arg_count == 1 else "texture_size_lod"
         if func_name == "texture":

@@ -18107,6 +18107,54 @@ class TestVulkanSPIRVCodeGen:
         assert "MatchNode(" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_match_expression_infers_array_access_result_type(self, tmp_path):
+        source_code = """
+        shader MatchArrayAccessInference {
+            compute {
+                void main() {
+                    vec2 values[2];
+                    values[0] = vec2(1.0, 2.0);
+                    values[1] = vec2(3.0, 4.0);
+
+                    int mode = 1;
+                    let selected = match mode {
+                        0 => values[0],
+                        _ => values[1]
+                    };
+                    vec2 result = selected;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 2",
+            spv_code,
+        )
+        assert vec2_type is not None
+        vec2_pointer = re.search(
+            rf"(%\d+) = OpTypePointer Function {re.escape(vec2_type.group(1))}",
+            spv_code,
+        )
+        assert vec2_pointer is not None
+
+        spirv_named_variable(
+            spv_code,
+            "selected",
+            pointer_type=vec2_pointer.group(1),
+            storage_class="Function",
+        )
+        assert "Unknown type None" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_match_expression_return_emits_selected_spirv_value(self, tmp_path):
         source_code = """
         shader MatchReturnSmoke {

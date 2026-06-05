@@ -2771,6 +2771,77 @@ def test_user_defined_inverse_sqrt_alias_is_not_lowered():
     assert "rsqrt(" not in generated_code
 
 
+def test_glsl_bitcast_builtins_lower_to_slang_as_intrinsics():
+    code = """
+    shader BuiltinGap {
+        sampler2DMS msTex;
+
+        compute {
+            void main() {
+                float f = 1.0;
+                uint u = 1u;
+                int i = 1;
+                int signedBits = floatBitsToInt(f);
+                uint unsignedBits = floatBitsToUint(f);
+                float fromInt = intBitsToFloat(i);
+                float fromUint = uintBitsToFloat(u);
+                float samplesAsFloat = uintBitsToFloat(textureSamples(msTex));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int signedBits = asint(f);" in generated_code
+    assert "uint unsignedBits = asuint(f);" in generated_code
+    assert "float fromInt = asfloat(i);" in generated_code
+    assert "float fromUint = asfloat(u);" in generated_code
+    assert (
+        "float samplesAsFloat = asfloat(cgl_textureSamples_sampler2DMS(msTex));"
+        in generated_code
+    )
+    assert "floatBitsToInt(" not in generated_code
+    assert "floatBitsToUint(" not in generated_code
+    assert "intBitsToFloat(" not in generated_code
+    assert "uintBitsToFloat(" not in generated_code
+    assert "unsupported Slang resource query" not in generated_code
+
+
+def test_user_defined_glsl_bitcast_function_names_are_not_lowered():
+    code = """
+    shader BuiltinGap {
+        compute {
+            int floatBitsToInt(float value) {
+                return 7;
+            }
+
+            float uintBitsToFloat(uint value) {
+                return 1.0;
+            }
+
+            void main() {
+                int signedBits = floatBitsToInt(1.0);
+                float fromUint = uintBitsToFloat(1u);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int floatBitsToInt(float value)" in generated_code
+    assert "float uintBitsToFloat(uint value)" in generated_code
+    assert "int signedBits = floatBitsToInt(1.0);" in generated_code
+    assert "float fromUint = uintBitsToFloat(1u);" in generated_code
+    assert "asint(" not in generated_code
+    assert "asfloat(" not in generated_code
+
+
 def test_glsl_derivative_builtins_lower_to_slang_ddx_ddy():
     code = """
     shader BuiltinGap {

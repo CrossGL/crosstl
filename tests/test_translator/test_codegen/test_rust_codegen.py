@@ -19387,6 +19387,32 @@ def test_common_math_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_pat
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_two_argument_atan_maps_to_atan2_and_qualifies_shadowed_target(
+    tmp_path,
+):
+    code = """
+    shader TwoArgumentAtanAlias {
+        fragment {
+            vec4 main(float y, float x, vec3 vectorY) {
+                float atan2 = x;
+                let scalarAngle = atan(y, x);
+                let vectorAngle = atan(vectorY, y);
+                return vec4(vectorAngle, scalarAngle + atan2);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let atan2: f32 = x;" in generated_code
+    assert "let scalarAngle: f32 = math::atan2(y, x);" in generated_code
+    assert "let vectorAngle: Vec3<f32> = math::atan2(vectorY, y);" in generated_code
+    assert "atan(y, x)" not in generated_code
+    assert "atan(vectorY, y)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_unary_math_intrinsics_preserve_vector_shape_and_smoke_compile(tmp_path):
     code = """
     shader UnaryMathVectorInference {

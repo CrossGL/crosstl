@@ -341,6 +341,14 @@ class MetalCodeGen:
         "ddy": "dfdy",
         "dFdy": "dfdy",
     }
+    METAL_STDLIB_BUILTIN_FUNCTIONS = {
+        "clamp",
+        "cross",
+        "dot",
+        "mix",
+        "smoothstep",
+        "step",
+    }
     METAL_WAVE_INTRINSIC_ARITIES = {
         "WaveGetLaneCount": 0,
         "WaveGetLaneIndex": 0,
@@ -7273,9 +7281,17 @@ class MetalCodeGen:
                     else derivative_name
                 )
                 return f"{derivative_call_name}({arg})"
-            if func_name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
+            if (
+                func_name in self.METAL_STDLIB_BUILTIN_FUNCTIONS
+                and func_name not in self.user_function_names
+            ):
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"{func_name}({args})"
+                call_name = (
+                    f"metal::{func_name}"
+                    if self.metal_function_name_is_shadowed(func_name)
+                    else func_name
+                )
+                return f"{call_name}({args})"
             if func_name in [
                 "float",
                 "half",

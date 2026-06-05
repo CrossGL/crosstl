@@ -229,6 +229,55 @@ def test_metal_hlsl_lerp_alias_qualifies_mix_when_local_name_shadows_it():
     assert "float3 color = mix(cool, warm, phase);" not in generated_code
 
 
+def test_metal_direct_stdlib_builtins_qualify_when_local_names_shadow_them():
+    shader = """
+    shader MetalDirectStdlibTargetShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                vec3 base = vec3(float(tid.x), 0.5, 1.0);
+                float clamp = 1.0;
+                float dot = 0.0;
+                float step = 0.25;
+                float smoothstep = step;
+                float mix = smoothstep;
+                float cross = mix;
+                float scalar = clamp(dot(base, base), 0.0, 1.0);
+                float gate = step(0.25, scalar);
+                float smooth = smoothstep(0.0, 1.0, scalar);
+                vec3 blended = mix(base, vec3(scalar), smooth);
+                vec3 normal = cross(base, vec3(0.0, 1.0, 0.0));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float clamp = 1.0;" in generated_code
+    assert "float dot = 0.0;" in generated_code
+    assert "float step = 0.25;" in generated_code
+    assert "float smoothstep = step;" in generated_code
+    assert "float mix = smoothstep;" in generated_code
+    assert "float cross = mix;" in generated_code
+    assert (
+        "float scalar = metal::clamp(metal::dot(base, base), 0.0, 1.0);"
+        in generated_code
+    )
+    assert "float gate = metal::step(0.25, scalar);" in generated_code
+    assert "float smooth = metal::smoothstep(0.0, 1.0, scalar);" in generated_code
+    assert (
+        "float3 blended = metal::mix(base, float3(scalar), smooth);" in generated_code
+    )
+    assert (
+        "float3 normal = metal::cross(base, float3(0.0, 1.0, 0.0));" in generated_code
+    )
+    assert "float scalar = clamp(dot(base, base), 0.0, 1.0);" not in generated_code
+    assert "float gate = step(0.25, scalar);" not in generated_code
+    assert "float smooth = smoothstep(0.0, 1.0, scalar);" not in generated_code
+
+
 def test_metal_user_defined_frac_and_lerp_functions_are_preserved():
     shader = """
     shader MetalUserHlslMathNames {

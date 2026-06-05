@@ -4125,9 +4125,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.hlsl_transpose_result_type(
                     self.expression_result_type(args[0])
                 )
-            if func_name in {"fract", "inverseSqrt", "inversesqrt", "mod"} and args:
+            if (
+                func_name in {"frac", "fract", "inverseSqrt", "inversesqrt", "mod"}
+                and args
+            ):
                 return self.expression_result_type(args[0])
-            if func_name == "mix" and args:
+            if (
+                func_name in {"lerp", "mix"}
+                and args
+                and func_name not in getattr(self, "function_return_types", {})
+            ):
                 return self.expression_result_type(args[0])
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
@@ -5113,6 +5120,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_builtin_function_call(self, func_name, args):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
+        if (
+            func_name in {"frac", "fract"}
+            and len(args) == 1
+            and self.hlsl_function_name_is_shadowed("frac")
+        ):
+            arg = self.generate_expression(args[0])
+            return f"(({arg}) - floor({arg}))"
+
+        if (
+            func_name in {"lerp", "mix"}
+            and len(args) == 3
+            and self.hlsl_function_name_is_shadowed("lerp")
+        ):
+            left = self.generate_expression(args[0])
+            right = self.generate_expression(args[1])
+            weight = self.generate_expression(args[2])
+            return f"({left} + (({right} - {left}) * {weight}))"
+
         if (
             func_name in {"inverseSqrt", "inversesqrt"}
             and len(args) == 1

@@ -8749,6 +8749,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if isinstance(node, FunctionCallNode):
             function_expr = getattr(node, "function", getattr(node, "name", None))
             func_name = getattr(function_expr, "name", function_expr)
+            if self.is_user_defined_function(func_name):
+                return self.function_return_types.get(func_name)
             if func_name in HIP_WAVE_OP_ARITIES:
                 return self.wave_result_type(
                     func_name,

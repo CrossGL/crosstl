@@ -817,6 +817,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             builtin_alias = self.cuda_stage_builtin_alias_expression(node)
             if builtin_alias is not None:
                 return builtin_alias
+            if self.cuda_identifier_shadows_compute_builtin(node):
+                return node
             ray_builtin = self.cuda_ray_builtin_expression(node)
             if ray_builtin is not None and node not in self.variable_types:
                 return ray_builtin
@@ -2380,6 +2382,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "SV_GROUPINDEX": "local_invocation_index",
         }.get(name)
 
+    def cuda_identifier_shadows_compute_builtin(self, name):
+        """Return whether a user symbol hides a CUDA-lowered compute built-in."""
+        if name is None:
+            return False
+        root_name = str(name).split(".", 1)[0]
+        return (
+            root_name in self.variable_types
+            and root_name not in self.stage_builtin_aliases
+            and self.cuda_compute_builtin_role_for_name(root_name) is not None
+        )
+
     def cuda_compute_builtin_type(self, name):
         """Return the CUDA value type for a compute built-in identifier."""
         role = self.cuda_compute_builtin_role_for_name(name)
@@ -2597,6 +2610,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         builtin_alias = self.cuda_stage_builtin_alias_expression(name)
         if builtin_alias is not None:
             return builtin_alias
+        if self.cuda_identifier_shadows_compute_builtin(name):
+            return name
         ray_builtin = self.cuda_ray_builtin_expression(name)
         if ray_builtin is not None and name not in self.variable_types:
             return ray_builtin
@@ -4757,9 +4772,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "object_expr",
                 getattr(raw_arg, "object", None),
             )
-            role = self.cuda_compute_builtin_role_for_name(
-                getattr(object_node, "name", None)
-            )
+            object_name = getattr(object_node, "name", None)
+            role = None
+            if not self.cuda_identifier_shadows_compute_builtin(object_name):
+                role = self.cuda_compute_builtin_role_for_name(object_name)
             if role is not None:
                 lanes = [
                     self.cuda_compute_builtin_expression(role, component)
@@ -5305,18 +5321,23 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
             if alias_component is not None:
                 return alias_component
-            direct_builtin = self.cuda_compute_builtin_expression(
-                self.cuda_compute_builtin_role_for_name(raw_object_name), node.member
-            )
-            if direct_builtin is not None:
-                return direct_builtin
-            raw_member_access = f"{raw_object_name}.{node.member}"
-            if raw_member_access in self.builtin_map:
-                return self.builtin_map[raw_member_access]
+            if not self.cuda_identifier_shadows_compute_builtin(raw_object_name):
+                direct_builtin = self.cuda_compute_builtin_expression(
+                    self.cuda_compute_builtin_role_for_name(raw_object_name),
+                    node.member,
+                )
+                if direct_builtin is not None:
+                    return direct_builtin
+                raw_member_access = f"{raw_object_name}.{node.member}"
+                if raw_member_access in self.builtin_map:
+                    return self.builtin_map[raw_member_access]
 
         obj = self.visit(object_node)
         member_access = f"{obj}.{node.member}"
-        if member_access in self.builtin_map:
+        if (
+            member_access in self.builtin_map
+            and not self.cuda_identifier_shadows_compute_builtin(member_access)
+        ):
             return self.builtin_map[member_access]
 
         swizzle = self.generate_vector_swizzle(node, obj)
@@ -6449,9 +6470,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def expression_result_type(self, node):
         """Infer expression result types with CUDA structured-buffer operations."""
         if isinstance(node, (IdentifierNode, VariableNode)):
-            builtin_type = self.cuda_compute_builtin_type(getattr(node, "name", None))
-            if builtin_type is not None:
-                return builtin_type
+            name = getattr(node, "name", None)
+            if not self.cuda_identifier_shadows_compute_builtin(name):
+                builtin_type = self.cuda_compute_builtin_type(name)
+                if builtin_type is not None:
+                    return builtin_type
         if isinstance(node, WaveOpNode):
             return self.wave_result_type(
                 getattr(node, "operation", ""), getattr(node, "arguments", []) or []
@@ -6473,12 +6496,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "object_expr",
                 getattr(node, "object", None),
             )
-            builtin_member_type = self.cuda_compute_builtin_member_type(
-                getattr(object_node, "name", None),
-                getattr(node, "member", ""),
-            )
-            if builtin_member_type is not None:
-                return builtin_member_type
+            object_name = getattr(object_node, "name", None)
+            if not self.cuda_identifier_shadows_compute_builtin(object_name):
+                builtin_member_type = self.cuda_compute_builtin_member_type(
+                    object_name,
+                    getattr(node, "member", ""),
+                )
+                if builtin_member_type is not None:
+                    return builtin_member_type
             member_type = self.member_access_member_type(node)
             if member_type is not None:
                 return member_type
