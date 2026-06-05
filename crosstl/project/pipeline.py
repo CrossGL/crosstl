@@ -79,6 +79,9 @@ SOURCE_HASH_VALIDATION_STATUSES = frozenset(
 GENERATED_HASH_VALIDATION_STATUSES = frozenset(
     ("ok", "missing", "mismatch", "not-applicable", "not-recorded", "outside-project")
 )
+SOURCE_ROOT_STATUSES = frozenset(
+    ("active", "missing", "not-directory", "outside-project")
+)
 INCLUDE_DIR_STATUSES = frozenset(
     ("active", "missing", "not-directory", "outside-project")
 )
@@ -841,6 +844,43 @@ def _resolved_source_root(config: ProjectConfig, source_root: str) -> Path:
     return path.resolve()
 
 
+def _source_root_status_for_path(config: ProjectConfig, path: Path) -> str:
+    if not _is_relative_to(path, config.root):
+        return "outside-project"
+    if not path.exists():
+        return "missing"
+    if not path.is_dir():
+        return "not-directory"
+    return "active"
+
+
+def _source_root_status_records(config: ProjectConfig) -> list[dict[str, Any]]:
+    records = []
+    for source_root in config.source_roots:
+        absolute_root = _resolved_source_root(config, source_root)
+        status = _source_root_status_for_path(config, absolute_root)
+        records.append(
+            {
+                "path": source_root,
+                "resolvedPath": str(absolute_root),
+                "status": status,
+                "scanVisible": status == "active",
+            }
+        )
+    return records
+
+
+def _source_root_status_counts(
+    records: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts = {status: 0 for status in sorted(SOURCE_ROOT_STATUSES)}
+    for record in records:
+        status = record.get("status")
+        if isinstance(status, str) and status in counts:
+            counts[status] += 1
+    return {status: count for status, count in counts.items() if count}
+
+
 def _config_location(config: ProjectConfig) -> SourceLocation:
     if config.config_path:
         file = (
@@ -1013,7 +1053,8 @@ def _source_root_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     location = _config_location(config)
     for source_root in config.source_roots:
         absolute_root = _resolved_source_root(config, source_root)
-        if not _is_relative_to(absolute_root, config.root):
+        status = _source_root_status_for_path(config, absolute_root)
+        if status == "outside-project":
             diagnostics.append(
                 ProjectDiagnostic(
                     severity="error",
@@ -1027,12 +1068,26 @@ def _source_root_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
                 )
             )
             continue
-        if not absolute_root.exists():
+        if status == "missing":
             diagnostics.append(
                 ProjectDiagnostic(
                     severity="warning",
                     code="project.scan.missing-source-root",
                     message=f"Configured source root does not exist: {source_root}",
+                    location=location,
+                    missing_capabilities=["repo.scan"],
+                )
+            )
+            continue
+        if status == "not-directory":
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="warning",
+                    code="project.config.source-root-not-directory",
+                    message=(
+                        "Configured source root resolves to a file or "
+                        f"non-directory path: {source_root}"
+                    ),
                     location=location,
                     missing_capabilities=["repo.scan"],
                 )
@@ -1248,6 +1303,7 @@ class ProjectPortabilityReport:
         )
         diagnostics = [diagnostic.to_json() for diagnostic in self.diagnostics]
         source_map_rollups = _source_map_rollups(self.artifacts)
+        source_root_status = _source_root_status_records(self.config)
         include_dir_status = _include_dir_status_records(self.config)
         external_corpus = _external_corpus_report(
             self.config, self.units, self.artifacts, self.targets
@@ -1268,6 +1324,10 @@ class ProjectPortabilityReport:
                 ),
                 "sourceRoots": list(self.config.source_roots),
                 "sourceRootCount": len(self.config.source_roots),
+                "sourceRootStatus": source_root_status,
+                "sourceRootStatusCounts": _source_root_status_counts(
+                    source_root_status
+                ),
                 "includePatterns": list(self.config.include_patterns),
                 "includePatternCount": len(self.config.include_patterns),
                 "excludePatterns": list(self.config.exclude_patterns),
@@ -1425,6 +1485,8 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
         if not _is_relative_to(absolute_root, config.root):
             continue
         if not absolute_root.exists():
+            continue
+        if not absolute_root.is_dir():
             continue
         for pattern in include_patterns:
             if explicit_include_patterns or pattern in source_override_patterns:
@@ -2329,6 +2391,8 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         summary["config"] = project.get("config")
     for field_name in (
         "sourceRootCount",
+        "sourceRootStatus",
+        "sourceRootStatusCounts",
         "includePatternCount",
         "excludePatternCount",
         "sourceOverrideCount",
@@ -3336,6 +3400,103 @@ def _include_dir_status_contract_reasons(
     return reasons
 
 
+def _source_root_status_contract_reasons(
+    project: Mapping[str, Any],
+    source_roots: Any,
+    *,
+    require_counts: bool,
+) -> list[str]:
+    records = project.get("sourceRootStatus")
+    if not isinstance(records, list):
+        return ["project.sourceRootStatus must be a list"]
+
+    reasons = []
+    source_roots_is_list = isinstance(source_roots, list) and all(
+        isinstance(item, str) for item in source_roots
+    )
+    if source_roots_is_list and len(records) != len(source_roots):
+        reasons.append("project.sourceRootStatus must match project.sourceRoots")
+
+    root_path = _project_root_path(project)
+    valid_records = []
+    for index, record in enumerate(records):
+        prefix = f"project.sourceRootStatus[{index}]"
+        if not isinstance(record, Mapping):
+            reasons.append(f"{prefix} must be an object")
+            continue
+
+        valid_records.append(record)
+        source_root = record.get("path")
+        resolved_path = record.get("resolvedPath")
+        status = record.get("status")
+        scan_visible = record.get("scanVisible")
+
+        if not isinstance(source_root, str):
+            reasons.append(f"{prefix}.path must be a string")
+        elif (
+            source_roots_is_list
+            and index < len(source_roots)
+            and source_root != source_roots[index]
+        ):
+            reasons.append(f"{prefix}.path must match project.sourceRoots[{index}]")
+
+        if not _is_non_empty_string(resolved_path):
+            reasons.append(f"{prefix}.resolvedPath must be a string")
+        elif not Path(resolved_path).is_absolute():
+            reasons.append(f"{prefix}.resolvedPath must be an absolute path")
+
+        if not isinstance(status, str) or status not in SOURCE_ROOT_STATUSES:
+            reasons.append(f"{prefix}.status must be a known source root status")
+        if not isinstance(scan_visible, bool):
+            reasons.append(f"{prefix}.scanVisible must be a boolean")
+
+        if (
+            root_path is None
+            or not isinstance(source_root, str)
+            or not _is_non_empty_string(resolved_path)
+            or not Path(resolved_path).is_absolute()
+            or not isinstance(status, str)
+            or status not in SOURCE_ROOT_STATUSES
+            or not isinstance(scan_visible, bool)
+        ):
+            continue
+
+        expected_path = Path(source_root)
+        if not expected_path.is_absolute():
+            expected_path = root_path / expected_path
+        expected_path = expected_path.resolve()
+        actual_resolved_path = Path(resolved_path).resolve()
+        if actual_resolved_path != expected_path:
+            reasons.append(f"{prefix}.resolvedPath must match the resolved source root")
+        expected_status = (
+            "outside-project"
+            if not _is_relative_to(expected_path, root_path)
+            else (
+                "missing"
+                if not expected_path.exists()
+                else "not-directory" if not expected_path.is_dir() else "active"
+            )
+        )
+        if status != expected_status:
+            reasons.append(f"{prefix}.status must match the resolved source root")
+        if scan_visible != (expected_status == "active"):
+            reasons.append(f"{prefix}.scanVisible must match status")
+
+    if require_counts or "sourceRootStatusCounts" in project:
+        counts = project.get("sourceRootStatusCounts")
+        expected_counts = _source_root_status_counts(valid_records)
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "project.sourceRootStatusCounts",
+                counts,
+                expected_counts,
+                "project.sourceRootStatus",
+            )
+        )
+
+    return reasons
+
+
 def _optional_project_field(
     project: Mapping[str, Any], key: str, *, required: bool
 ) -> bool:
@@ -3379,6 +3540,22 @@ def _project_metadata_contract_reasons(
                 reasons.append(f"project.{field_name} must be a non-negative integer")
             elif list_is_valid and count != len(list_value):
                 reasons.append(f"project.{field_name} must match project.{list_name}")
+
+    source_roots = project.get("sourceRoots")
+    if _optional_project_field(
+        project, "sourceRootStatus", required=require_full_metadata
+    ):
+        reasons.extend(
+            _source_root_status_contract_reasons(
+                project,
+                source_roots,
+                require_counts=require_full_metadata,
+            )
+        )
+    elif "sourceRootStatusCounts" in project:
+        reasons.append(
+            "project.sourceRootStatusCounts requires project.sourceRootStatus"
+        )
 
     include_dirs = project.get("includeDirs")
     include_dirs_is_list = isinstance(include_dirs, list) and all(

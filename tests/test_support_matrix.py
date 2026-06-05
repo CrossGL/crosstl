@@ -145,9 +145,48 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "source-extension" in backend_support["notes"]
         assert "skipped-extension" in backend_support["notes"]
         assert "invalid-report markers" in backend_support["notes"]
-        assert "project-config count, and include-directory status rollups" in (
-            backend_support["notes"]
+        assert (
+            "project-config count, source-root status, and include-directory "
+            "status rollups" in backend_support["notes"]
         )
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_source_root_status"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_include_dir_status"
+        ) in backend_support["evidence"]
+
+
+def test_project_repo_scan_documents_source_root_status():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.repo_scan"]
+
+    for backend_support in feature["support"].values():
+        assert "source-root status counts" in backend_support["notes"]
+        assert "roots that resolve to non-directory paths" in (backend_support["notes"])
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_reports_source_roots_that_are_not_directories"
+        ) in backend_support["evidence"]
+
+
+def test_project_report_inspection_documents_rollups():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.report_inspection"]
+
+    for backend_support in feature["support"].values():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_map_counts"
@@ -384,6 +423,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "applied define map consistency" in backend_support["notes"]
         assert "target/variant directory containment" in backend_support["notes"]
+        assert "source-root status record and count consistency" in (
+            backend_support["notes"]
+        )
         assert "include-directory status record and count consistency" in (
             backend_support["notes"]
         )
@@ -400,6 +442,20 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_malformed_include_dir_status_"
             "records"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_malformed_source_root_status_"
+            "records"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_source_root_status_count_"
+            "mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_stale_source_root_status"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

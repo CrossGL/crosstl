@@ -159,9 +159,13 @@ config paths are resolved against the repository root passed to the command, not
 against the shell's current working directory.
 
 ``source_roots`` limits discovery to selected directories. ``include`` and
-``exclude`` use shell-style patterns against repository-relative paths. Missing
-source roots and roots that resolve outside the repository are reported as scan
-diagnostics. Include and source override patterns must also be
+``exclude`` use shell-style patterns against repository-relative paths. Project
+reports include order-preserving source-root status records and status counts
+so active, missing, non-directory, outside-project, and scan-visible roots can
+be triaged without re-running discovery. Missing source roots, source roots
+that resolve to files or other non-directory paths, and roots that resolve
+outside the repository are reported as scan or configuration diagnostics.
+Include and source override patterns must also be
 repository-relative; absolute patterns or patterns containing parent-directory
 segments are reported as configuration diagnostics and skipped. Source overrides
 allow extensionless or non-standard files to be assigned to a registered source
@@ -218,7 +222,8 @@ Project reports are JSON documents with:
 
 - top-level metadata: report schema version, report kind, generation timestamp,
   and generator name/pipeline/package-version fields.
-- ``project`` metadata: root, config path, source roots, include/exclude
+- ``project`` metadata: root, config path, source roots, source-root status
+  records and status counts, include/exclude
   patterns, targets, output directory, source override map, include
   directories, include-directory status records and status counts, define and
   variant maps, and counts for source roots, include patterns, exclude
@@ -271,8 +276,8 @@ Project reports are JSON documents with:
   source/generated hash status fields for summarized validation artifacts,
   aggregate validation artifact and hash-status summary counts, direct
   validation report artifact target, hash-status, toolchain status, and
-  toolchain-run status rollups, include-directory status record and count
-  consistency checks, unit source hash shape and current-file checks,
+  toolchain-run status rollups, source-root and include-directory status record
+  and count consistency checks, unit source hash shape and current-file checks,
   full-report artifact define map checks, full-report source-map granularity,
   target, and source-backend rollup checks, source hash checks, failed artifact
   error metadata checks, translated artifact error metadata rejection, required

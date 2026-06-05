@@ -193,12 +193,58 @@ def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tm
         "project.scan.missing-source-root": 1,
     }
     assert payload["summary"]["missingCapabilityCounts"] == {"repo.scan": 2}
+    assert payload["project"]["sourceRootStatusCounts"] == {
+        "active": 1,
+        "missing": 1,
+        "outside-project": 1,
+    }
+    assert [record["status"] for record in payload["project"]["sourceRootStatus"]] == [
+        "active",
+        "missing",
+        "outside-project",
+    ]
+    assert [
+        record["scanVisible"] for record in payload["project"]["sourceRootStatus"]
+    ] == [True, False, False]
     assert diagnostics["project.scan.missing-source-root"]["location"]["file"] == (
         "crosstl.toml"
     )
     assert diagnostics["project.config.source-root-outside-project"][
         "missingCapabilities"
     ] == ["repo.scan"]
+
+
+def test_scan_project_reports_source_roots_that_are_not_directories(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["simple.cgl"]
+            include = ["**/*"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report().to_json()
+
+    assert scan.units == []
+    assert payload["project"]["sourceRootStatusCounts"] == {"not-directory": 1}
+    assert payload["project"]["sourceRootStatus"] == [
+        {
+            "path": "simple.cgl",
+            "resolvedPath": str((repo / "simple.cgl").resolve()),
+            "status": "not-directory",
+            "scanVisible": False,
+        }
+    ]
+    diagnostics = {diagnostic.code for diagnostic in scan.diagnostics}
+    assert diagnostics == {
+        "project.config.source-root-not-directory",
+        "project.scan.empty",
+    }
 
 
 def test_scan_project_accepts_repository_relative_include_patterns(tmp_path):
@@ -2076,6 +2122,66 @@ def test_validate_project_report_rejects_malformed_include_dir_status_records(
     assert "project.includeDirStatusCounts must be an object" in (diagnostic["message"])
 
 
+def test_validate_project_report_rejects_malformed_source_root_status_records(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-source-root-status-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "sourceRoots": ["shaders"],
+                    "sourceRootCount": 1,
+                    "sourceRootStatus": [
+                        {
+                            "path": 1,
+                            "resolvedPath": "shaders",
+                            "status": "ready",
+                            "scanVisible": "yes",
+                        },
+                        "not a record",
+                    ],
+                    "sourceRootStatusCounts": [],
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.sourceRootStatus must match project.sourceRoots" in (
+        diagnostic["message"]
+    )
+    assert "project.sourceRootStatus[0].path must be a string" in (
+        diagnostic["message"]
+    )
+    assert "project.sourceRootStatus[0].resolvedPath must be an absolute path" in (
+        diagnostic["message"]
+    )
+    assert (
+        "project.sourceRootStatus[0].status must be a known source root status"
+        in diagnostic["message"]
+    )
+    assert "project.sourceRootStatus[0].scanVisible must be a boolean" in (
+        diagnostic["message"]
+    )
+    assert "project.sourceRootStatus[1] must be an object" in diagnostic["message"]
+    assert "project.sourceRootStatusCounts must be an object" in (diagnostic["message"])
+
+
 def test_validate_project_report_rejects_include_dir_status_count_mismatches(
     tmp_path,
 ):
@@ -2104,6 +2210,38 @@ def test_validate_project_report_rejects_include_dir_status_count_mismatches(
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "project.includeDirStatusCounts must match project.includeDirStatus" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_source_root_status_count_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    repo.mkdir()
+    shader_dir.mkdir()
+    (shader_dir / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out").to_json()
+    report["project"]["sourceRootStatusCounts"] = {"missing": 1}
+    report_path = repo / "out" / "invalid-source-root-status-count-report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.sourceRootStatusCounts must match project.sourceRootStatus" in (
         diagnostic["message"]
     )
 
@@ -2138,6 +2276,39 @@ def test_validate_project_report_rejects_stale_include_dir_status(tmp_path):
         in diagnostic["message"]
     )
     assert "project.includeDirStatusCounts must match project.includeDirStatus" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_stale_source_root_status(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    repo.mkdir()
+    shader_dir.mkdir()
+    (shader_dir / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out").to_json()
+    report["project"]["sourceRootStatus"][0]["status"] = "missing"
+    report_path = repo / "out" / "stale-source-root-status-report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.sourceRootStatus[0].status must match the resolved source root" in (
+        diagnostic["message"]
+    )
+    assert "project.sourceRootStatusCounts must match project.sourceRootStatus" in (
         diagnostic["message"]
     )
 
@@ -6749,6 +6920,52 @@ def test_project_cli_inspect_report_text_includes_include_dir_status(tmp_path):
     }
     assert payload["report"]["project"]["includeDirStatus"][0]["status"] == "active"
     assert payload["report"]["project"]["includeDirStatus"][1]["status"] == "missing"
+
+
+def test_project_cli_inspect_report_text_includes_source_root_status(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    repo.mkdir()
+    shader_dir.mkdir()
+    (shader_dir / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            source_roots = ["shaders", "missing-shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Source roots by status: active=1, missing=1" in result.stdout
+
+    payload = inspect_project_report(report_path)
+    assert payload["report"]["project"]["sourceRootStatusCounts"] == {
+        "active": 1,
+        "missing": 1,
+    }
+    assert payload["report"]["project"]["sourceRootStatus"][0]["status"] == "active"
+    assert payload["report"]["project"]["sourceRootStatus"][1]["status"] == "missing"
 
 
 def test_project_cli_inspect_report_text_includes_skipped_reason_rollups(tmp_path):

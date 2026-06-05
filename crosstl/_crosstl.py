@@ -725,13 +725,20 @@ def _format_project_report_inspection(payload):
     project_config_counts = _format_project_config_counts(project)
     if project_config_counts:
         lines.insert(3, project_config_counts)
+    source_root_status = _format_count_rollup(
+        "Source roots by status",
+        project.get("sourceRootStatusCounts"),
+        include_zero=False,
+    )
+    if source_root_status:
+        lines.insert(4, source_root_status)
     include_dir_status = _format_count_rollup(
         "Include dirs by status",
         project.get("includeDirStatusCounts"),
         include_zero=False,
     )
     if include_dir_status:
-        lines.insert(4, include_dir_status)
+        lines.insert(5 if source_root_status else 4, include_dir_status)
     project_config_path = _format_project_config_path(project)
     if project_config_path:
         lines.insert(1, project_config_path)
