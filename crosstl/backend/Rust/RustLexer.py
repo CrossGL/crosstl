@@ -96,8 +96,13 @@ TOKENS = tuple(
             "BYTE_RAW_STRING",
             r'br(?P<byte_raw_hashes>#*)"(?:.|\n)*?"(?P=byte_raw_hashes)',
         ),
+        (
+            "C_RAW_STRING",
+            r'cr(?P<c_raw_hashes>#*)"(?:.|\n)*?"(?P=c_raw_hashes)',
+        ),
         ("RAW_STRING", r'r(?P<raw_hashes>#*)"(?:.|\n)*?"(?P=raw_hashes)'),
         ("BYTE_STRING", r'b"([^"\\]|\\(.|\n))*"'),
+        ("C_STRING", r'c"([^"\\]|\\(.|\n))*"'),
         ("BYTE_CHAR", r"b'(\\x[0-9a-fA-F]{2}|[^'\\]|\\.)'"),
         ("RAW_IDENTIFIER", r"r#[a-zA-Z_][a-zA-Z0-9_]*"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
@@ -309,7 +314,9 @@ class TokenType(Enum):
     CHAR_LIT = auto()
     LIFETIME = auto()
     BYTE_RAW_STRING = auto()
+    C_RAW_STRING = auto()
     BYTE_STRING = auto()
+    C_STRING = auto()
     BYTE_CHAR = auto()
     RAW_STRING = auto()
     LBRACE = auto()

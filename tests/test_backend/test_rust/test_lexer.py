@@ -716,6 +716,25 @@ def test_unsafe_extern_keyword_tokenization():
     assert ("STRING", '"C"') in tokens, "extern ABI string not tokenized correctly"
 
 
+def test_c_string_literal_tokenization_from_rust_gpu_ash_runner():
+    code = r"""
+    fn validation_layer() {
+        let layer = c"VK_LAYER_KHRONOS_validation";
+        let raw = cr#"VK_LAYER_KHRONOS_validation"#;
+    }
+    """
+    tokens = tokenize_code(code)
+
+    assert (
+        "C_STRING",
+        'c"VK_LAYER_KHRONOS_validation"',
+    ) in tokens, "C string literal not tokenized correctly"
+    assert (
+        "C_RAW_STRING",
+        'cr#"VK_LAYER_KHRONOS_validation"#',
+    ) in tokens, "raw C string literal not tokenized correctly"
+
+
 def test_const_fn_and_block_tokenization():
     code = """
     pub const fn load() -> i32 {

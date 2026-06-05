@@ -2944,8 +2944,10 @@ class HipParser:
                 expr = MemberAccessNode(expr, member, True)
             elif self.match("LPAREN"):
                 self.consume("LPAREN")
+                self.skip_newlines()
                 if expr == "sizeof" and self.is_sizeof_type_operand():
                     args = [self.parse_type()]
+                    self.skip_newlines()
                 else:
                     args = self.parse_argument_list()
                 self.consume("RPAREN")
@@ -2987,6 +2989,7 @@ class HipParser:
     def is_sizeof_type_operand(self):
         saved_pos = self.pos
         try:
+            self.skip_newlines()
             saw_integral_sign = False
             while self.match(*self.TYPE_QUALIFIER_TOKENS):
                 if self.current_token.type in {"SIGNED", "UNSIGNED"}:
@@ -3024,6 +3027,7 @@ class HipParser:
                     return False
                 self.advance()
 
+            self.skip_newlines()
             return self.match("RPAREN")
         finally:
             self.pos = saved_pos

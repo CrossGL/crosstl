@@ -4288,9 +4288,11 @@ class CudaToCrossGLConverter:
             function_name = function_name[2:]
 
         bit_reinterpret_intrinsics = {
+            "__double_as_longlong": "doubleBitsToLong",
             "__float_as_int": "floatBitsToInt",
             "__float_as_uint": "floatBitsToUint",
             "__int_as_float": "intBitsToFloat",
+            "__longlong_as_double": "longBitsToDouble",
             "__uint_as_float": "uintBitsToFloat",
         }
         mapped_name = bit_reinterpret_intrinsics.get(function_name)

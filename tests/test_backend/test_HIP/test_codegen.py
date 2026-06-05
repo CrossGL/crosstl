@@ -142,6 +142,27 @@ class TestHipCodeGen:
         assert "var d_shadow: ptr<u32>;" in result
         assert "d_output[0] = ((d_input[0] & 0xf00) >> 8);" in result
 
+    def test_public_rocm_floyd_warshall_multiline_sizeof_type_operand_conversion(self):
+        code = """
+        void host(unsigned int* verificationPathMatrix, int numNodes) {
+            verificationPathMatrix = (unsigned int *) malloc(
+                numNodes * numNodes * sizeof(
+                    int));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "verificationPathMatrix = "
+            "ptr<u32>(malloc(((numNodes * numNodes) * sizeof(int))));"
+        ) in result
+
     def test_public_rocm_bandwidth_enum_class_conversion(self):
         code = """
         enum class MemoryMode : unsigned int

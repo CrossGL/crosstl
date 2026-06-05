@@ -1299,6 +1299,35 @@ def test_parse_macro_declaration_prefixes_from_filament_sources():
     assert ast.structs[0].members[1].vtype == "vec4"
 
 
+def test_parse_precision_qualified_custom_type_local_from_filament_fsr():
+    # Reduced from google/filament@6221f22a79597006b98e329f7267ee59f8ff354c
+    # filament/src/materials/fsr/ffx_fsr1_mobile.fs, which declares
+    # precision-qualified aliases such as "highp AF2 pp" inside functions.
+    code = textwrap.dedent("""
+        AF3 FsrEasuSampleF(highp AF2 p);
+
+        void main()
+        {
+            highp AF2 pp = AF2(0.5);
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    sample = next(
+        function for function in ast.functions if function.name == "FsrEasuSampleF"
+    )
+    main = next(function for function in ast.functions if function.name == "main")
+    local = next(stmt for stmt in main.body if isinstance(stmt, VariableNode))
+
+    assert sample.params[0].vtype == "AF2"
+    assert sample.params[0].qualifiers == ["highp"]
+    assert local.vtype == "AF2"
+    assert local.name == "pp"
+    assert local.qualifiers == ["highp"]
+    assert isinstance(local.value, FunctionCallNode)
+    assert local.value.name.name == "AF2"
+
+
 def test_parse_explicit_typecast_from_glslang_nv_extension():
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/spv.nv.explicittypecast.frag, which uses GL_NV_explicit_typecast.

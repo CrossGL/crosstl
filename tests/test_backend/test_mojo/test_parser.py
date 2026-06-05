@@ -296,6 +296,32 @@ def test_function_optional_argument_default_parses_from_official_docs():
     assert function.params[1].default_value == "2"
 
 
+def test_default_keyword_parameter_name_parse_from_modular_stdlib():
+    # Reduced from https://github.com/modular/modular.git commit
+    # daa47bb846cc213723a54c51844ea4e923eb5e13,
+    # mojo/stdlib/std/memory/unsafe_nullable_pointer.mojo UnsafeNullablePointer.gather.
+    code = """
+    def gather[
+        dtype: DType,
+        width: SIMDSize = 1,
+    ](
+        mask: SIMD[DType.bool, width] = SIMD[DType.bool, width](fill=True),
+        default: SIMD[dtype, width] = 0,
+    ) -> SIMD[dtype, width]:
+        return default
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "gather")
+
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("mask", "SIMD[DType.bool, width]"),
+        ("default", "SIMD[dtype, width]"),
+    ]
+    assert function.params[1].default_value == "0"
+    assert function.return_type == "SIMD[dtype, width]"
+    assert function.body[0].value.name == "default"
+
+
 def test_struct_parsing():
     code = """
     struct VSInput:
