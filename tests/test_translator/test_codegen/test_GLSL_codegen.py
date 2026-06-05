@@ -221,6 +221,57 @@ def test_compute_stage_validates_builtin_parameter_types():
     assert "gid @ gl_GlobalInvocationID" not in generated
 
 
+def test_glsl_hlsl_compute_builtin_parameter_aliases_to_glsl_builtins():
+    code = """
+    shader HLSLComputeBuiltinAliases {
+        compute {
+            void main(
+                uvec3 tid @ SV_DispatchThreadID,
+                uvec3 gid @ SV_GroupID,
+                uvec3 lid @ SV_GroupThreadID,
+                uint groupIndex @ SV_GroupIndex
+            ) {
+                uint value = tid.x + gid.y + lid.z + groupIndex;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "void main()" in generated
+    assert (
+        "uint value = (((gl_GlobalInvocationID.x + gl_WorkGroupID.y) + "
+        "gl_LocalInvocationID.z) + gl_LocalInvocationIndex);"
+    ) in generated
+    assert re.search(r"\btid\b", generated) is None
+    assert re.search(r"\bgid\b", generated) is None
+    assert re.search(r"\blid\b", generated) is None
+    assert re.search(r"\bgroupIndex\b", generated) is None
+    assert "SV_DispatchThreadID" not in generated
+
+
+def test_glsl_hlsl_graphics_builtin_parameter_aliases_to_glsl_builtins():
+    code = """
+    shader HLSLGraphicsBuiltinAliases {
+        vertex {
+            void main(int vertexId @ SV_VertexID, int instanceId @ SV_InstanceID) {
+                gl_Position = vec4(float(vertexId + instanceId));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "vertex")
+
+    assert "void main()" in generated
+    assert "in int vertexId;" not in generated
+    assert "in int instanceId;" not in generated
+    assert "float((gl_VertexID + gl_InstanceID))" in generated
+    assert "SV_VertexID" not in generated
+    assert "SV_InstanceID" not in generated
+
+
 def test_readonly_structured_buffer_uses_readonly_ssbo():
     code = """
     shader StructuredBufferGLSL {

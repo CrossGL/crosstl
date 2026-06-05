@@ -8147,6 +8147,104 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = result_type
         return spirv_id
 
+    def bitcast_builtin_target_component_type(
+        self, function_name: str
+    ) -> Optional[str]:
+        return {
+            "asfloat": "float",
+            "asint": "int",
+            "asuint": "uint",
+            "floatBitsToInt": "int",
+            "floatBitsToUint": "uint",
+            "intBitsToFloat": "float",
+            "uintBitsToFloat": "float",
+        }.get(function_name)
+
+    def bitcast_builtin_result_type(
+        self, function_name: str, source_type: Optional[SpirvId]
+    ) -> Optional[SpirvId]:
+        target_component_name = self.bitcast_builtin_target_component_type(
+            function_name
+        )
+        if target_component_name is None:
+            return None
+
+        target_component_type = self.register_primitive_type(target_component_name)
+        if source_type is None:
+            return target_component_type
+
+        source_vector = self.vector_component_type_and_count(source_type.type.base_type)
+        if source_vector is None:
+            return target_component_type
+
+        return self.register_vector_type(target_component_type, source_vector[1])
+
+    def bitcast_builtin_source_is_valid(self, source_type: SpirvId) -> bool:
+        source_vector = self.vector_component_type_and_count(source_type.type.base_type)
+        if source_vector is not None:
+            source_component_name = source_vector[0]
+        else:
+            source_component_name = self.normalize_primitive_name(
+                source_type.type.base_type
+            )
+        return source_component_name in {"float", "int", "uint"}
+
+    def call_bitcast_builtin_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        if function_name in self.struct_types:
+            return None
+
+        target_component_name = self.bitcast_builtin_target_component_type(
+            function_name
+        )
+        if target_component_name is None:
+            return None
+
+        if len(args) != 1:
+            self.emit(f"; WARNING: {function_name} requires exactly one operand")
+            result_type = self.register_primitive_type(target_component_name)
+            return self.default_value_for_type(result_type)
+
+        source_type = self.registered_value_type(
+            args[0]
+        ) or self.ensure_registered_type(args[0].type)
+        result_type = self.bitcast_builtin_result_type(function_name, source_type)
+        if result_type is None:
+            return None
+
+        if not self.bitcast_builtin_source_is_valid(source_type):
+            self.emit(
+                f"; WARNING: {function_name} requires a 32-bit numeric scalar "
+                "or vector operand"
+            )
+            return self.default_value_for_type(result_type)
+
+        if source_type.type.base_type == result_type.type.base_type:
+            return args[0]
+
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpBitcast %{result_type.id} %{args[0].id}")
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        if self.is_non_uniform_value(args[0]):
+            self.mark_non_uniform_result(spirv_id)
+        return spirv_id
+
+    def infer_bitcast_builtin_result_type(
+        self, function_name: str, args: List
+    ) -> Optional[SpirvId]:
+        target_component_name = self.bitcast_builtin_target_component_type(
+            function_name
+        )
+        if target_component_name is None:
+            return None
+        if len(args) != 1:
+            return self.register_primitive_type(target_component_name)
+
+        source_type = self.infer_expression_result_type(args[0])
+        return self.bitcast_builtin_result_type(function_name, source_type)
+
     def call_builtin_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
@@ -8168,6 +8266,10 @@ class VulkanSPIRVCodeGen:
         derivative_call = self.call_derivative_function(function_name, args)
         if derivative_call is not None:
             return derivative_call
+
+        bitcast_call = self.call_bitcast_builtin_function(function_name, args)
+        if bitcast_call is not None:
+            return bitcast_call
 
         exact_operand_counts = {
             "min": 2,
@@ -12643,6 +12745,11 @@ class VulkanSPIRVCodeGen:
                 return signature[0]
             if callee_name in self.struct_types:
                 return self.struct_types[callee_name]
+            bitcast_type = self.infer_bitcast_builtin_result_type(
+                callee_name, expr.args
+            )
+            if bitcast_type is not None:
+                return bitcast_type
             return None
         if isinstance(expr, ArrayAccessNode):
             array_type = self.infer_expression_result_type(expr.array)

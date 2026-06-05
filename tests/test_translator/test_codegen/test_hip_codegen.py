@@ -1017,6 +1017,165 @@ class TestHipCodeGen:
         assert "double invD = (1.0 / sqrt(d));" in hip_code
         assert "inverseSqrt(" not in hip_code
 
+    def test_glsl_bitcast_builtins_lower_to_hip_intrinsics(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float f = 1.0;
+                    int i = 1;
+                    uint u = 1u;
+                    vec3 v = vec3(1.0, 2.0, 3.0);
+                    ivec3 iv = ivec3(1, 2, 3);
+                    uvec3 uv = uvec3(1u, 2u, 3u);
+
+                    int signedBits = floatBitsToInt(f);
+                    uint unsignedBits = floatBitsToUint(f);
+                    float fromInt = intBitsToFloat(i);
+                    float fromUint = uintBitsToFloat(u);
+                    ivec3 vectorBits = floatBitsToInt(v);
+                    uvec3 unsignedVectorBits = floatBitsToUint(v);
+                    vec3 fromSignedVector = intBitsToFloat(iv);
+                    vec3 fromUnsignedVector = uintBitsToFloat(uv);
+                    let inferredSignedBits = floatBitsToInt(f);
+                    let inferredFromUint = uintBitsToFloat(u);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "int signedBits = __float_as_int(f);" in hip_code
+        assert "unsigned int unsignedBits = __float_as_uint(f);" in hip_code
+        assert "float fromInt = __int_as_float(i);" in hip_code
+        assert "float fromUint = __uint_as_float(u);" in hip_code
+        assert (
+            "__device__ inline int3 cgl_float3_to_int3_bitcast(float3 value)"
+            in hip_code
+        )
+        assert (
+            "return make_int3(__float_as_int(value.x), __float_as_int(value.y), "
+            "__float_as_int(value.z));" in hip_code
+        )
+        assert (
+            "__device__ inline uint3 cgl_float3_to_uint3_bitcast(float3 value)"
+            in hip_code
+        )
+        assert (
+            "__device__ inline float3 cgl_int3_to_float3_bitcast(int3 value)"
+            in hip_code
+        )
+        assert (
+            "__device__ inline float3 cgl_uint3_to_float3_bitcast(uint3 value)"
+            in hip_code
+        )
+        assert "int3 vectorBits = cgl_float3_to_int3_bitcast(v);" in hip_code
+        assert "uint3 unsignedVectorBits = cgl_float3_to_uint3_bitcast(v);" in hip_code
+        assert "float3 fromSignedVector = cgl_int3_to_float3_bitcast(iv);" in hip_code
+        assert (
+            "float3 fromUnsignedVector = cgl_uint3_to_float3_bitcast(uv);" in hip_code
+        )
+        assert "int inferredSignedBits = __float_as_int(f);" in hip_code
+        assert "float inferredFromUint = __uint_as_float(u);" in hip_code
+        assert "floatBitsToInt(" not in hip_code
+        assert "floatBitsToUint(" not in hip_code
+        assert "intBitsToFloat(" not in hip_code
+        assert "uintBitsToFloat(" not in hip_code
+
+    def test_hlsl_as_bitcast_aliases_lower_to_hip_intrinsics(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float f = 1.0;
+                    int i = 1;
+                    uint u = 1u;
+                    vec3 v = vec3(1.0, 2.0, 3.0);
+                    ivec3 iv = ivec3(1, 2, 3);
+                    uvec3 uv = uvec3(1u, 2u, 3u);
+
+                    uint unsignedFromFloat = asuint(f);
+                    int signedFromFloat = asint(f);
+                    float floatFromInt = asfloat(i);
+                    float floatFromUint = asfloat(u);
+                    uint unsignedFromInt = asuint(i);
+                    int signedFromUint = asint(u);
+                    uvec3 unsignedVector = asuint(v);
+                    ivec3 signedVector = asint(v);
+                    vec3 floatFromSignedVector = asfloat(iv);
+                    vec3 floatFromUnsignedVector = asfloat(uv);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "unsigned int unsignedFromFloat = __float_as_uint(f);" in hip_code
+        assert "int signedFromFloat = __float_as_int(f);" in hip_code
+        assert "float floatFromInt = __int_as_float(i);" in hip_code
+        assert "float floatFromUint = __uint_as_float(u);" in hip_code
+        assert "unsigned int unsignedFromInt = static_cast<unsigned int>(i);" in (
+            hip_code
+        )
+        assert "int signedFromUint = static_cast<int>(u);" in hip_code
+        assert "uint3 unsignedVector = cgl_float3_to_uint3_bitcast(v);" in hip_code
+        assert "int3 signedVector = cgl_float3_to_int3_bitcast(v);" in hip_code
+        assert (
+            "float3 floatFromSignedVector = cgl_int3_to_float3_bitcast(iv);" in hip_code
+        )
+        assert (
+            "float3 floatFromUnsignedVector = cgl_uint3_to_float3_bitcast(uv);"
+            in hip_code
+        )
+        assert "asuint(" not in hip_code
+        assert "asint(" not in hip_code
+        assert "asfloat(" not in hip_code
+
+    def test_user_defined_bitcast_function_names_are_preserved(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                float floatBitsToInt(vec3 value) {
+                    return value.x;
+                }
+
+                float asfloat(float value) {
+                    return value + 1.0;
+                }
+
+                void main() {
+                    vec3 value = vec3(1.0, 2.0, 3.0);
+                    let adjusted = floatBitsToInt(value);
+                    let nativeName = asfloat(1.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__device__ float floatBitsToInt(float3 value)" in hip_code
+        assert "__device__ float asfloat(float value)" in hip_code
+        assert "float adjusted = floatBitsToInt(value);" in hip_code
+        assert "float nativeName = asfloat(1.0);" in hip_code
+        assert "cgl_float3_to_int3_bitcast(value)" not in hip_code
+        assert "__float_as_int(value)" not in hip_code
+        assert "float nativeName = 1.0;" not in hip_code
+
     def test_user_defined_rsqrt_function_is_not_lowered_to_hip_builtin(self):
         source_code = """
         shader TestShader {

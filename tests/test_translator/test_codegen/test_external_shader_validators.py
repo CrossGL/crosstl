@@ -5,6 +5,9 @@ import subprocess
 import pytest
 
 import crosstl.translator
+from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
@@ -1529,8 +1532,94 @@ void main() {
 """
 
 
+URP_TOON_LIGHTING_SOURCE_URL = (
+    "https://github.com/TinyPlay/URPShadersCollection/blob/"
+    "6e663fffccd00a4cce837644a29f6e8f82a6e372/"
+    "Shaders/_Includes/ToonLighting.hlsl"
+)
+
+
+URP_TOON_LIGHTING_HLSL_INCLUDE = """
+#ifndef CUSTOM_LIGHTING_INCLUDED
+#define CUSTOM_LIGHTING_INCLUDED
+
+void CalculateMainLight_float(
+    float3 WorldPos,
+    out float3 Direction,
+    out float3 Color,
+    out half DistanceAtten,
+    out half ShadowAtten
+)
+{
+    #ifdef SHADERGRAPH_PREVIEW
+        Direction = float3(0.5,0.5,0);
+        Color = 1;
+        DistanceAtten = 1;
+        ShadowAtten = 1;
+    #else
+        #if SHADOWS_SCREEN
+            half4 clipPos = TransformWorldToHClip(WorldPos);
+            half4 shadowCoord = ComputeScreenPos(clipPos);
+        #else
+            half4 shadowCoord = TransformWorldToShadowCoord(WorldPos);
+        #endif
+
+        Light mainLight = GetMainLight(0);
+        Direction = mainLight.direction;
+        Color = mainLight.color;
+        DistanceAtten = mainLight.distanceAttenuation;
+        ShadowAtten = mainLight.shadowAttenuation;
+    #endif
+}
+
+#endif
+"""
+
+
+PMFX_SHADER_SOURCE_URL = (
+    "https://github.com/polymonster/pmfx-shader/blob/"
+    "79df2ad107dc35dd02f6f92ab4b38fcc05ba5fbf/"
+    "examples/v2/v2_examples.hlsl"
+)
+
+
+PMFX_PERMUTATION_CONDITIONAL_HLSL = """
+struct vs_output {
+    float4 position : SV_POSITION;
+};
+
+struct vs_input {
+    float4 position : POSITION;
+};
+
+vs_output vs_output_default() {
+    vs_output output;
+    output.position = float4(0, 0, 0, 1);
+    return output;
+}
+
+vs_output vs_main_permutations(vs_input input) {
+    if:(SKINNED) {
+        return vs_output_default();
+    }
+    else if:(INSTANCED) {
+        return vs_output_default();
+    }
+    return vs_output_default();
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
+
+
+def _hlsl_to_crossgl(source):
+    tokens = HLSLLexer(source).tokenize()
+    ast = HLSLParser(tokens).parse()
+    crossgl = HLSLToCrossGLConverter().generate(ast)
+    assert crosstl.translator.parse(crossgl) is not None
+    return crossgl
 
 
 def _mixed_glsl_ast(source, shader_type):
@@ -1686,6 +1775,30 @@ def _run_validator_or_skip_unsupported_extension(
             f"{extension} qualifier path is not supported by this validator build"
         )
     assert result.returncode == 0, diagnostics
+
+
+def test_real_world_urp_hlsl_include_imports_to_parseable_crossgl():
+    crossgl = _hlsl_to_crossgl(URP_TOON_LIGHTING_HLSL_INCLUDE)
+
+    assert URP_TOON_LIGHTING_SOURCE_URL.startswith("https://github.com/")
+    assert (
+        "void CalculateMainLight_float(vec3 WorldPos, out vec3 Direction, "
+        "out vec3 Color, out float16 DistanceAtten, out float16 ShadowAtten)"
+    ) in crossgl
+    assert "f16vec4 shadowCoord = TransformWorldToShadowCoord(WorldPos);" in crossgl
+    assert "Light mainLight = GetMainLight(0);" in crossgl
+    assert "Direction = mainLight.direction;" in crossgl
+    assert "Color = mainLight.color;" in crossgl
+
+
+def test_real_world_pmfx_permutation_conditionals_import_to_parseable_crossgl():
+    assert PMFX_SHADER_SOURCE_URL.startswith("https://github.com/")
+
+    crossgl = _hlsl_to_crossgl(PMFX_PERMUTATION_CONDITIONAL_HLSL)
+
+    assert "if (SKINNED)" in crossgl
+    assert "else if (INSTANCED)" in crossgl
+    assert "return vs_output_default();" in crossgl
 
 
 def test_generated_hlsl_fragment_compiles_with_dxc(tmp_path):

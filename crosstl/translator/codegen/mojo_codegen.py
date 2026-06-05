@@ -712,6 +712,13 @@ MOJO_REINTERPRET_BUILTINS = {
     "asuint": "UInt32",
 }
 
+MOJO_REINTERPRET_ALIAS_MAP = {
+    "floatBitsToInt": "asint",
+    "floatBitsToUint": "asuint",
+    "intBitsToFloat": "asfloat",
+    "uintBitsToFloat": "asfloat",
+}
+
 MOJO_REINTERPRET_TARGET_TYPES = {
     "asfloat": ("float", "vec"),
     "asint": ("int", "ivec"),
@@ -8319,8 +8326,9 @@ class MojoCodeGen:
                 return self.generate_buffer_consume_call(expr.args)
             if func_name == "buffer_dimensions":
                 return self.generate_buffer_dimensions_call(expr.args)
-            if func_name in MOJO_REINTERPRET_BUILTINS:
-                return self.generate_reinterpret_call(func_name, expr.args)
+            reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
+            if reinterpret_name is not None:
+                return self.generate_reinterpret_call(reinterpret_name, expr.args)
             if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
                 helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
                 return self.generate_resource_builtin_call(
@@ -10316,11 +10324,15 @@ class MojoCodeGen:
             return None
 
         func_name = self.function_call_name(expr)
-        if func_name not in MOJO_REINTERPRET_BUILTINS:
+        reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
+        if reinterpret_name is None:
             return None
 
         source_type = self.expression_result_type(expr.args[0]) if expr.args else None
-        return func_name, self.reinterpret_return_type_name(func_name, source_type)
+        return (
+            reinterpret_name,
+            self.reinterpret_return_type_name(reinterpret_name, source_type),
+        )
 
     def image_result_expression_info_for_resource(self, resource_expr, helper_name):
         resource_type = self.map_type(self.expression_result_type(resource_expr))
@@ -11009,6 +11021,13 @@ class MojoCodeGen:
         self.required_reinterpret_helpers.add((func_name, arg_type, return_type))
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{func_name}({generated_args})"
+
+    def mojo_reinterpret_builtin_name(self, func_name):
+        if not func_name or self.is_user_defined_function(func_name):
+            return None
+        if func_name in MOJO_REINTERPRET_BUILTINS:
+            return func_name
+        return MOJO_REINTERPRET_ALIAS_MAP.get(func_name)
 
     def reinterpret_argument_type(self, source_type):
         if source_type is None:
@@ -13759,11 +13778,12 @@ class MojoCodeGen:
                     return info[1]
             if func_name in {"buffer_store", "buffer_append", "buffer_dimensions"}:
                 return "void"
-            if func_name in MOJO_REINTERPRET_BUILTINS:
+            reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
+            if reinterpret_name is not None:
                 source_type = (
                     self.expression_result_type(expr.args[0]) if expr.args else None
                 )
-                return self.reinterpret_return_type_name(func_name, source_type)
+                return self.reinterpret_return_type_name(reinterpret_name, source_type)
             if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
                 _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
                 if return_kind == "float":

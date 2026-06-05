@@ -11,6 +11,7 @@ from crosstl.translator.ast import (
     EnumNode,
     ExecutionModel,
     ExpressionStatementNode,
+    FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     MeshOpNode,
@@ -3138,6 +3139,72 @@ class TestVulkanSPIRVCodeGen:
             rf"Cross %{vector3.id} %{vector3.id}",
             code,
         )
+
+    def test_bitcast_builtins_lower_aliases_and_register_result_types(self):
+        generator = VulkanSPIRVCodeGen()
+        float_type = generator.register_primitive_type("float")
+        int_type = generator.register_primitive_type("int")
+        uint_type = generator.register_primitive_type("uint")
+        uvec2_type = generator.register_vector_type(uint_type, 2)
+
+        float_value = generator.register_constant(1.0, float_type)
+        int_value = generator.register_constant(1, int_type)
+        uint_value = generator.register_constant(1, uint_type)
+        uvec2_value = generator.composite_construct(
+            uvec2_type, [uint_value, uint_value]
+        )
+
+        cases = [
+            ("asfloat", uint_value, float_type),
+            ("asint", float_value, int_type),
+            ("asuint", float_value, uint_type),
+            ("floatBitsToInt", float_value, int_type),
+            ("floatBitsToUint", float_value, uint_type),
+            ("intBitsToFloat", int_value, float_type),
+            ("uintBitsToFloat", uint_value, float_type),
+            (
+                "asfloat",
+                uvec2_value,
+                generator.register_vector_type(float_type, 2),
+            ),
+        ]
+
+        for function_name, operand, result_type in cases:
+            result = generator.call_builtin_function(function_name, [operand])
+
+            assert result is not None
+            assert generator.value_types[result.id] == result_type
+            assert (
+                f"%{result.id} = OpBitcast %{result_type.id} %{operand.id}"
+                in generator.code_lines
+            )
+
+    def test_bitcast_builtin_result_type_inference_preserves_vectors_and_shadowing(
+        self,
+    ):
+        generator = VulkanSPIRVCodeGen()
+        float_type = generator.register_primitive_type("float")
+        uint_type = generator.register_primitive_type("uint")
+        uvec2_type = generator.register_vector_type(uint_type, 2)
+        vec2_type = generator.register_vector_type(float_type, 2)
+        packed_var = generator.create_variable(uvec2_type, "Function", "packed")
+        generator.local_variables["packed"] = packed_var
+
+        inferred = generator.infer_expression_result_type(
+            FunctionCallNode("asfloat", [IdentifierNode("packed")])
+        )
+
+        assert inferred == vec2_type
+
+        user_function = SpirvId(999, SpirvType("function"), "asuint")
+        generator.functions["asuint"] = user_function
+        generator.function_signatures["asuint"] = (float_type, [float_type])
+
+        shadowed = generator.infer_expression_result_type(
+            FunctionCallNode("asuint", [IdentifierNode("packed")])
+        )
+
+        assert shadowed == float_type
 
     def test_vector_saturate_builtins_lower_to_vector_fclamp(self):
         source_code = """

@@ -929,9 +929,13 @@ class MetalCodeGen:
         self.semantic_map = {
             # Vertex inputs
             "gl_VertexID": "vertex_id",
+            "SV_VertexID": "vertex_id",
             "gl_InstanceID": "instance_id",
+            "SV_InstanceID": "instance_id",
             "gl_IsFrontFace": "is_front_facing",
+            "SV_IsFrontFace": "is_front_facing",
             "gl_PrimitiveID": "primitive_id",
+            "SV_PrimitiveID": "primitive_id",
             "POSITION": "attribute(0)",
             "NORMAL": "attribute(1)",
             "TANGENT": "attribute(2)",
@@ -993,9 +997,13 @@ class MetalCodeGen:
             "SV_Coverage": "sample_mask",
             # Compute shader specific
             "gl_GlobalInvocationID": "thread_position_in_grid",
+            "SV_DispatchThreadID": "thread_position_in_grid",
             "gl_LocalInvocationID": "thread_position_in_threadgroup",
+            "SV_GroupThreadID": "thread_position_in_threadgroup",
             "gl_WorkGroupID": "threadgroup_position_in_grid",
+            "SV_GroupID": "threadgroup_position_in_grid",
             "gl_LocalInvocationIndex": "thread_index_in_threadgroup",
+            "SV_GroupIndex": "thread_index_in_threadgroup",
             "gl_WorkGroupSize": "threads_per_threadgroup",
             "gl_NumWorkGroups": "threadgroups_per_grid",
             # Ray tracing / payload semantics

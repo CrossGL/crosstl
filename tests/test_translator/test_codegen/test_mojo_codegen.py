@@ -15419,6 +15419,65 @@ def test_reinterpret_helpers_use_mojo_bitcast_for_scalar_and_simd_values():
     assert ".cast[DType.float32]()" not in generated_code
 
 
+def test_glsl_bitcast_aliases_lower_to_mojo_reinterpret_helpers():
+    code = """
+    ivec2 signedBits(vec2 value) {
+        return floatBitsToInt(value);
+    }
+
+    uvec2 unsignedBits(vec2 value) {
+        return floatBitsToUint(value);
+    }
+
+    vec2 fromSigned(ivec2 bits) {
+        return intBitsToFloat(bits);
+    }
+
+    vec2 fromUnsigned(uvec2 bits) {
+        return uintBitsToFloat(bits);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "from memory import bitcast" in generated_code
+    assert "return asint(value)" in generated_code
+    assert "return asuint(value)" in generated_code
+    assert "return asfloat(bits)" in generated_code
+    assert "fn asint(value: SIMD[DType.float32, 2]) -> SIMD[DType.int32, 2]:" in (
+        generated_code
+    )
+    assert "fn asuint(value: SIMD[DType.float32, 2]) -> SIMD[DType.uint32, 2]:" in (
+        generated_code
+    )
+    assert "fn asfloat(value: SIMD[DType.int32, 2]) -> SIMD[DType.float32, 2]:" in (
+        generated_code
+    )
+    assert "fn asfloat(value: SIMD[DType.uint32, 2]) -> SIMD[DType.float32, 2]:" in (
+        generated_code
+    )
+    assert "floatBitsToInt(" not in generated_code
+    assert "uintBitsToFloat(" not in generated_code
+
+
+def test_user_defined_glsl_bitcast_alias_names_are_not_lowered_for_mojo():
+    code = """
+    float floatBitsToInt(vec2 value) {
+        return value.x;
+    }
+
+    float adjusted(vec2 value) {
+        return floatBitsToInt(value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn floatBitsToInt(value: SIMD[DType.float32, 2]) -> Float32:" in (
+        generated_code
+    )
+    assert "return floatBitsToInt(value)" in generated_code
+    assert "return asint(value)" not in generated_code
+
+
 def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
     code = """
     ByteAddressBuffer rawBytes;

@@ -2109,11 +2109,17 @@ class HLSLParser:
             )
         return self.parse_expression()
 
-    def parse_if_statement(self):
-        self.eat("IF")
+    def parse_hlsl_condition_header(self, keyword):
+        self.eat(keyword)
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
         self.eat("LPAREN")
         condition = self.parse_condition_expression()
         self.eat("RPAREN")
+        return condition
+
+    def parse_if_statement(self):
+        condition = self.parse_hlsl_condition_header("IF")
 
         if_body = self.parse_statement_or_block()
 
@@ -2133,10 +2139,7 @@ class HLSLParser:
         return IfNode(condition, if_body, else_body)
 
     def parse_else_if_statement(self):
-        self.eat("ELSE_IF")
-        self.eat("LPAREN")
-        condition = self.parse_condition_expression()
-        self.eat("RPAREN")
+        condition = self.parse_hlsl_condition_header("ELSE_IF")
         if_body = self.parse_statement_or_block()
 
         else_body = None

@@ -8528,6 +8528,10 @@ class RustCodeGen:
                 if bool_mix is not None:
                     return bool_mix
 
+            bitcast_alias = self.generate_bitcast_alias_call(func_name, args)
+            if bitcast_alias is not None:
+                return bitcast_alias
+
             original_func_name = func_name
             func_name = self.mapped_function_name(func_name, len(args), args)
             cuda_shuffle_call = self.generate_cuda_shuffle_intrinsic_call(
@@ -8726,6 +8730,73 @@ class RustCodeGen:
         self.required_generic_math_traits.add("CglSqrt")
         return f"CglSqrt::cgl_sqrt({self.generate_expression(args[0])})"
 
+    def generate_bitcast_alias_call(self, func_name, args):
+        if func_name not in {"asfloat", "asint", "asuint"} or len(args or []) != 1:
+            return None
+
+        arg = args[0]
+        arg_type = self.expression_result_type(arg)
+        target_component_type = {
+            "asfloat": "float",
+            "asint": "int",
+            "asuint": "uint",
+        }[func_name]
+        target_type = self.bitcast_value_type(arg_type, target_component_type)
+        if target_type is None:
+            return None
+        source_component_type = self.bitcast_argument_component_type(arg_type)
+        if source_component_type not in {"float", "int", "uint"}:
+            return None
+
+        helper_name = self.bitcast_alias_helper_name(func_name, arg_type)
+        if helper_name is not None:
+            callee = self.rust_imported_math_callable_name(helper_name)
+            return f"{self.rust_callable_name(callee)}({self.generate_expression(arg)})"
+
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            temp_bindings = []
+            lanes = self.vector_argument_lane_expressions(
+                arg,
+                vector_info,
+                temp_bindings,
+                target_component_type,
+            )
+            return self.generate_constructor_call(
+                self.map_type(target_type),
+                lanes[: vector_info["size"]],
+                temp_bindings,
+            )
+
+        arg_expr = self.generate_expression(arg)
+        return self.normalize_scalar_assignment_value(
+            arg,
+            arg_expr,
+            arg_type,
+            target_component_type,
+        )
+
+    def bitcast_alias_helper_name(self, func_name, arg_type):
+        source_component_type = self.bitcast_argument_component_type(arg_type)
+        if func_name == "asfloat":
+            return {
+                "int": "int_bits_to_float",
+                "uint": "uint_bits_to_float",
+            }.get(source_component_type)
+        if func_name == "asint" and source_component_type == "float":
+            return "float_bits_to_int"
+        if func_name == "asuint" and source_component_type == "float":
+            return "float_bits_to_uint"
+        return None
+
+    def bitcast_argument_component_type(self, type_name):
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return vector_info["component_type"]
+
+        scalar_type = self.normalize_scalar_type(type_name)
+        return self.scalar_type_for_type_constructor(scalar_type)
+
     def rust_imported_math_callable_name(self, func_name):
         helper_module = self.rust_imported_helper_module(func_name)
         if (
@@ -8782,6 +8853,8 @@ class RustCodeGen:
             "find_lsb",
             "find_msb",
             "floor",
+            "float_bits_to_int",
+            "float_bits_to_uint",
             "fract",
             "fwidth",
             "fwidth_coarse",
@@ -8789,6 +8862,7 @@ class RustCodeGen:
             "greater_than",
             "greater_than_equal",
             "inverse",
+            "int_bits_to_float",
             "isfinite",
             "isinf",
             "isnan",
@@ -8829,6 +8903,7 @@ class RustCodeGen:
             "tanh",
             "transpose",
             "trunc",
+            "uint_bits_to_float",
             "unpack_double_2x32",
             "unpack_half_2x16",
             "unpack_snorm_2x16",
@@ -11695,6 +11770,20 @@ class RustCodeGen:
 
         mapped_name = self.mapped_function_name(func_name, len(arguments), arguments)
         arg_types = [self.expression_result_type(arg) for arg in arguments]
+
+        bitcast_alias_component_type = {
+            "asfloat": "float",
+            "asint": "int",
+            "asuint": "uint",
+        }.get(func_name)
+        if bitcast_alias_component_type is not None and arg_types:
+            source_component_type = self.bitcast_argument_component_type(arg_types[0])
+            if source_component_type not in {"float", "int", "uint"}:
+                return None
+            return self.bitcast_value_type(
+                arg_types[0],
+                bitcast_alias_component_type,
+            )
 
         wave_type = self.wave_helper_result_type(mapped_name, arg_types)
         if wave_type is not None:

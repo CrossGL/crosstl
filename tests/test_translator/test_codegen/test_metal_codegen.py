@@ -12517,6 +12517,36 @@ def test_compute_builtin_semantics_roundtrip():
         assert expected in generated
 
 
+def test_compute_hlsl_system_value_semantic_aliases_lower_to_metal_builtins():
+    code = """
+    shader HlslComputeAliasesForMetal {
+        compute {
+            void main(uvec3 dispatchID @ SV_DispatchThreadID,
+                      uvec3 groupID @ SV_GroupID,
+                      uvec3 groupThreadID @ SV_GroupThreadID,
+                      uint groupIndex @ SV_GroupIndex) { }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate_stage(ast, "compute")
+
+    for expected in [
+        "uint3 dispatchID [[thread_position_in_grid]]",
+        "uint3 groupID [[threadgroup_position_in_grid]]",
+        "uint3 groupThreadID [[thread_position_in_threadgroup]]",
+        "uint groupIndex [[thread_index_in_threadgroup]]",
+    ]:
+        assert expected in generated
+    for hlsl_semantic in [
+        "SV_DispatchThreadID",
+        "SV_GroupID",
+        "SV_GroupThreadID",
+        "SV_GroupIndex",
+    ]:
+        assert hlsl_semantic not in generated
+
+
 @pytest.mark.parametrize(
     ("param_type", "semantic", "metal_semantic", "expected_type"),
     [
@@ -12632,6 +12662,34 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
     assert "float2 point [[point_coord]]" in fragment_code
     assert "uint sampleID [[sample_id]]" in fragment_code
     assert "uint sampleMask [[sample_mask]]" in fragment_code
+
+
+def test_graphics_hlsl_vertex_system_value_aliases_lower_to_metal_builtins():
+    code = """
+    shader HlslVertexAliasesForMetal {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+        };
+
+        vertex {
+            VSOutput main(
+                uint vertexID @ SV_VertexID,
+                uint instanceID @ SV_InstanceID
+            ) {
+                VSOutput output;
+                output.position = vec4(float(vertexID + instanceID));
+                return output;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate_stage(ast, "vertex")
+
+    assert "uint vertexID [[vertex_id]]" in generated
+    assert "uint instanceID [[instance_id]]" in generated
+    assert "SV_VertexID" not in generated
+    assert "SV_InstanceID" not in generated
 
 
 def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
