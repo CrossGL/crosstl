@@ -3886,19 +3886,18 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"artifacts[{index}] duplicates artifacts[{previous_index}] "
                         "identity"
                     )
-            require_artifact_hashes = has_summary and status == "translated"
             reasons.extend(
                 _source_hash_contract_reasons(
                     index,
                     artifact,
-                    required=require_artifact_hashes,
+                    required=has_summary,
                 )
             )
             reasons.extend(
                 _generated_hash_contract_reasons(
                     index,
                     artifact,
-                    required=require_artifact_hashes,
+                    required=has_summary and status == "translated",
                 )
             )
             reasons.extend(

@@ -193,8 +193,9 @@ Project reports are JSON documents with:
   optional variant name, target/variant-scoped output path with the target
   backend suffix, status, source hash, generated artifact hash, pipeline
   provenance, and file-granularity source-map anchors for successful
-  translations. Full reports require artifact source paths to match declared
-  translation units and artifact source backend names to match those units.
+  translations. Full reports require every artifact to carry a source hash,
+  artifact source paths to match declared translation units, and artifact
+  source backend names to match those units.
   Successful artifact records in full reports must include file-level
   source-map anchors.
   Artifact provenance records the
@@ -219,13 +220,13 @@ Project reports are JSON documents with:
   checks, source and
   generated hash checks, duplicate artifact identity checks, per-artifact
   source/generated hash status fields, aggregate validation artifact and
-  hash-status summary counts, failed artifact error metadata checks, required
-  artifact provenance and provenance value checks, failed artifact generated
-  metadata rejection, required translated artifact source maps, source-map
-  record shape, non-empty mapping list, single file-level mapping, span
-  consistency, and anchor consistency checks, external corpus record, per-entry
-  artifact count, and summary checks, summary consistency checks, migration
-  action shape and target declaration checks,
+  hash-status summary counts, full-report source hash checks, failed artifact
+  error metadata checks, required artifact provenance and provenance value
+  checks, failed artifact generated metadata rejection, required translated
+  artifact source maps, source-map record shape, non-empty mapping list, single
+  file-level mapping, span consistency, and anchor consistency checks, external
+  corpus record, per-entry artifact count, and summary checks, summary
+  consistency checks, migration action shape and target declaration checks,
   preserved diagnostic shape, repository-relative file path, span consistency,
   and target declaration checks, validation toolchain status consistency
   checks, validation artifact and toolchain run record shape and duplicate

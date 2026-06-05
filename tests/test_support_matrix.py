@@ -170,6 +170,9 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         assert "current translated artifacts without source-map records" in (
             backend_support["notes"]
         )
+        assert "full report artifacts without source hashes" in (
+            backend_support["notes"]
+        )
         assert "failed artifacts missing error metadata or generated metadata" in (
             backend_support["notes"]
         )
@@ -182,6 +185,11 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_failed_artifacts_with_"
             "generated_metadata"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_failed_artifacts_without_"
+            "source_hash"
         ) in backend_support["evidence"]
 
 
@@ -224,6 +232,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "target/variant directory containment" in backend_support["notes"]
         assert "artifact target suffix consistency" in backend_support["notes"]
+        assert "required full-report artifact source hashes" in (
+            backend_support["notes"]
+        )
         assert "failed artifact error metadata" in backend_support["notes"]
         assert "failed artifact generated metadata rejection" in (
             backend_support["notes"]
@@ -257,6 +268,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_failed_artifacts_with_"
             "generated_metadata"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_failed_artifacts_without_"
+            "source_hash"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

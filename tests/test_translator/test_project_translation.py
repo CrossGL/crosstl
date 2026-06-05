@@ -3362,6 +3362,37 @@ def test_validate_project_report_rejects_failed_artifacts_without_error(tmp_path
     assert "artifacts[0].error must be a string" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_failed_artifacts_without_source_hash(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    artifact["status"] = "failed"
+    artifact["error"] = "translation failed"
+    artifact.pop("sourceHash")
+    artifact.pop("generatedHash")
+    artifact.pop("sourceMap")
+    payload["summary"]["translatedCount"] = 0
+    payload["summary"]["failedCount"] = 1
+    payload["summary"]["artifactsByTarget"]["cgl"]["translatedCount"] = 0
+    payload["summary"]["artifactsByTarget"]["cgl"]["failedCount"] = 1
+    payload["summary"]["sourceMapCount"] = 0
+    report_path = repo / "out" / "failed-artifact-missing-source-hash-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].sourceHash must be an object" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_failed_artifacts_with_generated_metadata(
     tmp_path,
 ):
