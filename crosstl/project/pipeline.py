@@ -2251,6 +2251,7 @@ def inspect_project_report(
         "success": bool(validation_report.get("success")),
         "report": {"available": False, "valid": False},
         "sourceMaps": {"available": False},
+        "artifactMatrix": {"available": False},
         "diagnosticCount": len(diagnostics),
         "truncatedDiagnosticCount": max(0, len(diagnostics) - diagnostic_limit),
         "failedArtifactCount": 0,
@@ -2318,6 +2319,10 @@ def inspect_project_report(
         "summary": dict(summary) if isinstance(summary, Mapping) else {},
     }
     payload["sourceMaps"] = _inspection_source_map_summary(summary)
+    payload["artifactMatrix"] = _inspection_artifact_matrix_summary(
+        report.get("artifactMatrix"),
+        report.get("artifacts"),
+    )
 
     artifacts = report.get("artifacts", [])
     failed_artifacts_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -2396,6 +2401,53 @@ def inspect_project_report(
             ),
         }
     return payload
+
+
+def _inspection_artifact_matrix_summary(
+    artifact_matrix: Any, artifacts: Any
+) -> dict[str, Any]:
+    if not isinstance(artifact_matrix, Mapping):
+        return {"available": False}
+
+    fields = {
+        field_name: artifact_matrix.get(field_name)
+        for field_name in (
+            "unitCount",
+            "targetCount",
+            "variantCount",
+            "expectedArtifactCount",
+        )
+    }
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in fields.values()
+    ):
+        return {"available": False}
+
+    variant_mode = artifact_matrix.get("variantMode")
+    if variant_mode not in {"none", "named"}:
+        return {"available": False}
+
+    artifact_records = _record_sequence(artifacts)
+    emitted_count = len(artifact_records)
+    translated_count = sum(
+        1 for artifact in artifact_records if artifact.get("status") == "translated"
+    )
+    failed_count = sum(
+        1 for artifact in artifact_records if artifact.get("status") == "failed"
+    )
+    expected_count = fields["expectedArtifactCount"]
+    return {
+        "available": True,
+        **fields,
+        "variantMode": variant_mode,
+        "emittedArtifactCount": emitted_count,
+        "translatedCount": translated_count,
+        "failedCount": failed_count,
+        "missingArtifactCount": max(0, expected_count - emitted_count),
+        "extraArtifactCount": max(0, emitted_count - expected_count),
+        "complete": emitted_count == expected_count,
+    }
 
 
 def _inspection_project_summary(project: Any) -> dict[str, Any]:

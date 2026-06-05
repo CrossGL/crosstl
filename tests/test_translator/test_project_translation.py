@@ -6873,6 +6873,20 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "sourceMapsByTarget": {"cgl": 1},
         "sourceMapsBySourceBackend": {"cgl": 1},
     }
+    assert payload["artifactMatrix"] == {
+        "available": True,
+        "unitCount": 1,
+        "targetCount": 1,
+        "variantCount": 0,
+        "expectedArtifactCount": 1,
+        "variantMode": "none",
+        "emittedArtifactCount": 1,
+        "translatedCount": 1,
+        "failedCount": 0,
+        "missingArtifactCount": 0,
+        "extraArtifactCount": 0,
+        "complete": True,
+    }
     assert payload["validation"]["success"] is True
     assert payload["validation"]["toolchainStatusCounts"] == {
         "available": 0,
@@ -7014,6 +7028,9 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "sourceMapsByTarget": {"cgl": 1},
         "sourceMapsBySourceBackend": {"cgl": 1},
     }
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
+    assert payload["artifactMatrix"]["emittedArtifactCount"] == 1
+    assert payload["artifactMatrix"]["complete"] is True
 
 
 def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):
@@ -7267,6 +7284,37 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert "Source maps by granularity: file=1" in result.stdout
     assert "Source maps by target: cgl=1" in result.stdout
     assert "Source maps by source backend: cgl=1" in result.stdout
+
+
+def test_project_cli_inspect_report_text_includes_artifact_matrix(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert (
+        "Artifact matrix: 1 emitted of 1 expected "
+        "(1 translated, 0 failed, 0 missing, 0 extra; variants=none)"
+    ) in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_report_rollups(tmp_path):

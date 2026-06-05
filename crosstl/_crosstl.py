@@ -633,6 +633,43 @@ def _format_source_map_counts(summary):
     )
 
 
+def _format_artifact_matrix_summary(artifact_matrix):
+    if not isinstance(artifact_matrix, Mapping):
+        return None
+    if not artifact_matrix.get("available"):
+        return None
+
+    expected_count = artifact_matrix.get("expectedArtifactCount")
+    emitted_count = artifact_matrix.get("emittedArtifactCount")
+    translated_count = artifact_matrix.get("translatedCount")
+    failed_count = artifact_matrix.get("failedCount")
+    missing_count = artifact_matrix.get("missingArtifactCount")
+    extra_count = artifact_matrix.get("extraArtifactCount")
+    variant_mode = artifact_matrix.get("variantMode")
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in (
+            expected_count,
+            emitted_count,
+            translated_count,
+            failed_count,
+            missing_count,
+            extra_count,
+        )
+    ):
+        return None
+    if variant_mode not in {"none", "named"}:
+        return None
+
+    return (
+        "Artifact matrix: "
+        f"{emitted_count} emitted of {expected_count} expected "
+        f"({translated_count} translated, {failed_count} failed, "
+        f"{missing_count} missing, {extra_count} extra; "
+        f"variants={variant_mode})"
+    )
+
+
 def _format_external_corpus_accounting(summary):
     if not isinstance(summary, Mapping):
         return None
@@ -745,6 +782,9 @@ def _format_project_report_inspection(payload):
     source_maps = _format_source_map_counts(summary)
     if source_maps:
         lines.append(source_maps)
+    artifact_matrix = _format_artifact_matrix_summary(payload.get("artifactMatrix"))
+    if artifact_matrix:
+        lines.append(artifact_matrix)
     for line in (
         _format_count_rollup(
             "Source maps by granularity",

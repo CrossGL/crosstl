@@ -122,11 +122,12 @@ project counts, project configuration path and counts, failed artifacts,
 diagnostic code and missing-capability rollups, validation diagnostic-code,
 missing-capability, and artifact target rollups, report source-backend,
 file-extension, and artifact target rollups, source-map count, granularity,
-target, and source-backend rollups, include-directory status counts,
-diagnostics, configurable diagnostic and failed-artifact truncation counts,
-external corpus rollups, and migration actions. ``--format sarif`` emits the
-inspection diagnostics as SARIF for code-scanning workflows. Inspection exits
-nonzero when validation finds report errors.
+target, and source-backend rollups, artifact matrix completion counts,
+include-directory status counts, diagnostics, configurable diagnostic and
+failed-artifact truncation counts, external corpus rollups, and migration
+actions. ``--format sarif`` emits the inspection diagnostics as SARIF for
+code-scanning workflows. Inspection exits nonzero when validation finds report
+errors.
 
 Configuration
 -------------
@@ -262,6 +263,9 @@ Project reports are JSON documents with:
 - ``artifactMatrix``: translation-report metadata with the expected artifact
   count for the unit, target, and variant matrix. Scan-only reports omit this
   object because they intentionally contain no translated or failed artifacts.
+  Report inspection summarizes the matrix as emitted, translated, failed,
+  missing, extra, and completion counts so incomplete batch outputs are visible
+  without opening every artifact record.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, valid/invalid manifest-entry counts, and translated/failed artifact
