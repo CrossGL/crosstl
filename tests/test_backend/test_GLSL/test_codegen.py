@@ -647,6 +647,59 @@ def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
     assert "cbuffer Uniforms" not in crossgl
 
 
+def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/spv.glsl.register.autoassign.frag, which samples separate texture and
+    # sampler resources through sampler1D(g_tTex1, g_sSamp1).
+    code = textwrap.dedent("""
+        #version 450
+
+        uniform layout(binding = 0) sampler g_sSamp1;
+        uniform layout(binding = 1) texture1D g_tTex1;
+        out vec4 FragColor;
+
+        void main()
+        {
+            FragColor = texture(sampler1D(g_tTex1, g_sSamp1), 0.1);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "sampler g_sSamp1 @binding(0);" in crossgl
+    assert "texture1D g_tTex1 @binding(1);" in crossgl
+    assert "texture(g_tTex1, g_sSamp1, 0.1)" in crossgl
+    assert "sampler1D(g_tTex1, g_sSamp1)" not in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "texture(sampler1D(g_tTex1, g_sSamp1), 0.1)" in glsl
+
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/spv.sampledImageBlock.frag, which fetches from sampler2D(tex0, samp0).
+    fetch_code = textwrap.dedent("""
+        #version 450
+
+        layout(binding = 0) uniform texture2D tex0;
+        layout(binding = 1) uniform sampler samp0;
+        layout(location = 0) out vec4 FragColor;
+
+        void main()
+        {
+            FragColor = texelFetch(sampler2D(tex0, samp0), ivec2(0), 0);
+        }
+    """).strip()
+
+    fetch_crossgl = assert_roundtrip(fetch_code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "texture2D tex0 @binding(0);" in fetch_crossgl
+    assert "sampler samp0 @binding(1);" in fetch_crossgl
+    assert "texelFetch(tex0, ivec2(0), 0)" in fetch_crossgl
+    assert "texelFetch(tex0, samp0" not in fetch_crossgl
+
+    fetch_glsl = GLSLCodeGen().generate(parse_crossgl(fetch_crossgl))
+    assert "texelFetch(tex0, ivec2(0), 0)" in fetch_glsl
+
+
 def test_codegen_vulkan_descriptor_sets_preserved_on_resources():
     # Reduced from Khronos Vulkan GLSL examples that use descriptor
     # layout(set = <set-index>, binding = <binding-index>) on resources.

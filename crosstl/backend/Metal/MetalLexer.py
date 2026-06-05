@@ -227,6 +227,7 @@ KEYWORDS = {
     "volatile": "VOLATILE",
     "restrict": "RESTRICT",
     "inline": "INLINE",
+    "__inline__": "INLINE",
     "typedef": "TYPEDEF",
     "enum": "ENUM",
     "class": "CLASS",

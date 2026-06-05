@@ -1397,6 +1397,43 @@ def test_parse_metalpetal_namespace_macro_qualifier_and_unsigned_int():
     parse_ok(code)
 
 
+def test_parse_gnu_inline_unsigned_helpers_from_strelka_random_shader():
+    # Reduced from:
+    # Repo: https://github.com/arhix52/Strelka
+    # Commit: 3eec7fa260e7d598911053f9e0f38054ce1c4f60
+    # Path: src/render/metal/shaders/random.h
+    code = """
+    inline unsigned pcg_hash(unsigned seed) {
+        unsigned state = seed * 747796405u + 2891336453u;
+        return state;
+    }
+
+    template<unsigned int N>
+    static __inline__ unsigned int tea(unsigned int val0, unsigned int val1) {
+        unsigned int v0 = val0;
+        return v0;
+    }
+
+    static __inline__ unsigned int lcg(thread unsigned int &prev) {
+        prev = prev * 1664525u + 1013904223u;
+        return prev & 0x00FFFFFF;
+    }
+    """
+    ast = parse_ok(code)
+    pcg_hash, tea, lcg = ast.functions
+
+    assert pcg_hash.return_type == "uint"
+    assert pcg_hash.name == "pcg_hash"
+    assert pcg_hash.body[0].left.vtype == "uint"
+    assert tea.return_type == "uint"
+    assert tea.name == "tea"
+    assert tea.template_parameters == [("value", "N")]
+    assert tea.params[0].vtype == "uint"
+    assert lcg.return_type == "uint"
+    assert lcg.params[0].vtype == "uint&"
+    assert lcg.params[0].qualifiers == ["thread"]
+
+
 def test_parse_function_table_call_and_icb_methods():
     code = """
     #include <metal_stdlib>

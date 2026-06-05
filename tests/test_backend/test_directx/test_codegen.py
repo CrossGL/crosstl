@@ -1537,6 +1537,31 @@ def test_codegen_block_scope_typedef_from_dxc_linalg_vectors_reparse():
     parse_crossgl(output)
 
 
+def test_codegen_block_scope_class_declarations_from_dxc_spec_reparse():
+    # Source: https://github.com/microsoft/DirectXShaderCompiler
+    # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # Path: tools/clang/test/SemaHLSL/spec.hlsl
+    hlsl = textwrap.dedent("""
+        namespace ns_general {
+          void subobjects() {
+            class Class { uint field; };
+            class SuperClass { Class C; uint field; };
+
+            Class C = { 0 };
+            SuperClass SC = { 0, 0 };
+          }
+        }
+    """)
+
+    output = generate_crossgl(hlsl)
+
+    assert "class Class;" not in output
+    assert "class SuperClass;" not in output
+    assert "Class C = {0};" in output
+    assert "SuperClass SC = {0, 0};" in output
+    parse_crossgl(output)
+
+
 def test_codegen_anonymous_struct_array_typedef_from_dxc_codegen_debug_tests():
     hlsl = textwrap.dedent("""
         typedef struct { int a[4]; float2 b[2]; } type[3];

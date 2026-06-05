@@ -101,6 +101,7 @@ IDENTIFIER_TYPE_QUALIFIERS = MACRO_QUALIFIERS | {"object_data"}
 RAYTRACING_TYPE_QUALIFIERS = {"ray_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
+SIGNED_PREFIX_TYPE_TOKENS = {"CHAR", "SHORT", "INT", "LONG"}
 KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER"}
 TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
 OPERATOR_OVERLOAD_TOKENS = {
@@ -839,10 +840,14 @@ class MetalParser:
                 return False
             tok_type = self.tokens[idx][0]
 
-        if tok_type not in TYPE_TOKENS:
+        if tok_type == "IDENTIFIER" and self.tokens[idx][1] in SIGNED_TYPE_PREFIXES:
+            idx = self.skip_signed_type_prefix_at(idx)
+            type_name = "int"
+        elif tok_type not in TYPE_TOKENS:
             return False
-        type_name = self.tokens[idx][1]
-        idx += 1
+        else:
+            type_name = self.tokens[idx][1]
+            idx += 1
         idx = self.skip_scoped_type_suffix_at(idx)
 
         if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
@@ -1347,12 +1352,14 @@ class MetalParser:
         elif (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] in SIGNED_TYPE_PREFIXES
-            and self.peek(1)[0] in TYPE_TOKENS
         ):
             signed_prefix = self.current_token[1]
             self.eat("IDENTIFIER")
-            base_type = self.current_token[1]
-            self.eat(self.current_token[0])
+            if self.current_token[0] in SIGNED_PREFIX_TYPE_TOKENS:
+                base_type = self.current_token[1]
+                self.eat(self.current_token[0])
+            else:
+                base_type = "int"
             if signed_prefix == "unsigned":
                 base_type = {
                     "char": "uchar",
@@ -1400,6 +1407,18 @@ class MetalParser:
             self.eat("ELLIPSIS")
 
         return base_type + pointer_suffix, qualifiers
+
+    def skip_signed_type_prefix_at(self, idx):
+        if (
+            idx >= len(self.tokens)
+            or self.tokens[idx][0] != "IDENTIFIER"
+            or self.tokens[idx][1] not in SIGNED_TYPE_PREFIXES
+        ):
+            return idx
+        idx += 1
+        if idx < len(self.tokens) and self.tokens[idx][0] in SIGNED_PREFIX_TYPE_TOKENS:
+            idx += 1
+        return idx
 
     def is_type_qualifier_start(self):
         if self.current_token[0] in QUALIFIER_TOKENS:
@@ -2215,11 +2234,7 @@ class MetalParser:
             if token_type == "IDENTIFIER":
                 if self.is_decltype_start_at(idx):
                     return True
-                if (
-                    token_value in SIGNED_TYPE_PREFIXES
-                    and idx + 1 < len(self.tokens)
-                    and self.tokens[idx + 1][0] in TYPE_TOKENS
-                ):
+                if token_value in SIGNED_TYPE_PREFIXES:
                     return True
                 if (
                     token_value

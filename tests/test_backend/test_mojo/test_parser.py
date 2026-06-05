@@ -676,6 +676,31 @@ def test_for_in_range_parsing_preserves_range_call():
     assert loop.iterable.args[2].operand == "1"
 
 
+def test_floor_divide_assignment_parse_from_mojo_gpu_puzzles():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # solutions/p15/p15.mojo axis_sum reduction loop.
+    code = """
+    def axis_sum():
+        var stride = TPB // 2
+        while stride > 0:
+            stride //= 2
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "axis_sum")
+    declaration = function.body[0]
+    loop = function.body[1]
+    update = loop.body[0]
+
+    assert isinstance(declaration.initial_value, BinaryOpNode)
+    assert declaration.initial_value.op == "//"
+    assert isinstance(loop, WhileNode)
+    assert isinstance(update, AssignmentNode)
+    assert update.operator == "//="
+    assert update.left.name == "stride"
+    assert update.right == "2"
+
+
 def test_comptime_for_parsing_preserves_loop_shape():
     code = """
     fn main():

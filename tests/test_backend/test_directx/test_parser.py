@@ -942,6 +942,30 @@ def test_parse_block_scope_typedef_from_dxc_linalg_vectors():
     assert ast.functions[0].body[0].name == "srcF16"
 
 
+def test_parse_block_scope_class_declarations_from_dxc_spec():
+    # Source: https://github.com/microsoft/DirectXShaderCompiler
+    # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # Path: tools/clang/test/SemaHLSL/spec.hlsl
+    ast = parse_code("""
+    namespace ns_general {
+      void subobjects() {
+        class Class { uint field; };
+        class SuperClass { Class C; uint field; };
+
+        Class C = { 0 };
+        SuperClass SC = { 0, 0 };
+      }
+    }
+    """)
+
+    body = ast.functions[0].body
+
+    assert [(statement.vtype, statement.name) for statement in body] == [
+        ("Class", "C"),
+        ("SuperClass", "SC"),
+    ]
+
+
 def test_parse_enum_underlying_type_from_dxc_sema_enums():
     # Source: https://github.com/microsoft/DirectXShaderCompiler
     # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092

@@ -972,6 +972,39 @@ def test_codegen_class_helper_data_member_from_public_metal_shader():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_gnu_inline_unsigned_helpers_from_strelka_random_shader():
+    # Reduced from:
+    # Repo: https://github.com/arhix52/Strelka
+    # Commit: 3eec7fa260e7d598911053f9e0f38054ce1c4f60
+    # Path: src/render/metal/shaders/random.h
+    code = """
+    inline unsigned pcg_hash(unsigned seed) {
+        unsigned state = seed * 747796405u + 2891336453u;
+        return state;
+    }
+
+    template<unsigned int N>
+    static __inline__ unsigned int tea(unsigned int val0, unsigned int val1) {
+        unsigned int v0 = val0;
+        return v0;
+    }
+
+    static __inline__ unsigned int lcg(thread unsigned int &prev) {
+        prev = prev * 1664525u + 1013904223u;
+        return prev & 0x00FFFFFF;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "uint pcg_hash(uint seed)" in crossgl
+    assert "uint state = seed * 747796405u + 2891336453u;" in crossgl
+    assert "uint tea(uint val0, uint val1)" in crossgl
+    assert "uint lcg(thread uint& prev)" in crossgl
+    assert "__inline__" not in crossgl
+    assert "unsigned" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_ternary_expression():
     code = """
     void main() {

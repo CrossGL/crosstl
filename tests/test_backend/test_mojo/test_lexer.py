@@ -133,6 +133,7 @@ def test_assignment_ops_tokenization():
         a -= 2
         a *= 4
         a /= 2
+        a //= 2
         a %= 3
         a ^= 1
         a |= 2
@@ -141,7 +142,8 @@ def test_assignment_ops_tokenization():
         a >>= 2
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert ("FLOOR_DIVIDE_EQUALS", "//=") in tokens
     except SyntaxError:
         pytest.fail("Assignment operators tokenization not implemented.")
 

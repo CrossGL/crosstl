@@ -1689,6 +1689,10 @@ class HLSLParser:
             self.parse_typedef()
             return None
 
+        if self.is_class_declaration_prefix():
+            self.parse_class_declaration()
+            return None
+
         if self.looks_like_declaration():
             qualifiers = self.parse_qualifiers()
             var = self.parse_variable_declaration(

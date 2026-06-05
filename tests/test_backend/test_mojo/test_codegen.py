@@ -1107,6 +1107,26 @@ def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
     assert "Unhandled statement type: VectorConstructorNode" not in generated_code
 
 
+def test_floor_divide_assignment_codegen_from_mojo_gpu_puzzles_reparses_crossgl():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # solutions/p15/p15.mojo axis_sum reduction loop.
+    code = """
+    def axis_sum():
+        var stride = TPB // 2
+        while stride > 0:
+            stride //= 2
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var stride = (TPB / 2);" in generated_code
+    assert "stride /= 2;" in generated_code
+    assert "//=" not in generated_code
+    assert "TPB // 2" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_modular_top_k_type_of_parameter_type_codegen():
     # Reduced from https://github.com/modular/modular.git commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,

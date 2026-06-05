@@ -634,7 +634,7 @@ class MojoToCrossGLConverter:
     def generate_assignment(self, node):
         left = self.generate_expression(node.left)
         right = self.generate_expression(node.right)
-        op = node.operator if hasattr(node, "operator") else "="
+        op = self.map_operator(node.operator if hasattr(node, "operator") else "=")
         return f"{left} {op} {right}"
 
     def generate_nested_expression(self, expr):
@@ -1155,4 +1155,8 @@ class MojoToCrossGLConverter:
             return "!="
         if op == "@":
             return "*"
+        if op == "//":
+            return "/"
+        if op == "//=":
+            return "/="
         return op

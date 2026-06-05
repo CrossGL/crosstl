@@ -642,6 +642,40 @@ class GLSLToCrossGLConverter:
             return "textureGatherCompareOffsets"
         return name
 
+    def combined_sampler_constructor_parts(self, node):
+        if not isinstance(node, FunctionCallNode) or len(node.args) != 2:
+            return None
+
+        constructor_name = self.function_call_name(node)
+        if not isinstance(constructor_name, str):
+            return None
+
+        if not constructor_name.startswith(("sampler", "isampler", "usampler")):
+            return None
+
+        return node.args[0], node.args[1]
+
+    def texture_function_arguments(self, args, operation=None):
+        if not args:
+            return []
+
+        combined_sampler = self.combined_sampler_constructor_parts(args[0])
+        if combined_sampler is None:
+            return [self.generate_expression(arg) for arg in args]
+
+        texture_arg, sampler_arg = combined_sampler
+        if operation in {"fetch", "query_size", "query_levels", "query_samples"}:
+            return [
+                self.generate_expression(texture_arg),
+                *[self.generate_expression(arg) for arg in args[1:]],
+            ]
+
+        return [
+            self.generate_expression(texture_arg),
+            self.generate_expression(sampler_arg),
+            *[self.generate_expression(arg) for arg in args[1:]],
+        ]
+
     def sanitize_crossgl_identifier(self, name):
         if name in CROSSGL_RESERVED_IDENTIFIERS:
             return f"{name}_"
@@ -2281,7 +2315,12 @@ class GLSLToCrossGLConverter:
             else self.function_map.get(name, self.format_function_name(name))
         )
 
-        args = ", ".join(self.generate_expression(arg) for arg in node.args)
+        if descriptor is not None and descriptor.get("resource") == "texture":
+            args = ", ".join(
+                self.texture_function_arguments(node.args, descriptor.get("operation"))
+            )
+        else:
+            args = ", ".join(self.generate_expression(arg) for arg in node.args)
 
         return f"{mapped_name}({args})"
 
