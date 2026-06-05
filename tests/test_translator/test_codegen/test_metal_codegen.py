@@ -11987,12 +11987,17 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
                 uint primitiveID @ gl_PrimitiveID,
                 bool frontFacing @ gl_FrontFacing,
                 vec4 coord @ gl_FragCoord,
-                vec2 point @ gl_PointCoord
+                vec2 point @ gl_PointCoord,
+                uint sampleID @ gl_SampleID,
+                uint sampleMask @ gl_SampleMaskIn
             ) {
                 FSOutput output;
-                output.color = coord + vec4(point, float(primitiveID), 1.0);
+                output.color = coord + vec4(point, float(primitiveID + sampleID), 1.0);
                 if (frontFacing) {
                     output.color.x = output.color.x + 1.0;
+                }
+                if (sampleMask == 0u) {
+                    output.color.y = 0.0;
                 }
                 return output;
             }
@@ -12010,6 +12015,8 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
     assert "bool frontFacing [[is_front_facing]]" in fragment_code
     assert "float4 coord [[position]]" in fragment_code
     assert "float2 point [[point_coord]]" in fragment_code
+    assert "uint sampleID [[sample_id]]" in fragment_code
+    assert "uint sampleMask [[sample_mask]]" in fragment_code
 
 
 def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
@@ -12071,6 +12078,8 @@ def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
         ("fragment", "int", "gl_FrontFacing", "is_front_facing", "bool"),
         ("fragment", "vec3", "gl_FragCoord", "position", "float4"),
         ("fragment", "vec3", "gl_PointCoord", "point_coord", "float2"),
+        ("fragment", "int", "gl_SampleID", "sample_id", "uint"),
+        ("fragment", "int", "gl_SampleMaskIn", "sample_mask", "uint"),
     ],
 )
 def test_graphics_builtin_parameter_types_are_validated(
@@ -12102,6 +12111,24 @@ def test_graphics_builtin_parameter_types_are_validated(
         MetalCodeGen().generate_stage(ast, stage)
 
 
+def test_fragment_sample_mask_parameter_rejects_output_only_crossgl_builtin():
+    # Apple MSL exposes fragment coverage through [[sample_mask]]. CrossGL keeps
+    # GLSL's input/output split: gl_SampleMaskIn is input, gl_SampleMask is output.
+    code = """
+    shader BadSampleMaskInput {
+        fragment {
+            vec4 main(uint mask @ gl_SampleMask) @ gl_FragColor {
+                return vec4(float(mask));
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+
+    with pytest.raises(ValueError, match="gl_SampleMask.*output-only"):
+        MetalCodeGen().generate_stage(ast, "fragment")
+
+
 def test_struct_builtin_member_semantics_are_validated():
     valid_code = """
     shader ValidStructBuiltins {
@@ -12115,11 +12142,14 @@ def test_struct_builtin_member_semantics_are_validated():
             vec2 point @ gl_PointCoord;
             bool frontFacing @ gl_FrontFacing;
             uint primitiveID @ gl_PrimitiveID;
+            uint sampleID @ gl_SampleID;
+            uint sampleMaskIn @ gl_SampleMaskIn;
         };
 
         struct FSOutput {
             vec4 color @ gl_FragColor;
             float depth @ gl_FragDepth;
+            uint sampleMask @ gl_SampleMask;
         };
 
         vertex {
@@ -12148,8 +12178,11 @@ def test_struct_builtin_member_semantics_are_validated():
     assert "float2 point [[point_coord]];" in generated
     assert "bool frontFacing [[is_front_facing]];" in generated
     assert "uint primitiveID [[primitive_id]];" in generated
+    assert "uint sampleID [[sample_id]];" in generated
+    assert "uint sampleMaskIn [[sample_mask]];" in generated
     assert "float4 color [[color(0)]];" in generated
     assert "float depth [[depth(any)]];" in generated
+    assert "uint sampleMask [[sample_mask]];" in generated
 
 
 @pytest.mark.parametrize(
@@ -12162,6 +12195,8 @@ def test_struct_builtin_member_semantics_are_validated():
         ("vec3 point @ gl_PointCoord", "point_coord", "float2"),
         ("int primitiveID @ gl_PrimitiveID", "primitive_id", "uint"),
         ("vec2 pointSize @ gl_PointSize", "point_size", "float"),
+        ("int sampleID @ gl_SampleID", "sample_id", "uint"),
+        ("int sampleMask @ gl_SampleMask", "sample_mask", "uint"),
     ],
 )
 def test_struct_builtin_member_types_are_validated(
@@ -12208,6 +12243,23 @@ def test_function_return_builtin_semantics_are_validated():
     assert "float4 color [[color(1)]];" in fragment_code
     assert "fragment fragment_main_Return fragment_main()" in fragment_code
     assert "return fragment_main_Return{float4(1.0)};" in fragment_code
+
+    sample_mask_code = """
+    shader SampleMaskReturnBuiltin {
+        fragment {
+            uint main() @ gl_SampleMask {
+                return 1u;
+            }
+        }
+    }
+    """
+    sample_mask_output = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(sample_mask_code), "fragment"
+    )
+    assert "struct fragment_main_Return" in sample_mask_output
+    assert "uint sampleMask [[sample_mask]];" in sample_mask_output
+    assert "fragment fragment_main_Return fragment_main()" in sample_mask_output
+    assert "return fragment_main_Return{1u};" in sample_mask_output
 
 
 def test_function_return_semantics_lower_to_output_structs_when_required():
@@ -12284,6 +12336,7 @@ def test_void_function_return_semantics_are_rejected(stage, semantic):
         ("vertex", "int", "gl_Position", "position", "float4"),
         ("fragment", "vec3", "gl_FragColor", "color\\(0\\)", "float4"),
         ("fragment", "vec4", "gl_FragDepth", "depth\\(any\\)", "float"),
+        ("fragment", "int", "gl_SampleMask", "sample_mask", "uint"),
     ],
 )
 def test_function_return_builtin_types_are_validated(
@@ -12317,6 +12370,8 @@ def test_function_return_builtin_types_are_validated(
         ("fragment", "vec4", "gl_FragCoord", "vec4(0.0)"),
         ("fragment", "bool", "gl_FrontFacing", "true"),
         ("fragment", "vec2", "gl_PointCoord", "vec2(0.0)"),
+        ("fragment", "uint", "gl_SampleID", "0u"),
+        ("fragment", "uint", "gl_SampleMaskIn", "1u"),
     ],
 )
 def test_input_only_builtin_semantics_are_rejected_on_function_returns(
@@ -12341,6 +12396,7 @@ def test_input_only_builtin_semantics_are_rejected_on_function_returns(
     [
         ("vertex", "vec4", "gl_FragColor", "vec4(0.0)", "fragment output"),
         ("vertex", "float", "gl_FragDepth", "0.5", "fragment output"),
+        ("vertex", "uint", "gl_SampleMask", "1u", "fragment output"),
         ("fragment", "vec4", "gl_Position", "vec4(0.0)", "vertex output"),
     ],
 )

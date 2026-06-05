@@ -7,6 +7,7 @@ from crosstl.backend.CUDA.CudaAst import (
     ForNode,
     FunctionCallNode,
     IfNode,
+    MemberAccessNode,
     ReturnNode,
     SharedMemoryNode,
     StructNode,
@@ -39,6 +40,7 @@ EXTERNAL_SAMPLES = [
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
             "cpp/3_CUDA_Features/cudaCompressibleMemory/saxpy.cu",
             "cpp/3_CUDA_Features/cdpAdvancedQuicksort/cdpAdvancedQuicksort.cu",
+            "cpp/3_CUDA_Features/cdpQuadtree/cdpQuadtree.cu",
             "cpp/3_CUDA_Features/simpleCudaGraphs/simpleCudaGraphs.cu",
             "cpp/3_CUDA_Features/cudaTensorCoreGemm/cudaTensorCoreGemm.cu",
             "cpp/5_Domain_Specific/BlackScholes/BlackScholes_kernel.cuh",
@@ -1282,6 +1284,55 @@ def test_cuda_samples_cdp_advanced_quicksort_popc_codegen_reparse():
     assert "var lt_count: u32 = bitCount(lt_mask);" in crossgl
     assert "var my_offset: u32 = bitCount((my_mask & lane_mask_lt));" in crossgl
     assert "__popc" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_cdp_quadtree_tile_collectives_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/3_CUDA_Features/cdpQuadtree/cdpQuadtree.cu
+    source = """
+    namespace cg = cooperative_groups;
+
+    __global__ void qtree_warp(unsigned int *out,
+                               bool pred,
+                               unsigned int lane_mask_lt,
+                               int limit) {
+        cg::thread_block cta = cg::this_thread_block();
+        cg::thread_block_tile<32> tile32 = cg::tiled_partition<32>(cta);
+
+        for (int range_it = threadIdx.x;
+             tile32.any(range_it < limit);
+             range_it += warpSize) {
+            unsigned int vote = tile32.ballot(pred);
+            unsigned int dest = __popc(vote & lane_mask_lt);
+            out[threadIdx.x] = tile32.shfl(dest, 0);
+        }
+    }
+    """
+
+    ast = parse_cuda(source)
+    loop = ast.kernels[0].body[2]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(loop, ForNode)
+    assert isinstance(loop.condition, FunctionCallNode)
+    assert isinstance(loop.condition.name, MemberAccessNode)
+    assert loop.condition.name.member == "any"
+    assert loop.body[0].value.name.member == "ballot"
+    assert loop.body[2].right.name.member == "shfl"
+    assert (
+        "for (var range_it: i32 = gl_LocalInvocationID.x; "
+        "WaveActiveAnyTrue(((range_it < limit) != 0)); range_it += 32)" in crossgl
+    )
+    assert "var vote: u32 = WaveActiveBallot((pred != 0)).x;" in crossgl
+    assert "var dest: u32 = bitCount((vote & lane_mask_lt));" in crossgl
+    assert "out[gl_LocalInvocationID.x] = WaveReadLaneAt(dest, 0);" in crossgl
+    assert "tile32.any" not in crossgl
+    assert "tile32.ballot" not in crossgl
+    assert "tile32.shfl" not in crossgl
+    assert "thread_block_tile.any not directly supported" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 

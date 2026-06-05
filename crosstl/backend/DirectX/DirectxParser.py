@@ -261,6 +261,9 @@ class HLSLParser:
                 self.current_token[0] == "STRUCT"
                 and not self.looks_like_external_declaration()
             ):
+                if self.is_struct_forward_declaration():
+                    structs.append(self.parse_struct_forward_declaration())
+                    continue
                 synthetic_start = len(self.synthetic_structs)
                 struct = self.parse_struct()
                 structs.extend(self.synthetic_structs[synthetic_start:])
@@ -879,6 +882,48 @@ class HLSLParser:
                 break
             self.eat("COMMA")
         return base_classes
+
+    def is_struct_forward_declaration(self):
+        if self.current_token[0] != "STRUCT":
+            return False
+
+        idx = self.current_index + 1
+        if idx >= len(self.tokens) or not self.is_identifier_token_at(idx):
+            return False
+        idx += 1
+
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_angle_list_at(idx)
+            if idx is None:
+                return False
+
+        return idx < len(self.tokens) and self.tokens[idx][0] == "SEMICOLON"
+
+    def skip_angle_list_at(self, idx):
+        depth = 0
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    return idx + 1
+            elif token_type == "EOF":
+                return None
+            idx += 1
+        return None
+
+    def parse_struct_forward_declaration(self):
+        self.eat("STRUCT")
+        name = self.parse_identifier()
+        if self.current_token[0] == "LESS_THAN":
+            self.skip_template_argument_list()
+        self.eat("SEMICOLON")
+
+        struct_node = StructNode(name, [])
+        struct_node.is_forward_declaration = True
+        return struct_node
 
     def parse_struct(self):
         self.eat("STRUCT")

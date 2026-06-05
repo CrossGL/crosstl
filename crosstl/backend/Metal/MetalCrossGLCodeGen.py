@@ -1405,14 +1405,19 @@ class MetalToCrossGLConverter:
         return code
 
     def generate_for_loop(self, node, indent, is_main):
-        init = self.generate_expression(node.init, is_main)
-        condition = self.generate_expression(node.condition, is_main)
-        update = self.generate_expression(node.update, is_main)
+        init = self.generate_for_clause(node.init, is_main)
+        condition = self.generate_for_clause(node.condition, is_main)
+        update = self.generate_for_clause(node.update, is_main)
 
         code = f"for ({init}; {condition}; {update}) {{\n"
         code += self.generate_function_body(node.body, indent + 1, is_main)
         code += "    " * indent + "}\n"
         return code
+
+    def generate_for_clause(self, expr, is_main):
+        if isinstance(expr, list):
+            return ", ".join(self.generate_for_clause(item, is_main) for item in expr)
+        return self.generate_expression(expr, is_main)
 
     def generate_range_for_loop(self, node, indent, is_main):
         iterable = self.generate_expression(node.iterable, is_main)

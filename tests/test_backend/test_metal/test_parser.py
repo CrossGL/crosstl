@@ -1413,6 +1413,31 @@ def test_parse_function_prototypes_macro_expanded_empty_statements_and_comma_upd
     parse_ok(code)
 
 
+def test_parse_multi_declarator_for_header_from_mlx_conv_loader():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 6ea7a00d05d548219864d10ff6c013b7544b13ea
+    # Path: mlx/backend/metal/kernels/steel/conv/loaders/loader_general.h
+    code = """
+    void load_unsafe(short n_rows, short TROWS) {
+        for (short i = 0, is = 0; i < n_rows; ++i, is += TROWS) {
+            short row = is;
+        }
+    }
+    """
+    ast = parse_ok(code)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop, ForNode)
+    assert isinstance(loop.init, list)
+    assert len(loop.init) == 2
+    assert loop.init[0].left.name == "i"
+    assert loop.init[0].left.vtype == "short"
+    assert loop.init[1].left.name == "is"
+    assert isinstance(loop.update, BinaryOpNode)
+    assert loop.update.op == ","
+
+
 def test_parse_metalpetal_namespace_macro_qualifier_and_unsigned_int():
     code = """
     #include <metal_stdlib>

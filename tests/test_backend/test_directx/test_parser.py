@@ -1392,6 +1392,46 @@ def test_parse_template_function_prefix_from_raytracing_sample():
     assert function.params[0].array_sizes == [3]
 
 
+def test_parse_struct_forward_declarations_from_dxc_incomplete_type_tests():
+    # Sources:
+    # microsoft/DirectXShaderCompiler tools/clang/test/SemaHLSL/sizeof-requires-complete-type.hlsl
+    # microsoft/DirectXShaderCompiler tools/clang/test/CodeGenDXIL/templates/incomplete-target-in-CanConvert.hlsl
+    ast = parse_code("""
+    struct Incomplete;
+    template<typename T> struct Wrapper;
+
+    struct Complete {
+        float value;
+    };
+
+    float get(Wrapper<float> o);
+    float main(Complete c) : OUT {
+        return c.value;
+    }
+    """)
+
+    forward_declarations = [
+        struct
+        for struct in ast.structs
+        if getattr(struct, "is_forward_declaration", False)
+    ]
+    definitions = [
+        struct
+        for struct in ast.structs
+        if not getattr(struct, "is_forward_declaration", False)
+    ]
+
+    assert [struct.name for struct in forward_declarations] == [
+        "Incomplete",
+        "Wrapper",
+    ]
+    assert [struct.name for struct in definitions] == ["Complete"]
+    assert definitions[0].members[0].name == "value"
+    assert ast.functions[0].name == "get"
+    assert ast.functions[0].is_prototype is True
+    assert ast.functions[0].params[0].vtype == "Wrapper<float>"
+
+
 def test_parse_struct_template_methods_from_dxc_spirv_resource_array():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/CodeGenSPIRV/use.rvalue.for.member-expr.of.array-subscript.hlsl

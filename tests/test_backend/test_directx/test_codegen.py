@@ -527,6 +527,30 @@ def test_codegen_pragma_once_from_directx_fallback_samples():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_skips_struct_forward_declarations_from_dxc_tests():
+    # Sources:
+    # microsoft/DirectXShaderCompiler tools/clang/test/SemaHLSL/sizeof-requires-complete-type.hlsl
+    # microsoft/DirectXShaderCompiler tools/clang/test/CodeGenDXIL/templates/incomplete-target-in-CanConvert.hlsl
+    crossgl = generate_crossgl("""
+        struct Payload;
+        template<typename T> struct Wrapper;
+
+        struct Payload {
+            float value;
+        };
+
+        float get(Wrapper<float> o);
+        float readPayload(Payload payload) {
+            return payload.value;
+        }
+    """)
+
+    assert crossgl.count("struct Payload") == 1
+    assert "struct Wrapper" not in crossgl
+    assert "struct Payload {\n        float value;" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_preserves_interpolation_modifiers_as_crossgl_metadata():
     crossgl = generate_crossgl("""
         struct PSInput {

@@ -880,6 +880,26 @@ def test_codegen_nested_unbraced_for_loops_from_public_msl_example():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_multi_declarator_for_header_from_mlx_conv_loader():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 6ea7a00d05d548219864d10ff6c013b7544b13ea
+    # Path: mlx/backend/metal/kernels/steel/conv/loaders/loader_general.h
+    code = """
+    void load_unsafe(short n_rows, short TROWS) {
+        for (short i = 0, is = 0; i < n_rows; ++i, is += TROWS) {
+            short row = is;
+        }
+    }
+    """
+    crossgl = convert(code)
+
+    assert "/* Unhandled expression: list */" not in crossgl
+    assert "for (int16 i = 0, is = 0; i < n_rows;" in crossgl
+    assert "is += TROWS" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_range_for_loop_from_mlx_random():
     code = """
     void mix_values() {

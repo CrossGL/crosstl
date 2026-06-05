@@ -524,6 +524,31 @@ def test_codegen_legacy_lod_grad_texture_intrinsics_from_bgfx_examples():
     assert "textureLodOffset(s_texColor, vUV, 0.0, ivec2(1))" in glsl
 
 
+def test_codegen_vertex_clip_distance_builtin_from_sascha_willems_offscreen():
+    # Reduced from SaschaWillems/Vulkan@180be3f9
+    # shaders/glsl/offscreen/phong.vert.
+    code = textwrap.dedent("""
+        #version 450
+        layout(location = 0) in vec3 inPos;
+
+        void main()
+        {
+            vec4 clipPlane = vec4(0.0, 0.0, 0.0, 0.0);
+            gl_Position = vec4(inPos, 1.0);
+            gl_ClipDistance[0] = dot(vec4(inPos, 1.0), clipPlane);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "float gl_ClipDistance[] @ gl_ClipDistance;" in crossgl
+    assert "output.gl_ClipDistance[0] = dot(" in crossgl
+    assert not any(
+        line.lstrip().startswith("gl_ClipDistance[0] =")
+        for line in crossgl.splitlines()
+    )
+
+
 def test_codegen_array_of_arrays_return_type_from_glslang_spv_aofa():
     code = textwrap.dedent("""
         #version 430

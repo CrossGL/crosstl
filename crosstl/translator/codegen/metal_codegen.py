@@ -966,6 +966,11 @@ class MetalCodeGen:
             "gl_FragCoord": "position",
             "gl_FrontFacing": "is_front_facing",
             "gl_PointCoord": "point_coord",
+            "gl_SampleID": "sample_id",
+            "SV_SampleIndex": "sample_id",
+            "gl_SampleMask": "sample_mask",
+            "gl_SampleMaskIn": "sample_mask",
+            "SV_Coverage": "sample_mask",
             # Compute shader specific
             "gl_GlobalInvocationID": "thread_position_in_grid",
             "gl_LocalInvocationID": "thread_position_in_threadgroup",
@@ -3990,9 +3995,16 @@ class MetalCodeGen:
             "is_front_facing": "bool",
             "position": "float4",
             "point_coord": "float2",
+            "sample_id": "uint",
+            "sample_mask": "uint",
         }
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)
+            if stage_name == "fragment" and str(semantic) == "gl_SampleMask":
+                raise ValueError(
+                    "Metal fragment stage gl_SampleMask parameter is output-only; "
+                    "use gl_SampleMaskIn or sample_mask for coverage-mask input"
+                )
             metal_semantic = self.canonical_metal_semantic(semantic)
             expected_type = expected_types.get(metal_semantic)
             if expected_type is None:
@@ -4033,6 +4045,8 @@ class MetalCodeGen:
             "point_coord": "float2",
             "point_size": "float",
             "depth(any)": "float",
+            "sample_id": "uint",
+            "sample_mask": "uint",
         }
         if metal_semantic is None:
             return None
@@ -4084,6 +4098,8 @@ class MetalCodeGen:
         semantic = str(semantic)
         if semantic == "gl_FragDepth":
             return True
+        if metal_semantic == "sample_mask":
+            return True
         return bool(
             metal_semantic
             and metal_semantic.startswith("color(")
@@ -4110,6 +4126,8 @@ class MetalCodeGen:
             return "depth"
         if semantic == "gl_PointSize":
             return "pointSize"
+        if metal_semantic == "sample_mask":
+            return "sampleMask"
         if metal_semantic and metal_semantic.startswith("color("):
             return "color"
         return "value"
@@ -4164,6 +4182,7 @@ class MetalCodeGen:
         is_fragment_output = semantic_text == "gl_FragDepth" or bool(
             metal_semantic and metal_semantic.startswith("color(")
         )
+        is_fragment_output = is_fragment_output or metal_semantic == "sample_mask"
         is_vertex_output = semantic_text == "gl_Position"
 
         if stage_name == "vertex" and is_fragment_output:
@@ -4181,14 +4200,6 @@ class MetalCodeGen:
         if semantic is None:
             return None
         semantic = str(semantic)
-        output_types = {
-            "gl_Position": "float4",
-            "gl_FragDepth": "float",
-        }
-        if semantic in output_types:
-            return output_types[semantic]
-        if metal_semantic and metal_semantic.startswith("color("):
-            return "float4"
         invalid_return_semantics = {
             "gl_VertexID",
             "gl_InstanceID",
@@ -4198,6 +4209,8 @@ class MetalCodeGen:
             "gl_FragCoord",
             "gl_FrontFacing",
             "gl_PointCoord",
+            "gl_SampleID",
+            "gl_SampleMaskIn",
             "gl_GlobalInvocationID",
             "gl_LocalInvocationID",
             "gl_WorkGroupID",
@@ -4207,6 +4220,17 @@ class MetalCodeGen:
         }
         if semantic in invalid_return_semantics:
             return "invalid"
+        output_types = {
+            "gl_Position": "float4",
+            "gl_FragDepth": "float",
+            "gl_SampleMask": "uint",
+        }
+        if semantic in output_types:
+            return output_types[semantic]
+        if metal_semantic and metal_semantic.startswith("color("):
+            return "float4"
+        if metal_semantic == "sample_mask":
+            return "uint"
         return None
 
     def canonical_metal_semantic(self, semantic):

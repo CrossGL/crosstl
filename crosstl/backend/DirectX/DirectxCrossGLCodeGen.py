@@ -1412,6 +1412,8 @@ class HLSLToCrossGLConverter:
         for struct in structs or []:
             if not isinstance(struct, StructNode):
                 continue
+            if getattr(struct, "is_forward_declaration", False):
+                continue
             member_types[struct.name] = {
                 member.name: getattr(member, "vtype", None)
                 for member in getattr(struct, "members", []) or []
@@ -2298,6 +2300,8 @@ class HLSLToCrossGLConverter:
                     code += "    }\n"
         # Generate structs
         for node in ast.structs:
+            if getattr(node, "is_forward_declaration", False):
+                continue
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"
                 for member in node.members:
@@ -3604,6 +3608,8 @@ class HLSLToCrossGLConverter:
         return self.visit_CaseNode(node)
 
     def visit_StructNode(self, node):
+        if getattr(node, "is_forward_declaration", False):
+            return ""
         code = f"struct {node.name} {{\n"
         self.indentation += 1
 

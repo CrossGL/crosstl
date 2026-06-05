@@ -4638,7 +4638,14 @@ class CudaToCrossGLConverter:
             ):
                 return f"(gl_LocalInvocationIndex % {tile_size})"
 
-        if member_name in {"memcpy_async", "wait", "wait_prior"}:
+        if group_kind == "thread_block_tile" and args:
+            tile_collective = self.format_thread_block_tile_collective_call(
+                group_metadata, member_name, args
+            )
+            if tile_collective is not None:
+                return tile_collective
+
+        if member_name in {"sync", "memcpy_async", "wait", "wait_prior"}:
             return self.format_unsupported_cooperative_group_statement(
                 group_kind, member_name, args
             )
@@ -4650,10 +4657,33 @@ class CudaToCrossGLConverter:
             return self.format_unsupported_cooperative_group_expression(
                 group_kind, member_name, "vec3<u32>(0, 0, 0)"
             )
-        return (
-            f"// cooperative_groups {group_kind}.{member_name} "
-            "not directly supported in CrossGL"
+        return self.format_unsupported_cooperative_group_expression(
+            group_kind, member_name, args=args
         )
+
+    def format_thread_block_tile_collective_call(
+        self, group_metadata, member_name, args
+    ):
+        if (
+            group_metadata.get("tile_size") != "32"
+            or group_metadata.get("parent_kind") != "thread_block"
+        ):
+            return None
+
+        formatted_args = [self.visit(arg) for arg in args]
+        if member_name == "any" and len(formatted_args) == 1:
+            predicate = self.format_wave_predicate(formatted_args[0])
+            return f"WaveActiveAnyTrue({predicate})"
+        if member_name == "all" and len(formatted_args) == 1:
+            predicate = self.format_wave_predicate(formatted_args[0])
+            return f"WaveActiveAllTrue({predicate})"
+        if member_name == "ballot" and len(formatted_args) == 1:
+            predicate = self.format_wave_predicate(formatted_args[0])
+            return f"WaveActiveBallot({predicate}).x"
+        if member_name == "shfl" and len(formatted_args) >= 2:
+            return f"WaveReadLaneAt({formatted_args[0]}, {formatted_args[1]})"
+
+        return None
 
     def format_thread_block_size_expression(self):
         return "((gl_WorkGroupSize.x * gl_WorkGroupSize.y) * gl_WorkGroupSize.z)"
@@ -4670,10 +4700,13 @@ class CudaToCrossGLConverter:
         )
 
     def format_unsupported_cooperative_group_expression(
-        self, group_kind, member, fallback="0"
+        self, group_kind, member, fallback="0", args=None
     ):
+        args = args or []
+        formatted_args = ", ".join(self.visit(arg) for arg in args)
+        arg_suffix = f"({formatted_args})" if formatted_args else ""
         return (
-            f"(/* cooperative_groups {group_kind}.{member} "
+            f"(/* cooperative_groups {group_kind}.{member}{arg_suffix} "
             f"not directly supported in CrossGL */ {fallback})"
         )
 

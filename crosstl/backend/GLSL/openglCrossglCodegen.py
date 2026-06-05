@@ -227,7 +227,10 @@ class GLSLToCrossGLConverter:
     VERTEX_BUILTIN_OUTPUT_TYPES = {
         "gl_Position": "vec4",
         "gl_PointSize": "float",
+        "gl_ClipDistance": "float",
+        "gl_CullDistance": "float",
     }
+    VERTEX_BUILTIN_ARRAY_OUTPUTS = {"gl_ClipDistance", "gl_CullDistance"}
     DEFAULT_SHADER_TYPE = "vertex"
 
     def __init__(self, shader_type="vertex"):
@@ -1383,6 +1386,12 @@ class GLSLToCrossGLConverter:
         vertex_writes_point_size = self.main_writes_name(
             node, "gl_PointSize", shader_type="vertex"
         )
+        vertex_builtin_output_writes = {}
+        if self.shader_type == "vertex":
+            for builtin_name in self.VERTEX_BUILTIN_OUTPUT_TYPES:
+                vertex_builtin_output_writes[builtin_name] = self.main_writes_name(
+                    node, builtin_name, shader_type="vertex"
+                )
 
         # Ensure vertex stages include gl_Position
         if self.shader_type == "vertex":
@@ -1405,10 +1414,12 @@ class GLSLToCrossGLConverter:
                 if name == "gl_Position" or (
                     name not in builtin_redeclaration_qualifiers
                     and not (name == "gl_PointSize" and vertex_writes_point_size)
+                    and not vertex_builtin_output_writes.get(name, False)
                 ):
                     continue
                 if name in output_names:
                     continue
+                is_array = name in self.VERTEX_BUILTIN_ARRAY_OUTPUTS
                 self.outputs.append(
                     VariableNode(
                         vtype,
@@ -1416,6 +1427,8 @@ class GLSLToCrossGLConverter:
                         qualifiers=self.builtin_output_qualifiers(
                             name, builtin_redeclaration_qualifiers
                         ),
+                        array_sizes=[None] if is_array else [],
+                        is_array=is_array,
                         semantic=name,
                     )
                 )
