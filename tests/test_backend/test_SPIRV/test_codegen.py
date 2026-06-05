@@ -354,6 +354,37 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_VECTOR_NEGATE_EXTRACT_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/opt/fold_test.cpp
+; Reduced from vector OpFNegate and OpCompositeExtract folding patterns.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_vec %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %input_vec "inputVec"
+OpName %out_value "outValue"
+OpDecorate %input_vec Location 0
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_float = OpTypePointer Output %float
+%input_vec = OpVariable %ptr_input_v4float Input
+%out_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %input_vec
+%negated = OpFNegate %v4float %loaded
+%component = OpCompositeExtract %float %negated 0
+OpStore %out_value %component
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SPEC_VECTOR_INSERT_DYNAMIC_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
@@ -3114,6 +3145,21 @@ def test_spirv_spec_vector_extract_dynamic_codegen_reparse():
     assert "outValue = inputVec[index];" in generated_code
     assert "outValue = component;" not in generated_code
     assert "OpVectorExtractDynamic" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_vector_negate_then_extract_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_VECTOR_NEGATE_EXTRACT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 inputVec @input @location(0);" in generated_code
+    assert "float outValue @output @location(0);" in generated_code
+    assert "outValue = (-inputVec)[0];" in generated_code
+    assert "outValue = -inputVec[0];" not in generated_code
+    assert "outValue = component;" not in generated_code
+    assert "OpFNegate" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

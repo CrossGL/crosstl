@@ -126,6 +126,9 @@ TOKENS = tuple(
         ("MIN16INT", r"\bmin16int\b"),
         ("MIN12INT", r"\bmin12int\b"),
         ("MIN16UINT", r"\bmin16uint\b"),
+        ("FLOAT16_T", r"\bfloat16_t\b"),
+        ("INT16_T", r"\bint16_t\b"),
+        ("UINT16_T", r"\buint16_t\b"),
         ("INT64_T", r"\bint64_t\b"),
         ("UINT64_T", r"\buint64_t\b"),
         # Control flow keywords
@@ -323,6 +326,9 @@ KEYWORDS = {
     "min16int": "MIN16INT",
     "min12int": "MIN12INT",
     "min16uint": "MIN16UINT",
+    "float16_t": "FLOAT16_T",
+    "int16_t": "INT16_T",
+    "uint16_t": "UINT16_T",
     "int64_t": "INT64_T",
     "uint64_t": "UINT64_T",
     "return": "RETURN",
@@ -441,6 +447,9 @@ class TokenType(Enum):
     MIN16INT = auto()
     MIN12INT = auto()
     MIN16UINT = auto()
+    FLOAT16_T = auto()
+    INT16_T = auto()
+    UINT16_T = auto()
     INT64_T = auto()
     UINT64_T = auto()
     RETURN = auto()

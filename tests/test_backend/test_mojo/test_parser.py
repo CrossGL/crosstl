@@ -339,6 +339,24 @@ def test_backtick_local_identifier_parse_from_modular_base64_stdlib():
     assert function.body[1].value.args[0].name == "`6bit`"
 
 
+def test_backtick_keyword_function_name_parse_from_official_docs():
+    # Reduced from https://docs.modular.com/mojo/reference/mojo-function-declarations/
+    # "Function names" escaped keyword identifier example.
+    code = """
+    def `import`() -> Int:
+        return 1
+
+    def main() -> Int:
+        return `import`()
+    """
+    ast = parse_code(tokenize_code(code))
+    imported = find_function(ast, "`import`")
+    main = find_function(ast, "main")
+
+    assert imported.return_type == "Int"
+    assert main.body[0].value.name == "`import`"
+
+
 def test_struct_parsing():
     code = """
     struct VSInput:

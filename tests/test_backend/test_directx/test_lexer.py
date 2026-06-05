@@ -295,6 +295,18 @@ def test_min_precision_types_tokenization():
     assert_values_present(values, expected, case_insensitive=True)
 
 
+def test_exact_16_bit_scalar_types_tokenization_from_hlsl_docs():
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
+    tokens = tokenize_code("float16_t f; int16_t i; uint16_t u;")
+
+    assert ("FLOAT16_T", "float16_t") in tokens
+    assert ("INT16_T", "int16_t") in tokens
+    assert ("UINT16_T", "uint16_t") in tokens
+    assert ("IDENTIFIER", "float16_t") not in tokens
+    assert ("IDENTIFIER", "int16_t") not in tokens
+    assert ("IDENTIFIER", "uint16_t") not in tokens
+
+
 def test_interpolation_modifiers_tokenization():
     code = """
     struct PSInput {

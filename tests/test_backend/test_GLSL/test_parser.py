@@ -692,6 +692,45 @@ def test_parse_array_type_declarators_and_newline_array_constructors():
     assert [size.value for size in local.array_sizes] == ["9"]
 
 
+def test_parse_raw_line_continuations_from_glslang_line_continuation():
+    # Reduced from KhronosGroup/glslang Test/lineContinuation.vert.
+    code = "\n".join(
+        [
+            "#version 110",
+            "float f\\",
+            "oo;",
+            "void main() {",
+            "    float funkyf = \\",
+            ".\\",
+            "1\\",
+            "2\\",
+            "3\\",
+            "e\\",
+            "+\\",
+            "1\\",
+            "7;",
+            "    int funkyh\\",
+            "=\\",
+            "0\\",
+            "x\\",
+            "f\\",
+            "4;",
+            "    gl_Position = vec4(foo + funkyf + float(funkyh));",
+            "}",
+        ]
+    )
+
+    tokens = GLSLLexer(code, preprocess=False).tokenize()
+    ast = GLSLParser(tokens, "vertex").parse()
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert ast.global_variables[0].name == "foo"
+    assert main.body[0].name == "funkyf"
+    assert main.body[0].value.value == ".123e+17"
+    assert main.body[1].name == "funkyh"
+    assert main.body[1].value.value == "0xf4"
+
+
 def test_parse_vulkan_extension_types_suffixes_and_qualifiers():
     code = textwrap.dedent("""
         #version 460

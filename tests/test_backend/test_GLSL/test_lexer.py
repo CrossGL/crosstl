@@ -88,6 +88,42 @@ def test_raw_line_comment_continuation_from_glslang_comment_frag():
     assert "v" in values
 
 
+def test_raw_line_continuations_join_tokens_from_glslang_line_continuation():
+    # Reduced from KhronosGroup/glslang Test/lineContinuation.vert.
+    code = "\n".join(
+        [
+            "#version 110",
+            "float f\\",
+            "oo;",
+            "void main() {",
+            "    float funkyf = \\",
+            ".\\",
+            "1\\",
+            "2\\",
+            "3\\",
+            "e\\",
+            "+\\",
+            "1\\",
+            "7;",
+            "    int funkyh\\",
+            "=\\",
+            "0\\",
+            "x\\",
+            "f\\",
+            "4;",
+            "}",
+        ]
+    )
+
+    tokens = normalize_tokens(GLSLLexer(code, preprocess=False).tokenize())
+    values = token_values(tokens)
+
+    assert "foo" in values
+    assert ".123e+17" in values
+    assert "0xf4" in values
+    assert "\\" not in values
+
+
 @pytest.mark.parametrize(
     "keyword",
     [

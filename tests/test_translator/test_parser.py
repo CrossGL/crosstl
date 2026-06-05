@@ -2990,6 +2990,30 @@ def test_nested_generic_type_close_does_not_eat_shift_operator():
     assert getattr(shifted.initial_value, "operator", None) == ">>"
 
 
+def test_failed_generic_declaration_lookahead_preserves_shift_tokens():
+    code = """
+    shader LookaheadShift {
+        compute {
+            void main() {
+                foo < bar >> value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    original_tokens = list(tokens)
+
+    ast = parse_code(tokens)
+
+    assert tokens == original_tokens
+    statement = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements[0]
+    expression = statement.expression
+    assert expression.operator == "<"
+    assert expression.right.operator == ">>"
+    assert expression.right.right.name == "value"
+
+
 def test_hlsl_parameter_qualifiers_parse():
     code = """
     shader HLSLParameterQualifiers {

@@ -18,6 +18,7 @@ from crosstl.backend.common_ast import (
     TextureSampleNode,
     UnaryOpNode,
     VectorConstructorNode,
+    WhileNode,
 )
 from crosstl.backend.Metal.MetalAst import BlockNode, LambdaNode
 from crosstl.backend.Metal.MetalLexer import MetalLexer
@@ -170,6 +171,22 @@ def test_parse_nested_unbraced_for_loops_from_public_msl_example():
 
     assert len(loops) == 2
     assert isinstance(loops[0].body[0], ForNode)
+
+
+def test_parse_unbraced_while_body_from_msl_cxx14_statement_grammar():
+    code = """
+    kernel void normalize(device float* values [[buffer(0)]], uint count) {
+        uint i = 0;
+        while (i < count)
+            values[i++] = 0.0f;
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert isinstance(body[1], WhileNode)
+    assert len(body[1].body) == 1
+    assert isinstance(body[1].body[0], AssignmentNode)
 
 
 def test_parse_resource_bindings_and_address_spaces():

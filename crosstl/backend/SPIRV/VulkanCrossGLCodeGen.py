@@ -867,10 +867,10 @@ class VulkanToCrossGLConverter:
             flattened_member = self.flattened_uniform_block_member(expr)
             if flattened_member is not None:
                 return flattened_member
-            obj = self.generate_expression(expr.object)
+            obj = self.generate_postfix_base_expression(expr.object)
             return f"{obj}.{expr.member}"
         elif isinstance(expr, ArrayAccessNode):
-            array = self.generate_expression(expr.array)
+            array = self.generate_postfix_base_expression(expr.array)
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
         else:
@@ -879,6 +879,12 @@ class VulkanToCrossGLConverter:
     def generate_nested_expression(self, expr):
         rendered = self.generate_expression(expr)
         if isinstance(expr, AssignmentNode):
+            return f"({rendered})"
+        return rendered
+
+    def generate_postfix_base_expression(self, expr):
+        rendered = self.generate_expression(expr)
+        if isinstance(expr, (AssignmentNode, UnaryOpNode)):
             return f"({rendered})"
         return rendered
 

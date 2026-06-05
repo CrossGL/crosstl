@@ -1801,6 +1801,7 @@ class Parser:
         """
         saved_pos = self.pos
         saved_token = self.current_token
+        saved_tokens = list(self.tokens)
 
         try:
             self.parse_attribute_annotations()
@@ -1884,6 +1885,7 @@ class Parser:
         except Exception:
             return False
         finally:
+            self.tokens[:] = saved_tokens
             self.pos = saved_pos
             self.current_token = saved_token
 
@@ -3773,6 +3775,7 @@ class Parser:
         """Return whether the current token sequence looks like a function."""
         saved_pos = self.pos
         saved_token = self.current_token
+        saved_tokens = list(self.tokens)
 
         try:
             while (
@@ -3826,6 +3829,7 @@ class Parser:
         except:
             pass
         finally:
+            self.tokens[:] = saved_tokens
             self.pos = saved_pos
             self.current_token = saved_token
 

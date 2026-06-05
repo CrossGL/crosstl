@@ -2580,7 +2580,7 @@ class MetalParser:
         condition = self.parse_expression(allow_comma=True)
         self.eat("RPAREN")
         self.parse_control_statement_attributes()
-        body = self.parse_block()
+        body = self.parse_statement_body()
         return WhileNode(condition, body)
 
     def parse_do_while_statement(self):

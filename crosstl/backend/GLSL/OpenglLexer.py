@@ -258,6 +258,7 @@ class GLSLLexer:
     ):
         """Initialize the lexer and optionally run the GLSL preprocessor."""
         code = code.lstrip("\ufeff")
+        code = self._splice_line_continuations(code)
         if preprocess:
             preprocessor = GLSLPreprocessor(
                 include_paths=include_paths,
@@ -269,6 +270,11 @@ class GLSLLexer:
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
+
+    @staticmethod
+    def _splice_line_continuations(code: str) -> str:
+        """Apply GLSL backslash-newline splicing before tokenization."""
+        return re.sub(r"\\(?:\r\n|\n|\r)", "", code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
         """Return the full token stream as ``(token_type, text)`` tuples."""

@@ -1204,6 +1204,33 @@ def test_parse_min_precision_vector_and_matrix_types():
     assert local_uv.vtype == "min10float2"
 
 
+def test_parse_exact_16_bit_scalar_types_from_hlsl_docs():
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector
+    ast = parse_code("""
+    float16_t halfValue;
+    int16_t signedValue;
+    uint16_t unsignedValue;
+
+    vector<float16_t> MakeHalfVector(float16_t seed) {
+        float16_t local = float16_t(seed);
+        return vector<float16_t>(local, local, local, local);
+    }
+    """)
+
+    assert [variable.vtype for variable in ast.global_variables] == [
+        "float16_t",
+        "int16_t",
+        "uint16_t",
+    ]
+    function = ast.functions[0]
+    assert function.return_type == "vector<float16_t>"
+    assert function.params[0].vtype == "float16_t"
+    assert function.body[0].vtype == "float16_t"
+    assert isinstance(function.body[0].value, VectorConstructorNode)
+    assert function.body[0].value.type_name == "float16_t"
+
+
 def test_parse_template_style_vector_matrix_types_and_constructors():
     ast = parse_code("""
     struct TemplateTypes {

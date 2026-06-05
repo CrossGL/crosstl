@@ -9049,7 +9049,29 @@ class RustToCrossGLConverter:
         if builtin_type is not None:
             return builtin_type
 
+        crossgl_type = self.format_unmapped_crossgl_type(rust_type)
+        if crossgl_type is not None:
+            return crossgl_type
+
         return rust_type
+
+    def format_unmapped_crossgl_type(self, rust_type):
+        if not isinstance(rust_type, str) or "::" not in rust_type:
+            return None
+
+        generic = self.parse_generic_type(rust_type)
+        if generic is not None:
+            base_name, args = generic
+            mapped_args = [self.map_type(arg) for arg in args]
+            return (
+                f"{self.crossgl_type_path_identifier(base_name)}"
+                f"<{', '.join(mapped_args)}>"
+            )
+
+        return self.crossgl_type_path_identifier(rust_type)
+
+    def crossgl_type_path_identifier(self, type_name):
+        return self.crossgl_identifier(type_name.replace("::", "_"))
 
     def resolve_imported_type_alias(self, rust_type):
         generic = self.parse_generic_type(rust_type)
@@ -9075,6 +9097,8 @@ class RustToCrossGLConverter:
         mapped = self.map_type(target_type)
         if mapped == target_type:
             return None
+        if mapped == self.format_unmapped_crossgl_type(target_type):
+            return rust_type
         return mapped
 
     def resolve_imported_module_path(self, path):

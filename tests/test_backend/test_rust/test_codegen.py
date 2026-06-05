@@ -6879,7 +6879,7 @@ def test_lifetime_receiver_codegen_from_rust_gpu_wgpu_runner():
     try:
         result = parse_and_generate(code)
         assert (
-            "wgpu::ShaderModuleDescriptor "
+            "wgpu_ShaderModuleDescriptor "
             "CompiledShaderModules_spv_module_for_entry_point("
             "CompiledShaderModules self, str wanted_entry)" in result
         )
@@ -6887,6 +6887,32 @@ def test_lifetime_receiver_codegen_from_rust_gpu_wgpu_runner():
         assert "&" not in result
     except Exception as e:
         pytest.fail(f"Lifetime receiver conversion failed: {e}")
+
+
+def test_wgpu_shader_loading_host_types_codegen_reparse():
+    # Reduced from gfx-rs/wgpu hello_triangle and stencil_triangles examples,
+    # plus wgpu's documented include_wgsl! shader-loading macro.
+    code = """
+    use std::borrow::Cow;
+
+    fn init(device: wgpu::Device) {
+        spawn(async move {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
+            });
+            let shader2 = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+        });
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void init(wgpu_Device device)" in result
+    assert "wgpu::ShaderModuleDescriptor {" in result
+    assert 'include_str!("shader.wgsl")' in result
+    assert 'wgpu::include_wgsl!("shader.wgsl")' in result
+    crosstl.translator.parse(result)
 
 
 def test_use_statement_conversion():

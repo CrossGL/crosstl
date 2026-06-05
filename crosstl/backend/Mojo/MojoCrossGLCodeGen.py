@@ -39,6 +39,77 @@ class MojoToCrossGLConverter:
         "i64": "int64_t",
         "index": "int",
     }
+    CROSSGL_RESERVED_IDENTIFIERS = {
+        "as",
+        "async",
+        "await",
+        "bool",
+        "box",
+        "break",
+        "buffer",
+        "case",
+        "cbuffer",
+        "char",
+        "class",
+        "compute",
+        "const",
+        "continue",
+        "default",
+        "do",
+        "double",
+        "elif",
+        "else",
+        "enum",
+        "extern",
+        "float",
+        "for",
+        "fragment",
+        "from",
+        "fn",
+        "geometry",
+        "global",
+        "half",
+        "if",
+        "impl",
+        "import",
+        "in",
+        "interface",
+        "internal",
+        "kernel",
+        "layout",
+        "let",
+        "local",
+        "loop",
+        "match",
+        "module",
+        "move",
+        "mut",
+        "namespace",
+        "priv",
+        "protected",
+        "pub",
+        "ref",
+        "return",
+        "safe",
+        "shader",
+        "shared",
+        "static",
+        "string",
+        "struct",
+        "switch",
+        "tessellation",
+        "threadgroup",
+        "trait",
+        "uniform",
+        "unsafe",
+        "use",
+        "var",
+        "vertex",
+        "void",
+        "while",
+        "workgroup",
+        "yield",
+    }
 
     def __init__(self):
         self.user_function_names = set()
@@ -1022,7 +1093,9 @@ class MojoToCrossGLConverter:
         if not sanitized:
             return "metadata"
         if sanitized[0].isdigit():
-            return f"_{sanitized}"
+            sanitized = f"_{sanitized}"
+        if sanitized.lower() in self.CROSSGL_RESERVED_IDENTIFIERS:
+            return f"{sanitized}_"
         return sanitized
 
     def map_semantic(self, attributes):

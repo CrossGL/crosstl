@@ -260,6 +260,28 @@ def test_backtick_local_identifier_codegen_from_modular_base64_stdlib_reparses_c
     parse_crossgl(generated_code)
 
 
+def test_backtick_keyword_function_name_codegen_from_official_docs_reparses_crossgl():
+    # Reduced from https://docs.modular.com/mojo/reference/mojo-function-declarations/
+    # "Function names" escaped keyword identifier example.
+    code = """
+    def `import`() -> Int:
+        return 1
+
+    def main() -> Int:
+        return `import`()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+    reparsed = parse_crossgl(generated_code)
+
+    assert "int import_()" in generated_code
+    assert "return import_();" in generated_code
+    assert "int import()" not in generated_code
+    assert "`" not in generated_code
+    assert reparsed.functions[0].name == "import_"
+    assert reparsed.functions[1].body.statements[0].value.function.name == "import_"
+
+
 def test_comptime_expression_prefix_codegen_drops_mojo_marker():
     code = """
     def main():
