@@ -187,8 +187,9 @@ written. When named variants are configured, project translation emits one
 artifact attempt per variant and passes base defines merged with the variant's
 define overrides to the source frontend. Variant artifacts are written under a
 variant path segment inside each target output directory, and the original
-variant name is recorded on the artifact and validation records. Native
-preprocessor behavior remains backend-dependent.
+variant name plus applied define map are recorded on the artifact and variant
+name is recorded on validation records. Native preprocessor behavior remains
+backend-dependent.
 
 Configuration scalar values and define/source-override maps are type checked
 when ``crosstl.toml`` is loaded. Malformed values are rejected before scan or
@@ -205,9 +206,10 @@ from this manifest. Malformed manifest entries are reported as configuration
 diagnostics and skipped from retained corpus entries, while the summary still
 records how many manifest entries were skipped.
 
-Project reports include configured define and variant names and values. Review
-reports before sharing them outside the repository if those values include
-private build metadata.
+Project reports include configured define and variant names and values, and
+artifact records include the applied define map used for that translation
+attempt. Review reports before sharing them outside the repository if those
+values include private build metadata.
 
 Report Shape
 ------------
@@ -229,14 +231,16 @@ Project reports are JSON documents with:
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, and source overrides.
 - ``artifacts``: attempted outputs with source path, source backend, target,
-  optional variant name, target/variant-scoped output path with the target
-  backend suffix, status, source hash, generated artifact hash, pipeline
-  provenance, and file-granularity source-map anchors for successful
+  applied define map, optional variant name, target/variant-scoped output path
+  with the target backend suffix, status, source hash, generated artifact hash,
+  pipeline provenance, and file-granularity source-map anchors for successful
   translations. Full reports require every artifact to carry a source hash,
   artifact output paths to match the target/variant directory plus the
   source-relative path with the target backend suffix, artifact source paths
   to match declared translation units, and artifact source backend names to
-  match those units.
+  match those units. Full reports also require artifact define maps to match
+  the project-level defines merged with the artifact variant's define
+  overrides.
   Successful artifact records in full reports must include file-level
   source-map anchors.
   Artifact provenance records the
@@ -267,7 +271,7 @@ Project reports are JSON documents with:
   aggregate validation artifact and hash-status summary counts, direct
   validation report artifact target, hash-status, toolchain status, and
   toolchain-run status rollups, include-directory status record and count
-  consistency checks, full-report
+  consistency checks, full-report artifact define map checks, full-report
   source-map granularity, target, and source-backend rollup checks, source hash
   checks, failed artifact
   error metadata checks, translated artifact error metadata rejection, required

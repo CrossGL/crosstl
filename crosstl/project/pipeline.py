@@ -1680,6 +1680,7 @@ def translate_project(
                     "target": target,
                     "path": _artifact_report_path(output_path, config),
                     "status": "translated",
+                    "defines": dict(sorted(defines.items())),
                     "sourceHash": _source_hash(unit.path),
                     "provenance": {
                         "pipeline": "single-file-translate",
@@ -3117,6 +3118,58 @@ def _variant_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
             continue
         if any(not isinstance(item, str) for item in defines.values()):
             reasons.append(f"{variant_prefix} values must be strings")
+    return reasons
+
+
+def _valid_string_mapping(value: Any) -> bool:
+    return isinstance(value, Mapping) and all(
+        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+    )
+
+
+def _expected_artifact_defines(
+    project: Mapping[str, Any],
+    artifact: Mapping[str, Any],
+) -> dict[str, str] | None:
+    project_defines = project.get("defines", {})
+    project_variants = project.get("variants", {})
+    if not _valid_string_mapping(project_defines) or not isinstance(
+        project_variants, Mapping
+    ):
+        return None
+
+    base_defines = dict(project_defines)
+    if not project_variants:
+        return base_defines
+
+    variant = artifact.get("variant")
+    if not _is_non_empty_string(variant):
+        return None
+    variant_defines = project_variants.get(variant)
+    if not _valid_string_mapping(variant_defines):
+        return None
+    return {**base_defines, **dict(variant_defines)}
+
+
+def _artifact_defines_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+    project: Mapping[str, Any],
+    *,
+    required: bool,
+) -> list[str]:
+    if not required and "defines" not in artifact:
+        return []
+
+    prefix = f"artifacts[{index}].defines"
+    defines = artifact.get("defines")
+    reasons = _string_mapping_contract_reasons(prefix, defines)
+    if reasons:
+        return reasons
+
+    expected_defines = _expected_artifact_defines(project, artifact)
+    if expected_defines is not None and dict(defines) != expected_defines:
+        reasons.append(f"{prefix} must match project defines and artifact variant")
     return reasons
 
 
@@ -4692,6 +4745,20 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     reasons.append(
                         f"artifacts[{index}].variant must be listed in project.variants"
                     )
+            elif has_summary and project_variants_valid and project_variants:
+                reasons.append(
+                    f"artifacts[{index}].variant must be recorded "
+                    "when project.variants is non-empty"
+                )
+            if isinstance(project, Mapping):
+                reasons.extend(
+                    _artifact_defines_contract_reasons(
+                        index,
+                        artifact,
+                        project,
+                        required=has_summary,
+                    )
+                )
             identity = _artifact_identity(artifact)
             if identity is not None:
                 previous_index = artifact_identities.get(identity)

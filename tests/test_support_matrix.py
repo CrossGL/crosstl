@@ -226,6 +226,27 @@ def test_project_include_resolution_documents_status_reporting():
         ) in backend_support["evidence"]
 
 
+def test_project_macro_variants_document_artifact_define_maps():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.macro_variants"]
+
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "partial"
+        assert "records each artifact applied define map" in backend_support["notes"]
+        assert "artifact define maps that do not match base defines merged" in (
+            backend_support["notes"]
+        )
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_define_mismatches"
+        ) in backend_support["evidence"]
+
+
 def test_project_diagnostics_document_location_path_checks():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(
@@ -266,6 +287,10 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         )
         assert "translated artifacts with error metadata" in backend_support["notes"]
         assert "source-relative target/variant layout" in backend_support["notes"]
+        assert "applied define map" in backend_support["notes"]
+        assert "missing or mismatched artifact define maps" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_current_translated_artifacts_"
@@ -290,6 +315,10 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_path_source_layout_"
             "mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_artifact_defines"
         ) in backend_support["evidence"]
 
 
@@ -338,6 +367,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "declarations"
         ) in backend_support["notes"]
         assert "unit extension/path consistency" in backend_support["notes"]
+        assert "applied define map consistency" in backend_support["notes"]
         assert "target/variant directory containment" in backend_support["notes"]
         assert "include-directory status record and count consistency" in (
             backend_support["notes"]
@@ -355,6 +385,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_malformed_include_dir_status_"
             "records"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_define_mismatches"
         ) in backend_support["evidence"]
         assert "failed artifact generated metadata rejection" in (
             backend_support["notes"]

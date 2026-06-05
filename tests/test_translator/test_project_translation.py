@@ -976,6 +976,10 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "debug",
         "release",
     ]
+    assert [artifact["defines"] for artifact in payload["artifacts"]] == [
+        {"MODE": "debug", "USE_FAST_PATH": "1"},
+        {"MODE": "base", "USE_FAST_PATH": "1"},
+    ]
     assert [artifact["path"] for artifact in payload["artifacts"]] == [
         "translated/opengl/debug/simple.glsl",
         "translated/opengl/release/simple.glsl",
@@ -1051,6 +1055,63 @@ def test_validate_project_report_rejects_artifacts_with_undeclared_variants(tmp_
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "artifacts[0].variant must be listed in project.variants" in (
         diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_missing_artifact_defines(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["artifacts"][0].pop("defines")
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].defines must be an object" in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_artifact_define_mismatches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.defines]
+            MODE = "base"
+
+            [project.variants.debug]
+            MODE = "debug"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    payload["artifacts"][0]["defines"] = {"MODE": "base"}
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].defines must match project defines and artifact variant"
+        in diagnostic["message"]
     )
 
 
