@@ -1175,20 +1175,54 @@ def test_codegen_lowers_static_cast_from_apple_compute_sample():
 
 
 def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 6ea7a00d05d548219864d10ff6c013b7544b13ea
+    # Path: mlx/backend/metal/kernels/fence.metal
     code = """
     #include <metal_stdlib>
     using namespace metal;
 
     kernel void fence() {
-        metal::atomic_thread_fence(metal::mem_flags::mem_device);
+        metal::atomic_thread_fence(metal::mem_flags::mem_device,
+                                   metal::memory_order_seq_cst,
+                                   metal::thread_scope_system);
     }
     """
     crossgl = convert(code)
 
-    assert "metal_u3a_u3aatomic_thread_fence" in crossgl
-    assert "metal_u3a_u3amem_flags_u3a_u3amem_device" in crossgl
+    assert "memoryBarrier();" in crossgl
+    assert "metal_u3a_u3aatomic_thread_fence" not in crossgl
     assert "metal::atomic_thread_fence" not in crossgl
-    assert parse_crossgl(crossgl) is not None
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "threadgroup_barrier(mem_flags::mem_device);" in metal
+
+
+def test_codegen_lowers_combined_threadgroup_barrier_flags_from_blender_builtin():
+    # Reduced from:
+    # Repo: https://github.com/blender/blender
+    # Commit: b8e327c77fed04517e9a6ec8d306c8c3986d531b
+    # Path: source/blender/gpu/shaders/gpu_shader_msl_builtin.msl
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void synchronize_all() {
+        threadgroup_barrier(mem_flags::mem_threadgroup |
+                            mem_flags::mem_device |
+                            mem_flags::mem_texture);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "allMemoryBarrier();" in crossgl
+    assert "threadgroup_barrier" not in crossgl
+    assert "mem_flags_u3a_u3a" not in crossgl
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | "
+        "mem_flags::mem_threadgroup | mem_flags::mem_texture);"
+    ) in metal
 
 
 def test_codegen_scoped_variable_template_expression_from_mlx_gemv_masked():
@@ -2237,7 +2271,7 @@ def test_codegen_threadgroup_memory_and_barrier():
     }
     """
     result = convert(code)
-    assert "threadgroup_barrier" in result
+    assert "workgroupBarrier();" in result
     assert "@threadgroup" in result or "threadgroup" in result
 
 
@@ -2261,7 +2295,7 @@ def test_codegen_preserves_lambda_callback_from_mlx_fp_quantized_nax():
     assert "dispatch_bool" in compact
     assert "[&](auto kAlignedM)" in compact
     assert "if (kAlignedM.value)" in compact
-    assert "threadgroup_barrier" in compact
+    assert "workgroupBarrier();" in compact
     assert "Unhandled expression" not in compact
 
 

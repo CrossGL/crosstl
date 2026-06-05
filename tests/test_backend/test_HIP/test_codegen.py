@@ -664,11 +664,13 @@ class TestHipCodeGen:
         code = """
         __device__ half2 fp16_ops(half2 a, half2 b, float x) {
             half2 scalar = __float2half2_rn(x);
+            half2 lanes = __floats2half2_rn(x, x + 1.0f);
             half2 prod = __hmul2(a, b);
             half2 sum = __hadd2(prod, scalar);
             half2 fused = __hfma2(a, b, sum);
             float low = __low2float(fused);
-            return fused;
+            float high = __high2float(fused);
+            return __hadd2(fused, lanes);
         }
         """
         lexer = HipLexer(code)
@@ -680,17 +682,22 @@ class TestHipCodeGen:
 
         assert "vec2<f16> fp16_ops(vec2<f16> a, vec2<f16> b, f32 x)" in result
         assert "var scalar: vec2<f16> = vec2<f16>(x, x);" in result
+        assert "var lanes: vec2<f16> = vec2<f16>(x, (x + 1.0f));" in result
         assert "var prod: vec2<f16> = (a * b);" in result
         assert "var sum: vec2<f16> = (prod + scalar);" in result
         assert "var fused: vec2<f16> = fma(a, b, sum);" in result
         assert "var low: f32 = f32(fused.x);" in result
+        assert "var high: f32 = f32(fused.y);" in result
+        assert "return (fused + lanes);" in result
         for raw_name in (
             "half2",
             "__float2half2_rn",
+            "__floats2half2_rn",
             "__hmul2",
             "__hadd2",
             "__hfma2",
             "__low2float",
+            "__high2float",
         ):
             assert raw_name not in result
 

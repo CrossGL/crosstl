@@ -1561,6 +1561,9 @@ class MetalToCrossGLConverter:
                     return self.generate_initializer_list(
                         initializer, is_main, expr.name
                     )
+            sync_call = self.metal_synchronization_function_call(expr.name, expr.args)
+            if sync_call is not None:
+                return sync_call
             function_name = self.map_function_call_name(expr.name)
             if function_name == "sampler":
                 args = ", ".join(
@@ -1771,6 +1774,52 @@ class MetalToCrossGLConverter:
         finally:
             self.pop_identifier_scope()
             self.current_variable_types = previous_variable_types
+
+    def metal_synchronization_function_call(self, name, args):
+        unscoped_name = str(name).split("::")[-1]
+
+        if unscoped_name == "threadgroup_barrier":
+            flags = self.metal_mem_flag_names(args)
+            if flags == {"mem_threadgroup"}:
+                return "workgroupBarrier()"
+            if flags == {"mem_device"}:
+                return "memoryBarrierBuffer()"
+            if flags == {"mem_texture"}:
+                return "memoryBarrierImage()"
+            if flags == {"mem_device", "mem_threadgroup", "mem_texture"}:
+                return "allMemoryBarrier()"
+            return None
+
+        if unscoped_name == "atomic_thread_fence":
+            flags = self.metal_mem_flag_names(args[:1])
+            if flags == {"mem_device"}:
+                return "memoryBarrier()"
+            if flags == {"mem_threadgroup"}:
+                return "memoryBarrierShared()"
+            if flags == {"mem_texture"}:
+                return "memoryBarrierImage()"
+            return None
+
+        return None
+
+    def metal_mem_flag_names(self, args):
+        if len(args) != 1:
+            return None
+        flags = self.collect_metal_mem_flags(args[0])
+        return flags or None
+
+    def collect_metal_mem_flags(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            left = self.collect_metal_mem_flags(expr.left)
+            right = self.collect_metal_mem_flags(expr.right)
+            if left is None or right is None:
+                return None
+            return left | right
+        if isinstance(expr, VariableNode):
+            name = str(expr.name).split("::")[-1]
+            if name.startswith("mem_"):
+                return {name}
+        return None
 
     def map_function_call_name(self, name):
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)

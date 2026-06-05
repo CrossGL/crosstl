@@ -998,6 +998,29 @@ def test_external_hip_fp16_scalar_conversion_codegen_reparse():
     assert "__float2half" not in crossgl
 
 
+def test_hipify_half2_high_lane_and_two_float_constructor_codegen_reparse():
+    # Source inspiration:
+    # ROCm HIPIFY CUDA Device API supported-by-HIP table lists the CUDA half2
+    # lane extraction and two-float constructor intrinsics as HIP-supported.
+    source = """
+    __device__ float pack_and_sum_half2(float a, float b) {
+        half2 pair = __floats2half2_rn(a, b);
+        return __low2float(pair) + __high2float(pair);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert body[0].value.name == "__floats2half2_rn"
+    assert body[1].value.left.name == "__low2float"
+    assert body[1].value.right.name == "__high2float"
+    assert "var pair: vec2<f16> = vec2<f16>(a, b);" in crossgl
+    assert "return (f32(pair.x) + f32(pair.y));" in crossgl
+    assert "__floats2half2_rn" not in crossgl
+    assert "__high2float" not in crossgl
+
+
 def test_external_rocm_warp_size_reduction_popcount_codegen_reparse():
     source = """
     inline auto popcount(unsigned int x) -> int {

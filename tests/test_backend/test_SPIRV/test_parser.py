@@ -883,6 +883,42 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SUBGROUP_BROADCAST_REDUCE_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source pattern: reduced from Vulkan subgroupBroadcastFirst/subgroupAdd style
+; compute shader assembly emitted by glslang for subgroup arithmetic builtins.
+OpCapability Shader
+OpCapability GroupNonUniform
+OpCapability GroupNonUniformArithmetic
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %value %broadcast_out %sum_out
+OpExecutionMode %main LocalSize 32 1 1
+OpName %value "value"
+OpName %broadcast_out "broadcastOut"
+OpName %sum_out "sumOut"
+OpDecorate %value Location 0
+OpDecorate %broadcast_out Location 0
+OpDecorate %sum_out Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%uint_3 = OpConstant %uint 3
+%ptr_input_uint = OpTypePointer Input %uint
+%ptr_output_uint = OpTypePointer Output %uint
+%value = OpVariable %ptr_input_uint Input
+%broadcast_out = OpVariable %ptr_output_uint Output
+%sum_out = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %uint %value
+%broadcast = OpGroupNonUniformBroadcastFirst %uint %uint_3 %loaded
+%sum = OpGroupNonUniformIAdd %uint %uint_3 Reduce %loaded
+OpStore %broadcast_out %broadcast
+OpStore %sum_out %sum
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
 ; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
 OpCapability Shader
@@ -1718,6 +1754,23 @@ def test_glslang_web_comp_barrier_instructions_parse():
     assert body[1].args == ["1", "3400"]
     assert body[2].args == ["2", "3400"]
     assert isinstance(body[3], ReturnNode)
+
+
+def test_spirv_subgroup_broadcast_and_reduce_parse():
+    tokens = tokenize_code(SPIRV_SUBGROUP_BROADCAST_REDUCE_ASSEMBLY)
+    ast = parse_code(tokens)
+    body = ast.functions[0].body
+
+    assert ast.functions[0].spirv_execution_model == "GLCompute"
+    assert isinstance(body[0], AssignmentNode)
+    assert isinstance(body[0].right, FunctionCallNode)
+    assert body[0].right.name == "subgroupBroadcastFirst"
+    assert body[0].right.args[0].name == "value"
+    assert isinstance(body[1], AssignmentNode)
+    assert isinstance(body[1].right, FunctionCallNode)
+    assert body[1].right.name == "subgroupAdd"
+    assert body[1].right.args[0].name == "value"
+    assert isinstance(body[2], ReturnNode)
 
 
 def test_spirv_assembly_uniform_constant_resources_parse():

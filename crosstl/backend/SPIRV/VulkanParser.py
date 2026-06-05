@@ -250,6 +250,30 @@ class VulkanParser:
         "OpAtomicXor": "atomicXor",
         "OpAtomicExchange": "atomicExchange",
     }
+    SPIRV_GROUP_NON_UNIFORM_REDUCTION_FUNCTIONS = {
+        "OpGroupNonUniformBitwiseAnd": "And",
+        "OpGroupNonUniformBitwiseOr": "Or",
+        "OpGroupNonUniformBitwiseXor": "Xor",
+        "OpGroupNonUniformFAdd": "Add",
+        "OpGroupNonUniformFMax": "Max",
+        "OpGroupNonUniformFMin": "Min",
+        "OpGroupNonUniformFMul": "Mul",
+        "OpGroupNonUniformIAdd": "Add",
+        "OpGroupNonUniformIMul": "Mul",
+        "OpGroupNonUniformLogicalAnd": "And",
+        "OpGroupNonUniformLogicalOr": "Or",
+        "OpGroupNonUniformLogicalXor": "Xor",
+        "OpGroupNonUniformSMax": "Max",
+        "OpGroupNonUniformSMin": "Min",
+        "OpGroupNonUniformUMax": "Max",
+        "OpGroupNonUniformUMin": "Min",
+    }
+    SPIRV_GROUP_NON_UNIFORM_SCAN_PREFIXES = {
+        "Reduce": "subgroup",
+        "InclusiveScan": "subgroupInclusive",
+        "ExclusiveScan": "subgroupExclusive",
+        "ClusteredReduce": "subgroupClustered",
+    }
     CROSSGL_RESERVED_IDENTIFIERS = {
         "as",
         "async",
@@ -1627,6 +1651,40 @@ class VulkanParser:
                     expression_type_ids[result_id] = operands[0]
                     continue
 
+            if result_id and opcode == "OpGroupNonUniformBroadcastFirst":
+                if len(operands) >= 3:
+                    expressions[result_id] = FunctionCallNode(
+                        "subgroupBroadcastFirst",
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[2],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                        ],
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
+            if result_id and opcode in self.SPIRV_GROUP_NON_UNIFORM_REDUCTION_FUNCTIONS:
+                if len(operands) >= 4:
+                    expressions[result_id] = (
+                        self.spirv_assembly_group_non_uniform_reduction_expression(
+                            opcode,
+                            operands[2],
+                            operands[3],
+                            operands[4:],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
             if result_id and opcode == "OpDot" and len(operands) >= 3:
                 expressions[result_id] = FunctionCallNode(
                     "dot",
@@ -2827,6 +2885,47 @@ class VulkanParser:
                 ),
             ],
         )
+
+    def spirv_assembly_group_non_uniform_reduction_expression(
+        self,
+        opcode,
+        group_operation,
+        value_operand,
+        extra_operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        operation_name = self.SPIRV_GROUP_NON_UNIFORM_REDUCTION_FUNCTIONS[opcode]
+        prefix = self.SPIRV_GROUP_NON_UNIFORM_SCAN_PREFIXES.get(group_operation)
+        if prefix is None:
+            sanitized_group_operation = self.spirv_fallback_identifier(
+                group_operation, "group_operation"
+            )
+            prefix = f"spirvGroupNonUniform{sanitized_group_operation}"
+
+        function_name = f"{prefix}{operation_name}"
+        args = [
+            self.spirv_assembly_operand_expression(
+                value_operand,
+                expressions,
+                names,
+                decorations,
+                constants,
+            )
+        ]
+        if group_operation == "ClusteredReduce" and extra_operands:
+            args.append(
+                self.spirv_assembly_operand_expression(
+                    extra_operands[0],
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+            )
+        return FunctionCallNode(function_name, args)
 
     def spirv_assembly_vector_shuffle_expression(
         self,

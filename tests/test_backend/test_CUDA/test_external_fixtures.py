@@ -250,6 +250,28 @@ def test_cuda_samples_fp16_scalar_product_high2float_codegen_reparse():
     assert "__high2float" not in crossgl
 
 
+def test_cuda_math_api_floats2half2_rn_codegen_reparse():
+    # Source inspiration:
+    # NVIDIA CUDA Math API, Half Precision Conversion and Data Movement.
+    # cuda-samples fp16ScalarProduct covers half2 lane extraction; the CUDA
+    # Math API documents the related two-float half2 constructor.
+    source = """
+    __global__ void pack_half2(float *a, float *b, half2 *out) {
+        int idx = threadIdx.x;
+        out[idx] = __floats2half2_rn(a[idx], b[idx]);
+    }
+    """
+
+    ast = parse_cuda(source)
+    assignment = ast.kernels[0].body[1]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert assignment.right.name == "__floats2half2_rn"
+    assert "out[idx] = vec2<f16>(a[idx], b[idx]);" in crossgl
+    assert "__floats2half2_rn" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_tile_matmul_half2float_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cuda-samples

@@ -123,9 +123,32 @@ def reverse_plain_glsl(source: str):
             ],
             id="glslang-fragment-layout-only",
         ),
+        pytest.param(
+            """
+            #version 300 es
+            precision highp float;
+
+            uniform vec3 iResolution;
+            uniform float iTime;
+
+            void mainImage(out vec4 fragColor, in vec2 fragCoord)
+            {
+                vec2 uv = fragCoord / iResolution.xy;
+                fragColor = vec4(uv, 0.5 + 0.5 * sin(iTime), 1.0);
+            }
+            """,
+            "fragment",
+            ShaderStage.FRAGMENT,
+            [
+                "fragment {",
+                "void mainImage(out vec4 fragColor, in vec2 fragCoord)",
+                "fragColor = vec4(uv, (0.5 + (0.5 * sin(iTime))), 1.0);",
+            ],
+            id="shadertoy-main-image-fragment-entrypoint",
+        ),
     ],
 )
-def test_plain_glsl_registry_infers_stage_from_glslang_layout_snippets(
+def test_plain_glsl_registry_infers_stage_from_real_world_snippets(
     source,
     expected_shader_type,
     expected_stage,

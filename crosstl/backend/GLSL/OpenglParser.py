@@ -549,6 +549,9 @@ class GLSLParser:
         if layout_shader_type:
             return layout_shader_type
 
+        if self.has_shadertoy_main_image(shader):
+            return "fragment"
+
         identifiers = self.collect_shader_identifiers(shader)
         if identifiers & COMPUTE_BUILTINS:
             return "compute"
@@ -563,6 +566,12 @@ class GLSLParser:
         if identifiers & VERTEX_BUILTINS or "gl_Position" in identifiers:
             return "vertex"
         return "vertex"
+
+    def has_shadertoy_main_image(self, shader):
+        for function in getattr(shader, "functions", []) or []:
+            if getattr(function, "name", None) == "mainImage":
+                return True
+        return False
 
     def infer_shader_type_from_layouts(self, layouts):
         saw_geometry_input_layout = False

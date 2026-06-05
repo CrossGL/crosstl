@@ -313,6 +313,7 @@ class SlangToCrossGLConverter:
             "fmod": "mod",
             "lerp": "mix",
             "rsqrt": "inversesqrt",
+            "atan2": "atan",
         }
         self.user_function_names = set()
         self.function_name_map = {}

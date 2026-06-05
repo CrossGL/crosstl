@@ -4334,6 +4334,26 @@ def test_codegen_rcp_intrinsic_from_microsoft_docs_imports_to_reciprocal_express
     parse_crossgl(crossgl)
 
 
+def test_codegen_fmod_and_atan2_intrinsics_from_microsoft_docs_import_to_crossgl_names():
+    # Sources: Microsoft Learn HLSL intrinsic docs for fmod and atan2.
+    # URLs:
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-fmod
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-atan2
+    crossgl = generate_crossgl("""
+        float4 main(float2 p : TEXCOORD0) : SV_Target0 {
+            float wrapped = fmod(p.x, 1.0);
+            float angle = atan2(p.y, p.x);
+            return float4(wrapped, angle, 0.0, 1.0);
+        }
+    """)
+
+    assert "float wrapped = mod(p.x, 1.0);" in crossgl
+    assert "float angle = atan(p.y, p.x);" in crossgl
+    assert "fmod(" not in crossgl
+    assert "atan2(" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_interpolation_intrinsics_roundtrip():
     crossgl = generate_crossgl(INTERPOLATION_INTRINSICS_HLSL)
 

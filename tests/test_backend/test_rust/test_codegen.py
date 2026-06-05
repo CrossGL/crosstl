@@ -1931,6 +1931,9 @@ def test_scalar_math_method_conversion():
         let k = x.min(y);
         let l = x.max(y);
         let m = y.atan2(x);
+        let nan = x.is_nan();
+        let inf = y.is_infinite();
+        let finite = angle.is_finite();
         return a + b + c + d + e + f + g + h + i + j + k + l + m;
     }
     """
@@ -1950,6 +1953,9 @@ def test_scalar_math_method_conversion():
         assert "k = min(x, y);" in result
         assert "l = max(x, y);" in result
         assert "m = atan2(y, x);" in result
+        assert "nan = isnan(x);" in result
+        assert "inf = isinf(y);" in result
+        assert "finite = isfinite(angle);" in result
         assert ".abs()" not in result
         assert ".sqrt()" not in result
         assert ".sin()" not in result
@@ -1962,6 +1968,9 @@ def test_scalar_math_method_conversion():
         assert ".min(" not in result
         assert ".max(" not in result
         assert ".atan2(" not in result
+        assert ".is_nan()" not in result
+        assert ".is_infinite()" not in result
+        assert ".is_finite()" not in result
     except Exception as e:
         pytest.fail(f"Scalar math method conversion failed: {e}")
 

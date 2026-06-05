@@ -1087,6 +1087,7 @@ MOJO_MATH_HELPERS = {
     "power",
     "reflect",
     "refract",
+    "round_even",
     "smoothstep",
     "step",
 }
@@ -1329,6 +1330,7 @@ class MojoCodeGen:
             "sqrt": "sqrt",
             "inversesqrt": "rsqrt",
             "pow": "power",
+            "roundEven": "round_even",
             "abs": "abs",
             "min": "min",
             "max": "max",
@@ -12455,6 +12457,24 @@ class MojoCodeGen:
                 "fn fmod(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](fmod(a[0], b[0]), fmod(a[1], b[1]), fmod(a[2], b[2]), fmod(a[3], b[3]))\n\n"
             )
+        if helper_name == "round_even":
+            return (
+                "fn round_even(x: Float32) -> Float32:\n"
+                "    var lower = floor(x)\n"
+                "    var fraction = x - lower\n"
+                "    if fraction < 0.5:\n"
+                "        return lower\n"
+                "    if fraction > 0.5:\n"
+                "        return lower + 1.0\n"
+                "    var parity = lower - floor(lower / 2.0) * 2.0\n"
+                "    if parity == 0.0:\n"
+                "        return lower\n"
+                "    return lower + 1.0\n\n"
+                "fn round_even(v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](round_even(v[0]), round_even(v[1]))\n\n"
+                "fn round_even(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](round_even(v[0]), round_even(v[1]), round_even(v[2]), round_even(v[3]))\n\n"
+            )
         if helper_name == "cross_product":
             return (
                 "fn cross_product(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
@@ -13378,6 +13398,8 @@ class MojoCodeGen:
             if func_name in MOJO_MATRIX_TYPES:
                 return func_name
             if func_name in {"fract", "frac"} and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "roundEven" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name in {"inverse", "transpose"} and expr.args:
                 return self.expression_result_type(expr.args[0])

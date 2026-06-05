@@ -948,6 +948,42 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SUBGROUP_BROADCAST_REDUCE_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source pattern: reduced from Vulkan subgroupBroadcastFirst/subgroupAdd style
+; compute shader assembly emitted by glslang for subgroup arithmetic builtins.
+OpCapability Shader
+OpCapability GroupNonUniform
+OpCapability GroupNonUniformArithmetic
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %value %broadcast_out %sum_out
+OpExecutionMode %main LocalSize 32 1 1
+OpName %value "value"
+OpName %broadcast_out "broadcastOut"
+OpName %sum_out "sumOut"
+OpDecorate %value Location 0
+OpDecorate %broadcast_out Location 0
+OpDecorate %sum_out Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%uint_3 = OpConstant %uint 3
+%ptr_input_uint = OpTypePointer Input %uint
+%ptr_output_uint = OpTypePointer Output %uint
+%value = OpVariable %ptr_input_uint Input
+%broadcast_out = OpVariable %ptr_output_uint Output
+%sum_out = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %uint %value
+%broadcast = OpGroupNonUniformBroadcastFirst %uint %uint_3 %loaded
+%sum = OpGroupNonUniformIAdd %uint %uint_3 Reduce %loaded
+OpStore %broadcast_out %broadcast
+OpStore %sum_out %sum
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_ATOMIC_LOAD_STORE_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -3306,6 +3342,28 @@ def test_glslang_web_comp_barrier_instructions_codegen_reparse():
     assert "spirvControlBarrier(2, 2, 264);" in generated_code
     assert "spirvMemoryBarrier(1, 3400);" in generated_code
     assert "spirvMemoryBarrier(2, 3400);" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_subgroup_broadcast_and_reduce_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SUBGROUP_BROADCAST_REDUCE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "compute {" in generated_code
+    assert (
+        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;"
+        in generated_code
+    )
+    assert "uint value @input @location(0);" in generated_code
+    assert "uint broadcastOut @output @location(0);" in generated_code
+    assert "uint sumOut @output @location(1);" in generated_code
+    assert "broadcastOut = subgroupBroadcastFirst(value);" in generated_code
+    assert "sumOut = subgroupAdd(value);" in generated_code
+    assert "broadcastOut = broadcast;" not in generated_code
+    assert "sumOut = sum;" not in generated_code
+    assert "OpGroupNonUniform" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

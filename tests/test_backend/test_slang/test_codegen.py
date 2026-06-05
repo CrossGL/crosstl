@@ -2155,6 +2155,26 @@ def test_slang_saturate_builtin_lowers_to_crossgl_clamp():
     assert "saturate(" not in generated_code
 
 
+def test_slang_atan2_builtin_from_stdlib_reference_lowers_to_crossgl_atan():
+    # Source: Slang core module reference for atan2.
+    # URL: https://docs.shader-slang.org/en/latest/external/core-module-reference/global-decls/atan2.html
+    code = """
+    void main() {
+        float angle = atan2(y, x);
+        float2 angleVec = atan2(float2(1.0, 2.0), float2(3.0, 4.0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float angle = atan(y, x);" in generated_code
+    assert "vec2 angleVec = atan(vec2(1.0, 2.0), vec2(3.0, 4.0));" in generated_code
+    assert "atan2(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_derivative_intrinsics_codegen_from_official_fragment_derivative_tests():
     # Source: shader-slang/slang tests/hlsl-intrinsic/fragment-derivative.slang
     # at 85c65f862c045c929814e1abe6b31828d78030ed exercises ddx/ddy,

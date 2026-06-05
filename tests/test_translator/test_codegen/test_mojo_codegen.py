@@ -18384,6 +18384,34 @@ def test_builtin_function_call_names_are_mapped():
     assert "var i: Int32 = fmod(" not in generated_code
 
 
+def test_round_even_builtin_lowers_to_mojo_helper():
+    code = """
+    shader NumericGuards {
+        compute {
+            void main() {
+                float value = -2.5;
+                float scalarEven = roundEven(value);
+                vec3 vectorEven = roundEven(vec3(1.5, 2.5, 3.5));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn round_even(x: Float32) -> Float32:" in generated_code
+    assert (
+        "fn round_even(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:"
+        in generated_code
+    )
+    assert "var scalarEven: Float32 = round_even(value)" in generated_code
+    assert (
+        "var vectorEven: SIMD[DType.float32, 4] = "
+        "round_even(SIMD[DType.float32, 4](1.5, 2.5, 3.5, 0.0))" in generated_code
+    )
+    assert "roundEven(" not in generated_code
+
+
 def test_user_defined_mix_function_is_not_lowered_to_lerp():
     code = """
     shader main {
