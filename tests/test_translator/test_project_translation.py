@@ -3929,6 +3929,29 @@ def test_validate_project_report_rejects_current_translated_artifacts_without_ha
     assert "artifacts[0].generatedHash must be an object" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_current_translated_artifacts_without_source_maps(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["artifacts"][0].pop("sourceMap")
+    payload["summary"]["sourceMapCount"] = 0
+    payload["summary"]["fineGrainedSourceMapCount"] = 0
+    report_path = repo / "out" / "missing-source-map-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].sourceMap must be an object" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

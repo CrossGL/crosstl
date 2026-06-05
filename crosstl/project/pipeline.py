@@ -3603,8 +3603,12 @@ def _source_map_anchor_reasons(
     return reasons
 
 
-def _source_map_contract_reasons(index: int, artifact: Mapping[str, Any]) -> list[str]:
+def _source_map_contract_reasons(
+    index: int, artifact: Mapping[str, Any], *, required: bool = False
+) -> list[str]:
     if "sourceMap" not in artifact:
+        if required:
+            return [f"artifacts[{index}].sourceMap must be an object"]
         return []
 
     prefix = f"artifacts[{index}].sourceMap"
@@ -3885,7 +3889,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             reasons.extend(
                 _provenance_contract_reasons(index, artifact, required=has_summary)
             )
-            reasons.extend(_source_map_contract_reasons(index, artifact))
+            reasons.extend(
+                _source_map_contract_reasons(
+                    index,
+                    artifact,
+                    required=has_summary and status == "translated",
+                )
+            )
 
     diagnostics = report.get("diagnostics", [])
     if has_summary and "diagnostics" not in report:

@@ -194,6 +194,8 @@ Project reports are JSON documents with:
   provenance, and file-granularity source-map anchors for successful
   translations. Full reports require artifact source paths to match declared
   translation units and artifact source backend names to match those units.
+  Successful artifact records in full reports must include file-level
+  source-map anchors.
   Artifact provenance records the
   ``single-file-translate`` pipeline and uses ``crossgl`` as the intermediate
   marker only when both source and target backends route through the CrossGL
@@ -216,10 +218,11 @@ Project reports are JSON documents with:
   generated hash checks, duplicate artifact identity checks, per-artifact
   source/generated hash status fields, aggregate validation artifact and
   hash-status summary counts, failed artifact error metadata checks, required
-  artifact provenance and provenance value checks, source-map record shape, span
-  consistency, and anchor consistency checks, external corpus record, per-entry
-  artifact count, and summary checks, summary consistency checks, migration
-  action shape and target declaration checks,
+  artifact provenance and provenance value checks, required translated artifact
+  source maps, source-map record shape, span consistency, and anchor consistency
+  checks, external corpus record, per-entry artifact count, and summary checks,
+  summary consistency checks, migration action shape and target declaration
+  checks,
   preserved diagnostic shape, repository-relative file path, span consistency,
   and target declaration checks, validation toolchain status consistency
   checks, validation artifact and toolchain run record shape and duplicate
