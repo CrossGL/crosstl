@@ -3962,6 +3962,13 @@ class RustToCrossGLConverter:
             return f"distance({obj}, {args[0]})"
 
         if (
+            method_name == "perp_dot"
+            and len(args) == 1
+            and self.map_type(receiver_type) == "vec2"
+        ):
+            return f"(({obj}.x * {args[0]}.y) - ({obj}.y * {args[0]}.x))"
+
+        if (
             method_name in {"map", "filter", "for_each", "any", "all"}
             and len(args) == 1
             and isinstance(arg_nodes[0], ClosureNode)

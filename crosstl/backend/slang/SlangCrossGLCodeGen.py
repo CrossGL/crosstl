@@ -487,13 +487,7 @@ class SlangToCrossGLConverter:
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"
                 for member in node.members:
-                    semantic = self.map_semantic(member.semantic)
-                    semantic_suffix = f" {semantic}" if semantic else ""
-                    member_name = self.format_struct_member_name(node, member.name)
-                    code += (
-                        f"        {self.map_type(member.vtype)} {member_name}"
-                        f"{self.format_array_suffixes(member)}{semantic_suffix};\n"
-                    )
+                    code += f"        {self.generate_struct_member(node, member)};\n"
                 code += "    }\n"
         for node in ast.global_vars:
             code += self.generate_global_variable(node)
@@ -719,13 +713,7 @@ class SlangToCrossGLConverter:
                 return ""
             code = f"    struct {item.name} {{\n"
             for member in item.members:
-                semantic = self.map_semantic(member.semantic)
-                semantic_suffix = f" {semantic}" if semantic else ""
-                member_name = self.format_struct_member_name(item, member.name)
-                code += (
-                    f"        {self.map_type(member.vtype)} {member_name}"
-                    f"{self.format_array_suffixes(member)}{semantic_suffix};\n"
-                )
+                code += f"        {self.generate_struct_member(item, member)};\n"
             code += "    }\n"
             return code
         if isinstance(item, (VariableNode, AssignmentNode)):
@@ -987,6 +975,31 @@ class SlangToCrossGLConverter:
             f"{self.format_identifier(node.name)}{self.format_array_suffixes(node)}"
             f"{self.format_variable_metadata(node)}"
         )
+
+    def generate_struct_member(self, struct_node, member):
+        qualifiers = self.format_struct_member_qualifiers(member)
+        if qualifiers:
+            qualifiers += " "
+        member_name = self.format_struct_member_name(struct_node, member.name)
+        declaration = (
+            f"{qualifiers}{self.map_type(member.vtype)} {member_name}"
+            f"{self.format_array_suffixes(member)}"
+        )
+        if getattr(member, "value", None) is not None:
+            declaration += f" = {self.generate_expression(member.value)}"
+        semantic = self.map_semantic(member.semantic)
+        if semantic:
+            declaration += f" {semantic}"
+        return declaration
+
+    def format_struct_member_qualifiers(self, member):
+        allowed_qualifiers = {"static", "const"}
+        qualifiers = [
+            qualifier
+            for qualifier in getattr(member, "qualifiers", []) or []
+            if str(qualifier).lower() in allowed_qualifiers
+        ]
+        return " ".join(qualifiers)
 
     def format_variable_metadata(self, node):
         metadata = []

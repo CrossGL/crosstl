@@ -4378,11 +4378,17 @@ class CudaParser:
 
         identifier_name = self.current_token[1]
         close_index = self.current_index + 1
+        saw_declarator_marker = False
         while close_index < len(self.tokens) and self.tokens[close_index][0] in {
             "MULTIPLY",
             *self.TYPE_REFERENCE_TOKENS,
             *self.POSTFIX_TYPE_QUALIFIER_TOKENS,
         }:
+            if self.tokens[close_index][0] in {
+                "MULTIPLY",
+                *self.TYPE_REFERENCE_TOKENS,
+            }:
+                saw_declarator_marker = True
             close_index += 1
 
         if close_index >= len(self.tokens) or self.tokens[close_index][0] != "RPAREN":
@@ -4399,6 +4405,7 @@ class CudaParser:
 
         if (
             not self.is_identifier_type_name(identifier_name)
+            and not saw_declarator_marker
             and operand_index < len(self.tokens)
             and self.tokens[operand_index][0] in {"MULTIPLY", "BITWISE_AND"}
         ):

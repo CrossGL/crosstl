@@ -292,6 +292,28 @@ def test_visibility_qualified_struct_from_mlp_training_adam_sample():
     ]
 
 
+def test_static_const_struct_field_initializer_from_mlp_training_adam_sample():
+    # Source: shader-slang/slang@52339028a2aa703271533454c6b9528a534bac31
+    # examples/mlp-training/adam.slang
+    code = """
+    public struct AdamOptimizer
+    {
+        public static const NFloat beta1 = 0.9h;
+        public static const NFloat epsilon = 1e-7h;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    fields = ast.structs[0].members
+
+    assert [
+        (field.qualifiers, field.vtype, field.name, field.value) for field in fields
+    ] == [
+        (["public", "static", "const"], "NFloat", "beta1", "0.9h"),
+        (["public", "static", "const"], "NFloat", "epsilon", "1e-7h"),
+    ]
+
+
 def test_struct_property_declaration_parses_as_property_member():
     code = """
     struct Box {

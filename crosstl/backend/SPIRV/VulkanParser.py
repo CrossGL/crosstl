@@ -2932,6 +2932,26 @@ class VulkanParser:
                 )
             return access
 
+        if self.spirv_is_flattened_resource_block_access(
+            storage_class, struct_type_id, decorations
+        ):
+            member_name = member_names.get(struct_type_id, {}).get(
+                member_key, f"member{member_key}"
+            )
+            access = VariableNode("", member_name)
+            for index_operand in index_operands[1:]:
+                access = ArrayAccessNode(
+                    access,
+                    self.spirv_assembly_operand_expression(
+                        index_operand,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                )
+            return access
+
         if storage_class not in self.SPIRV_INTERFACE_STORAGE_CLASSES:
             return None
 
@@ -3895,6 +3915,20 @@ class VulkanParser:
             return names[value_id]
         return self.spirv_fallback_identifier(value_id, prefix)
 
+    def spirv_is_flattened_resource_block_access(
+        self, storage_class, struct_type_id, decorations
+    ):
+        struct_decorations = decorations.get(struct_type_id, [])
+        if not self.spirv_has_decoration(struct_decorations, "Block"):
+            return False
+        if storage_class == "PushConstant":
+            return True
+        if storage_class == "Uniform" and not self.spirv_has_decoration(
+            struct_decorations, "BufferBlock"
+        ):
+            return True
+        return False
+
     def spirv_function_name_fallback(self, function_id, entry_points_by_id):
         if function_id in entry_points_by_id:
             return entry_points_by_id[function_id][0].get("name")
@@ -4116,7 +4150,9 @@ class VulkanParser:
         if access_qualifier and access_qualifier not in declaration_qualifiers:
             declaration_qualifiers.append(access_qualifier)
 
-        variable_name = names.get(variable["id"]) or variable["id"].lstrip("%")
+        variable_name = self.spirv_assembly_value_name(
+            variable["id"], names, decorations
+        )
         variable_name += array_suffix
         return LayoutNode(
             qualifiers,
@@ -4414,9 +4450,11 @@ class VulkanParser:
         if not struct_fields:
             return None
 
-        variable_name = names.get(variable_id) or variable_id.lstrip("%")
+        variable_name = self.spirv_assembly_value_name(variable_id, names, decorations)
         block_name = (
-            names.get(struct_type_id) or variable_name or struct_type_id.lstrip("%")
+            names.get(struct_type_id)
+            or variable_name
+            or self.spirv_fallback_identifier(struct_type_id, "block")
         )
         qualifiers = []
         if storage_class in {"StorageBuffer", "Uniform"}:

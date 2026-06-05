@@ -9144,6 +9144,25 @@ class TestCudaCodeGen:
         assert "return LaneMask;" not in result
         assert "x;" not in result
 
+    def test_cuda_samples_const_unknown_pointer_pointer_c_style_cast_conversion(self):
+        code = """
+        void compile_shader(char* data, int size) {
+            glShaderSource(shader, 1, (const GLchar **)&data, &size);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "glShaderSource(shader, 1, ptr<ptr<GLchar>>((&data)), (&size));" in result
+        )
+        assert "const GLchar" not in result
+
     def test_range_based_for_loop_conversion(self):
         code = """
         void host(std::vector<float>& h) {

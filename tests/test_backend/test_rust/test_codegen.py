@@ -1190,6 +1190,26 @@ def test_rust_gpu_vector_associated_constants_codegen_from_upstream_compiletests
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_mouse_shader_perp_dot_method_codegen_from_upstream_example():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/mouse-shader/src/lib.rs main_fs background expression.
+    code = """
+    fn determinant_magnitude(to_frag: Vec2, start_to_end: Vec2) -> f32 {
+        to_frag.perp_dot(start_to_end).abs()
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "return abs(((to_frag.x * start_to_end.y) - "
+        "(to_frag.y * start_to_end.x)));" in result
+    )
+    assert ".perp_dot(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_reduce_shader_inferred_cast_target_codegen():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

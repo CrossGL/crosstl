@@ -959,6 +959,57 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_ANONYMOUS_RESOURCE_BLOCK_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d
+; Source path: test/diff/diff_files/small_functions_small_diffs_src.spvasm
+; Reduced from descriptor block variables named with empty OpName strings:
+; OpName %19 "" and OpName %24 "".
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %4 "main" %30
+OpExecutionMode %4 LocalSize 1 1 1
+OpName %17 "BufferOut"
+OpMemberName %17 0 "o"
+OpName %19 ""
+OpName %22 "BufferIn"
+OpMemberName %22 0 "i"
+OpName %24 ""
+OpName %30 "result"
+OpMemberDecorate %17 0 Offset 0
+OpDecorate %17 BufferBlock
+OpDecorate %19 DescriptorSet 0
+OpDecorate %19 Binding 1
+OpMemberDecorate %22 0 Offset 0
+OpDecorate %22 Block
+OpDecorate %24 DescriptorSet 0
+OpDecorate %24 Binding 0
+OpDecorate %30 Location 0
+%2 = OpTypeVoid
+%3 = OpTypeFunction %2
+%16 = OpTypeInt 32 0
+%17 = OpTypeStruct %16
+%18 = OpTypePointer Uniform %17
+%19 = OpVariable %18 Uniform
+%20 = OpTypeInt 32 1
+%21 = OpConstant %20 0
+%22 = OpTypeStruct %16
+%23 = OpTypePointer Uniform %22
+%24 = OpVariable %23 Uniform
+%25 = OpTypePointer Uniform %16
+%29 = OpTypePointer Output %16
+%30 = OpVariable %29 Output
+%4 = OpFunction %2 None %3
+%5 = OpLabel
+%26 = OpAccessChain %25 %24 %21
+%27 = OpLoad %16 %26
+%28 = OpAccessChain %25 %19 %21
+OpStore %28 %27
+OpStore %30 %27
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_ARRAY_LENGTH_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source version: SPIR-V 1.6 Revision 7, unified spec.
@@ -3648,6 +3699,25 @@ def test_spirv_assembly_runtime_array_buffer_block_codegen():
         in generated_code
     )
     assert "%storage" not in generated_code
+
+
+def test_spirv_tools_anonymous_resource_block_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_ANONYMOUS_RESOURCE_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert (
+        "RWStructuredBuffer<BufferOut> value_19 @set(0) @binding(1);" in generated_code
+    )
+    assert "cbuffer BufferIn @set(0) @binding(0) {" in generated_code
+    assert "uint i;" in generated_code
+    assert "uint result @output @location(0);" in generated_code
+    assert "value_19[0] = i;" in generated_code
+    assert "result = i;" in generated_code
+    assert "RWStructuredBuffer<BufferOut> 19" not in generated_code
+    assert "value_24" not in generated_code
+    assert "Unhandled statement type" not in generated_code
 
 
 def test_spirv_tools_array_length_codegen_reparse():

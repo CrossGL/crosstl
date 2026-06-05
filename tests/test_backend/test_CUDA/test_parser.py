@@ -2984,6 +2984,31 @@ class TestCudaParser:
         assert body[0].value.target_type == "LaneMask"
         assert body[0].value.expression == "x"
 
+    def test_cuda_samples_const_unknown_pointer_pointer_c_style_cast_parsing(self):
+        code = """
+        void compile_shader(char* data, int size) {
+            glShaderSource(shader, 1, (const GLchar **)&data, &size);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        call = ast.functions[0].body[0]
+        shader_source = call.args[2]
+        size_arg = call.args[3]
+
+        assert isinstance(call, FunctionCallNode)
+        assert isinstance(shader_source, CastNode)
+        assert shader_source.target_type == "const GLchar * *"
+        assert isinstance(shader_source.expression, UnaryOpNode)
+        assert shader_source.expression.op == "&"
+        assert shader_source.expression.operand == "data"
+        assert isinstance(size_arg, UnaryOpNode)
+        assert size_arg.op == "&"
+        assert size_arg.operand == "size"
+
     def test_auto_pointer_reference_local_declarations_parsing(self):
         code = """
         void host(std::vector<float>& h, float* data) {

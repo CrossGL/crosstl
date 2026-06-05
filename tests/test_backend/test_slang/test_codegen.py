@@ -198,6 +198,26 @@ def test_visibility_qualified_struct_codegen_from_mlp_training_adam_sample():
     assert "internal" not in generated_code
 
 
+def test_static_const_struct_field_initializer_codegen_from_mlp_training_adam_sample():
+    # Source: shader-slang/slang@52339028a2aa703271533454c6b9528a534bac31
+    # examples/mlp-training/adam.slang
+    code = """
+    public struct AdamOptimizer
+    {
+        public static const NFloat beta1 = 0.9h;
+        public static const NFloat epsilon = 1e-7h;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "static const NFloat beta1 = 0.9;" in generated_code
+    assert "static const NFloat epsilon = 0.0000001;" in generated_code
+    assert "public" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_reserved_crossgl_names_are_sanitized_from_reflection_api_sample():
     code = """
     struct RasterVertex
