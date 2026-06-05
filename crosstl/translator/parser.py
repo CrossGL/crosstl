@@ -1275,9 +1275,8 @@ class Parser:
 
             break
 
-        if self.current_token[0] == "IDENTIFIER" and self.peek()[0] == "COLON":
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+        if self.current_token_is_binding_identifier() and self.peek()[0] == "COLON":
+            name = self.parse_binding_identifier()
             self.eat("COLON")
             member_type = self.parse_type()
 
@@ -1319,7 +1318,7 @@ class Parser:
             self.eat("RBRACKET")
             member_type = ArrayType(member_type, size)
 
-        if self.current_token[0] != "IDENTIFIER":
+        if not self.current_token_is_binding_identifier():
             # Skip malformed member
             while self.current_token[0] not in ["SEMICOLON", "RBRACE", "EOF"]:
                 self.skip_unknown_token()
@@ -1327,8 +1326,7 @@ class Parser:
                 self.skip_unknown_token()
             return None
 
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_binding_identifier()
 
         while self.current_token[
             0
@@ -1481,10 +1479,12 @@ class Parser:
         else:
             return_type = self.parse_type()
 
-        if self.current_token[0] not in ["IDENTIFIER", "KERNEL"]:
+        if not (
+            self.current_token[0] == "KERNEL"
+            or self.current_token_is_binding_identifier()
+        ):
             raise SyntaxError(f"Expected function name, got {self.current_token[0]}")
-        name = self.current_token[1]
-        self.eat(self.current_token[0])
+        name = self.parse_binding_identifier()
 
         generic_params = []
         if self.current_token[0] == "LESS_THAN":
@@ -1556,9 +1556,8 @@ class Parser:
             is_mutable = True
             self.eat("MUT")
 
-        if self.current_token[0] == "IDENTIFIER" and self.peek()[0] == "COLON":
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+        if self.current_token_is_binding_identifier() and self.peek()[0] == "COLON":
+            name = self.parse_binding_identifier()
             self.eat("COLON")
             param_type = self.parse_type()
         elif (
@@ -1566,13 +1565,11 @@ class Parser:
             and self.current_token[1] == "self"
             and self.peek()[0] in ["COMMA", "RPAREN"]
         ):
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            name = self.parse_binding_identifier()
             param_type = NamedType("Self")
         else:
             param_type = self.parse_type()
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            name = self.parse_binding_identifier()
 
         while self.current_token[
             0
@@ -1609,6 +1606,9 @@ class Parser:
         while True:
             token_type, token_value = self.current_token
             normalized = str(token_value).lower() if token_value else ""
+
+            if self.current_token_is_binding_identifier() and self.peek()[0] == "COLON":
+                return qualifiers
 
             if self.current_token_is_parameter_qualifier():
                 qualifiers.append(normalized)
@@ -2678,8 +2678,7 @@ class Parser:
             self.eat(self.current_token[0])
 
         var_type = self.parse_type()
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_binding_identifier()
 
         while self.current_token[0] == "LBRACKET":
             self.eat("LBRACKET")
@@ -3114,8 +3113,7 @@ class Parser:
         while True:
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
-                member = self.current_token[1]
-                self.eat("IDENTIFIER")
+                member = self.parse_binding_identifier()
                 left = MemberAccessNode(left, member)
             elif self.is_arrow_token():
                 self.eat_arrow()
@@ -3476,6 +3474,43 @@ class Parser:
             return expr
 
         elif self.current_token[0] == "MATCH":
+            if self.peek()[0] in {
+                "ASSIGN_ADD",
+                "ASSIGN_AND",
+                "ASSIGN_DIV",
+                "ASSIGN_MOD",
+                "ASSIGN_MUL",
+                "ASSIGN_OR",
+                "ASSIGN_SHIFT_LEFT",
+                "ASSIGN_SHIFT_RIGHT",
+                "ASSIGN_SUB",
+                "ASSIGN_XOR",
+                "BITWISE_AND",
+                "BITWISE_OR",
+                "COMMA",
+                "DIVIDE",
+                "DOT",
+                "EQUAL",
+                "EQUALS",
+                "GREATER_THAN",
+                "LBRACKET",
+                "LESS_THAN",
+                "LOGICAL_AND",
+                "LOGICAL_OR",
+                "LPAREN",
+                "MINUS",
+                "MOD",
+                "MULTIPLY",
+                "NOT_EQUAL",
+                "PLUS",
+                "RBRACE",
+                "RBRACKET",
+                "RPAREN",
+                "SEMICOLON",
+            }:
+                name = self.current_token[1]
+                self.eat("MATCH")
+                return IdentifierNode(name)
             return self.parse_match_statement()
 
         elif self.current_token[0] == "LBRACE":
@@ -3658,7 +3693,10 @@ class Parser:
 
     def current_token_starts_bare_function_name(self):
         """Return whether the current token is a ``fn name`` style function name."""
-        if self.current_token[0] not in ["IDENTIFIER", "KERNEL"]:
+        if not (
+            self.current_token[0] == "KERNEL"
+            or self.current_token_is_binding_identifier()
+        ):
             return False
 
         offset = 1
@@ -3720,8 +3758,11 @@ class Parser:
 
             if self.is_type_token():
                 self.advance_over_type()
-                if self.current_token[0] in ["IDENTIFIER", "KERNEL"]:
-                    self.eat(self.current_token[0])
+                if (
+                    self.current_token[0] == "KERNEL"
+                    or self.current_token_is_binding_identifier()
+                ):
+                    self.parse_binding_identifier()
                     # Skip generic parameters if present
                     if self.current_token[0] == "LESS_THAN":
                         depth = 1

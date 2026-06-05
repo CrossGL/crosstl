@@ -28,6 +28,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
     },
+    "shader-slang/slang-types-interface-2026-06-05": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
+    },
     "shader-slang/slang-gfx-tools-2026": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "c6f104ca76a54ca1565dac54363ea763dd906de6",
@@ -1092,6 +1096,86 @@ def test_generated_type_equality_property_syntax_parse():
     assert function.generic_constraints[0].parameter == "T.PropertyType"
     assert function.generic_constraints[0].relation == "=="
     assert function.generic_constraints[0].constraint_type == "int"
+
+
+def test_generated_interface_constructor_requirement_parse():
+    # Source: shader-slang/slang@564ac9f050d6569efd773e2f74e7d067a4e54baa
+    # docs/generated/tests/conformance/types-interface/
+    # interface-constructor-requirement.slang
+    source = """
+        interface IInitializable
+        {
+            __init(int v);
+            int getValue();
+        }
+
+        struct InitStruct : IInitializable
+        {
+            int stored;
+
+            __init(int v)
+            {
+                stored = v * 2;
+            }
+
+            int getValue() { return stored; }
+        }
+    """
+
+    ast = parse_slang(source)
+    interface = ast.interfaces[0]
+    constructor = interface.methods[0]
+    get_value = interface.methods[1]
+    struct_constructor = ast.structs[0].methods[0]
+
+    assert interface.name == "IInitializable"
+    assert constructor.name == "__init"
+    assert constructor.return_type == "void"
+    assert constructor.is_declaration is True
+    assert [(param.vtype, param.name) for param in constructor.params] == [("int", "v")]
+    assert get_value.name == "getValue"
+    assert get_value.is_declaration is True
+    assert struct_constructor.name == "__init"
+    assert struct_constructor.is_declaration is False
+
+
+def test_generated_interface_subscript_requirement_parse():
+    # Source: shader-slang/slang@564ac9f050d6569efd773e2f74e7d067a4e54baa
+    # docs/generated/tests/conformance/types-interface/
+    # interface-subscript-requirement.slang
+    source = """
+        interface IIndexable
+        {
+            __subscript(uint i) -> int { get; set; }
+        }
+
+        struct FixedArray : IIndexable
+        {
+            int data[4];
+
+            __subscript(uint i) -> int
+            {
+                get { return data[i]; }
+                set { data[i] = newValue; }
+            }
+        }
+    """
+
+    ast = parse_slang(source)
+    requirement = ast.interfaces[0].methods[0]
+    implementation = ast.structs[0].methods[0]
+
+    assert requirement.name == "operator[]"
+    assert requirement.slang_name == "__subscript"
+    assert requirement.is_declaration is True
+    assert requirement.return_type == "int"
+    assert [(param.vtype, param.name) for param in requirement.params] == [
+        ("uint", "i")
+    ]
+    assert requirement.property_accessors == {"get": [], "set": []}
+    assert implementation.name == "operator[]"
+    assert implementation.is_declaration is False
+    assert set(implementation.property_accessors) == {"get", "set"}
 
 
 def test_core_meta_interface_static_const_value_requirements_parse():

@@ -1605,6 +1605,33 @@ def test_constants_emit_mojo_aliases_and_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_keyword_like_crossgl_bindings_are_escaped_for_mojo():
+    code = """
+    shader KeywordBindingMojo {
+        const int alias = 2;
+
+        struct Payload {
+            return: int;
+            int fn;
+        };
+
+        int fn(int var, int loop) {
+            int struct = var + loop + alias;
+            return struct;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "alias alias_ = 2" in generated_code
+    assert "    var return_: Int32" in generated_code
+    assert "    var fn_: Int32" in generated_code
+    assert "fn fn_(var_: Int32, loop: Int32) -> Int32:" in generated_code
+    assert "var struct_: Int32 = ((var_ + loop) + alias_)" in generated_code
+    assert "return struct_" in generated_code
+
+
 def test_stage_local_resources_are_visible_to_mojo_stage_helpers():
     code = """
     shader StageLocalResourceMojo {
@@ -25501,6 +25528,42 @@ def test_buffer_block_with_structured_buffer_resource():
     assert ("StructuredBuffer", "float") in codegen.required_buffer_load_helpers
     assert ("StructuredBuffer", "float") in codegen.required_buffer_dimensions_helpers
     assert codegen.expression_result_type(BufferOpNode("Load", buf, [idx])) == "float"
+
+
+def test_mojo_keyword_like_bindings_escape_in_declarations_calls_and_members():
+    code = """
+    struct KeywordFields {
+        type: float;
+        match: vec4;
+    };
+
+    fn match(type: float, match: vec3) -> float {
+        float while = type + match.x;
+        return while;
+    }
+
+    fn read(input: KeywordFields) -> float {
+        return match(input.type, vec3(1.0, 2.0, 3.0)) + input.match.x;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var type_: Float32" in generated_code
+    assert "var match_: SIMD[DType.float32, 4]" in generated_code
+    assert (
+        "fn match_(type_: Float32, match_: SIMD[DType.float32, 4]) -> Float32:"
+        in generated_code
+    )
+    assert "var while_: Float32 = (type_ + match_[0])" in generated_code
+    assert "return while_" in generated_code
+    assert (
+        "return (match_(input.type_, SIMD[DType.float32, 4](1.0, 2.0, 3.0, 0.0)) "
+        "+ input.match_[0])"
+    ) in generated_code
+    assert "fn match(" not in generated_code
+    assert "var while:" not in generated_code
+    assert "input.match.x" not in generated_code
 
 
 if __name__ == "__main__":

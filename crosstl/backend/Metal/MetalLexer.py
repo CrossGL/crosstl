@@ -159,6 +159,7 @@ TOKENS = tuple(
         ("QUESTION", r"\?"),
         # Member access must be checked before the single-character minus token.
         ("ARROW", r"->"),
+        ("ELLIPSIS", r"\.\.\."),
         ("DOT", r"\."),
         # Shift and assignment operators (multi-char first)
         ("ASSIGN_SHIFT_LEFT", r"<<="),

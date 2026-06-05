@@ -4,6 +4,7 @@ from crosstl.backend.HIP.HipAst import (
     FunctionCallNode,
     HipAsmNode,
     KernelLaunchNode,
+    UnaryOpNode,
     VariableNode,
 )
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
@@ -18,6 +19,7 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
         "paths": [
             "Applications/convolution/main.hip",
+            "Common/rocjpeg_utils.hpp",
             "HIP-Basic/bit_extract/main.hip",
             "HIP-Basic/cooperative_groups/main.hip",
             "HIP-Basic/device_globals/main.hip",
@@ -653,6 +655,25 @@ def test_external_rocm_histogram_ffs_codegen_reparse():
     assert b_bits_length.value.left.name == "__ffs"
     assert "var b_bits_length: i32 = ((findLSB(block_size) + 1) - 3);" in crossgl
     assert "__ffs" not in crossgl
+
+
+def test_external_rocm_rocjpeg_alignment_bitwise_not_codegen_reparse():
+    # Upstream: ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
+    # Common/rocjpeg_utils.hpp.
+    source = """
+    static inline int align(int value, int alignment)
+    {
+        return (value + alignment - 1) & ~(alignment - 1);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    return_expr = ast.statements[0].body[0].value
+
+    assert return_expr.op == "&"
+    assert isinstance(return_expr.right, UnaryOpNode)
+    assert return_expr.right.op == "~"
+    assert "return (((value + alignment) - 1) & (~(alignment - 1)));" in crossgl
 
 
 def test_external_rocm_hip_tests_clz_intrinsics_codegen_reparse():

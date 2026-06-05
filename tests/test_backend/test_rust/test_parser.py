@@ -113,6 +113,33 @@ def test_raw_identifier_parsing_normalizes_keyword_names():
     assert function.body[0] == "match"
 
 
+def test_primitive_named_impl_methods_parse_from_rust_gpu_metadata():
+    code = """
+    pub struct TestMetadata {
+        output_type: OutputType,
+        epsilon: Option<f32>,
+    }
+
+    enum OutputType { Raw, F32, F64, U32, I32 }
+
+    impl TestMetadata {
+        pub fn f32(epsilon: f32) -> Self {
+            Self { output_type: OutputType::F32, epsilon: Some(epsilon) }
+        }
+
+        pub fn u32() -> Self {
+            Self { output_type: OutputType::U32, ..Default::default() }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    impl_block = ast.impl_blocks[0]
+
+    assert [method.name for method in impl_block.methods] == ["f32", "u32"]
+    assert impl_block.methods[0].params[0].vtype == "f32"
+
+
 def test_enum_parsing():
     code = """
     #[repr(u32)]

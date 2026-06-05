@@ -1072,14 +1072,16 @@ class VulkanParser:
                 expressions[result_id] = VariableNode("", variable_name)
                 expression_type_ids[result_id] = operands[0]
                 if storage_class == "Function":
-                    variable_type = (
-                        self.spirv_type_name(pointer_type.get("type_id"), types)
-                        or pointer_type.get("type_id")
-                        or ""
+                    variable_type, array_suffix = self.spirv_type_name_and_suffix(
+                        pointer_type.get("type_id"),
+                        types,
+                        constants,
+                        names=names,
                     )
+                    variable_type = variable_type or pointer_type.get("type_id") or ""
                     declaration = VariableNode(
                         variable_type,
-                        variable_name,
+                        f"{variable_name}{array_suffix}",
                         spirv_id=result_id,
                         spirv_type_id=pointer_type.get("type_id"),
                     )

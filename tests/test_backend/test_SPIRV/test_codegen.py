@@ -615,6 +615,36 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_LOCAL_ARRAY_VARIABLE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/web.operations.frag.out
+; Reduced from function-local OpTypeArray variables in the fragment main body.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %main "main"
+OpName %out_value "outValue"
+OpName %arr "arr"
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%uint = OpTypeInt 32 0
+%uint_2 = OpConstant %uint 2
+%arr_int_2 = OpTypeArray %int %uint_2
+%ptr_function_arr_int_2 = OpTypePointer Function %arr_int_2
+%ptr_output_float = OpTypePointer Output %float
+%fn = OpTypeFunction %void
+%out_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%arr = OpVariable %ptr_function_arr_int_2 Function
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_PUSH_CONSTANT_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -3048,6 +3078,17 @@ def test_glslang_any_all_codegen_reparse():
     assert "allOut = all((value == value));" in generated_code
     assert "anyOut = hasAny;" not in generated_code
     assert "allOut = hasAll;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_function_local_array_variable_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_LOCAL_ARRAY_VARIABLE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int arr[2];" in generated_code
+    assert "%arr_int_2 arr;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

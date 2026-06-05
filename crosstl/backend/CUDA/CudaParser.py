@@ -138,6 +138,14 @@ class CudaParser:
         "noexcept",
         "__noexcept",
     }
+    STATEMENT_DIRECTIVE_FOLLOW_TOKENS = {
+        "FOR",
+        "IF",
+        "WHILE",
+        "DO",
+        "SWITCH",
+        "LBRACE",
+    }
     FUNCTION_IDENTIFIER_SPECIFIERS = {
         "APIENTRY",
         "CALLBACK",
@@ -1794,6 +1802,40 @@ class CudaParser:
             for character in name
         )
 
+    def is_statement_directive_marker_start(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+
+        marker_end = self.statement_directive_marker_end_index(self.current_index)
+        return (
+            marker_end is not None
+            and marker_end < len(self.tokens)
+            and self.tokens[marker_end][0] in self.STATEMENT_DIRECTIVE_FOLLOW_TOKENS
+        )
+
+    def statement_directive_marker_end_index(self, index):
+        if index >= len(self.tokens) or self.tokens[index][0] != "IDENTIFIER":
+            return None
+
+        name = self.tokens[index][1]
+        if name == "_Pragma":
+            if index + 1 >= len(self.tokens) or self.tokens[index + 1][0] != "LPAREN":
+                return None
+            return self.skip_balanced_tokens_at_index(index + 1, "LPAREN", "RPAREN")
+
+        if not self.is_macro_like_identifier(name):
+            return None
+
+        index += 1
+        if index < len(self.tokens) and self.tokens[index][0] == "LPAREN":
+            index = self.skip_balanced_tokens_at_index(index, "LPAREN", "RPAREN")
+        return index
+
+    def skip_statement_directive_marker(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_parentheses()
+
     def skip_macro_block_invocation(self):
         if self.is_bare_macro_before_block_invocation():
             self.eat("IDENTIFIER")
@@ -2625,6 +2667,9 @@ class CudaParser:
         elif self.is_macro_block_invocation_start():
             self.skip_macro_block_invocation()
             return None
+        elif self.is_statement_directive_marker_start():
+            self.skip_statement_directive_marker()
+            return self.parse_statement()
         elif self.is_variable_declaration():
             declarations = self.parse_variable_declaration_list()
             self.eat("SEMICOLON")

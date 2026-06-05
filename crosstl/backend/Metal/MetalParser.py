@@ -627,8 +627,14 @@ class MetalParser:
     def parse_template_parameter_tokens(self, tokens):
         for idx, (token_type, value) in enumerate(tokens):
             if value == "typename" or token_type == "CLASS":
-                if idx + 1 < len(tokens) and tokens[idx + 1][0] == "IDENTIFIER":
-                    return (value, tokens[idx + 1][1])
+                name_idx = idx + 1
+                is_variadic = False
+                if name_idx < len(tokens) and tokens[name_idx][0] == "ELLIPSIS":
+                    is_variadic = True
+                    name_idx += 1
+                if name_idx < len(tokens) and tokens[name_idx][0] == "IDENTIFIER":
+                    kind = f"{value}..." if is_variadic else value
+                    return (kind, tokens[name_idx][1])
         if len(tokens) >= 2 and tokens[-1][0] == "IDENTIFIER":
             return ("value", tokens[-1][1])
         return None
@@ -1319,6 +1325,10 @@ class MetalParser:
             pointer_suffix += "*" if self.current_token[0] == "MULTIPLY" else "&"
             self.eat(self.current_token[0])
 
+        if self.current_token[0] == "ELLIPSIS":
+            pointer_suffix += "..."
+            self.eat("ELLIPSIS")
+
         return base_type + pointer_suffix, qualifiers
 
     def is_type_qualifier_start(self):
@@ -1936,6 +1946,17 @@ class MetalParser:
     def parse_parameters(self):
         params = []
         while self.current_token[0] != "RPAREN":
+            if self.current_token[0] == "ELLIPSIS":
+                self.eat("ELLIPSIS")
+                params.append(VariableNode("...", ""))
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    continue
+                if self.current_token[0] == "RPAREN":
+                    break
+                raise SyntaxError(
+                    f"Expected comma or closing parenthesis, got {self.current_token[0]}"
+                )
             attributes = self.parse_attributes()
             vtype, qualifiers = self.parse_type_specifier()
             name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
@@ -2789,6 +2810,10 @@ class MetalParser:
             if self.current_token[0] == "LPAREN":
                 node = self.parse_call(node)
                 continue
+            if self.current_token[0] == "ELLIPSIS":
+                self.eat("ELLIPSIS")
+                node = UnaryOpNode("post...", node)
+                continue
             if self.current_token[0] == "LBRACE" and isinstance(node, VariableNode):
                 initializer = self.parse_initializer_list()
                 node = FunctionCallNode(node.name, [initializer])
@@ -3163,14 +3188,8 @@ class MetalParser:
                 continue
             self.eat("LBRACKET")
             index = self.parse_designator_bound_expression()
-            if (
-                self.current_token[0] == "DOT"
-                and self.peek(1)[0] == "DOT"
-                and self.peek(2)[0] == "DOT"
-            ):
-                self.eat("DOT")
-                self.eat("DOT")
-                self.eat("DOT")
+            if self.current_token[0] == "ELLIPSIS":
+                self.eat("ELLIPSIS")
                 end = self.parse_designator_bound_expression()
                 designators.append(("range", index, end))
                 self.eat("RBRACKET")
@@ -3190,11 +3209,7 @@ class MetalParser:
             if depth == 0:
                 if token_type == "RBRACKET":
                     break
-                if (
-                    token_type == "DOT"
-                    and self.peek(1)[0] == "DOT"
-                    and self.peek(2)[0] == "DOT"
-                ):
+                if token_type == "ELLIPSIS":
                     break
             if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
                 depth += 1

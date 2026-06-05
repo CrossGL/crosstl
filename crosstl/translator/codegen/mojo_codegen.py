@@ -1481,35 +1481,37 @@ class MojoCodeGen:
                             node.initial_value, vtype, f"global declaration {node.name}"
                         )
                         init_expr = self.generate_expression(node.initial_value)
+                    var_name = self.mojo_identifier(node.name)
                     if vtype is None:
-                        code += f"var {node.name} = {init_expr}\n"
+                        code += f"var {var_name} = {init_expr}\n"
                         continue
-                    code += f"var {node.name}: {self.map_type(vtype)} = {init_expr}\n"
+                    code += f"var {var_name}: {self.map_type(vtype)} = {init_expr}\n"
                     continue
 
                 # Handle both old and new AST variable structures
                 vtype = self.variable_declared_type(node) or "float"
                 self.register_variable_type(node.name, vtype)
                 resource_comment = self.generate_resource_metadata_comment(node, vtype)
+                var_name = self.mojo_identifier(node.name)
                 if self.is_array_type_name(vtype):
                     code += resource_comment
                     code += (
-                        f"var {node.name} = "
+                        f"var {var_name} = "
                         f"{self.array_initial_value_for_type(vtype)}\n"
                     )
                 elif self.is_struct_type_name(vtype):
                     code += resource_comment
-                    code += f"var {node.name} = {self.zero_value_for_type(vtype)}\n"
+                    code += f"var {var_name} = {self.zero_value_for_type(vtype)}\n"
                 elif self.is_resource_type_name(vtype):
                     code += resource_comment
                     mapped_type = self.map_type(vtype)
                     code += (
-                        f"var {node.name}: {mapped_type} = "
+                        f"var {var_name}: {mapped_type} = "
                         f"{self.zero_value_for_type(vtype)}\n"
                     )
                 else:
                     code += (
-                        f"var {node.name}: {self.map_type(vtype)} = "
+                        f"var {var_name}: {self.map_type(vtype)} = "
                         f"{self.zero_value_for_type(vtype)}\n"
                     )
 
@@ -2465,27 +2467,29 @@ class MojoCodeGen:
             init_expr = self.generate_expression(
                 node.initial_value, variable_type, f"stage declaration {node.name}"
             )
+            var_name = self.mojo_identifier(node.name)
             return (
                 f"{self.generate_resource_metadata_comment(node, variable_type)}"
-                f"var {node.name}: {self.map_type(variable_type)} = {init_expr}\n"
+                f"var {var_name}: {self.map_type(variable_type)} = {init_expr}\n"
             )
 
         resource_comment = self.generate_resource_metadata_comment(node, variable_type)
+        var_name = self.mojo_identifier(node.name)
         if self.is_array_type_name(variable_type):
             return (
-                f"{resource_comment}var {node.name} = "
+                f"{resource_comment}var {var_name} = "
                 f"{self.array_initial_value_for_type(variable_type)}\n"
             )
         if self.is_struct_type_name(variable_type):
-            return f"{resource_comment}var {node.name} = {self.zero_value_for_type(variable_type)}\n"
+            return f"{resource_comment}var {var_name} = {self.zero_value_for_type(variable_type)}\n"
         if self.is_resource_type_name(variable_type):
             mapped_type = self.map_type(variable_type)
             return (
-                f"{resource_comment}var {node.name}: {mapped_type} = "
+                f"{resource_comment}var {var_name}: {mapped_type} = "
                 f"{self.zero_value_for_type(variable_type)}\n"
             )
         return (
-            f"var {node.name}: {self.map_type(variable_type)} = "
+            f"var {var_name}: {self.map_type(variable_type)} = "
             f"{self.zero_value_for_type(variable_type)}\n"
         )
 
@@ -2614,7 +2618,7 @@ class MojoCodeGen:
             value = getattr(node, "value", None)
             self.register_variable_type(name, const_type)
             value_code = self.generate_expression(value, const_type, f"constant {name}")
-            code += f"alias {name} = {value_code}\n"
+            code += f"alias {self.mojo_identifier(name)} = {value_code}\n"
         return f"{code}\n" if code else ""
 
     def collect_function_return_types(self, ast):
@@ -3565,7 +3569,10 @@ class MojoCodeGen:
             for field_name, field_type in generic_enum_specialized_fields(
                 self, specialization
             ):
-                code += f"    var {field_name}: {self.map_type(field_type)}\n"
+                code += (
+                    f"    var {self.mojo_identifier(field_name)}: "
+                    f"{self.map_type(field_type)}\n"
+                )
             code += "\n"
         return code
 
@@ -3608,7 +3615,7 @@ class MojoCodeGen:
                     if field_name in all_field_names:
                         rendered_fields[field_name] = f"payload{index}"
                 field_args = [
-                    f"{field_name}={rendered_fields[field_name]}"
+                    f"{self.mojo_identifier(field_name)}={rendered_fields[field_name]}"
                     for field_name in self.struct_types[specialization["struct_name"]]
                 ]
                 code += (
@@ -5197,7 +5204,10 @@ class MojoCodeGen:
         code = f"@value\nstruct {node.name}:\n"
         code += "    var variant: Int32\n"
         for field_name, field_type in fields:
-            code += f"    var {field_name}: {self.map_type(field_type)}\n"
+            code += (
+                f"    var {self.mojo_identifier(field_name)}: "
+                f"{self.map_type(field_type)}\n"
+            )
         code += "\n"
 
         code += self.generate_payload_enum_constants(node)
@@ -5280,7 +5290,7 @@ class MojoCodeGen:
                     continue
                 rendered_fields[field_name] = f"payload{index}"
             field_args = [
-                f"{field_name}={rendered_fields[field_name]}"
+                f"{self.mojo_identifier(field_name)}={rendered_fields[field_name]}"
                 for field_name in self.struct_types[node.name]
             ]
             code += f"    return {node.name}({', '.join(field_args)})\n\n"
@@ -5508,13 +5518,13 @@ class MojoCodeGen:
             if self.is_array_type_name(member_type):
                 element_type, size = self.parse_array_type_name(member_type)
                 code += (
-                    f"    var {member_name}: "
+                    f"    var {self.mojo_identifier(member_name)}: "
                     f"{self.array_storage_type(element_type, size)}"
                     f"{semantic_comment}\n"
                 )
             else:
                 code += (
-                    f"    var {member_name}: "
+                    f"    var {self.mojo_identifier(member_name)}: "
                     f"{self.map_type(member_type)}{semantic_comment}\n"
                 )
 
@@ -5572,12 +5582,19 @@ class MojoCodeGen:
         return code
 
     def generate_zero_initialized_variable(self, name, type_name):
+        emitted_name = self.mojo_identifier(name)
         if self.is_array_type_name(type_name):
-            return f"var {name} = {self.array_initial_value_for_type(type_name)}\n"
+            return (
+                f"var {emitted_name} = "
+                f"{self.array_initial_value_for_type(type_name)}\n"
+            )
         if self.is_struct_type_name(type_name):
-            return f"var {name} = {self.zero_value_for_type(type_name)}\n"
+            return f"var {emitted_name} = {self.zero_value_for_type(type_name)}\n"
         mapped_type = self.map_type(type_name)
-        return f"var {name}: {mapped_type} = {self.zero_value_for_type(type_name)}\n"
+        return (
+            f"var {emitted_name}: {mapped_type} = "
+            f"{self.zero_value_for_type(type_name)}\n"
+        )
 
     def generate_function(self, func, indent=0, shader_type=None, stage_node=None):
         """Render one CrossGL function or shader entry point as Mojo code."""
@@ -5653,10 +5670,14 @@ class MojoCodeGen:
                     )
                 )
             ownership = "owned " if p.name in mutated_params else ""
-            params.append(f"{ownership}{p.name}: {self.map_type(param_type)}")
+            params.append(
+                f"{ownership}{self.mojo_identifier(p.name)}: {self.map_type(param_type)}"
+            )
         for name, param_type in extra_param_infos:
             ownership = "owned " if name in mutated_params else ""
-            params.append(f"{ownership}{name}: {self.map_type(param_type)}")
+            params.append(
+                f"{ownership}{self.mojo_identifier(name)}: {self.map_type(param_type)}"
+            )
 
         params_str = ", ".join(params) if params else ""
 
@@ -5693,7 +5714,10 @@ class MojoCodeGen:
         if return_semantic:
             code += self.generate_return_semantic_comment(shader_type, return_semantic)
 
-        code += f"fn {function_name}({params_str}) -> {self.map_type(return_type)}:\n"
+        code += (
+            f"fn {self.mojo_identifier(function_name)}({params_str}) -> "
+            f"{self.map_type(return_type)}:\n"
+        )
         if stage_node is not None:
             code += self.generate_function_local_shared_declarations(
                 stage_node, indent + 1
@@ -6294,7 +6318,7 @@ class MojoCodeGen:
                         size = array_match.group(2)
                         base_type = "Float32"  # Default, could be improved
                         return (
-                            f"{indent_str}var {stmt.name} = "
+                            f"{indent_str}var {self.mojo_identifier(stmt.name)} = "
                             f"InlineArray[{base_type}, {size}]"
                             "(unsafe_uninitialized=True)\n"
                         )
@@ -6328,28 +6352,30 @@ class MojoCodeGen:
                     var_type,
                     f"declaration {stmt.name}",
                 )
+                var_name = self.mojo_identifier(stmt.name)
                 if var_type is None:
-                    return f"{prelude}{indent_str}var {stmt.name} = {init_expr}\n"
+                    return f"{prelude}{indent_str}var {var_name} = {init_expr}\n"
                 return (
-                    f"{prelude}{indent_str}var {stmt.name}: "
+                    f"{prelude}{indent_str}var {var_name}: "
                     f"{self.map_type(var_type)} = {init_expr}\n"
                 )
 
             var_type = var_type or "float"
             self.register_variable_type(stmt.name, var_type)
             self.register_resource_access_metadata(stmt, var_type)
+            var_name = self.mojo_identifier(stmt.name)
             if self.is_array_type_name(var_type):
                 return (
-                    f"{indent_str}var {stmt.name} = "
+                    f"{indent_str}var {var_name} = "
                     f"{self.array_initial_value_for_type(var_type)}\n"
                 )
             elif self.is_struct_type_name(var_type):
                 return (
-                    f"{indent_str}var {stmt.name} = "
+                    f"{indent_str}var {var_name} = "
                     f"{self.zero_value_for_type(var_type)}\n"
                 )
             else:
-                return f"{indent_str}var {stmt.name}: {self.map_type(var_type)}\n"
+                return f"{indent_str}var {var_name}: {self.map_type(var_type)}\n"
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
         elif isinstance(stmt, AssignmentNode):
@@ -6444,11 +6470,12 @@ class MojoCodeGen:
         assignment_op = "+=" if op == "++" else "-="
         indent_str = "    " * indent
         update = f"{indent_str}{operand} {assignment_op} 1\n"
+        var_name = self.mojo_identifier(stmt.name)
         if var_type is None:
-            declaration = f"{indent_str}var {stmt.name} = {operand}\n"
+            declaration = f"{indent_str}var {var_name} = {operand}\n"
         else:
             declaration = (
-                f"{indent_str}var {stmt.name}: {self.map_type(var_type)} = {operand}\n"
+                f"{indent_str}var {var_name}: {self.map_type(var_type)} = {operand}\n"
             )
         is_postfix = getattr(
             initial_value,
@@ -7586,7 +7613,7 @@ class MojoCodeGen:
             node.name, self.array_type_name(node.element_type, size)
         )
         return (
-            f"{indent_str}var {node.name} = "
+            f"{indent_str}var {self.mojo_identifier(node.name)} = "
             f"{self.array_initial_value(node.element_type, size)}\n"
         )
 
@@ -7705,7 +7732,7 @@ class MojoCodeGen:
         iterable = self.generate_for_in_iterable(getattr(node, "iterable", None))
         entry_alias_state = self.resource_access_alias_state()
 
-        code = f"{indent_str}for {pattern} in {iterable}:\n"
+        code = f"{indent_str}for {self.mojo_identifier(pattern)} in {iterable}:\n"
 
         self.loop_depth += 1
         self.push_loop_exit_alias_state_scope()
@@ -8069,7 +8096,10 @@ class MojoCodeGen:
             builtin = self.mojo_builtin_placeholder_expression(expr)
             if builtin is not None:
                 return builtin
-            return self.map_enum_variant_reference(expr, target_type)
+            mapped_reference = self.map_enum_variant_reference(expr, target_type)
+            if mapped_reference != expr:
+                return mapped_reference
+            return self.mojo_identifier(expr)
         elif isinstance(expr, (int, float, bool)):
             return self.format_literal(expr)
         elif isinstance(expr, VariableNode):
@@ -8082,7 +8112,7 @@ class MojoCodeGen:
                 builtin = self.mojo_builtin_placeholder_expression(expr.name)
                 if builtin is not None:
                     return builtin
-                return f"{expr.name}"
+                return self.mojo_identifier(expr.name)
             elif hasattr(expr, "name"):
                 if expr.name in self.expression_identifier_replacements:
                     return self.expression_identifier_replacements[expr.name]
@@ -8092,7 +8122,7 @@ class MojoCodeGen:
                 builtin = self.mojo_builtin_placeholder_expression(expr.name)
                 if builtin is not None:
                     return builtin
-                return expr.name
+                return self.mojo_identifier(expr.name)
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
@@ -8187,7 +8217,10 @@ class MojoCodeGen:
 
             if self.is_user_defined_function(func_name):
                 args = self.generate_user_function_call_arguments(func_name, expr.args)
-                return f"{callee}({args})"
+                call_name = (
+                    self.mojo_identifier(func_name) if func_name is not None else callee
+                )
+                return f"{call_name}({args})"
 
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name, expr.args
@@ -8308,7 +8341,13 @@ class MojoCodeGen:
                 )
 
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-            call_name = func_name if func_name is not None else callee
+            call_name = (
+                "lambda"
+                if func_name == "lambda"
+                else (
+                    self.mojo_identifier(func_name) if func_name is not None else callee
+                )
+            )
             return f"{call_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             builtin_member = self.generate_builtin_member_access(expr)
@@ -8321,13 +8360,13 @@ class MojoCodeGen:
             obj_type = self.expression_result_type(expr.object)
             obj_struct_type, obj_fields = self.struct_type_name_and_fields(obj_type)
             if obj_struct_type is not None and expr.member in obj_fields:
-                return f"{obj}.{expr.member}"
+                return f"{obj}.{self.mojo_identifier(expr.member)}"
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
                 return self.generate_swizzle(
                     expr.object, obj, obj_type, expr.member, swizzle_indices
                 )
-            return f"{obj}.{expr.member}"
+            return f"{obj}.{self.mojo_identifier(expr.member)}"
         elif isinstance(expr, TernaryOpNode):
             bool_vector_select = self.generate_bool_vector_select_expression(
                 expr.condition, expr.true_expr, expr.false_expr
@@ -8360,7 +8399,10 @@ class MojoCodeGen:
             builtin = self.mojo_builtin_placeholder_expression(name)
             if builtin is not None:
                 return builtin
-            return self.map_enum_variant_reference(name, target_type)
+            mapped_reference = self.map_enum_variant_reference(name, target_type)
+            if mapped_reference != name:
+                return mapped_reference
+            return self.mojo_identifier(name)
         elif hasattr(expr, "__class__") and "ExpressionStatement" in str(
             expr.__class__
         ):
@@ -8499,7 +8541,7 @@ class MojoCodeGen:
             )
             self.validate_expression_target_shape(value, field_type, field_context)
             rendered_value = self.generate_expression(value, field_type, field_context)
-            named_args.append(f"{name}={rendered_value}")
+            named_args.append(f"{self.mojo_identifier(name)}={rendered_value}")
             if field_type is not None:
                 rendered_fields[name] = rendered_value
 
@@ -8513,7 +8555,7 @@ class MojoCodeGen:
                 for field_name, field_type in missing_fields:
                     rendered_fields[field_name] = self.zero_value_for_type(field_type)
                 field_args = [
-                    f"{field_name}={rendered_fields[field_name]}"
+                    f"{self.mojo_identifier(field_name)}={rendered_fields[field_name]}"
                     for field_name, _ in field_items
                 ]
                 return f"{mapped_type}({', '.join(field_args)})"
@@ -13830,6 +13872,72 @@ class MojoCodeGen:
             else:
                 escaped.append(char)
         return "".join(escaped)
+
+    def mojo_identifier(self, name):
+        """Return a Mojo-safe value or field identifier for source names."""
+        name = str(name)
+        if not name.isidentifier():
+            return name
+        if name in self.mojo_reserved_identifiers():
+            return f"{name}_"
+        return name
+
+    def mojo_reserved_identifiers(self):
+        return {
+            "False",
+            "None",
+            "Self",
+            "True",
+            "alias",
+            "and",
+            "as",
+            "async",
+            "await",
+            "borrowed",
+            "break",
+            "case",
+            "class",
+            "constrained",
+            "continue",
+            "def",
+            "elif",
+            "else",
+            "except",
+            "finally",
+            "fn",
+            "for",
+            "from",
+            "global",
+            "if",
+            "import",
+            "in",
+            "inout",
+            "is",
+            "lambda",
+            "let",
+            "match",
+            "mut",
+            "nonlocal",
+            "not",
+            "or",
+            "owned",
+            "pass",
+            "raise",
+            "raises",
+            "ref",
+            "return",
+            "self",
+            "static",
+            "struct",
+            "trait",
+            "try",
+            "type",
+            "var",
+            "where",
+            "while",
+            "with",
+            "yield",
+        }
 
     def map_type(self, vtype):
         """Map a CrossGL type name or type node to a Mojo type string."""

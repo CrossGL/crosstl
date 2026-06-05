@@ -2931,6 +2931,7 @@ class HipParser:
             "MINUS",
             "NOT",
             "BITWISE_NOT",
+            "TILDE",
             "INCREMENT",
             "DECREMENT",
             "STAR",

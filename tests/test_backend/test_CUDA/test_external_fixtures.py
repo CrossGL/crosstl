@@ -1,5 +1,6 @@
 from crosstl.backend.CUDA.CudaAst import (
     AtomicOperationNode,
+    ForNode,
     FunctionCallNode,
     ReturnNode,
     SharedMemoryNode,
@@ -59,6 +60,11 @@ EXTERNAL_SAMPLES = [
         ],
     },
     {
+        "repo": "https://github.com/NVlabs/tiny-cuda-nn",
+        "commit": "749dd70c5afc5a9dadb85e5652ed65d55e0ba187",
+        "paths": ["src/fully_fused_mlp.cu"],
+    },
+    {
         "repo": "https://github.com/NVIDIA/CUDALibrarySamples",
         "commit": "830c6b0e5b4bf44e6d487c8505dbe42ef243b8a9",
         "paths": [
@@ -112,6 +118,41 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     )
     assert all(len(sample["commit"]) == 40 for sample in EXTERNAL_SAMPLES)
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
+
+
+def test_tiny_cuda_nn_unroll_macro_markers_before_for_loops_parse_and_codegen():
+    # Upstream source:
+    # repo: https://github.com/NVlabs/tiny-cuda-nn
+    # commit: 749dd70c5afc5a9dadb85e5652ed65d55e0ba187
+    # path: src/fully_fused_mlp.cu
+    source = """
+    template <uint32_t N_ITERS>
+    __device__ void threadblock_load_input_static(float* out,
+                                                  const float* input) {
+        __syncthreads();
+
+        TCNN_PRAGMA_UNROLL
+        for (uint32_t i = 0; i < N_ITERS; ++i) {
+            out[i] = input[i];
+        }
+
+        _Pragma("unroll")
+        for (uint32_t j = 0; j < N_ITERS; ++j) {
+            out[j] = out[j];
+        }
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    loops = [stmt for stmt in body if isinstance(stmt, ForNode)]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert len(loops) == 2
+    assert body[0].sync_type == "__syncthreads"
+    assert "TCNN_PRAGMA_UNROLL" not in crossgl
+    assert "_Pragma" not in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_programming_guide_syncthreads_predicate_variants_codegen_reparse():

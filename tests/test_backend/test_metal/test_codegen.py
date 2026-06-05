@@ -46,6 +46,20 @@ def parse_crossgl(code: str):
     return parser.parse()
 
 
+def test_codegen_preserves_variadic_pack_expansion_from_mlx_integral_constant():
+    code = """
+    template <typename T, typename... Us>
+    METAL_FUNC constexpr auto sum(T x, Us... us) {
+        return x + sum(us...);
+    }
+    """
+    generated = convert(code)
+
+    assert "Us... us" in generated
+    assert "sum(us...)" in generated
+    assert "post..." not in generated
+
+
 def test_codegen_emits_shader_and_stages():
     code = """
     #include <metal_stdlib>

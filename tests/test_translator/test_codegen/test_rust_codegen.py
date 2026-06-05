@@ -25140,6 +25140,40 @@ def test_rust_escapes_keyword_struct_fields_and_accesses(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_keyword_like_bindings_escape_in_functions_and_members(tmp_path):
+    code = """
+    struct KeywordFields {
+        type: float;
+        match: vec4;
+    };
+
+    fn match(type: float, match: vec3) -> float {
+        float while = type + match.x;
+        return while;
+    }
+
+    fn read(input: KeywordFields) -> float {
+        return match(input.type, vec3(1.0, 2.0, 3.0)) + input.match.x;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub type_: f32," in generated_code
+    assert "pub match_: Vec4<f32>," in generated_code
+    assert "pub fn match_(type_: f32, match_: Vec3<f32>) -> f32" in generated_code
+    assert "let while_: f32 = (type_ + match_.x);" in generated_code
+    assert "return while_;" in generated_code
+    assert (
+        "return (match_(input.type_, Vec3::<f32>::new(1.0, 2.0, 3.0)) "
+        "+ input.match_.x);"
+    ) in generated_code
+    assert "pub fn match(" not in generated_code
+    assert "let while:" not in generated_code
+    assert "input.match.x" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_rust_keyword_struct_fields_survive_default_formatting(tmp_path):
     import crosstl
 

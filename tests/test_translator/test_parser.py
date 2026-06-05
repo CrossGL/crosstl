@@ -284,6 +284,34 @@ def test_range_expression_preserves_assignment_rhs():
     assert not isinstance(assignment.target, RangeNode)
 
 
+def test_keyword_like_binding_identifiers_parse_in_declarations():
+    code = """
+    shader main {
+        const int alias = 2;
+
+        struct Payload {
+            return: int;
+            int fn;
+        };
+
+        int fn(int var, int loop) {
+            int struct = var + loop + alias;
+            return struct;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    payload = ast.structs[0]
+    function = ast.functions[0]
+    local = function.body.statements[0]
+
+    assert [member.name for member in payload.members] == ["return", "fn"]
+    assert function.name == "fn"
+    assert [param.name for param in function.parameters] == ["var", "loop"]
+    assert local.name == "struct"
+
+
 def test_preprocessor_and_precision_parsing():
     code = """
     #version 450 core

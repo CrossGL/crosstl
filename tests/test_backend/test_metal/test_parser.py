@@ -1838,6 +1838,33 @@ def test_parse_template_struct_base_clause_from_mlx_type_traits():
     ]
 
 
+def test_parse_variadic_function_parameter_pack_from_mlx_integral_constant():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 6ea7a00d05d548219864d10ff6c013b7544b13ea
+    # Path: mlx/backend/metal/kernels/steel/utils/integral_constant.h
+    code = """
+    template <typename T, typename... Us>
+    METAL_FUNC constexpr auto sum(T x, Us... us) {
+        return x + sum(us...);
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+    returned = function.body[0].value
+    pack_call = returned.right
+
+    assert function.template_parameters == [("typename", "T"), ("typename...", "Us")]
+    assert [(param.vtype, param.name) for param in function.params] == [
+        ("T", "x"),
+        ("Us...", "us"),
+    ]
+    assert isinstance(pack_call, FunctionCallNode)
+    assert isinstance(pack_call.args[0], UnaryOpNode)
+    assert pack_call.args[0].op == "post..."
+    assert pack_call.args[0].operand.name == "us"
+
+
 def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
     code = """
     #define instantiate_metal_math_funcs(itype, otype, ctype, mfast) \\

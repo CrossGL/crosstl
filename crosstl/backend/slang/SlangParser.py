@@ -1283,6 +1283,22 @@ class SlangParser:
                     self.parse_property_member(attributes=pending_attributes)
                 )
                 continue
+            if self.is_constructor():
+                methods.append(
+                    self.parse_constructor(
+                        attributes=pending_attributes,
+                        allow_signature=True,
+                    )
+                )
+                continue
+            if self.is_subscript_declaration():
+                methods.append(
+                    self.parse_subscript_declaration(
+                        attributes=pending_attributes,
+                        allow_signature=True,
+                    )
+                )
+                continue
             if self.is_function():
                 if self.is_func_keyword_declaration_start():
                     methods.append(
@@ -1546,6 +1562,9 @@ class SlangParser:
         generic_constraints = self.parse_generic_constraint_clauses()
         accessors = self.parse_accessor_block("subscript accessor")
         body = accessors.get("get", [])
+        is_declaration = allow_signature and all(
+            not accessor_body for accessor_body in accessors.values()
+        )
 
         node = FunctionNode(
             return_type,
@@ -1555,7 +1574,7 @@ class SlangParser:
             qualifiers=qualifiers,
             is_generic=is_generic,
             generic_constraints=generic_constraints,
-            is_declaration=False,
+            is_declaration=is_declaration,
             attributes=attributes,
         )
         node.slang_name = slang_name
