@@ -76,6 +76,38 @@ def test_struct_parsing():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_forward_struct_declaration_from_generated_conformance_sample():
+    # Source: shader-slang/slang@52339028a2aa703271533454c6b9528a534bac31
+    # docs/generated/tests/conformance/types-struct/struct-no-body-decl.slang
+    code = """
+    struct ForwardDeclared;
+
+    struct ForwardDeclared
+    {
+        int x;
+    }
+
+    void main()
+    {
+        ForwardDeclared fd;
+        fd.x = 55;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    forward, definition = ast.structs
+    assert forward.name == "ForwardDeclared"
+    assert forward.members == []
+    assert forward.is_forward_declaration is True
+    assert definition.name == "ForwardDeclared"
+    assert definition.is_forward_declaration is False
+    assert [(member.vtype, member.name) for member in definition.members] == [
+        ("int", "x")
+    ]
+
+
 def test_compound_import_parsing():
     code = "import MyApp.Shadowing;\n"
 

@@ -1261,9 +1261,10 @@ def test_rust_gpu_compute_collatz_option_chain_codegen_from_upstream_example():
     assert "@numthreads(64, 1, 1)" in result
     assert "let index = (uint)id.x;" in result
     assert (
-        "prime_indices[index] = collatz(prime_indices[index]).unwrap_or(u32::MAX);"
+        "prime_indices[index] = collatz(prime_indices[index]).unwrap_or(4294967295);"
         in result
     )
+    assert "u32::MAX" not in result
     assert "Unhandled statement type" not in result
 
 

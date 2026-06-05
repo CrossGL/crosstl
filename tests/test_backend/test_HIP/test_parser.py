@@ -213,6 +213,31 @@ class TestHipParser:
         assert function.name == "add"
         assert "__device__" in function.qualifiers
 
+    def test_cuda_samples_style_const_dim3_constructor_global_parses(self):
+        code = """
+        const dim3 windowSize(512, 512);
+        const dim3 windowBlockSize(16, 16, 1);
+        const dim3 windowGridSize(windowSize.x / windowBlockSize.x,
+                                  windowSize.y / windowBlockSize.y);
+        """
+        ast = self.parse_code(code)
+
+        window_size = ast.statements[0]
+
+        assert isinstance(window_size, VariableNode)
+        assert window_size.vtype == "const dim3"
+        assert window_size.name == "windowSize"
+        assert isinstance(window_size.value, FunctionCallNode)
+        assert window_size.value.name == "dim3"
+        assert window_size.value.args == ["512", "512"]
+
+        window_grid_size = ast.statements[2]
+        assert isinstance(window_grid_size, VariableNode)
+        assert window_grid_size.name == "windowGridSize"
+        assert isinstance(window_grid_size.value, FunctionCallNode)
+        assert window_grid_size.value.name == "dim3"
+        assert len(window_grid_size.value.args) == 2
+
     def test_public_rocm_hipfft_complex_pointer_declarators_parse(self):
         code = """
         void host() {

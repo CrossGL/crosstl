@@ -1083,8 +1083,14 @@ class VulkanParser:
         expressions = {}
         expression_type_ids = {}
         variables_by_id = {variable["id"]: variable for variable in variables}
+        phi_contexts = self.spirv_assembly_phi_contexts(raw_instructions)
+        current_label = None
 
         for result_id, opcode, operands, _line_number in raw_instructions:
+            if result_id and opcode == "OpLabel":
+                current_label = result_id
+                continue
+
             if result_id and opcode == "OpFunctionParameter":
                 expressions[result_id] = VariableNode(
                     "",
@@ -1740,6 +1746,19 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode == "OpPhi" and len(operands) >= 3:
+                expressions[result_id] = self.spirv_assembly_phi_expression(
+                    operands,
+                    current_label,
+                    phi_contexts,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             operation = opcode[2:] if opcode.startswith("Op") else opcode
             if (
                 result_id
@@ -2224,6 +2243,126 @@ class VulkanParser:
             )
             if result_id and opcode == "OpLabel"
         }
+
+    def spirv_assembly_phi_contexts(self, raw_instructions):
+        contexts = {}
+        for index, (_result_id, opcode, operands, _line_number) in enumerate(
+            raw_instructions
+        ):
+            if opcode != "OpSelectionMerge" or not operands:
+                continue
+            if index + 1 >= len(raw_instructions):
+                continue
+
+            _branch_id, branch_opcode, branch_operands, _branch_line = raw_instructions[
+                index + 1
+            ]
+            if branch_opcode != "OpBranchConditional" or len(branch_operands) < 3:
+                continue
+
+            contexts[operands[0]] = {
+                "condition": branch_operands[0],
+                "true_label": branch_operands[1],
+                "false_label": branch_operands[2],
+            }
+        return contexts
+
+    def spirv_assembly_phi_expression(
+        self,
+        operands,
+        current_label,
+        phi_contexts,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        incoming = [
+            (operands[index], operands[index + 1])
+            for index in range(1, len(operands) - 1, 2)
+        ]
+        if not incoming:
+            return FunctionCallNode("spirvPhi", [])
+
+        first_value = incoming[0][0]
+        if all(value == first_value for value, _label in incoming):
+            return self.spirv_assembly_operand_expression(
+                first_value,
+                expressions,
+                names,
+                decorations,
+                constants,
+            )
+
+        selection_phi = self.spirv_assembly_selection_phi_expression(
+            current_label,
+            incoming,
+            phi_contexts,
+            expressions,
+            names,
+            decorations,
+            constants,
+        )
+        if selection_phi is not None:
+            return selection_phi
+
+        args = []
+        for value, label in incoming:
+            args.append(
+                self.spirv_assembly_operand_expression(
+                    value,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+            )
+            args.append(self.spirv_string_literal(str(label).lstrip("%")))
+        return FunctionCallNode("spirvPhi", args)
+
+    def spirv_assembly_selection_phi_expression(
+        self,
+        current_label,
+        incoming,
+        phi_contexts,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        context = phi_contexts.get(current_label)
+        if context is None or len(incoming) != 2:
+            return None
+
+        incoming_by_label = {label: value for value, label in incoming}
+        true_value = incoming_by_label.get(context["true_label"])
+        false_value = incoming_by_label.get(context["false_label"])
+        if true_value is None or false_value is None:
+            return None
+
+        return TernaryOpNode(
+            self.spirv_assembly_operand_expression(
+                context["condition"],
+                expressions,
+                names,
+                decorations,
+                constants,
+            ),
+            self.spirv_assembly_operand_expression(
+                true_value,
+                expressions,
+                names,
+                decorations,
+                constants,
+            ),
+            self.spirv_assembly_operand_expression(
+                false_value,
+                expressions,
+                names,
+                decorations,
+                constants,
+            ),
+        )
 
     def spirv_assembly_label_block_branches_to_merge(
         self, raw_instructions, labels, label, merge_label

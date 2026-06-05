@@ -854,10 +854,44 @@ class CudaParser:
         if self.is_function_pointer_parameter_start_at_index(index):
             return True
 
-        return (
-            self.skip_type_at_index(index, allow_unknown_identifier_declarator=True)
-            is not None
+        return self.is_plausible_function_parameter_at_index(index)
+
+    def is_plausible_function_parameter_at_index(self, index):
+        type_end = self.skip_type_at_index(
+            index, allow_unknown_identifier_declarator=True
         )
+        if type_end is None:
+            return False
+
+        index = self.skip_cpp_attribute_specifiers_at_index(type_end)
+        while index < len(self.tokens) and self.tokens[index][0] in {
+            "MULTIPLY",
+            *self.TYPE_REFERENCE_TOKENS,
+            *self.POSTFIX_TYPE_QUALIFIER_TOKENS,
+        }:
+            index += 1
+            index = self.skip_postfix_type_qualifiers_at_index(index)
+
+        if self.is_ellipsis_at_index(index):
+            index += 3
+
+        if index >= len(self.tokens):
+            return False
+
+        if self.tokens[index][0] in {"COMMA", "RPAREN", "ASSIGN"}:
+            return True
+
+        if self.tokens[index][0] in self.NAME_COMPONENT_TOKENS:
+            index += 1
+            index = self.skip_array_suffix_at_index(index)
+            index = self.skip_cpp_attribute_specifiers_at_index(index)
+            return index < len(self.tokens) and self.tokens[index][0] in {
+                "COMMA",
+                "RPAREN",
+                "ASSIGN",
+            }
+
+        return False
 
     def is_function_pointer_parameter_start_at_index(self, index):
         type_end = self.skip_type_at_index(
@@ -2421,7 +2455,7 @@ class CudaParser:
             value = self.parse_expression()
         elif self.current_token[0] == "LPAREN":
             args = self.parse_argument_list()
-            value = FunctionCallNode(vtype, args)
+            value = FunctionCallNode(self.constructor_initializer_name(vtype), args)
         elif self.current_token[0] == "LBRACE":
             value = self.parse_initializer_list()
 
@@ -2537,10 +2571,26 @@ class CudaParser:
             return self.parse_expression()
         if self.current_token[0] == "LPAREN":
             args = self.parse_argument_list()
-            return FunctionCallNode(vtype, args)
+            return FunctionCallNode(self.constructor_initializer_name(vtype), args)
         if self.current_token[0] == "LBRACE":
             return self.parse_initializer_list()
         return None
+
+    def constructor_initializer_name(self, vtype):
+        return " ".join(
+            part
+            for part in str(vtype).split()
+            if part
+            not in {
+                "const",
+                "volatile",
+                "__restrict__",
+                "__restrict",
+                "restrict",
+                "&",
+                "&&",
+            }
+        )
 
     def parse_function_pointer_variable_declaration(self):
         qualifiers = self.parse_declaration_prefixes()

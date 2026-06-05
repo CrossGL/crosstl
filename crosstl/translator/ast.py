@@ -627,6 +627,10 @@ class LayoutQualifierNode(ASTNode):
 class StatementNode(ASTNode):
     """Base class for all statements."""
 
+    def __init__(self, attributes: List["AttributeNode"] = None, **kwargs):
+        super().__init__(**kwargs)
+        self.attributes = attributes or []
+
 
 class BlockNode(StatementNode):
     """Block of statements."""

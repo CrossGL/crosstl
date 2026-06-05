@@ -2974,6 +2974,81 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_SAME_VALUE_PHI_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/opt/dead_insert_elim_test.cpp
+; Reduced from the same-value OpPhi pattern: %41 = OpPhi %S %4 %if_true %4 %if_merge.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %out_color "outColor"
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%bool = OpTypeBool
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%true = OpConstantTrue %bool
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%entry = OpLabel
+OpSelectionMerge %merge None
+OpBranchConditional %true %if_true %if_merge
+%if_true = OpLabel
+OpBranch %merge
+%if_merge = OpLabel
+OpBranch %merge
+%merge = OpLabel
+%phi = OpPhi %v4float %red %if_true %red %if_merge
+OpStore %out_color %phi
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_TOOLS_DIRECT_SELECTION_PHI_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/opt/block_merge_test.cpp
+; Reduced from PhiInSuccessorOfMergedBlock's direct OpPhi merge pattern.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %out_color "outColor"
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%bool = OpTypeBool
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%blue = OpConstantComposite %v4float %zero %zero %one %one
+%true = OpConstantTrue %bool
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%entry = OpLabel
+OpSelectionMerge %merge None
+OpBranchConditional %true %then %else
+%then = OpLabel
+OpBranch %merge
+%else = OpLabel
+OpBranch %merge
+%merge = OpLabel
+%phi = OpPhi %v4float %red %then %blue %else
+OpStore %out_color %phi
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -4377,6 +4452,37 @@ def test_spirv_tools_extended_arithmetic_codegen_reparse():
     assert "outHigh = spirvSMulExtended(2, 3)[1];" in generated_code
     assert "OpIAddCarry" not in generated_code
     assert "OpSMulExtended" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_same_value_phi_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_SAME_VALUE_PHI_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "outColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "outColor = phi;" not in generated_code
+    assert "spirvPhi" not in generated_code
+    assert "OpPhi" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_direct_selection_phi_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_DIRECT_SELECTION_PHI_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert (
+        "outColor = (true ? float4(1.0, 0.0, 0.0, 1.0) : "
+        "float4(0.0, 0.0, 1.0, 1.0));" in generated_code
+    )
+    assert "outColor = phi;" not in generated_code
+    assert "spirvPhi" not in generated_code
+    assert "OpPhi" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

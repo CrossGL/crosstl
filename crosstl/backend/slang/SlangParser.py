@@ -1366,6 +1366,20 @@ class SlangParser:
             generic_parameters = self.parse_generic_type_suffix()
         conformances = self.parse_conformance_clause()
         generic_constraints = self.parse_generic_constraint_clauses()
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            node = StructNode(name, [])
+            node.methods = []
+            node.typedefs = []
+            node.enums = []
+            node.structs = []
+            node.generic_parameters = generic_parameters
+            node.generic_constraints = generic_constraints
+            node.conformances = conformances
+            node.qualifiers = qualifiers
+            node.is_forward_declaration = True
+            return node
+
         self.eat("LBRACE")
         members = []
         methods = []
@@ -1446,6 +1460,7 @@ class SlangParser:
         node.generic_constraints = generic_constraints
         node.conformances = conformances
         node.qualifiers = qualifiers
+        node.is_forward_declaration = False
         return node
 
     def parse_struct_field_members(self, attributes=None):

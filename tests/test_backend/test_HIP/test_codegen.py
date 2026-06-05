@@ -1387,6 +1387,30 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("int3") == "vec3<i32>"
         assert codegen.convert_hip_type_to_crossgl("int4") == "vec4<i32>"
 
+    def test_cuda_samples_style_const_dim3_constructor_global_conversion(self):
+        code = """
+        const dim3 windowSize(512, 512);
+        const dim3 windowBlockSize(16, 16, 1);
+        const dim3 windowGridSize(windowSize.x / windowBlockSize.x,
+                                  windowSize.y / windowBlockSize.y);
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var windowSize: vec3<u32> = vec3<u32>(512, 512);" in result
+        assert "var windowBlockSize: vec3<u32> = vec3<u32>(16, 16, 1);" in result
+        assert (
+            "var windowGridSize: vec3<u32> = "
+            "vec3<u32>((windowSize.x / windowBlockSize.x), "
+            "(windowSize.y / windowBlockSize.y));"
+        ) in result
+        assert "const dim3(" not in result
+
     def test_constructor_style_vector_declaration_conversion(self):
         code = """
         hipTextureObject_t globalTex;

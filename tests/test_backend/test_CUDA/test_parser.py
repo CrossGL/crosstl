@@ -208,6 +208,34 @@ class TestCudaParser:
         assert block_assignment.left.object == "params"
         assert block_assignment.left.member == "blockDim"
 
+    def test_public_cuda_samples_const_dim3_constructor_global_parses(self):
+        code = """
+        const dim3 windowSize(512, 512);
+        const dim3 windowBlockSize(16, 16, 1);
+        const dim3 windowGridSize(windowSize.x / windowBlockSize.x,
+                                  windowSize.y / windowBlockSize.y);
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        window_size = ast.global_variables[0]
+
+        assert isinstance(window_size, VariableNode)
+        assert window_size.vtype == "const dim3"
+        assert window_size.name == "windowSize"
+        assert isinstance(window_size.value, FunctionCallNode)
+        assert window_size.value.name == "dim3"
+        assert window_size.value.args == ["512", "512"]
+
+        window_grid_size = ast.global_variables[2]
+        assert isinstance(window_grid_size, VariableNode)
+        assert window_grid_size.name == "windowGridSize"
+        assert isinstance(window_grid_size.value, FunctionCallNode)
+        assert window_grid_size.value.name == "dim3"
+        assert len(window_grid_size.value.args) == 2
+
     def test_public_cuda_samples_unnamed_parameters_and_keyword_names(self):
         code = """
         struct Ray { float x; };

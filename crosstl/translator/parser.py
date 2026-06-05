@@ -2511,6 +2511,8 @@ class Parser:
 
     def parse_statement(self):
         """Parse any statement form supported by CrossGL."""
+        if self.current_token_starts_statement_attribute():
+            return self.parse_attributed_statement()
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -2550,6 +2552,21 @@ class Parser:
                 return ExpressionStatementNode(expr, is_tail_expression=True)
             self.eat("SEMICOLON")
             return ExpressionStatementNode(expr)
+
+    def current_token_starts_statement_attribute(self):
+        """Return whether the current token starts statement-level metadata."""
+        return (
+            self.current_token[0] in {"AT", "ATTRIBUTE"}
+            or self.current_token_starts_square_attribute()
+        )
+
+    def parse_attributed_statement(self):
+        """Parse metadata that decorates the following statement."""
+        attributes = self.parse_attribute_annotations()
+        statement = self.parse_statement()
+        existing = getattr(statement, "attributes", [])
+        statement.attributes = [*attributes, *existing]
+        return statement
 
     def parse_let_declaration(self):
         """Parse Rust-style ``let [mut] name [: type] = expr;`` declarations."""

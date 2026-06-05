@@ -10,9 +10,11 @@ from crosstl.translator.ast import (
     ConstructorPatternNode,
     DoWhileNode,
     ForInNode,
+    ForNode,
     FunctionCallNode,
     IdentifierNode,
     IdentifierPatternNode,
+    IfNode,
     LiteralNode,
     LoopNode,
     MatrixType,
@@ -27,6 +29,7 @@ from crosstl.translator.ast import (
     RayQueryOpNode,
     RayTracingOpNode,
     ReferenceType,
+    ReturnNode,
     ShaderNode,
     ShaderStage,
     StructPatternNode,
@@ -1301,6 +1304,52 @@ def test_square_bracket_stage_attributes_parse_to_function_metadata():
         3,
         "HSConst",
     ]
+
+
+def test_square_bracket_statement_attributes_preserve_control_flow_metadata():
+    code = """
+    shader StatementAttributes {
+        float shade(float value) {
+            [branch]
+            if (value > 0.0) {
+                value += 1.0;
+            }
+
+            [flatten]
+            if (value < 4.0) {
+                value += 2.0;
+            } else {
+                value -= 1.0;
+            }
+
+            [unroll(4)]
+            for (int i = 0; i < 4; i++) {
+                value += float(i);
+            }
+
+            return value;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    statements = ast.functions[0].body.statements
+
+    assert [type(statement) for statement in statements] == [
+        IfNode,
+        IfNode,
+        ForNode,
+        ReturnNode,
+    ]
+    assert [attr.name for attr in statements[0].attributes] == ["branch"]
+    assert [attr.name for attr in statements[1].attributes] == ["flatten"]
+    assert [attr.name for attr in statements[2].attributes] == ["unroll"]
+    assert statements[2].attributes[0].arguments[0].value == 4
+
+    ast.bind_parent_links()
+    assert statements[0].attributes[0].parent is statements[0]
+    assert statements[1].attributes[0].parent is statements[1]
+    assert statements[2].attributes[0].parent is statements[2]
 
 
 def test_compute_layout_does_not_consume_resource_layouts():

@@ -96,6 +96,39 @@ def test_struct_array_member_codegen():
     assert "vec4 colors[2][3]" in generated_code
 
 
+def test_forward_struct_declaration_codegen_from_generated_conformance_sample():
+    # Source: shader-slang/slang@52339028a2aa703271533454c6b9528a534bac31
+    # docs/generated/tests/conformance/types-struct/struct-no-body-decl.slang
+    code = """
+    struct ForwardDeclared;
+
+    struct ForwardDeclared
+    {
+        int x;
+    }
+
+    RWStructuredBuffer<int> output;
+
+    [numthreads(1,1,1)]
+    void main()
+    {
+        ForwardDeclared fd;
+        fd.x = 55;
+        output[0] = fd.x;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert generated_code.count("struct ForwardDeclared") == 1
+    assert "int x;" in generated_code
+    assert "ForwardDeclared fd;" in generated_code
+    assert "output[0] = fd.x;" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_name_first_property_codegen_from_generated_interface_sample():
     code = """
     struct IntProperty

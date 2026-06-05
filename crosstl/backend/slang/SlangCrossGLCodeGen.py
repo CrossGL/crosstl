@@ -482,6 +482,8 @@ class SlangToCrossGLConverter:
                         code += f"        {member_name} = {value},\n"
                 code += "    }\n"
         for node in ast.structs:
+            if self.is_forward_struct_declaration(node):
+                continue
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"
                 for member in node.members:
@@ -575,6 +577,11 @@ class SlangToCrossGLConverter:
                 f"{constraint.parameter} {relation} {constraint.constraint_type}"
             )
         return constraints
+
+    def is_forward_struct_declaration(self, node):
+        return isinstance(node, StructNode) and getattr(
+            node, "is_forward_declaration", False
+        )
 
     def format_import_path(self, path):
         path = str(path)
@@ -708,6 +715,8 @@ class SlangToCrossGLConverter:
         if isinstance(item, FunctionNode):
             return self.generate_function(item)
         if isinstance(item, StructNode):
+            if self.is_forward_struct_declaration(item):
+                return ""
             code = f"    struct {item.name} {{\n"
             for member in item.members:
                 semantic = self.map_semantic(member.semantic)

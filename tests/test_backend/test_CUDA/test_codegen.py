@@ -487,6 +487,30 @@ class TestCudaCodeGen:
         assert "var ids: vec4<u32> = vec4<u32>(1u, 2u, 3u, 4u);" in result
         assert "var bytes: vec2<u8> = vec2<u8>(1, 2);" in result
 
+    def test_public_cuda_samples_const_dim3_constructor_global_conversion(self):
+        code = """
+        const dim3 windowSize(512, 512);
+        const dim3 windowBlockSize(16, 16, 1);
+        const dim3 windowGridSize(windowSize.x / windowBlockSize.x,
+                                  windowSize.y / windowBlockSize.y);
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var windowSize: vec3<u32> = vec3<u32>(512, 512);" in result
+        assert "var windowBlockSize: vec3<u32> = vec3<u32>(16, 16, 1);" in result
+        assert (
+            "var windowGridSize: vec3<u32> = "
+            "vec3<u32>((windowSize.x / windowBlockSize.x), "
+            "(windowSize.y / windowBlockSize.y));"
+        ) in result
+        assert "const dim3(" not in result
+
     def test_fmod_builtins_convert_to_crossgl_mod(self):
         code = """
         __global__ void wrap(float* out, float x) {

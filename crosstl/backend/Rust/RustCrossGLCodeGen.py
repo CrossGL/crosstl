@@ -176,6 +176,23 @@ class RustToCrossGLConverter:
         "bvec3": 3,
         "bvec4": 4,
     }
+    SCALAR_ASSOCIATED_CONSTANTS = {
+        "u8::MAX": "255",
+        "u8::MIN": "0",
+        "u16::MAX": "65535",
+        "u16::MIN": "0",
+        "u32::MAX": "4294967295",
+        "u32::MIN": "0",
+        "i8::MAX": "127",
+        "i8::MIN": "(-128)",
+        "i16::MAX": "32767",
+        "i16::MIN": "(-32768)",
+        "i32::MAX": "2147483647",
+        "i32::MIN": "(-2147483648)",
+        "f32::EPSILON": "1.1920929e-7",
+        "f32::INFINITY": "1.0 / 0.0",
+        "f32::NEG_INFINITY": "-1.0 / 0.0",
+    }
     VECTOR_AXIS_CONSTANT_INDICES = {"X": 0, "Y": 1, "Z": 2, "W": 3}
 
     def __init__(self):
@@ -4425,6 +4442,11 @@ class RustToCrossGLConverter:
         components[axis_index] = axis_value
         return components
 
+    def format_scalar_associated_constant(self, value):
+        if not isinstance(value, str):
+            return None
+        return self.SCALAR_ASSOCIATED_CONSTANTS.get(value)
+
     def vector_zero_one_literals(self, mapped_type):
         if mapped_type.startswith("bvec"):
             return "false", "true"
@@ -8028,6 +8050,9 @@ class RustToCrossGLConverter:
         """Render a Rust backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
             value = self.resolve_imported_module_path(self.normalize_rust_literal(expr))
+            scalar_constant = self.format_scalar_associated_constant(value)
+            if scalar_constant is not None:
+                return scalar_constant
             vector_constant = self.format_vector_associated_constant(value)
             if vector_constant is not None:
                 return vector_constant
