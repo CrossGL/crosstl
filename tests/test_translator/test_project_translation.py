@@ -2653,6 +2653,34 @@ def test_validate_project_report_rejects_validation_summary_missing_artifact_che
     )
 
 
+def test_validate_project_report_rejects_validation_summary_missing_toolchain_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(
+        repo,
+        targets=["cgl", "opengl"],
+        output_dir="out",
+        validate=True,
+    )
+    payload = report.to_json()
+    payload["validation"]["toolchains"] = payload["validation"]["toolchains"][:1]
+    report_path = repo / "out" / "validation-missing-toolchain-target-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "validation.toolchains must include project.targets[1]" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_validation_records_with_escaped_paths(
     tmp_path,
 ):

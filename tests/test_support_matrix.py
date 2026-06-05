@@ -256,6 +256,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "required summarized validation artifact hash status fields" in (
             backend_support["notes"]
         )
+        assert "required summarized validation toolchain target coverage" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_altered_migration_non_goals"
@@ -299,6 +302,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_summarized_validation_without_"
             "hash_statuses"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_validation_summary_missing_"
+            "toolchain_targets"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

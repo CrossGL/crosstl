@@ -2377,6 +2377,28 @@ def _duplicate_toolchain_target_contract_reasons(records: Sequence[Any]) -> list
     return reasons
 
 
+def _validation_toolchain_coverage_contract_reasons(
+    toolchains: Sequence[Any], project_targets: Sequence[Any]
+) -> list[str]:
+    validation_targets = set()
+    for toolchain in toolchains:
+        if not isinstance(toolchain, Mapping):
+            continue
+        target = toolchain.get("target")
+        if _is_non_empty_string(target):
+            validation_targets.add(_normalized_targets([target])[0])
+
+    reasons = []
+    for target_index, target in enumerate(project_targets):
+        if not _is_non_empty_string(target):
+            continue
+        if _normalized_targets([target])[0] not in validation_targets:
+            reasons.append(
+                f"validation.toolchains must include project.targets[{target_index}]"
+            )
+    return reasons
+
+
 def _validation_artifact_coverage_contract_reasons(
     artifact_checks: Sequence[Any],
     declared_artifacts_by_identity: Mapping[ArtifactIdentity, DeclaredArtifact] | None,
@@ -3073,6 +3095,13 @@ def _validation_contract_reasons(
         )
 
     if "summary" in validation:
+        if isinstance(toolchains, list) and project_targets_valid:
+            reasons.extend(
+                _validation_toolchain_coverage_contract_reasons(
+                    toolchains,
+                    project_targets,
+                )
+            )
         if isinstance(artifact_checks, list):
             reasons.extend(
                 _validation_artifact_coverage_contract_reasons(
