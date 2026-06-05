@@ -176,6 +176,7 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         assert "failed artifacts missing error metadata or generated metadata" in (
             backend_support["notes"]
         )
+        assert "translated artifacts with error metadata" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_current_translated_artifacts_"
@@ -190,6 +191,11 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_failed_artifacts_without_"
             "source_hash"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_translated_artifacts_with_"
+            "error_metadata"
         ) in backend_support["evidence"]
 
 
@@ -236,6 +242,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
             backend_support["notes"]
         )
         assert "failed artifact error metadata" in backend_support["notes"]
+        assert "translated artifact error metadata rejection" in (
+            backend_support["notes"]
+        )
         assert "failed artifact generated metadata rejection" in (
             backend_support["notes"]
         )
@@ -263,6 +272,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_failed_artifacts_without_error"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_translated_artifacts_with_"
+            "error_metadata"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
