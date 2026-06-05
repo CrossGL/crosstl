@@ -6362,6 +6362,10 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
         "External corpus: ok; 2 entries, 1 present, 1 missing, 1 invalid"
         in result.stdout
     )
+    assert (
+        "External corpus coverage: 1 discovered, 0 present but undiscovered; "
+        "3 manifest entries, 2 valid"
+    ) in result.stdout
     assert "External corpus sources: cgl=1, directx=1" in result.stdout
     assert "External corpus targets: cgl=2, opengl=1" in result.stdout
     assert (

@@ -448,6 +448,33 @@ def _format_source_map_counts(summary):
     )
 
 
+def _format_external_corpus_accounting(summary):
+    if not isinstance(summary, Mapping):
+        return None
+
+    values = {
+        field_name: summary.get(field_name)
+        for field_name in (
+            "manifestEntryCount",
+            "validEntryCount",
+            "discoveredUnitCount",
+            "undiscoveredPresentCount",
+        )
+    }
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in values.values()
+    ):
+        return None
+    return (
+        "External corpus coverage: "
+        f"{values['discoveredUnitCount']} discovered, "
+        f"{values['undiscoveredPresentCount']} present but undiscovered; "
+        f"{values['manifestEntryCount']} manifest entries, "
+        f"{values['validEntryCount']} valid"
+    )
+
+
 def _format_project_report_inspection(payload):
     report = payload.get("report", {})
     summary = report.get("summary", {}) if isinstance(report, Mapping) else {}
@@ -641,6 +668,9 @@ def _format_project_report_inspection(payload):
                 f"{external_summary.get('missingCount', 0)} missing"
                 f"{invalid_entries}"
             )
+            corpus_accounting = _format_external_corpus_accounting(external_summary)
+            if corpus_accounting:
+                lines.append(corpus_accounting)
             corpus_sources = _format_count_rollup(
                 "External corpus sources",
                 external_summary.get("entriesBySourceBackend"),
