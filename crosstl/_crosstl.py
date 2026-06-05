@@ -558,12 +558,21 @@ def _format_project_report_inspection(payload):
     if isinstance(external_corpus, Mapping):
         external_summary = external_corpus.get("summary", {})
         if isinstance(external_summary, Mapping):
+            invalid_count = external_summary.get("invalidEntryCount", 0)
+            invalid_entries = ""
+            if (
+                isinstance(invalid_count, int)
+                and not isinstance(invalid_count, bool)
+                and invalid_count > 0
+            ):
+                invalid_entries = f", {invalid_count} invalid"
             lines.append(
                 "External corpus: "
                 f"{external_corpus.get('status', 'unknown')}; "
                 f"{external_summary.get('entryCount', 0)} entries, "
                 f"{external_summary.get('presentCount', 0)} present, "
                 f"{external_summary.get('missingCount', 0)} missing"
+                f"{invalid_entries}"
             )
             corpus_sources = _format_count_rollup(
                 "External corpus sources",

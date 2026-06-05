@@ -1144,6 +1144,9 @@ def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
     assert external_corpus["status"] == "ok"
     assert external_corpus["name"] == "Reduced project corpus"
     assert external_corpus["summary"] == {
+        "manifestEntryCount": 2,
+        "validEntryCount": 2,
+        "invalidEntryCount": 0,
         "entryCount": 2,
         "presentCount": 1,
         "missingCount": 1,
@@ -1229,6 +1232,9 @@ def test_translate_project_skips_invalid_external_corpus_entries(tmp_path):
     assert validation["success"] is True
     external_corpus = payload["externalCorpus"]
     assert external_corpus["status"] == "ok"
+    assert external_corpus["summary"]["manifestEntryCount"] == 2
+    assert external_corpus["summary"]["validEntryCount"] == 1
+    assert external_corpus["summary"]["invalidEntryCount"] == 1
     assert external_corpus["summary"]["entryCount"] == 1
     assert [entry["path"] for entry in external_corpus["entries"]] == ["simple.cgl"]
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
@@ -3368,6 +3374,9 @@ def test_validate_project_report_rejects_external_corpus_entry_count_mismatches(
     payload["externalCorpus"]["entries"][0]["artifactCount"] = 2
     payload["externalCorpus"]["entries"][0]["translatedCount"] = 0
     payload["externalCorpus"]["entries"][0]["failedCount"] = 1
+    payload["externalCorpus"]["summary"]["manifestEntryCount"] = 3
+    payload["externalCorpus"]["summary"]["validEntryCount"] = 2
+    payload["externalCorpus"]["summary"]["invalidEntryCount"] = 2
     report_path = repo / "invalid-external-corpus-counts.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -3384,6 +3393,15 @@ def test_validate_project_report_rejects_external_corpus_entry_count_mismatches(
     ) in diagnostic["message"]
     assert (
         "externalCorpus.entries[0].failedCount must match report.artifacts"
+    ) in diagnostic["message"]
+    assert (
+        "externalCorpus.summary.validEntryCount must match externalCorpus.entries"
+        in diagnostic["message"]
+    )
+    assert (
+        "externalCorpus.summary.manifestEntryCount must equal "
+        "externalCorpus.summary.validEntryCount plus "
+        "externalCorpus.summary.invalidEntryCount"
     ) in diagnostic["message"]
 
 
@@ -6023,6 +6041,12 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
                         "sourceBackend": "directx",
                         "targets": ["cgl", "opengl"],
                     },
+                    {
+                        "id": "repo/outside",
+                        "path": "../outside.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    },
                 ],
             }
         ),
@@ -6057,7 +6081,10 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
     )
 
     assert result.returncode == 0
-    assert "External corpus: ok; 2 entries, 1 present, 1 missing" in result.stdout
+    assert (
+        "External corpus: ok; 2 entries, 1 present, 1 missing, 1 invalid"
+        in result.stdout
+    )
     assert "External corpus sources: cgl=1, directx=1" in result.stdout
     assert "External corpus targets: cgl=2, opengl=1" in result.stdout
     assert (

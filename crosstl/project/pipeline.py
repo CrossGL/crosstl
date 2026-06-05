@@ -368,6 +368,9 @@ def _source_map_counts(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, int]
 
 def _external_corpus_empty_summary() -> dict[str, Any]:
     return {
+        "manifestEntryCount": 0,
+        "validEntryCount": 0,
+        "invalidEntryCount": 0,
         "entryCount": 0,
         "presentCount": 0,
         "missingCount": 0,
@@ -558,8 +561,11 @@ def _external_corpus_report(
         if source:
             artifacts_by_source.setdefault(source, []).append(artifact)
 
+    valid_manifest_entries = _valid_external_corpus_manifest_entries(manifest)
+    manifest_entry_count = len(manifest.get("entries", []))
+
     entries = []
-    for index, raw_entry in _valid_external_corpus_manifest_entries(manifest):
+    for index, raw_entry in valid_manifest_entries:
         path = str(raw_entry.get("path", "")).replace("\\", "/")
         entry_targets = _manifest_entry_targets(raw_entry, targets)
         source_backend = str(raw_entry.get("sourceBackend", "unknown"))
@@ -599,6 +605,9 @@ def _external_corpus_report(
         entries.append(entry_payload)
 
     summary = {
+        "manifestEntryCount": manifest_entry_count,
+        "validEntryCount": len(entries),
+        "invalidEntryCount": manifest_entry_count - len(entries),
         "entryCount": len(entries),
         "presentCount": sum(1 for entry in entries if entry["present"]),
         "missingCount": sum(1 for entry in entries if not entry["present"]),
@@ -3387,6 +3396,33 @@ def _external_corpus_summary_contract_reasons(
 
     entry_records = [entry for entry in entries if isinstance(entry, Mapping)]
     reasons = []
+    accounting_fields = (
+        "manifestEntryCount",
+        "validEntryCount",
+        "invalidEntryCount",
+    )
+    if any(field_name in summary for field_name in accounting_fields):
+        for field_name in accounting_fields:
+            if not _is_non_negative_int(summary.get(field_name)):
+                reasons.append(
+                    f"externalCorpus.summary.{field_name} "
+                    "must be a non-negative integer"
+                )
+        if all(_is_non_negative_int(summary.get(field)) for field in accounting_fields):
+            manifest_entry_count = summary["manifestEntryCount"]
+            valid_entry_count = summary["validEntryCount"]
+            invalid_entry_count = summary["invalidEntryCount"]
+            if valid_entry_count != len(entries):
+                reasons.append(
+                    "externalCorpus.summary.validEntryCount must match "
+                    "externalCorpus.entries"
+                )
+            if manifest_entry_count != valid_entry_count + invalid_entry_count:
+                reasons.append(
+                    "externalCorpus.summary.manifestEntryCount must equal "
+                    "externalCorpus.summary.validEntryCount plus "
+                    "externalCorpus.summary.invalidEntryCount"
+                )
     expected_counts = {
         "entryCount": len(entries),
         "presentCount": sum(1 for entry in entry_records if entry.get("present")),

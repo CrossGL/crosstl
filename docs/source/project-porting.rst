@@ -180,11 +180,12 @@ translation so reports do not silently stringify invalid project metadata.
 manifest of pinned upstream shader or GPU-source reductions. Project reports use
 the manifest for coverage accounting only: they record declared paths, present
 and missing entries, discovered translation units, source-backend and target
-rollups, and artifact outcomes for entries included in the project run. CrossTL
-does not clone upstream repositories, run native build systems, or claim whole
-corpus semantic parity from this manifest. Malformed manifest entries are
-reported as configuration diagnostics and skipped before corpus accounting so
-generated project reports remain contract-valid.
+rollups, valid and invalid manifest-entry counts, and artifact outcomes for
+entries included in the project run. CrossTL does not clone upstream
+repositories, run native build systems, or claim whole corpus semantic parity
+from this manifest. Malformed manifest entries are reported as configuration
+diagnostics and skipped from retained corpus entries, while the summary still
+records how many manifest entries were skipped.
 
 Project reports include configured define and variant names and values. Review
 reports before sharing them outside the repository if those values include
@@ -227,9 +228,11 @@ Project reports are JSON documents with:
   without writing files.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
-  rollups, and translated/failed artifact outcome counts for manifest entries.
-  Validation checks entry presence against the project root and checks
-  discovered/source-backend fields against declared translation units.
+  rollups, valid/invalid manifest-entry counts, and translated/failed artifact
+  outcome counts for manifest entries. Validation checks entry presence against
+  the project root, checks discovered/source-backend fields against declared
+  translation units, and rejects inconsistent retained-entry and manifest-entry
+  summary counts when those fields are present.
 - ``diagnostics``: structured diagnostics using severity, code, message,
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract.
