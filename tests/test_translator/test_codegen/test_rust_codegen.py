@@ -19432,6 +19432,50 @@ def test_unary_math_intrinsics_preserve_vector_shape_and_smoke_compile(tmp_path)
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_inverse_sqrt_alias_preserves_vector_shape_and_smoke_compile(tmp_path):
+    code = """
+    shader InverseSqrtAliasInference {
+        fragment {
+            vec4 main(vec3 value, float scalar) {
+                let inv_root = inverseSqrt(value);
+                let scalar_inv_root = inverseSqrt(scalar);
+                return vec4(inv_root, scalar_inv_root);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let inv_root: Vec3<f32> = rsqrt(value);" in generated_code
+    assert "let scalar_inv_root: f32 = rsqrt(scalar);" in generated_code
+    assert "inverseSqrt(" not in generated_code
+    assert "let inv_root: f32 = rsqrt(value)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_user_defined_inverse_sqrt_function_is_not_lowered_to_rsqrt():
+    code = """
+    shader UserDefinedInverseSqrt {
+        float inverseSqrt(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            float main(float value) {
+                return inverseSqrt(value);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn inverseSqrt(value: f32) -> f32" in generated_code
+    assert "return inverseSqrt(value);" in generated_code
+    assert "rsqrt(" not in generated_code
+
+
 def test_rounding_intrinsics_preserve_float_input_shape_and_smoke_compile(tmp_path):
     code = """
     shader RoundingIntrinsicInference {

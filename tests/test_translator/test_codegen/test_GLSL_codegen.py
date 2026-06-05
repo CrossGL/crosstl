@@ -23543,6 +23543,86 @@ def test_opengl_hlsl_saturate_alias_emits_three_argument_clamp():
     assert "clamp(color)" not in generated_code
 
 
+def test_opengl_hlsl_clip_alias_emits_discard_guards():
+    # Microsoft HLSL clip discards the current pixel if any component is
+    # less than zero:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-clip
+    # Khronos GLSL 4.60 uses the parameterless discard statement in fragment
+    # shaders:
+    # https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html#jumps
+    shader = """
+    shader ClipAlias {
+        struct FSInput {
+            float alpha @ TEXCOORD0;
+            vec3 distances @ TEXCOORD1;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                clip(input.alpha - 0.5);
+                clip(input.distances);
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "if ((alpha - 0.5) < 0.0) {\n        discard;\n    }" in generated_code
+    assert (
+        "if (any(lessThan(distances, vec3(0.0)))) {\n" "        discard;\n" "    }"
+    ) in generated_code
+    assert "discard(" not in generated_code
+    assert "clip(" not in generated_code
+
+
+def test_opengl_user_defined_clip_function_is_preserved():
+    shader = """
+    shader UserClip {
+        float clip(float value) {
+            return value * 2.0;
+        }
+
+        struct FSInput {
+            float alpha @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float adjusted = clip(input.alpha);
+                return vec4(adjusted);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float clip(float value)" in generated_code
+    assert "float adjusted = clip(alpha);" in generated_code
+    assert "discard" not in generated_code
+
+
+def test_opengl_clip_alias_is_rejected_outside_fragment_stage():
+    shader = """
+    shader VertexClip {
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                clip(position.x);
+                return vec4(position, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="OpenGL clip alias lowers to discard and is only valid in fragment",
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_opengl_explicit_sampler_argument_is_dropped():
     shader = """
     shader ExplicitSampler {

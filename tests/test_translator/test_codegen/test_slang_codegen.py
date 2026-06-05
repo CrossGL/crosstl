@@ -2726,6 +2726,51 @@ def test_inversesqrt_builtin_lowers_to_slang_rsqrt():
     assert "inversesqrt(" not in generated_code
 
 
+def test_inverse_sqrt_alias_lowers_to_slang_rsqrt():
+    code = """
+    shader BuiltinGap {
+        compute {
+            void main() {
+                float inv = inverseSqrt(x);
+                vec2 invVec = inverseSqrt(vec2(4.0, 9.0));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float inv = rsqrt(x);" in generated_code
+    assert "float2 invVec = rsqrt(float2(4.0, 9.0));" in generated_code
+    assert "inverseSqrt(" not in generated_code
+
+
+def test_user_defined_inverse_sqrt_alias_is_not_lowered():
+    code = """
+    shader BuiltinGap {
+        float inverseSqrt(float value) {
+            return value;
+        }
+
+        compute {
+            void main() {
+                float inv = inverseSqrt(4.0);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float inverseSqrt(float value)" in generated_code
+    assert "float inv = inverseSqrt(4.0);" in generated_code
+    assert "rsqrt(" not in generated_code
+
+
 def test_glsl_derivative_builtins_lower_to_slang_ddx_ddy():
     code = """
     shader BuiltinGap {

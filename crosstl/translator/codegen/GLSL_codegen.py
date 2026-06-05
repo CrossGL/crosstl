@@ -1289,7 +1289,6 @@ class GLSLCodeGen:
             "fwidth_coarse": "fwidthCoarse",
             "rsqrt": "inversesqrt",
             "sincos": "sin_cos",  # Custom function needed
-            "clip": "discard",  # HLSL clip becomes GLSL discard
             "log2": "log2",
             "exp2": "exp2",
             "pow": "pow",
@@ -2986,6 +2985,8 @@ class GLSLCodeGen:
     def is_fragment_only_call_name(self, func_name):
         if not func_name:
             return False
+        if func_name == "clip" and func_name not in self.function_return_types:
+            return True
         mapped_name = self.function_map.get(func_name, func_name)
         return (
             mapped_name in self.GLSL_DERIVATIVE_FUNCTIONS
@@ -7352,6 +7353,9 @@ class GLSLCodeGen:
             )
             if dynamic_resource_statement is not None:
                 return dynamic_resource_statement
+            clip_statement = self.generate_clip_statement(expression, indent)
+            if clip_statement is not None:
+                return clip_statement
             expr_code = self.generate_expression_statement(stmt)
             return f"{indent_str}{expr_code};\n"
         else:
@@ -7369,6 +7373,9 @@ class GLSLCodeGen:
             )
             if dynamic_resource_statement is not None:
                 return dynamic_resource_statement
+            clip_statement = self.generate_clip_statement(stmt, indent)
+            if clip_statement is not None:
+                return clip_statement
             expr_result = self.generate_expression(stmt)
             if expr_result.strip():
                 return f"{indent_str}{expr_result};\n"
@@ -9346,6 +9353,48 @@ class GLSLCodeGen:
         right = self.generate_expression(args[1])
         addend = self.generate_expression(args[2])
         return f"(({left} * {right}) + {addend})"
+
+    def generate_clip_statement(self, expression, indent):
+        if not isinstance(expression, FunctionCallNode):
+            return None
+
+        func_name = self.function_call_name(expression)
+        if func_name != "clip" or func_name in self.function_return_types:
+            return None
+
+        args = getattr(expression, "arguments", getattr(expression, "args", [])) or []
+        if len(args) != 1:
+            raise ValueError("OpenGL clip alias requires 1 argument")
+        if self.current_stage_entry_type not in (None, "fragment"):
+            raise ValueError(
+                "OpenGL clip alias lowers to discard and is only valid in "
+                "fragment stages"
+            )
+
+        value_expr = args[0]
+        value = self.generate_expression(value_expr)
+        condition = self.clip_discard_condition(value_expr, value)
+        indent_str = "    " * indent
+        return (
+            f"{indent_str}if ({condition}) {{\n"
+            f"{indent_str}    discard;\n"
+            f"{indent_str}}}\n"
+        )
+
+    def clip_discard_condition(self, value_expr, value):
+        value_type = self.map_type(self.expression_result_type(value_expr))
+        zero = self.clip_zero_literal(value_type)
+        if self.is_vector_value_type(value_type):
+            return f"any(lessThan({value}, {value_type}({zero})))"
+        return f"{value} < {zero}"
+
+    def clip_zero_literal(self, value_type):
+        component_type = self.vector_component_type(value_type) or value_type
+        if component_type == "uint":
+            return "0u"
+        if component_type == "int":
+            return "0"
+        return "0.0"
 
     def saturate_bound_literals(self, value_expr):
         value_type = self.expression_result_type(value_expr)

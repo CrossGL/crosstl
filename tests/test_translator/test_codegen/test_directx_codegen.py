@@ -5810,14 +5810,14 @@ def test_hlsl_lowers_glsl_fractional_mix_and_simple_atomic_names():
     assert "atomicAdd(" not in generated_code
 
 
-def test_hlsl_lowers_glsl_mod_to_fmod_intrinsic():
+def test_hlsl_lowers_glsl_mod_to_floor_semantics_expression():
     shader = """
     shader HlslModBuiltinLowering {
         compute {
             void main() {
-                let wrapped = mod(5.0, 2.0);
-                let v = vec3(5.0, 7.0, 9.0);
-                let wrappedVec = mod(v, vec3(2.0));
+                vec2 uv = vec2(-1.25, 2.75);
+                vec2 tile = mod((uv * 4.0) - vec2(2.0), 1.0);
+                let wrapped = mod(tile, vec2(0.25, 0.5));
             }
         }
     }
@@ -5825,13 +5825,40 @@ def test_hlsl_lowers_glsl_mod_to_fmod_intrinsic():
 
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    # Microsoft HLSL docs list floating-point remainder as ret fmod(x, y).
-    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-fmod
-    assert "float wrapped = fmod(5.0, 2.0);" in generated_code
-    assert "float3 v = float3(5.0, 7.0, 9.0);" in generated_code
-    assert "float3 wrappedVec = fmod(v, float3(2.0, 2.0, 2.0));" in generated_code
-    assert "wrapped = mod(" not in generated_code
-    assert "wrappedVec = mod(" not in generated_code
+    # GLSL mod is x - y * floor(x/y); HLSL fmod is a remainder operation and
+    # differs for negative tiled coordinates.
+    assert (
+        "float2 tile = ((((uv * 4.0) - float2(2.0, 2.0))) - "
+        "((1.0) * floor((((uv * 4.0) - float2(2.0, 2.0))) / (1.0))));"
+    ) in generated_code
+    assert (
+        "float2 wrapped = ((tile) - "
+        "((float2(0.25, 0.5)) * floor((tile) / (float2(0.25, 0.5)))));"
+    ) in generated_code
+    assert "mod(" not in generated_code
+    assert "fmod(" not in generated_code
+
+
+def test_hlsl_user_defined_mod_is_not_lowered():
+    shader = """
+    shader HlslUserMod {
+        float mod(float value, float period) {
+            return value + period;
+        }
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float wrapped = mod(float(tid.x), 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float mod(float value, float period)" in generated_code
+    assert "float wrapped = mod(float(tid.x), 2.0);" in generated_code
+    assert "floor(" not in generated_code
 
 
 def test_hlsl_two_argument_atan_lowers_to_atan2_intrinsic():

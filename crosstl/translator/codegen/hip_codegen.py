@@ -398,6 +398,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "log2": "log2f",
             "sqrt": "sqrtf",
             "inversesqrt": "rsqrtf",
+            "rsqrt": "rsqrtf",
             "pow": "powf",
             "abs": "fabsf",
             "floor": "floorf",
@@ -3778,8 +3779,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     f"{self.coord_component(args[1], 'y')})"
                 )
 
+        math_func_name = self.hip_math_function_name(func_name)
         vector_math_call = self.generate_vector_scalar_math_call(
-            func_name,
+            math_func_name,
             raw_args,
             args,
         )
@@ -3800,13 +3802,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return constructor_call
             args = self.generate_vector_constructor_args(vector_info, raw_args, args)
 
-        scalar_math_call = self.generate_scalar_math_call(func_name, raw_args, args)
+        scalar_math_call = self.generate_scalar_math_call(
+            math_func_name, raw_args, args
+        )
         if scalar_math_call is not None:
             return scalar_math_call
 
         args_str = ", ".join(args)
         target = mapped_name if mapped_name is not None else callee
         return f"{target}({args_str})"
+
+    def hip_math_function_name(self, func_name):
+        return {"rsqrt": "inversesqrt"}.get(func_name, func_name)
 
     def generate_warp_sync_builtin_call(self, func_name, raw_args, args):
         expected_count = HIP_WARP_SYNC_BUILTIN_ARITIES.get(func_name)

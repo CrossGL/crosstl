@@ -3275,6 +3275,87 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
+    def test_lerp_alias_lowers_to_spirv_fmix(self, tmp_path):
+        source_code = """
+        shader LerpAlias {
+            compute {
+                void main() {
+                    float sx = lerp(0.0, 1.0, 0.25);
+                    vec3 vx = vec3(1.0, 2.0, 3.0);
+                    vec3 vy = vec3(4.0, 5.0, 6.0);
+                    vec3 vv = lerp(vx, vy, 0.5);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"FMix %\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        scalar_splat = re.search(
+            rf"(?P<splat>%\d+) = OpCompositeConstruct "
+            rf"{re.escape(vec3_type.group(1))} (%\d+) \2 \2",
+            spv_code,
+        )
+        assert scalar_splat is not None
+        assert re.search(
+            rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ FMix "
+            rf"%\d+ %\d+ {re.escape(scalar_splat.group('splat'))}",
+            spv_code,
+        )
+        assert "lerp" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_user_defined_lerp_function_shadows_builtin_alias(self, tmp_path):
+        source_code = """
+        shader UserLerp {
+            float lerp(float x, float y, float s) {
+                return x + y + s;
+            }
+
+            compute {
+                void main() {
+                    float value = lerp(1.0, 2.0, 3.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        lerp_function = re.search(
+            r"(?P<function>%\d+) = OpFunction %\d+ None %\d+\n"
+            r"(?:%\d+ = OpFunctionParameter %\d+\n){3}",
+            spv_code,
+        )
+
+        assert lerp_function is not None
+        assert re.search(
+            rf"%\d+ = OpFunctionCall %\d+ "
+            rf"{re.escape(lerp_function.group('function'))} "
+            r"%\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert " FMix " not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_float_min_max_clamp_builtins_use_typed_spirv_extinsts(self):
         source_code = """
         shader MinMaxClamp {

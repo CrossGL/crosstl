@@ -771,6 +771,41 @@ class TestCudaCodeGen:
         assert "float adjusted = mix(0.0, 1.0, 0.25);" in cuda_code
         assert "float adjusted = lerp(0.0, 1.0, 0.25);" not in cuda_code
 
+    def test_user_defined_fma_and_mad_functions_are_not_lowered_to_cuda_builtins(
+        self,
+    ):
+        source_code = """
+        shader TestShader {
+            compute {
+                float fma(float x, float y, float z) {
+                    return x + y + z;
+                }
+
+                float mad(float x, float y, float z) {
+                    return x - y + z;
+                }
+
+                void main() {
+                    float fused = fma(1.0, 2.0, 3.0);
+                    float multiplyAdd = mad(1.0, 2.0, 3.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float fma(float x, float y, float z)" in cuda_code
+        assert "__device__ float mad(float x, float y, float z)" in cuda_code
+        assert "float fused = fma(1.0, 2.0, 3.0);" in cuda_code
+        assert "float multiplyAdd = mad(1.0, 2.0, 3.0);" in cuda_code
+        assert "float fused = fmaf(1.0, 2.0, 3.0);" not in cuda_code
+        assert "float multiplyAdd = fmaf(1.0, 2.0, 3.0);" not in cuda_code
+
     def test_type_conversion(self):
         codegen = CudaCodeGen()
 
@@ -841,6 +876,8 @@ class TestCudaCodeGen:
         assert codegen.convert_builtin_function("exp2") == "exp2f"
         assert codegen.convert_builtin_function("log2") == "log2f"
         assert codegen.convert_builtin_function("inversesqrt") == "rsqrtf"
+        assert codegen.convert_builtin_function("fma") == "fmaf"
+        assert codegen.convert_builtin_function("mad") == "fmaf"
         assert codegen.convert_builtin_function("round") == "roundf"
         assert codegen.convert_builtin_function("trunc") == "truncf"
         assert codegen.convert_builtin_function("mod") == "fmodf"
@@ -3105,6 +3142,68 @@ class TestCudaCodeGen:
         assert "mod(" not in cuda_code
         assert "mix(" not in cuda_code
         assert "atan2(" not in cuda_code
+
+    def test_fma_and_mad_builtins_lower_to_cuda_fused_multiply_add(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float x = 2.0;
+                    float y = 3.0;
+                    float z = 4.0;
+                    float fused = fma(x, y, z);
+                    float multiplyAdd = mad(x, y, z);
+
+                    double dx = 2.0;
+                    double dy = 3.0;
+                    double dz = 4.0;
+                    double preciseFused = fma(dx, dy, dz);
+                    double preciseMad = mad(dx, dy, dz);
+
+                    vec3 vx = vec3(1.0, 2.0, 3.0);
+                    vec3 vy = vec3(4.0, 5.0, 6.0);
+                    vec3 vz = vec3(7.0, 8.0, 9.0);
+                    vec3 vectorFused = fma(vx, vy, vz);
+                    vec3 scalarMiddle = mad(vx, 2.0, vz);
+                    vec3 nested = fract(fma(vx, vy, vz));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float fused = fmaf(x, y, z);" in cuda_code
+        assert "float multiplyAdd = fmaf(x, y, z);" in cuda_code
+        assert "double preciseFused = fma(dx, dy, dz);" in cuda_code
+        assert "double preciseMad = fma(dx, dy, dz);" in cuda_code
+        assert (
+            "__device__ inline float3 "
+            "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz" in cuda_code
+        )
+        assert (
+            "return make_float3(fmaf(arg0.x, arg1.x, arg2.x), "
+            "fmaf(arg0.y, arg1.y, arg2.y), "
+            "fmaf(arg0.z, arg1.z, arg2.z));" in cuda_code
+        )
+        assert (
+            "float3 vectorFused = "
+            "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz(vx, vy, vz);" in cuda_code
+        )
+        assert (
+            "float3 scalarMiddle = "
+            "cgl_float3_fma_float3_xyz_float_float3_xyz(vx, 2.0, vz);" in cuda_code
+        )
+        assert (
+            "float3 nested = cgl_float3_fract("
+            "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz(vx, vy, vz));" in cuda_code
+        )
+        assert "float fused = fma(x, y, z);" not in cuda_code
+        assert "mad(" not in cuda_code
 
     def test_double_math_builtins_emit_cuda_double_functions(self):
         source_code = """

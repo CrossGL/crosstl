@@ -764,7 +764,6 @@ class HLSLCodeGen:
             "fract": "frac",
             "inversesqrt": "rsqrt",
             "mix": "lerp",
-            "mod": "fmod",
         }
 
         self.semantic_map = {
@@ -5032,6 +5031,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "min16uint4",
             ]:
                 return self.hlsl_constructor_expression(func_name, args)
+            builtin_call = self.hlsl_builtin_function_call(func_name, args)
+            if builtin_call is not None:
+                return builtin_call
             builtin_callee = self.hlsl_builtin_function_name(func_name, args)
             if builtin_callee is not None:
                 callee = builtin_callee
@@ -5102,6 +5104,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if func_name == "atan" and args is not None and len(args) == 2:
             return "atan2"
         return self.function_map.get(func_name)
+
+    def hlsl_builtin_function_call(self, func_name, args):
+        if not func_name or func_name in getattr(self, "function_return_types", {}):
+            return None
+        if func_name != "mod" or len(args) != 2:
+            return None
+
+        left = self.generate_expression(args[0])
+        right = self.generate_expression(args[1])
+        return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
 
     def interpolation_function_call(self, func_name, args):
         if not func_name or func_name in getattr(self, "function_return_types", {}):

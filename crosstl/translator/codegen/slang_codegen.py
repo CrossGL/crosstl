@@ -288,6 +288,7 @@ class SlangCodeGen:
             "dFdx": "ddx",
             "dFdy": "ddy",
             "inversesqrt": "rsqrt",
+            "inverseSqrt": "rsqrt",
             "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
         }
 

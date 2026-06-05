@@ -179,6 +179,88 @@ def test_metal_mod_builtin_lowers_to_compilable_msl_when_toolchain_is_available(
     compile_with_metal_if_available(generated_code)
 
 
+def test_metal_hlsl_frac_and_lerp_aliases_lower_to_msl_stdlib_names():
+    shader = """
+    shader MetalHlslMathAliases {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float phase = frac(float(tid.x) * 0.25);
+                vec3 cool = vec3(0.1, 0.2, 0.8);
+                vec3 warm = vec3(1.0, 0.4, 0.1);
+                vec3 color = lerp(cool, warm, phase);
+                float scalar = lerp(0.0, 1.0, phase) + color.x;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float phase = fract(float(tid.x) * 0.25);" in generated_code
+    assert "float3 color = mix(cool, warm, phase);" in generated_code
+    assert "float scalar = mix(0.0, 1.0, phase) + color.x;" in generated_code
+    assert "frac(" not in generated_code
+    assert "lerp(" not in generated_code
+
+
+def test_metal_user_defined_frac_and_lerp_functions_are_preserved():
+    shader = """
+    shader MetalUserHlslMathNames {
+        compute {
+            float frac(float value) {
+                return value + 1.0;
+            }
+
+            float lerp(float left, float right, float weight) {
+                return left + right + weight;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float phase = frac(float(tid.x) * 0.25);
+                float scalar = lerp(0.0, 1.0, phase);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float frac(float value)" in generated_code
+    assert "float lerp(float left, float right, float weight)" in generated_code
+    assert "float phase = frac(float(tid.x) * 0.25);" in generated_code
+    assert "float scalar = lerp(0.0, 1.0, phase);" in generated_code
+    assert "fract(" not in generated_code
+    assert "mix(" not in generated_code
+
+
+def test_metal_hlsl_frac_and_lerp_aliases_compile_when_toolchain_is_available():
+    shader = """
+    shader MetalHlslMathAliasCompile {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float phase = frac(float(tid.x) * 0.25);
+                vec2 cool = vec2(0.1, 0.8);
+                vec2 warm = vec2(1.0, 0.1);
+                vec2 color = lerp(cool, warm, vec2(phase));
+                float scalar = lerp(0.0, 1.0, phase) + color.x;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "frac(" not in generated_code
+    assert "lerp(" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
     shader = """
     shader SynchronizationBuiltins {

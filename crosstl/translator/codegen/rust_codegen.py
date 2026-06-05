@@ -385,6 +385,7 @@ class RustCodeGen:
             "radians": "radians",
             "sqrt": "sqrt",
             "inversesqrt": "rsqrt",
+            "inverseSqrt": "rsqrt",
             "pow": "pow",
             "trunc": "trunc",
             "roundEven": "round_even",
