@@ -4223,6 +4223,14 @@ class CudaParser:
 
         operand_index = close_index + 1
         if (
+            operand_index < len(self.tokens)
+            and self.tokens[operand_index][0] == "LPAREN"
+            and not self.is_identifier_type_name(identifier_name)
+            and not self.is_probable_identifier_type_name(identifier_name)
+        ):
+            return False
+
+        if (
             not self.is_identifier_type_name(identifier_name)
             and operand_index < len(self.tokens)
             and self.tokens[operand_index][0] in {"MULTIPLY", "BITWISE_AND"}
@@ -4238,6 +4246,7 @@ class CudaParser:
         index = self.current_index + 1
         saw_scope = False
         saw_template = False
+        final_token = self.current_token
         while True:
             if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
                 index = self.skip_template_at_index(index)
@@ -4251,6 +4260,7 @@ class CudaParser:
                 and self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS
             ):
                 saw_scope = True
+                final_token = self.tokens[index + 1]
                 index += 2
                 continue
             break
@@ -4268,7 +4278,23 @@ class CudaParser:
         if index >= len(self.tokens) or self.tokens[index][0] != "RPAREN":
             return False
 
-        return self.is_cast_operand_start_at_index(index + 1)
+        operand_index = index + 1
+        if (
+            operand_index < len(self.tokens)
+            and self.tokens[operand_index][0] == "LPAREN"
+            and not self.is_probable_cast_target_name(final_token)
+        ):
+            return False
+
+        return self.is_cast_operand_start_at_index(operand_index)
+
+    def is_probable_cast_target_name(self, token):
+        token_type, token_value = token
+        if token_type != "IDENTIFIER":
+            return token_type in self.TYPE_TOKENS
+        return self.is_identifier_type_name(
+            token_value
+        ) or self.is_probable_identifier_type_name(token_value)
 
     def is_cast_operand_start_at_index(self, index):
         if index >= len(self.tokens):

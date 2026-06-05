@@ -242,6 +242,24 @@ def test_default_keyword_parameter_name_codegen_from_modular_stdlib():
     assert "Unhandled expression" not in generated_code
 
 
+def test_backtick_local_identifier_codegen_from_modular_base64_stdlib_reparses_crossgl():
+    # Reduced from https://github.com/modular/modular.git commit
+    # daa47bb846cc213723a54c51844ea4e923eb5e13,
+    # mojo/stdlib/std/base64/_b64encode.mojo _6bit_to_byte.combine.
+    code = """
+    def combine(shuffled: Bytes, mask: Bytes) -> Bytes:
+        var `6bit` = shuffled & mask
+        return shift(`6bit`)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var _6bit = (shuffled & mask);" in generated_code
+    assert "return shift(_6bit);" in generated_code
+    assert "`" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_comptime_expression_prefix_codegen_drops_mojo_marker():
     code = """
     def main():

@@ -1262,6 +1262,7 @@ class SlangParser:
         methods = []
         associated_types = []
         properties = []
+        value_requirements = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
                 raise SyntaxError("Unterminated interface declaration")
@@ -1282,21 +1283,27 @@ class SlangParser:
                     self.parse_property_member(attributes=pending_attributes)
                 )
                 continue
-            if not self.is_function():
-                raise SyntaxError(
-                    f"Unsupported interface member: {self.current_token[0]}"
-                )
-            if self.is_func_keyword_declaration_start():
+            if self.is_function():
+                if self.is_func_keyword_declaration_start():
+                    methods.append(
+                        self.parse_func_keyword_function(
+                            attributes=pending_attributes,
+                            allow_signature=True,
+                        )
+                    )
+                    continue
                 methods.append(
-                    self.parse_func_keyword_function(
-                        attributes=pending_attributes,
-                        allow_signature=True,
+                    self.parse_function(
+                        attributes=pending_attributes, allow_signature=True
                     )
                 )
                 continue
-            methods.append(
-                self.parse_function(attributes=pending_attributes, allow_signature=True)
-            )
+            if self.is_variable_declaration_start():
+                value_requirements.extend(
+                    self.parse_struct_field_members(attributes=pending_attributes)
+                )
+                continue
+            raise SyntaxError(f"Unsupported interface member: {self.current_token[0]}")
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
@@ -1306,6 +1313,7 @@ class SlangParser:
             generic_parameters=generic_parameters,
             associated_types=associated_types,
             properties=properties,
+            value_requirements=value_requirements,
         )
         node.qualifiers = qualifiers
         node.conformances = conformances

@@ -291,7 +291,7 @@ class MojoToCrossGLConverter:
     def push_value_scope(self, names=None):
         scope = set()
         if names:
-            scope.update(name for name in names if name)
+            scope.update(self.map_identifier_name(name) for name in names if name)
         self.scoped_value_names.append(scope)
 
     def pop_value_scope(self):
@@ -300,9 +300,10 @@ class MojoToCrossGLConverter:
 
     def add_scoped_value_name(self, name):
         if name and self.scoped_value_names:
-            self.scoped_value_names[-1].add(name)
+            self.scoped_value_names[-1].add(self.map_identifier_name(name))
 
     def is_scoped_value_name(self, name):
+        name = self.map_identifier_name(name)
         return any(name in scope for scope in reversed(self.scoped_value_names))
 
     def generate_global_variables(self, ast):
@@ -335,7 +336,7 @@ class MojoToCrossGLConverter:
             semantic_suffix = f" {semantic}" if semantic else ""
             code += (
                 f"        {self.map_type(member.vtype)} "
-                f"{member.name}{semantic_suffix};\n"
+                f"{self.map_identifier_name(member.name)}{semantic_suffix};\n"
             )
         code += "    }\n\n"
         return code
@@ -349,7 +350,7 @@ class MojoToCrossGLConverter:
             member_suffix = f" {member_attributes}" if member_attributes else ""
             code += (
                 f"        {self.map_type(member.vtype)} "
-                f"{member.name}{member_suffix};\n"
+                f"{self.map_identifier_name(member.name)}{member_suffix};\n"
             )
         code += "    }\n\n"
         return code
@@ -389,7 +390,8 @@ class MojoToCrossGLConverter:
             for p in func.params:
                 if not p.vtype:
                     continue
-                param_str = f"{self.map_type(p.vtype)} {p.name}"
+                param_name = self.map_identifier_name(p.name)
+                param_str = f"{self.map_type(p.vtype)} {param_name}"
                 if getattr(p, "default_value", None) is not None:
                     default_value = self.generate_expression(p.default_value)
                     param_str += f" = {default_value}"
@@ -398,15 +400,16 @@ class MojoToCrossGLConverter:
                     if semantic:
                         param_str += f" {semantic}"
                 params.append(param_str)
-                param_names.append(p.name)
+                param_names.append(param_name)
 
         params_str = ", ".join(params) if params else ""
         return_type = self.map_type(func.return_type) if func.return_type else "void"
 
         func_attributes = self.map_function_attributes(func)
+        func_name = self.map_identifier_name(func.name)
 
         code += (
-            f"{indent_str}{return_type} {func.name}({params_str}){func_attributes} {{\n"
+            f"{indent_str}{return_type} {func_name}({params_str}){func_attributes} {{\n"
         )
 
         saved_body_depth = self.function_body_depth
@@ -446,10 +449,11 @@ class MojoToCrossGLConverter:
                     code += self.generate_variable_declaration(stmt) + ";\n"
                     self.add_scoped_declaration_names(stmt.name)
                 elif isinstance(stmt, VariableNode):
+                    name = self.map_identifier_name(stmt.name)
                     if hasattr(stmt, "vtype") and stmt.vtype:
-                        code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
+                        code += f"{self.map_type(stmt.vtype)} {name};\n"
                     else:
-                        code += f"{stmt.name};\n"
+                        code += f"{name};\n"
                     self.add_scoped_value_name(stmt.name)
                 elif isinstance(stmt, AssignmentNode):
                     if self.is_implicit_assignment_declaration(stmt):
@@ -515,7 +519,7 @@ class MojoToCrossGLConverter:
 
     def generate_implicit_assignment_declaration(self, node):
         value = self.generate_expression(node.right)
-        return f"var {node.left.name} = {value}"
+        return f"var {self.map_identifier_name(node.left.name)} = {value}"
 
     def generate_import_comment(self, node):
         if getattr(node, "items", None):
@@ -546,7 +550,7 @@ class MojoToCrossGLConverter:
     def generate_declaration_name(self, name):
         if isinstance(name, TupleNode):
             return self.generate_expression(name)
-        return name
+        return self.map_identifier_name(name)
 
     def add_scoped_declaration_names(self, name):
         if isinstance(name, TupleNode):
@@ -621,10 +625,11 @@ class MojoToCrossGLConverter:
 
     def generate_for_initializer(self, node):
         if isinstance(node, VariableDeclarationNode):
+            name = self.generate_declaration_name(node.name)
             if node.vtype:
-                declaration = f"{self.map_type(node.vtype)} {node.name}"
+                declaration = f"{self.map_type(node.vtype)} {name}"
             else:
-                declaration = f"{node.var_type} {node.name}"
+                declaration = f"{node.var_type} {name}"
             if getattr(node, "initial_value", None) is not None:
                 value = self.generate_expression(node.initial_value)
                 declaration += f" = {value}"
@@ -669,10 +674,12 @@ class MojoToCrossGLConverter:
             return f"for {target} in {iterable} {{\n"
 
         condition = self.generate_range_condition(node.name, stop, args, step)
-        update = f"{node.name}++" if step == "1" else f"{node.name} += {step}"
-        return f"for (int {node.name} = {start}; {condition}; {update}) {{\n"
+        target = self.map_identifier_name(node.name)
+        update = f"{target}++" if step == "1" else f"{target} += {step}"
+        return f"for (int {target} = {start}; {condition}; {update}) {{\n"
 
     def generate_range_condition(self, name, stop, args, generated_step):
+        name = self.map_identifier_name(name)
         if self.is_negative_range_step(args, generated_step):
             return f"{name} > {stop}"
         if self.has_dynamic_range_step(args, generated_step):
@@ -797,10 +804,11 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, (int, float, bool)):
             return str(expr)
         elif isinstance(expr, VariableNode):
+            name = self.map_identifier_name(expr.name)
             if hasattr(expr, "vtype") and expr.vtype:
-                return f"{self.map_type(expr.vtype)} {expr.name}"
+                return f"{self.map_type(expr.vtype)} {name}"
             else:
-                return expr.name
+                return name
         elif isinstance(expr, VariableDeclarationNode):
             return self.generate_variable_declaration(expr)
         elif isinstance(expr, TupleNode):
@@ -997,6 +1005,9 @@ class MojoToCrossGLConverter:
         )
 
     def map_member_name(self, member):
+        return self.map_identifier_name(member)
+
+    def map_identifier_name(self, member):
         if not isinstance(member, str):
             return member
 
@@ -1056,9 +1067,10 @@ class MojoToCrossGLConverter:
         return f" {semantic}" if semantic else ""
 
     def map_function(self, func_name, arg_count=None):
+        mapped_name = self.map_identifier_name(func_name)
         if self.is_user_defined_function(func_name, arg_count):
-            return func_name
-        return self.function_map.get(func_name, func_name)
+            return mapped_name
+        return self.function_map.get(func_name, mapped_name)
 
     def map_operator(self, op):
         if op == "is":

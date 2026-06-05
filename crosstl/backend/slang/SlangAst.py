@@ -164,12 +164,14 @@ class InterfaceNode(ASTNode):
         generic_parameters=None,
         associated_types=None,
         properties=None,
+        value_requirements=None,
     ):
         self.name = name
         self.methods = methods or []
         self.generic_parameters = generic_parameters
         self.associated_types = associated_types or []
         self.properties = properties or []
+        self.value_requirements = value_requirements or []
 
     def __repr__(self):
         return f"InterfaceNode(name={self.name}, methods={len(self.methods)})"

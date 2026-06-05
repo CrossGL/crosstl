@@ -570,6 +570,33 @@ def test_cccl_cub_local_union_aligned_dynamic_shared_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cccl_cub_parenthesized_std_max_call_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 5a9ea633bfe63f113f4e99ecd505985ec2c38206
+    # path: cub/examples/block/example_block_reduce_dyn_smem.cu
+    source = """
+    void configure(int block_reduce_temp_bytes, int n) {
+        auto smem_size =
+            (std::max)(1 * sizeof(int), block_reduce_temp_bytes);
+        std::size_t count = (std::size_t)(n);
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(body[0].value, FunctionCallNode)
+    assert body[0].value.name == "std::max"
+    assert body[0].value.args[1] == "block_reduce_temp_bytes"
+    assert body[1].value.target_type == "std::size_t"
+    expected_call = "std::max((1 * sizeof(int)), block_reduce_temp_bytes);"
+    assert f"var smem_size: auto = {expected_call}" in crossgl
+    assert "var count: std::size_t = std::size_t(n);" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cccl_libcudacxx_templated_lambda_codegen_reparse():
     source = """
     __global__ void compare_kernel(int* out) {

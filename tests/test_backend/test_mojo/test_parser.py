@@ -322,6 +322,23 @@ def test_default_keyword_parameter_name_parse_from_modular_stdlib():
     assert function.body[0].value.name == "default"
 
 
+def test_backtick_local_identifier_parse_from_modular_base64_stdlib():
+    # Reduced from https://github.com/modular/modular.git commit
+    # daa47bb846cc213723a54c51844ea4e923eb5e13,
+    # mojo/stdlib/std/base64/_b64encode.mojo _6bit_to_byte.combine.
+    code = """
+    def combine(shuffled: Bytes, mask: Bytes) -> Bytes:
+        var `6bit` = shuffled & mask
+        return shift(`6bit`)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "combine")
+
+    declaration = function.body[0]
+    assert declaration.name == "`6bit`"
+    assert function.body[1].value.args[0].name == "`6bit`"
+
+
 def test_struct_parsing():
     code = """
     struct VSInput:

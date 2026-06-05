@@ -2906,6 +2906,32 @@ def test_hlsl_define_skips_cpp_compatibility_branch_from_directx_samples():
     assert ast.structs == []
 
 
+def test_parse_linalg_post_type_attributes_from_dxc():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/CodeGenDXIL/hlsl/linalg/attr-matrix-type.hlsl
+    code = textwrap.dedent("""
+        typedef __builtin_LinAlgMatrix [[__LinAlgMatrix_Attributes(ComponentType::F32, 10, 20, MatrixUse::A, MatrixScope::Thread)]] Mat10by20;
+
+        void f2(__builtin_LinAlgMatrix [[__LinAlgMatrix_Attributes(ComponentType::I32, 4, 5, MatrixUse::B, MatrixScope::ThreadGroup)]] mat2) {
+            __builtin_LinAlgMatrix [[__LinAlgMatrix_Attributes(ComponentType::I16, 2, 3, MatrixUse::Accumulator, MatrixScope::ThreadGroup)]] mat1;
+        }
+        """)
+
+    ast = parse_code(code)
+    typedef = ast.typedefs[0]
+    function = ast.functions[0]
+    param = function.params[0]
+    local = function.body[0]
+
+    assert typedef.name == "Mat10by20"
+    assert typedef.alias_type == "__builtin_LinAlgMatrix"
+    assert typedef.attributes[0].name == "__LinAlgMatrix_Attributes"
+    assert param.name == "mat2"
+    assert param.attributes[0].name == "__LinAlgMatrix_Attributes"
+    assert local.name == "mat1"
+    assert local.attributes[0].name == "__LinAlgMatrix_Attributes"
+
+
 @pytest.mark.parametrize(
     "code",
     [

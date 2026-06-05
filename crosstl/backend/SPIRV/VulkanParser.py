@@ -240,6 +240,7 @@ class VulkanParser:
     }
     SPIRV_ATOMIC_RMW_FUNCTIONS = {
         "OpAtomicIAdd": "atomicAdd",
+        "OpAtomicISub": "atomicAdd",
         "OpAtomicSMin": "atomicMin",
         "OpAtomicUMin": "atomicMin",
         "OpAtomicSMax": "atomicMax",
@@ -1561,6 +1562,24 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode in {
+                "OpAtomicIIncrement",
+                "OpAtomicIDecrement",
+            }:
+                if len(operands) >= 4:
+                    expressions[result_id] = (
+                        self.spirv_assembly_atomic_increment_expression(
+                            opcode,
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
             if result_id and opcode in self.SPIRV_ATOMIC_RMW_FUNCTIONS:
                 if len(operands) >= 5:
                     expressions[result_id] = self.spirv_assembly_atomic_expression(
@@ -2652,6 +2671,16 @@ class VulkanParser:
         decorations,
         constants,
     ):
+        value = self.spirv_assembly_operand_expression(
+            value_operand,
+            expressions,
+            names,
+            decorations,
+            constants,
+        )
+        if opcode == "OpAtomicISub":
+            value = UnaryOpNode("-", value)
+
         return FunctionCallNode(
             self.SPIRV_ATOMIC_RMW_FUNCTIONS[opcode],
             [
@@ -2662,13 +2691,34 @@ class VulkanParser:
                     decorations,
                     constants,
                 ),
+                value,
+            ],
+        )
+
+    def spirv_assembly_atomic_increment_expression(
+        self,
+        opcode,
+        pointer_operand,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        value = "1"
+        if opcode == "OpAtomicIDecrement":
+            value = UnaryOpNode("-", value)
+
+        return FunctionCallNode(
+            "atomicAdd",
+            [
                 self.spirv_assembly_operand_expression(
-                    value_operand,
+                    pointer_operand,
                     expressions,
                     names,
                     decorations,
                     constants,
                 ),
+                value,
             ],
         )
 

@@ -14,6 +14,7 @@ class MojoParser:
     FUNCTION_TOKENS = {"FN", "DEF"}
     ASYNC_FUNCTION_MODIFIER = "async"
     AWAIT_EXPRESSION_IDENTIFIER = "await"
+    IDENTIFIER_NAME_TOKENS = {"IDENTIFIER", "DEFAULT", "BACKTICK_IDENTIFIER"}
     TYPE_START_TOKENS = {"IDENTIFIER", "INT", "FLOAT", "BOOL", "STRING"}
     FUNCTION_TYPE_TOKENS = {"FN", "DEF"}
     PARAMETER_CONVENTION_TOKENS = {"VAR"}
@@ -217,6 +218,17 @@ class MojoParser:
         return isinstance(token_value, str) and re.match(
             r"^[A-Za-z_][A-Za-z0-9_]*$", token_value
         )
+
+    def is_identifier_name_token(self):
+        return self.current_token[0] in self.IDENTIFIER_NAME_TOKENS
+
+    def parse_identifier_name(self, context="IDENTIFIER"):
+        if not self.is_identifier_name_token():
+            raise SyntaxError(f"Expected {context}, got {self.current_token[0]}")
+
+        name = self.current_token[1]
+        self.eat(self.current_token[0])
+        return name
 
     def is_dotted_name_token(self):
         return self.current_token[0] == "BACKTICK_IDENTIFIER" or (
@@ -613,7 +625,7 @@ class MojoParser:
             )
 
         return_type = None
-        if self.current_token[0] not in {"IDENTIFIER", "DEFAULT"}:
+        if self.current_token[0] not in self.IDENTIFIER_NAME_TOKENS:
             raise SyntaxError(f"Expected function name, got {self.current_token[0]}")
         name = self.current_token[1]
         self.eat(self.current_token[0])
@@ -827,8 +839,10 @@ class MojoParser:
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
                 vtype = ""
-            elif self.is_identifier_like_token():
-                if self.peek_token()[0] == "COLON":
+            elif self.is_identifier_name_token() or (
+                self.current_token[0] in self.TYPE_START_TOKENS
+            ):
+                if self.is_identifier_name_token() and self.peek_token()[0] == "COLON":
                     name = self.current_token[1]
                     self.eat(self.current_token[0])
                     self.eat("COLON")
@@ -1234,17 +1248,13 @@ class MojoParser:
         return statement
 
     def parse_identifier_tuple(self):
-        identifiers = [VariableNode("", self.current_token[1])]
-        self.eat("IDENTIFIER")
+        identifiers = [VariableNode("", self.parse_identifier_name())]
 
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
-            if self.current_token[0] != "IDENTIFIER":
-                raise SyntaxError(
-                    f"Expected IDENTIFIER after comma, got {self.current_token[0]}"
-                )
-            identifiers.append(VariableNode("", self.current_token[1]))
-            self.eat("IDENTIFIER")
+            identifiers.append(
+                VariableNode("", self.parse_identifier_name("IDENTIFIER after comma"))
+            )
 
         if len(identifiers) == 1:
             return identifiers[0].name
@@ -1435,7 +1445,7 @@ class MojoParser:
             self.pos = saved_pos
             self.current_token = saved_token
 
-        if self.current_token[0] == "IDENTIFIER":
+        if self.is_identifier_name_token():
             var_name = self.parse_identifier_tuple()
             if self.current_token[0] == "IN":
                 self.eat("IN")
@@ -1850,12 +1860,8 @@ class MojoParser:
         return left
 
     def parse_primary(self):
-        if self.current_token[0] in {"IDENTIFIER", "DEFAULT"}:
+        if self.current_token[0] in self.IDENTIFIER_NAME_TOKENS:
             return self.parse_function_call_or_identifier()
-        elif self.current_token[0] == "BACKTICK_IDENTIFIER":
-            value = self.current_token[1]
-            self.eat("BACKTICK_IDENTIFIER")
-            return self.parse_postfix_suffixes(value)
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
@@ -2067,7 +2073,7 @@ class MojoParser:
         return VectorConstructorNode(type_name, args)
 
     def parse_function_call_or_identifier(self):
-        if self.current_token[0] in {"IDENTIFIER", "DEFAULT"}:
+        if self.current_token[0] in self.IDENTIFIER_NAME_TOKENS:
             name = self.current_token[1]
             self.eat(self.current_token[0])
             if self.current_token[0] == "STRING_LITERAL":
