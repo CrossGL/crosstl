@@ -81,7 +81,8 @@ Validate artifacts referenced by a report:
 
 .. code-block:: bash
 
-   python -m crosstl._crosstl validate-project crosstl-out/portability-report.json
+   python -m crosstl._crosstl validate-project crosstl-out/portability-report.json \
+     --format text
 
 Validation exits nonzero when the report metadata is malformed, artifact
 records, source-map records, or preserved diagnostics are malformed, source-map
@@ -103,7 +104,9 @@ the repository. Each smoke check is bounded by a short subprocess timeout, and
 timeouts are reported as failed toolchain runs. Validation reports include
 severity, diagnostic-code, and missing-capability rollups for generated and
 preserved diagnostics, plus artifact target, hash-status, toolchain status,
-and toolchain-run status rollups for validation results.
+and toolchain-run status rollups for validation results. The default output is
+JSON; ``--format text`` prints a concise validation summary with the same
+rollups.
 
 Inspect an existing report as a concise JSON or text summary:
 

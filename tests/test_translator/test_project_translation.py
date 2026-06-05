@@ -5944,6 +5944,38 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     )
     assert payload["diagnostics"][0]["code"] == "project.validate.failed-artifact"
 
+    text_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert text_result.returncode == 1
+    assert f"Project validation report: {report_path}" in text_result.stdout
+    assert "Status: failed" in text_result.stdout
+    assert "Diagnostics: 1 errors, 0 warnings, 0 notes" in text_result.stdout
+    assert "Diagnostic codes: project.validate.failed-artifact=1" in (
+        text_result.stdout
+    )
+    assert "Missing capabilities: batch.translation=1" in text_result.stdout
+    expected_artifact_rollup = (
+        "Validation artifacts by target: not-a-backend=1 artifact " "(0 ok, 1 failed)"
+    )
+    assert expected_artifact_rollup in text_result.stdout
+    assert "Validation source hashes: not-recorded=1" in text_result.stdout
+    assert "Validation generated hashes: not-applicable=1" in text_result.stdout
+    assert "Validation diagnostics:" in text_result.stdout
+
 
 def test_project_cli_validate_project_reports_invalid_report_shape(tmp_path):
     report_path = tmp_path / "invalid-report.json"

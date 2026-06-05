@@ -306,7 +306,17 @@ def _run_validate_project(args):
     from .project import validate_project_report
 
     payload = validate_project_report(args.report, run_toolchains=args.run_toolchains)
-    _write_json_payload(payload, args.output)
+    if args.format == "text":
+        text = _format_project_validation_report(payload)
+        if args.output:
+            path = Path(args.output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            print(f"Wrote {path}")
+        else:
+            print(text, end="")
+    else:
+        _write_json_payload(payload, args.output)
     return 0 if payload["success"] else 1
 
 
@@ -394,6 +404,73 @@ def _format_validation_artifact_rollup(label, counts):
         )
         for target, artifact_count, ok_count, failed_count in entries
     )
+
+
+def _format_project_validation_report(payload):
+    counts = payload.get("diagnosticCounts", {})
+    counts = counts if isinstance(counts, Mapping) else {}
+    lines = [
+        f"Project validation report: {payload.get('sourceReport')}",
+        f"Status: {'ok' if payload.get('success') else 'failed'}",
+        (
+            "Diagnostics: "
+            f"{counts.get('error', 0)} errors, "
+            f"{counts.get('warning', 0)} warnings, "
+            f"{counts.get('note', 0)} notes"
+        ),
+    ]
+
+    for line in (
+        _format_count_rollup(
+            "Diagnostic codes", payload.get("diagnosticsByCode"), include_zero=False
+        ),
+        _format_count_rollup(
+            "Missing capabilities",
+            payload.get("missingCapabilityCounts"),
+            include_zero=False,
+        ),
+        _format_validation_artifact_rollup(
+            "Validation artifacts by target",
+            payload.get("artifactStatusByTarget"),
+        ),
+        _format_count_rollup(
+            "Validation source hashes",
+            payload.get("sourceHashStatusCounts"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Validation generated hashes",
+            payload.get("generatedHashStatusCounts"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Validation toolchains",
+            payload.get("toolchainStatusCounts"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Validation toolchain runs",
+            payload.get("toolchainRunStatusCounts"),
+            include_zero=False,
+        ),
+    ):
+        if line:
+            lines.append(line)
+
+    diagnostics = payload.get("diagnostics", [])
+    if isinstance(diagnostics, list) and diagnostics:
+        lines.append("Validation diagnostics:")
+        for diagnostic in diagnostics:
+            if not isinstance(diagnostic, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{diagnostic.get('severity', 'unknown')} "
+                f"{diagnostic.get('code', 'unknown')}: "
+                f"{diagnostic.get('message', '')}"
+            )
+
+    return "\n".join(lines) + "\n"
 
 
 def _format_project_config_counts(project):
@@ -888,7 +965,13 @@ def _build_parser():
         "validate-project", help="Validate artifacts referenced by a project report"
     )
     validate_parser.add_argument("report", help="Project portability report JSON")
-    validate_parser.add_argument("--output", "-o", help="Write JSON validation report")
+    validate_parser.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help="Validation output format",
+    )
+    validate_parser.add_argument("--output", "-o", help="Write validation output")
     validate_parser.add_argument(
         "--run-toolchains",
         action="store_true",
