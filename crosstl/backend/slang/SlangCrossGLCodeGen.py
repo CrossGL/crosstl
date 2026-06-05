@@ -885,6 +885,11 @@ class SlangToCrossGLConverter:
         expression = self.generate_expression(node.expression, is_main)
 
         code = f"switch ({expression}) {{\n"
+        unlabeled_statements = getattr(node, "unlabeled_statements", []) or []
+        if unlabeled_statements:
+            code += self.generate_function_body(
+                unlabeled_statements, indent + 1, is_main
+            )
         ordered_cases = getattr(node, "ordered_cases", None)
         if ordered_cases is not None:
             for case in ordered_cases:

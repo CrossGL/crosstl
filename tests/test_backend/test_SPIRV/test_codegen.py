@@ -2092,6 +2092,36 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_NONSEMANTIC_DEBUG_PRINTF_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/diff/diff_files/string_in_ext_inst_src.spvasm
+; Reduced from OpString used as a NonSemantic.DebugPrintf OpExtInst argument.
+OpCapability Shader
+OpExtension "SPV_KHR_non_semantic_info"
+%std450 = OpExtInstImport "GLSL.std.450"
+%debug_printf = OpExtInstImport "NonSemantic.DebugPrintf"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %main "main"
+OpName %foo "foo"
+%fmt = OpString "unsigned == %u"
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%ptr_function_uint = OpTypePointer Function %uint
+%uint_127 = OpConstant %uint 127
+%main = OpFunction %void None %fn
+%label = OpLabel
+%foo = OpVariable %ptr_function_uint Function
+OpStore %foo %uint_127
+%loaded = OpLoad %uint %foo
+%call = OpExtInst %void %debug_printf 1 %fmt %loaded
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_DEBUG_FUNCTION_NAME_ASSEMBLY = """
 ; Reduced from Khronos SPIRV-Tools test/diff/diff_files/extra_if_block_src.spvasm.
 OpCapability Shader
@@ -3608,6 +3638,19 @@ def test_spirv_tools_std450_sqrt_extinst_codegen():
     assert "float outputValue @output @location(0);" in generated_code
     assert "outputValue = sqrt(inputValue);" in generated_code
     assert "spirv_GLSL_std_450_Sqrt" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_nonsemantic_debug_printf_opstring_extinst_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_NONSEMANTIC_DEBUG_PRINTF_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert 'debugPrintfEXT("unsigned == %u", foo);' in generated_code
+    assert "debugPrintfEXT(value_fmt" not in generated_code
+    assert "spirv_NonSemantic_DebugPrintf_1" not in generated_code
+    assert "OpString" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

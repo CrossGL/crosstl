@@ -37,6 +37,7 @@ MLX_FP_QUANTIZED_VALUE_TEMPLATE_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13
 MLX_STEEL_DEPENDENT_TEMPLATE_COMMIT = "e1a3f2f31fc298cfd7f017d19e8165d88a0c3c59"
 MLX_UNARY_OPS_COMMIT = "e1a3f2f31fc298cfd7f017d19e8165d88a0c3c59"
 MLX_STEEL_ATTENTION_TYPE_TRAIT_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
+MLX_STEEL_GEMM_LOADER_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
 PYTORCH_REPO = "https://github.com/pytorch/pytorch"
 PYTORCH_BUCKETIZATION_COMMIT = "5ee1f788c7098ae5e50e49543ee7822f73cd8990"
 CANDLE_REPO = "https://github.com/huggingface/candle"
@@ -936,6 +937,46 @@ EXTERNAL_FIXTURES = [
                 size_t pack_offset = offset / packing_size<T>;
                 size_t elem_offset = offset % packing_size<T>;
                 out[0] = uint(pack_offset + elem_offset);
+            }
+        """
+        ),
+    },
+    {
+        "name": "mlx_steel_gemm_nested_aligned_read_vector",
+        "repo_url": MLX_REPO,
+        "commit": MLX_STEEL_GEMM_LOADER_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/steel/gemm/loader.h",
+        "roundtrip": False,
+        "struct_names": ["BlockLoader"],
+        "source": (
+            """
+            #include "mlx/backend/metal/kernels/steel/defines.h"
+
+            namespace mlx {
+            namespace steel {
+
+            template <
+                typename T,
+                short BROWS,
+                short BCOLS,
+                short dst_ld,
+                short tgp_size,
+                short alignment = 1,
+                short n_reads = (BCOLS * BROWS) / (tgp_size),
+                short TCOLS = BCOLS / n_reads>
+            struct BlockLoader {
+                const int src_ld;
+                threadgroup T* dst;
+                const device T* src;
+
+                struct alignas(alignment * sizeof(T)) ReadVector {
+                    uint8_t v[sizeof(T) * n_reads];
+                };
+
+                const short bj;
+            };
+
+            }
             }
         """
         ),

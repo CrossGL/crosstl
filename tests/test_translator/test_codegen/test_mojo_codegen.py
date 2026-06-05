@@ -11394,6 +11394,11 @@ def test_resource_prefixed_generic_user_types_do_not_become_resources():
     assert "var globalTextureBox = TextureBox[Int32](0, 0)" in generated_code
     assert "var globalBufferBox = BufferBox[Int32](0, 0)" in generated_code
     assert "var globalSamplerBox = SamplerBox[Float32](0.0, 0)" in generated_code
+    assert "var local: TextureBox[Int32] = TextureBox[Int32](3, 1)" in generated_code
+    assert "var local: BufferBox[Int32] = BufferBox[Int32](5, 2)" in generated_code
+    assert (
+        "var local: SamplerBox[Float32] = SamplerBox[Float32](2.0, 3)" in generated_code
+    )
     assert "TextureBox<int>" not in generated_code
     assert "BufferBox<int>" not in generated_code
     assert "SamplerBox<float>" not in generated_code

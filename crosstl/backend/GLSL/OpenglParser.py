@@ -185,6 +185,12 @@ IDENTIFIER_QUALIFIERS |= VULKAN_MEMORY_MODEL_QUALIFIERS
 IDENTIFIER_QUALIFIERS |= {"nonuniformEXT"}
 CONTEXTUAL_QUALIFIERS = {"static"}
 TEMPLATE_TYPE_NAMES = {"vector"}
+TEMPLATE_DECLARATION_TYPE_NAMES = {
+    "coopmat",
+    "fcoopmatNV",
+    "icoopmatNV",
+    "ucoopmatNV",
+}
 EXPLICIT_ARITHMETIC_TYPE_RE = re.compile(
     r"^(?:"
     r"(?:float|int|uint)(?:8|16|32|64)_t|"
@@ -863,18 +869,41 @@ class GLSLParser:
 
         self.eat("LESS_THAN")
         parts = []
-        depth = 1
-        while depth:
+        angle_depth = 1
+        nested_depths = {"LPAREN": 0, "LBRACKET": 0, "LBRACE": 0}
+        while angle_depth:
             if self.current_token[0] == "EOF":
                 raise SyntaxError("Unterminated type template argument list")
-            if self.current_token[0] == "LESS_THAN":
-                depth += 1
+            if self.current_token[0] in nested_depths:
+                nested_depths[self.current_token[0]] += 1
+                parts.append(self.current_token[1])
+                self.advance()
+                continue
+            if self.current_token[0] == "RPAREN" and nested_depths["LPAREN"]:
+                nested_depths["LPAREN"] -= 1
+                parts.append(self.current_token[1])
+                self.advance()
+                continue
+            if self.current_token[0] == "RBRACKET" and nested_depths["LBRACKET"]:
+                nested_depths["LBRACKET"] -= 1
+                parts.append(self.current_token[1])
+                self.advance()
+                continue
+            if self.current_token[0] == "RBRACE" and nested_depths["LBRACE"]:
+                nested_depths["LBRACE"] -= 1
+                parts.append(self.current_token[1])
+                self.advance()
+                continue
+
+            in_nested_expression = any(nested_depths.values())
+            if self.current_token[0] == "LESS_THAN" and not in_nested_expression:
+                angle_depth += 1
                 parts.append("<")
                 self.advance()
                 continue
-            if self.current_token[0] == "GREATER_THAN":
-                depth -= 1
-                if depth == 0:
+            if self.current_token[0] == "GREATER_THAN" and not in_nested_expression:
+                angle_depth -= 1
+                if angle_depth == 0:
                     self.advance()
                     break
                 parts.append(">")
@@ -1310,7 +1339,28 @@ class GLSLParser:
         index = self.skip_newline_index(index)
         if self.token_at(index)[0] != "LESS_THAN":
             return index
-        return self.skip_balanced_suffix(index, "LESS_THAN", "GREATER_THAN")
+        angle_depth = 0
+        nested_depths = {"LPAREN": 0, "LBRACKET": 0, "LBRACE": 0}
+        while index < len(self.tokens):
+            token_type = self.token_at(index)[0]
+            if token_type in nested_depths:
+                nested_depths[token_type] += 1
+            elif token_type == "RPAREN" and nested_depths["LPAREN"]:
+                nested_depths["LPAREN"] -= 1
+            elif token_type == "RBRACKET" and nested_depths["LBRACKET"]:
+                nested_depths["LBRACKET"] -= 1
+            elif token_type == "RBRACE" and nested_depths["LBRACE"]:
+                nested_depths["LBRACE"] -= 1
+            else:
+                in_nested_expression = any(nested_depths.values())
+                if token_type == "LESS_THAN" and not in_nested_expression:
+                    angle_depth += 1
+                elif token_type == "GREATER_THAN" and not in_nested_expression:
+                    angle_depth -= 1
+                    if angle_depth == 0:
+                        return index + 1
+            index += 1
+        return index
 
     def skip_array_suffixes_index(self, index):
         while True:
@@ -1401,7 +1451,8 @@ class GLSLParser:
 
         index = self.skip_newline_index(self.index + 1)
         if (
-            self.current_token[1] in TEMPLATE_TYPE_NAMES
+            self.current_token[1]
+            in TEMPLATE_TYPE_NAMES | TEMPLATE_DECLARATION_TYPE_NAMES
             and self.token_at(index)[0] == "LESS_THAN"
         ):
             index = self.skip_type_template_suffix_index(index)
@@ -2121,7 +2172,7 @@ class GLSLParser:
         if self.current_token[0] in TYPE_TOKENS or self.is_name_token():
             name = self.current_token[1]
             self.advance()
-            if name in TEMPLATE_TYPE_NAMES:
+            if name in TEMPLATE_TYPE_NAMES or self.is_template_call_suffix_start():
                 name += self.parse_type_template_suffix()
             return VariableNode("", name)
         if self.current_token[0] in ("STRING", "CHAR_LITERAL"):
@@ -2129,6 +2180,13 @@ class GLSLParser:
             self.advance()
             return value
         raise SyntaxError(f"Unexpected token in expression: {self.current_token}")
+
+    def is_template_call_suffix_start(self):
+        if self.current_token[0] != "LESS_THAN":
+            return False
+        index = self.skip_type_template_suffix_index(self.index)
+        index = self.skip_newline_index(index)
+        return self.token_at(index)[0] == "LPAREN"
 
     def parse_initializer_list(self):
         self.eat("LBRACE")

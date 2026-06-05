@@ -141,6 +141,8 @@ PARAMETER_QUALIFIER_TOKEN_TYPES = VARIABLE_QUALIFIER_TOKEN_TYPES - {"MUT"}
 VARIABLE_QUALIFIER_NAMES = frozenset(
     {
         "out",
+        "input",
+        "output",
         "inout",
         "patch",
         "flat",
@@ -450,8 +452,7 @@ class Parser:
     def parse_shader_declaration(self):
         """Parse a named ``shader`` block and its contained declarations."""
         self.eat("SHADER")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_binding_identifier()
 
         execution_model = ExecutionModel.GRAPHICS_PIPELINE
         stages = StageMap()
@@ -1197,8 +1198,7 @@ class Parser:
         if self.current_token[0] != "IDENTIFIER":
             return None
 
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_binding_identifier()
 
         generic_params = []
         if self.current_token[0] == "LESS_THAN":
@@ -1690,11 +1690,22 @@ class Parser:
         attributes = list(leading_attributes or [])
         attributes.extend(self.parse_attribute_annotations())
 
-        qualifiers = self.parse_variable_qualifiers()
+        is_colon_style_var = (
+            self.current_token[0] == "VAR"
+            and self.peek()[0] != "LESS_THAN"
+            and self.peek(2)[0] == "COLON"
+        )
 
-        var_type = self.parse_type()
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        qualifiers = [] if is_colon_style_var else self.parse_variable_qualifiers()
+
+        if is_colon_style_var:
+            self.eat("VAR")
+            name = self.parse_binding_identifier()
+            self.eat("COLON")
+            var_type = self.parse_type()
+        else:
+            var_type = self.parse_type()
+            name = self.parse_binding_identifier()
 
         while self.current_token[
             0
@@ -1780,6 +1791,13 @@ class Parser:
         try:
             self.parse_attribute_annotations()
 
+            if (
+                self.current_token[0] == "VAR"
+                and self.peek()[0] != "LESS_THAN"
+                and self.peek(2)[0] == "COLON"
+            ):
+                return True
+
             self.parse_variable_qualifiers()
 
             if not self.is_type_token():
@@ -1795,11 +1813,10 @@ class Parser:
 
             self.advance_over_pointer_suffix()
 
-            if self.current_token[0] != "IDENTIFIER":
+            if not self.current_token_is_declaration_binding_identifier():
                 return False
 
-            self.current_token[1]
-            self.eat("IDENTIFIER")
+            self.parse_binding_identifier()
 
             next_token = self.current_token[0]
 
@@ -1892,8 +1909,7 @@ class Parser:
         """Parse a constant declaration."""
         self.eat("CONST")
         const_type = self.parse_type()
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_binding_identifier()
         attributes = self.parse_post_declaration_attributes()
 
         self.eat("EQUALS")
@@ -2396,6 +2412,22 @@ class Parser:
         if hasattr(type_node, "value"):
             value = type_node.value
             return str(value).lower() if isinstance(value, bool) else str(value)
+        if isinstance(type_node, BinaryOpNode):
+            left = self.format_type_argument(type_node.left)
+            right = self.format_type_argument(type_node.right)
+            return f"{left} {type_node.operator} {right}"
+        if isinstance(type_node, TernaryOpNode):
+            condition = self.format_type_argument(type_node.condition)
+            true_expr = self.format_type_argument(type_node.true_expr)
+            false_expr = self.format_type_argument(type_node.false_expr)
+            return f"({condition} ? {true_expr} : {false_expr})"
+        if isinstance(type_node, UnaryOpNode):
+            operand = self.format_type_argument(type_node.operand)
+            return (
+                f"{operand}{type_node.operator}"
+                if type_node.is_postfix
+                else f"{type_node.operator}{operand}"
+            )
         if hasattr(type_node, "name"):
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
@@ -2537,11 +2569,31 @@ class Parser:
     def parse_binding_identifier(self):
         """Parse an identifier in binding position, including keyword-like names."""
         token_type, token_value = self.current_token
-        if not isinstance(token_value, str) or not token_value.isidentifier():
+        if not self.current_token_is_binding_identifier():
             raise SyntaxError(f"Expected binding name, got {token_type}")
 
         self.eat(token_type)
         return token_value
+
+    def current_token_is_binding_identifier(self):
+        token_value = self.current_token[1]
+        return isinstance(token_value, str) and token_value.isidentifier()
+
+    def current_token_is_declaration_binding_identifier(self):
+        token_type, token_value = self.current_token
+        if token_type == "IDENTIFIER":
+            return True
+        if not (isinstance(token_value, str) and token_value.isidentifier()):
+            return False
+        return self.peek()[0] in {
+            "AT",
+            "ATTRIBUTE",
+            "COMMA",
+            "EQUALS",
+            "LBRACKET",
+            "RPAREN",
+            "SEMICOLON",
+        }
 
     def parse_if_statement(self):
         """Parse an if/else statement chain."""
@@ -3094,7 +3146,10 @@ class Parser:
             elif (
                 self.current_token[0] == "LESS_THAN"
                 and isinstance(left, IdentifierNode)
-                and left.name in {"vec2", "vec3", "vec4"}
+                and (
+                    left.name in {"vec2", "vec3", "vec4"}
+                    or self.generic_suffix_is_expression_name_suffix()
+                )
             ):
                 generic_args = self.parse_generic_arguments()
                 args = ", ".join(self.format_type_argument(arg) for arg in generic_args)
@@ -3134,6 +3189,59 @@ class Parser:
                 break
 
         return left
+
+    def generic_suffix_is_expression_name_suffix(self):
+        """Return whether ``<...>`` belongs to an identifier expression name."""
+        if self.current_token[0] != "LESS_THAN":
+            return False
+
+        index = self.pos
+        angle_depth = 0
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            in_nested_expression = paren_depth or bracket_depth or brace_depth
+
+            if token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN" and paren_depth:
+                paren_depth -= 1
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET" and bracket_depth:
+                bracket_depth -= 1
+            elif token_type == "LBRACE":
+                brace_depth += 1
+            elif token_type == "RBRACE" and brace_depth:
+                brace_depth -= 1
+            elif token_type == "LESS_THAN" and not in_nested_expression:
+                angle_depth += 1
+            elif token_type == "GREATER_THAN" and not in_nested_expression:
+                angle_depth -= 1
+                if angle_depth == 0:
+                    index += 1
+                    while index < len(self.tokens) and self.tokens[index][0] in {
+                        "COMMENT_SINGLE",
+                        "COMMENT_MULTI",
+                    }:
+                        index += 1
+                    return index < len(self.tokens) and self.tokens[index][0] in {
+                        "COMMA",
+                        "DOT",
+                        "LBRACKET",
+                        "LPAREN",
+                        "RBRACE",
+                        "RBRACKET",
+                        "RPAREN",
+                        "SEMICOLON",
+                    }
+
+            index += 1
+
+        return False
 
     def format_expression_path(self, expression):
         if isinstance(expression, IdentifierNode):

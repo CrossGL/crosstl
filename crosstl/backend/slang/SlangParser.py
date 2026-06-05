@@ -2500,6 +2500,7 @@ class SlangParser:
 
         cases = []
         ordered_cases = []
+        unlabeled_statements = []
         default_case = None
         seen_default = False
         while self.current_token[0] != "RBRACE":
@@ -2537,11 +2538,12 @@ class SlangParser:
                 ordered_cases.append(CaseNode(None, default_case))
                 continue
 
-            raise SyntaxError(f"Unexpected token in switch: {self.current_token[0]}")
+            self.append_parsed_statement(unlabeled_statements, self.parse_statement())
 
         self.eat("RBRACE")
         switch = SwitchNode(expression, cases, default_case)
         switch.ordered_cases = ordered_cases
+        switch.unlabeled_statements = unlabeled_statements
         return switch
 
     def parse_return_statement(self):

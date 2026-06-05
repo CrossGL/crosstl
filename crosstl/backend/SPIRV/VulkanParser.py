@@ -781,6 +781,8 @@ class VulkanParser:
                     constants[result_id] = operands[1]
                     if opcode == "OpSpecConstant":
                         spec_constant_ids.append(result_id)
+            elif result_id and opcode == "OpString" and operands:
+                constants[result_id] = self.spirv_string_literal(operands[0])
             elif result_id and opcode in {
                 "OpConstantFalse",
                 "OpConstantTrue",
@@ -1543,7 +1545,7 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpExtInst" and len(operands) >= 3:
-                expressions[result_id] = FunctionCallNode(
+                call = FunctionCallNode(
                     self.spirv_ext_inst_function_name(
                         extended_instruction_imports.get(operands[1]),
                         operands[2],
@@ -1559,6 +1561,10 @@ class VulkanParser:
                         for operand in operands[3:]
                     ],
                 )
+                if self.spirv_type_name(operands[0], types) == "void":
+                    statements.append(call)
+                else:
+                    expressions[result_id] = call
                 expression_type_ids[result_id] = operands[0]
                 continue
 
@@ -2649,6 +2655,11 @@ class VulkanParser:
         return parsed
 
     def spirv_ext_inst_function_name(self, instruction_set, instruction):
+        if instruction_set == "NonSemantic.DebugPrintf" and str(instruction) in {
+            "1",
+            "DebugPrintf",
+        }:
+            return "debugPrintfEXT"
         if instruction_set == "GLSL.std.450":
             mapped_name = self.SPIRV_GLSL_STD_450_EXT_INST_FUNCTIONS.get(instruction)
             if mapped_name is not None:
@@ -3343,6 +3354,10 @@ class VulkanParser:
             index = self.spirv_constant_expression_text(value.index)
             return f"{array}[{index}]"
         return str(value)
+
+    def spirv_string_literal(self, value):
+        escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
 
     def spirv_fallback_identifier(self, raw_value, prefix):
         identifier = re.sub(r"\W", "_", str(raw_value or "").lstrip("%"))

@@ -8297,6 +8297,11 @@ class MojoCodeGen:
             if func_name in MOJO_MATRIX_TYPES:
                 return self.generate_matrix_constructor(func_name, expr.args)
 
+            if self.generic_struct_mapped_type(func_name) is not None:
+                return self.generate_struct_function_constructor_call(
+                    expr, func_name, target_context, target_type
+                )
+
             if func_name in self.struct_types:
                 return self.generate_struct_function_constructor_call(
                     expr, func_name, target_context, target_type

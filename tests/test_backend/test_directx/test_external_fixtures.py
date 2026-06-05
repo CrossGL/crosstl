@@ -366,6 +366,36 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_global_scope_enum_type",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/type.enum.hlsl",
+        code=textwrap.dedent("""
+            enum Number {
+              First,
+              Second,
+              Third = 3,
+              Fourth = -1,
+            };
+
+            static ::Number a = Second;
+
+            [numthreads(1, 1, 1)]
+            void main() {
+              static ::Number e = Fourth;
+              Number d;
+              d = Number::Third;
+            }
+        """).strip(),
+        contains=(
+            "enum Number {",
+            "static Number a = Second;",
+            "@ numthreads(1, 1, 1)",
+            "static Number e = Fourth;",
+            "d = Number::Third;",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_native_16bit_scalar_types",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

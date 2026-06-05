@@ -1666,6 +1666,9 @@ class MetalParser:
             if self.is_access_specifier_label():
                 self.parse_access_specifier_label()
                 continue
+            if self.is_nested_aggregate_declaration_start():
+                self.skip_nested_aggregate_declaration()
+                continue
             if self.current_token == ("IDENTIFIER", "friend"):
                 self.skip_struct_method()
                 continue
@@ -1682,6 +1685,9 @@ class MetalParser:
                 self.skip_template_declaration()
                 continue
             member_alignas = self.parse_alignas_specifiers()
+            if self.is_nested_aggregate_declaration_start():
+                self.skip_nested_aggregate_declaration()
+                continue
             if self.is_struct_conversion_operator_start():
                 self.skip_struct_method()
                 continue
@@ -1715,6 +1721,76 @@ class MetalParser:
             var_node.default_value = default_value
             members.append(var_node)
         return members
+
+    def is_nested_aggregate_declaration_start(self):
+        idx = self.pos
+        if idx >= len(self.tokens):
+            return False
+        if self.tokens[idx][0] not in {"STRUCT", "CLASS"} and self.tokens[idx] != (
+            "IDENTIFIER",
+            "union",
+        ):
+            return False
+
+        idx += 1
+        idx = self.skip_alignas_specifier_tokens_at(idx)
+        if idx < len(self.tokens) and self.is_name_token_at(idx):
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+                idx = self.skip_template_argument_list_at(idx)
+            idx = self.skip_alignas_specifier_tokens_at(idx)
+
+        if idx >= len(self.tokens):
+            return False
+        return self.tokens[idx][0] in {"LBRACE", "COLON", "SEMICOLON"}
+
+    def skip_alignas_specifier_tokens_at(self, idx):
+        while idx < len(self.tokens) and self.tokens[idx][0] == "ALIGNAS":
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LPAREN":
+                idx = self.skip_balanced_tokens_at(idx, "LPAREN", "RPAREN")
+        return idx
+
+    def skip_nested_aggregate_declaration(self):
+        paren_depth = 0
+        brace_depth = 0
+        bracket_depth = 0
+        angle_depth = 0
+
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if (
+                token_type == "SEMICOLON"
+                and paren_depth == 0
+                and brace_depth == 0
+                and bracket_depth == 0
+                and angle_depth == 0
+            ):
+                self.eat("SEMICOLON")
+                return
+
+            if token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN" and paren_depth > 0:
+                paren_depth -= 1
+            elif token_type == "LBRACE":
+                brace_depth += 1
+            elif token_type == "RBRACE" and brace_depth > 0:
+                brace_depth -= 1
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET" and bracket_depth > 0:
+                bracket_depth -= 1
+            elif token_type == "LESS_THAN" and brace_depth == 0:
+                angle_depth += 1
+            elif token_type == "SHIFT_RIGHT" and brace_depth == 0 and angle_depth >= 2:
+                angle_depth -= 2
+            elif token_type == "GREATER_THAN" and brace_depth == 0 and angle_depth > 0:
+                angle_depth -= 1
+
+            self.eat(token_type)
+
+        raise SyntaxError("Unterminated nested aggregate declaration")
 
     def is_struct_conversion_operator_start(self):
         idx = self.pos
