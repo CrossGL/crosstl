@@ -3363,6 +3363,160 @@ class TestCudaCodeGen:
         assert "float value = rsqrtf(4.0);" not in cuda_code
         assert "float hlslValue = rsqrtf(4.0);" not in cuda_code
 
+    def test_glsl_bitcast_builtins_lower_to_cuda_intrinsics(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float f = 1.0;
+                    int i = 1;
+                    uint u = 1u;
+                    vec3 v = vec3(1.0, 2.0, 3.0);
+                    ivec3 iv = ivec3(1, 2, 3);
+                    uvec3 uv = uvec3(1u, 2u, 3u);
+
+                    int signedBits = floatBitsToInt(f);
+                    uint unsignedBits = floatBitsToUint(f);
+                    float fromInt = intBitsToFloat(i);
+                    float fromUint = uintBitsToFloat(u);
+                    ivec3 vectorBits = floatBitsToInt(v);
+                    uvec3 unsignedVectorBits = floatBitsToUint(v);
+                    vec3 fromSignedVector = intBitsToFloat(iv);
+                    vec3 fromUnsignedVector = uintBitsToFloat(uv);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "int signedBits = __float_as_int(f);" in cuda_code
+        assert "uint unsignedBits = __float_as_uint(f);" in cuda_code
+        assert "float fromInt = __int_as_float(i);" in cuda_code
+        assert "float fromUint = __uint_as_float(u);" in cuda_code
+        assert (
+            "__device__ inline int3 cgl_float3_to_int3_bitcast(float3 value)"
+            in cuda_code
+        )
+        assert (
+            "return make_int3(__float_as_int(value.x), __float_as_int(value.y), "
+            "__float_as_int(value.z));" in cuda_code
+        )
+        assert (
+            "__device__ inline uint3 cgl_float3_to_uint3_bitcast(float3 value)"
+            in cuda_code
+        )
+        assert (
+            "__device__ inline float3 cgl_int3_to_float3_bitcast(int3 value)"
+            in cuda_code
+        )
+        assert (
+            "__device__ inline float3 cgl_uint3_to_float3_bitcast(uint3 value)"
+            in cuda_code
+        )
+        assert "int3 vectorBits = cgl_float3_to_int3_bitcast(v);" in cuda_code
+        assert "uint3 unsignedVectorBits = cgl_float3_to_uint3_bitcast(v);" in cuda_code
+        assert "float3 fromSignedVector = cgl_int3_to_float3_bitcast(iv);" in cuda_code
+        assert (
+            "float3 fromUnsignedVector = cgl_uint3_to_float3_bitcast(uv);" in cuda_code
+        )
+        assert "floatBitsToInt(" not in cuda_code
+        assert "floatBitsToUint(" not in cuda_code
+        assert "intBitsToFloat(" not in cuda_code
+        assert "uintBitsToFloat(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_hlsl_as_bitcast_aliases_lower_to_cuda_intrinsics(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float f = 1.0;
+                    int i = 1;
+                    uint u = 1u;
+                    vec3 v = vec3(1.0, 2.0, 3.0);
+                    ivec3 iv = ivec3(1, 2, 3);
+                    uvec3 uv = uvec3(1u, 2u, 3u);
+
+                    uint unsignedFromFloat = asuint(f);
+                    int signedFromFloat = asint(f);
+                    float floatFromInt = asfloat(i);
+                    float floatFromUint = asfloat(u);
+                    uint unsignedFromInt = asuint(i);
+                    int signedFromUint = asint(u);
+                    uvec3 unsignedVector = asuint(v);
+                    ivec3 signedVector = asint(v);
+                    vec3 floatFromSignedVector = asfloat(iv);
+                    vec3 floatFromUnsignedVector = asfloat(uv);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint unsignedFromFloat = __float_as_uint(f);" in cuda_code
+        assert "int signedFromFloat = __float_as_int(f);" in cuda_code
+        assert "float floatFromInt = __int_as_float(i);" in cuda_code
+        assert "float floatFromUint = __uint_as_float(u);" in cuda_code
+        assert "uint unsignedFromInt = static_cast<unsigned int>(i);" in cuda_code
+        assert "int signedFromUint = static_cast<int>(u);" in cuda_code
+        assert "uint3 unsignedVector = cgl_float3_to_uint3_bitcast(v);" in cuda_code
+        assert "int3 signedVector = cgl_float3_to_int3_bitcast(v);" in cuda_code
+        assert (
+            "float3 floatFromSignedVector = cgl_int3_to_float3_bitcast(iv);"
+            in cuda_code
+        )
+        assert (
+            "float3 floatFromUnsignedVector = cgl_uint3_to_float3_bitcast(uv);"
+            in cuda_code
+        )
+        assert "asuint(" not in cuda_code
+        assert "asint(" not in cuda_code
+        assert "asfloat(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_user_defined_bitcast_function_names_are_preserved(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                int floatBitsToInt(float value) {
+                    return 7;
+                }
+
+                float asfloat(uint value) {
+                    return 1.0;
+                }
+
+                void main() {
+                    int signedBits = floatBitsToInt(1.0);
+                    float fromUint = asfloat(1u);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ int floatBitsToInt(float value)" in cuda_code
+        assert "__device__ float asfloat(uint value)" in cuda_code
+        assert "int signedBits = floatBitsToInt(1.0);" in cuda_code
+        assert "float fromUint = asfloat(1u);" in cuda_code
+        assert "__float_as_int(1.0)" not in cuda_code
+        assert "__uint_as_float(1u)" not in cuda_code
+
     def test_fma_and_mad_builtins_lower_to_cuda_fused_multiply_add(self):
         source_code = """
         shader TestShader {

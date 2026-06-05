@@ -102,6 +102,16 @@ CUDA_WAVE_UVEC4_RESULT_OPS = {
     "WaveMatch",
 }
 
+CUDA_BITCAST_FUNCTION_TARGETS = {
+    "floatBitsToInt": "int",
+    "floatBitsToUint": "uint",
+    "intBitsToFloat": "float",
+    "uintBitsToFloat": "float",
+    "asfloat": "float",
+    "asint": "int",
+    "asuint": "uint",
+}
+
 
 class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
     """Emit CUDA source from the shared CrossGL translator AST."""
@@ -2933,6 +2943,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if resource_call is not None:
                 return resource_call
 
+            bitcast_call = self.generate_cuda_bitcast_call(func_name, raw_args, args)
+            if bitcast_call is not None:
+                return bitcast_call
+
         args = self.cuda_user_function_call_arguments(func_name, raw_args, args)
         if is_user_function:
             return f"{func_name}({', '.join(args)})"
@@ -3054,6 +3068,95 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return {"inverseSqrt": "inversesqrt", "rsqrt": "inversesqrt"}.get(
             func_name, func_name
         )
+
+    def cuda_bitcast_result_type(self, func_name, raw_args):
+        target_component = CUDA_BITCAST_FUNCTION_TARGETS.get(func_name)
+        if (
+            target_component is None
+            or self.is_user_defined_function(func_name)
+            or len(raw_args or []) != 1
+        ):
+            return None
+
+        source_type = self.expression_result_type(raw_args[0])
+        source_info = self.vector_type_info(source_type)
+        if source_info is not None:
+            if source_info["component_type"] not in {"float", "int", "uint"}:
+                return None
+            return self.vector_type_for_components(
+                target_component,
+                len(source_info["components"]),
+            )
+
+        source_component = self.scalar_component_type(source_type)
+        if source_component in {"float", "int", "uint"}:
+            return target_component
+        return None
+
+    def generate_cuda_bitcast_call(self, func_name, raw_args, args):
+        result_type = self.cuda_bitcast_result_type(func_name, raw_args)
+        if result_type is None:
+            return None
+
+        source_type = self.expression_result_type(raw_args[0])
+        source_info = self.vector_type_info(source_type)
+        result_info = self.vector_type_info(result_type)
+        if source_info is not None and result_info is not None:
+            helper_name = self.require_cuda_vector_bitcast_helper(
+                source_info,
+                result_info,
+            )
+            return f"{helper_name}({args[0]})"
+
+        target_component = CUDA_BITCAST_FUNCTION_TARGETS[func_name]
+        source_component = self.scalar_component_type(source_type)
+        return self.format_cuda_scalar_bitcast(
+            source_component,
+            target_component,
+            args[0],
+        )
+
+    def require_cuda_vector_bitcast_helper(self, source_info, result_info):
+        helper_name = self.sanitize_helper_name(
+            f"cgl_{source_info['type']}_to_{result_info['type']}_bitcast"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        components = [
+            self.format_cuda_scalar_bitcast(
+                source_info["component_type"],
+                result_info["component_type"],
+                f"value.{component}",
+            )
+            for component in source_info["components"]
+        ]
+        helper = (
+            f"__device__ inline {result_info['type']} {helper_name}"
+            f"({source_info['type']} value)\n"
+            "{\n"
+            f"    return {result_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_cuda_scalar_bitcast(self, source_component, target_component, value):
+        if source_component == target_component:
+            return value
+        if source_component == "float" and target_component == "int":
+            return f"__float_as_int({value})"
+        if source_component == "float" and target_component == "uint":
+            return f"__float_as_uint({value})"
+        if source_component == "int" and target_component == "float":
+            return f"__int_as_float({value})"
+        if source_component == "uint" and target_component == "float":
+            return f"__uint_as_float({value})"
+        if source_component == "int" and target_component == "uint":
+            return f"static_cast<unsigned int>({value})"
+        if source_component == "uint" and target_component == "int":
+            return f"static_cast<int>({value})"
+        return value
 
     def visit_MeshOpNode(self, node):
         operation = getattr(node, "operation", "")
@@ -6522,6 +6625,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if func_name == "ReportHit":
                 return "bool"
             raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
+            bitcast_result_type = self.cuda_bitcast_result_type(func_name, raw_args)
+            if bitcast_result_type is not None:
+                return bitcast_result_type
             if func_name in {"fma", "mad"}:
                 cached_type = getattr(node, "expression_type", None) or getattr(
                     node, "vtype", None

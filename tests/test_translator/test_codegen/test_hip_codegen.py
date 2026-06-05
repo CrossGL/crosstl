@@ -3243,6 +3243,43 @@ class TestHipCodeGen:
         assert "SV_GroupIndex" not in hip_code
         assert "gl_LocalInvocationIndex" not in hip_code
 
+    def test_builtin_source_names_can_be_shadowed_by_locals(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    uvec3 gl_GlobalInvocationID = uvec3(7u, 8u, 9u);
+                    uvec3 SV_GroupID = uvec3(1u, 2u, 3u);
+                    uvec3 gl_LaunchIDEXT = uvec3(4u, 5u, 6u);
+
+                    uint localX = gl_GlobalInvocationID.x;
+                    uvec3 copiedGlobal = gl_GlobalInvocationID;
+                    uint groupY = SV_GroupID.y;
+                    uint launchZ = gl_LaunchIDEXT.z;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "uint3 gl_GlobalInvocationID = make_uint3(7u, 8u, 9u);" in hip_code
+        assert "uint3 SV_GroupID = make_uint3(1u, 2u, 3u);" in hip_code
+        assert "uint3 gl_LaunchIDEXT = make_uint3(4u, 5u, 6u);" in hip_code
+        assert "unsigned int localX = gl_GlobalInvocationID.x;" in hip_code
+        assert "uint3 copiedGlobal = gl_GlobalInvocationID;" in hip_code
+        assert "unsigned int groupY = SV_GroupID.y;" in hip_code
+        assert "unsigned int launchZ = gl_LaunchIDEXT.z;" in hip_code
+        assert (
+            "unsigned int localX = " "(blockIdx.x * blockDim.x + threadIdx.x);"
+        ) not in hip_code
+        assert "unsigned int groupY = blockIdx.y;" not in hip_code
+        assert "cgl_ray_launch_id().z" not in hip_code
+
     def test_hlsl_compute_builtin_parameters_lower_to_hip_expressions(self):
         source_code = """
         shader TestShader {

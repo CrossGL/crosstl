@@ -5970,6 +5970,33 @@ def test_hlsl_two_argument_atan_lowers_to_atan2_intrinsic():
     assert "atan(direction.y, direction.x)" not in generated_code
 
 
+def test_hlsl_two_argument_atan_renames_shadowed_atan2_locals():
+    shader = """
+    shader HlslAtan2TargetShadowing {
+        float helper(float atan2, float y, float x) {
+            return atan(y, x) + atan2;
+        }
+
+        fragment {
+            vec4 main(vec2 direction @ TEXCOORD0) @ gl_FragColor {
+                float atan2 = direction.x;
+                float angle = atan(direction.y, direction.x) + atan2;
+                return vec4(angle + helper(atan2, direction.y, direction.x), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float helper(float atan2_, float y, float x)" in generated_code
+    assert "return (atan2(y, x) + atan2_);" in generated_code
+    assert "float atan2_ = direction.x;" in generated_code
+    assert "float angle = (atan2(direction.y, direction.x) + atan2_);" in generated_code
+    assert "helper(atan2_, direction.y, direction.x)" in generated_code
+    assert "float atan2 = direction.x;" not in generated_code
+
+
 def test_hlsl_inversesqrt_lowers_to_rsqrt_intrinsic():
     shader = """
     shader HlslInverseSqrtBuiltinLowering {
@@ -6126,6 +6153,64 @@ def test_hlsl_user_defined_inverse_sqrt_alias_is_not_lowered():
     assert "float inverseSqrt(float value)" in generated_code
     assert "float invLength = inverseSqrt(lengthSquared);" in generated_code
     assert "rsqrt(" not in generated_code
+
+
+def test_hlsl_bitcast_builtins_lower_to_native_as_intrinsics():
+    shader = """
+    shader HlslBitcastBuiltinLowering {
+        fragment {
+            vec4 main(vec3 value @ TEXCOORD0, ivec3 bits @ TEXCOORD1, uvec3 ubits @ TEXCOORD2) @ gl_FragColor {
+                let signedBits = floatBitsToInt(value);
+                let unsignedBits = floatBitsToUint(value);
+                let fromSigned = intBitsToFloat(bits);
+                let fromUnsigned = uintBitsToFloat(ubits);
+                float scalar = asfloat(asuint(1.0));
+                return vec4(fromSigned + fromUnsigned + asfloat(unsignedBits), scalar);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int3 signedBits = asint(value);" in generated_code
+    assert "uint3 unsignedBits = asuint(value);" in generated_code
+    assert "float3 fromSigned = asfloat(bits);" in generated_code
+    assert "float3 fromUnsigned = asfloat(ubits);" in generated_code
+    assert "float scalar = asfloat(asuint(1.0));" in generated_code
+    assert "floatBitsTo" not in generated_code
+    assert "intBitsToFloat" not in generated_code
+    assert "uintBitsToFloat" not in generated_code
+
+
+def test_hlsl_user_defined_bitcast_names_are_not_lowered_or_inferred():
+    shader = """
+    shader HlslUserBitcastNames {
+        float floatBitsToInt(vec3 value) {
+            return value.x;
+        }
+
+        float asfloat(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(vec3 value @ TEXCOORD0) @ gl_FragColor {
+                let adjusted = floatBitsToInt(value);
+                let nativeName = asfloat(1.0);
+                return vec4(adjusted + nativeName, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float floatBitsToInt(float3 value)" in generated_code
+    assert "float asfloat(float value)" in generated_code
+    assert "float adjusted = floatBitsToInt(value);" in generated_code
+    assert "float nativeName = asfloat(1.0);" in generated_code
+    assert "int3 adjusted = asint(value);" not in generated_code
 
 
 def test_hlsl_user_defined_two_argument_atan_is_not_lowered():

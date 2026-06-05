@@ -24118,6 +24118,30 @@ def test_fixed_size_arrays_emit_inlinearray_and_cast_dynamic_indices():
     assert "DynamicVector" not in generated_code
 
 
+def test_symbolic_fixed_size_arrays_emit_inlinearray_without_ast_repr():
+    code = """
+    const int TILE_SIZE = 16;
+
+    float tileValue(int x, int y) {
+        float tile[TILE_SIZE][TILE_SIZE];
+        tile[y][x] = 1.0;
+        return tile[y][x];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "var tile = InlineArray[InlineArray[Float32, TILE_SIZE], TILE_SIZE]"
+        "(unsafe_uninitialized=True)"
+    ) in generated_code
+    assert "tile[int(y)][int(x)] = 1.0" in generated_code
+    assert "IdentifierNode(" not in generated_code
+    assert "var tile = List" not in generated_code
+
+
 def test_fixed_size_arrays_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

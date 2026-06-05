@@ -3722,6 +3722,8 @@ class MojoCodeGen:
             return None
         if hasattr(size, "value"):
             return size.value
+        if hasattr(size, "name"):
+            return size.name
         return size
 
     def parse_generic_type_name(self, type_name):
@@ -13375,7 +13377,7 @@ class MojoCodeGen:
         try:
             return element_type, int(size_text)
         except ValueError:
-            return element_type, None
+            return element_type, size_text
 
     def is_struct_type_name(self, type_name):
         if type_name is None:
@@ -13388,12 +13390,14 @@ class MojoCodeGen:
 
     def array_type_name(self, element_type, size):
         element_type_name = self.type_name(element_type)
+        size = self.format_array_size(size)
         if size is None:
             return f"{element_type_name}[]"
         return f"{element_type_name}[{size}]"
 
     def array_storage_type(self, element_type, size):
         element_type_name = self.map_type(element_type)
+        size = self.format_array_size(size)
         if size is None:
             return f"List[{element_type_name}]"
         return f"InlineArray[{element_type_name}, {size}]"

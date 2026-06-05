@@ -2859,6 +2859,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return None
         return self.hip_compute_builtin_expression(role, component)
 
+    def source_identifier_shadows_builtin(self, name):
+        """Return whether a source variable should block builtin-name lowering."""
+        return (
+            name is not None
+            and name in self.variable_types
+            and name not in self.stage_builtin_aliases
+        )
+
     def validate_hip_stage_parameter_semantic_type(
         self, param, semantic, expected_type
     ):
@@ -7701,7 +7709,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if diagnostic is not None:
                 return diagnostic
         raw_object_name = getattr(node.object, "name", None)
-        if raw_object_name is not None:
+        raw_object_shadows_builtin = self.source_identifier_shadows_builtin(
+            raw_object_name
+        )
+        if raw_object_name is not None and not raw_object_shadows_builtin:
             alias_component = self.hip_stage_builtin_alias_expression(
                 raw_object_name, node.member
             )
@@ -7721,7 +7732,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         object_expr = self.visit(node.object)
         member_access = f"{object_expr}.{node.member}"
-        if member_access in self.builtin_map:
+        if not raw_object_shadows_builtin and member_access in self.builtin_map:
             return self.builtin_map[member_access]
 
         swizzle = self.generate_vector_swizzle(node, object_expr)
@@ -7846,10 +7857,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         builtin_alias = self.hip_stage_builtin_alias_expression(name)
         if builtin_alias is not None:
             return builtin_alias
-        ray_builtin = self.hip_ray_builtin_expression(name)
-        if ray_builtin is not None and name not in self.variable_types:
-            return ray_builtin
-        return self.builtin_map.get(name, name)
+        if not self.source_identifier_shadows_builtin(name):
+            ray_builtin = self.hip_ray_builtin_expression(name)
+            if ray_builtin is not None:
+                return ray_builtin
+            return self.builtin_map.get(name, name)
+        return name
 
     def hip_ray_builtin_expression(self, name):
         helper_name = {
@@ -8728,9 +8741,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
     def expression_result_type(self, node):
         """Infer expression result types with HIP buffer operations."""
         if isinstance(node, (IdentifierNode, VariableNode)):
-            builtin_type = self.hip_compute_builtin_type(getattr(node, "name", None))
-            if builtin_type is not None:
-                return builtin_type
+            name = getattr(node, "name", None)
+            if not self.source_identifier_shadows_builtin(name):
+                builtin_type = self.hip_compute_builtin_type(name)
+                if builtin_type is not None:
+                    return builtin_type
         if isinstance(node, WaveOpNode):
             return self.wave_result_type(
                 getattr(node, "operation", ""), getattr(node, "arguments", []) or []
@@ -8780,12 +8795,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 "object_expr",
                 getattr(node, "object", None),
             )
-            builtin_member_type = self.hip_compute_builtin_member_type(
-                getattr(object_node, "name", None),
-                getattr(node, "member", ""),
-            )
-            if builtin_member_type is not None:
-                return builtin_member_type
+            object_name = getattr(object_node, "name", None)
+            if not self.source_identifier_shadows_builtin(object_name):
+                builtin_member_type = self.hip_compute_builtin_member_type(
+                    object_name,
+                    getattr(node, "member", ""),
+                )
+                if builtin_member_type is not None:
+                    return builtin_member_type
             member_type = self.member_access_member_type(node)
             if member_type is not None:
                 return member_type

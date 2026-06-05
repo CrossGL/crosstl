@@ -499,6 +499,20 @@ class HLSLCodeGen:
     }
     HLSL_WAVE_BASIC_COMPONENT_TYPES = HLSL_WAVE_NUMERIC_COMPONENT_TYPES | {"bool"}
     HLSL_WAVE_SIZE_LANE_COUNTS = {4, 8, 16, 32, 64, 128}
+    HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES = {
+        # GLSL atan(y, x) lowers to HLSL atan2(y, x); keep local symbols from
+        # capturing that intrinsic because HLSL does not provide a namespace escape.
+        "atan2",
+    }
+    HLSL_BITCAST_FUNCTION_TARGETS = {
+        "floatBitsToInt": "int",
+        "floatBitsToUint": "uint",
+        "intBitsToFloat": "float",
+        "uintBitsToFloat": "float",
+        "asint": "int",
+        "asuint": "uint",
+        "asfloat": "float",
+    }
 
     def __init__(self):
         """Initialize DirectX type maps and per-generation resource state."""
@@ -537,6 +551,7 @@ class HLSLCodeGen:
         self.function_resource_array_size_hints = {}
         self.literal_int_constants = {}
         self.literal_bool_constants = {}
+        self.current_identifier_aliases = {}
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.current_hlsl_visible_int_constants = None
@@ -766,9 +781,13 @@ class HLSLCodeGen:
             "dFdyCoarse": "ddy_coarse",
             "dFdyFine": "ddy_fine",
             "fract": "frac",
+            "floatBitsToInt": "asint",
+            "floatBitsToUint": "asuint",
             "inverseSqrt": "rsqrt",
             "inversesqrt": "rsqrt",
+            "intBitsToFloat": "asfloat",
             "mix": "lerp",
+            "uintBitsToFloat": "asfloat",
         }
 
         self.semantic_map = {
@@ -850,6 +869,7 @@ class HLSLCodeGen:
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_hlsl_inverse_helpers = set()
+        self.current_identifier_aliases = {}
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
@@ -3020,6 +3040,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         param_names = {getattr(param, "name", None) for param in param_list}
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
+        previous_identifier_aliases = self.current_identifier_aliases
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -3051,6 +3072,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             getattr(func, "_generic_substitutions", {}) or {}
         )
         self.local_variable_types = {}
+        self.current_identifier_aliases = {}
         if hasattr(func, "qualifiers") and func.qualifiers:
             qualifier = func.qualifiers[0] if func.qualifiers else None
         else:
@@ -3109,7 +3131,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             else:
                 param_type = self.apply_hlsl_parameter_qualifiers(param_type, p)
                 param_type = f"{self.hlsl_interpolation_modifier_prefix(p)}{param_type}"
-            declaration = format_c_style_array_declaration(param_type, p.name)
+            declaration = format_c_style_array_declaration(
+                param_type, self.hlsl_declaration_identifier_name(p.name)
+            )
             semantic_attr = "" if ray_role else self.map_semantic(semantic)
             params.append(
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
@@ -3222,6 +3246,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             self.current_function_return_type = previous_function_return_type
             self.local_variable_types = previous_local_variable_types
+            self.current_identifier_aliases = previous_identifier_aliases
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -3258,6 +3283,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             self.current_function_return_type = previous_function_return_type
             self.local_variable_types = previous_local_variable_types
+            self.current_identifier_aliases = previous_identifier_aliases
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -3387,6 +3413,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         self.current_function_return_type = previous_function_return_type
         self.local_variable_types = previous_local_variable_types
+        self.current_identifier_aliases = previous_identifier_aliases
         self.current_generic_function_substitutions = (
             previous_generic_function_substitutions
         )
@@ -3416,6 +3443,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(stmt, VariableNode):
             vtype = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = self.type_name_string(vtype)
+            stmt_name = self.hlsl_declaration_identifier_name(stmt.name)
             if self.is_unsupported_glsl_buffer_block_struct_type(vtype):
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
                     stmt.name
@@ -3427,7 +3455,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
 
             declaration = format_c_style_array_declaration(
-                self.map_type(vtype), stmt.name
+                self.map_type(vtype), stmt_name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             initial_value = getattr(stmt, "initial_value", None)
@@ -3436,7 +3464,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 code += generate_match_expression_assignment(
                     self,
                     initial_value,
-                    stmt.name,
+                    stmt_name,
                     vtype,
                     indent,
                     "HLSL",
@@ -3447,7 +3475,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     self.generate_hlsl_typed_buffer_atomic_ternary_initialization(
                         initial_value,
                         declaration,
-                        stmt.name,
+                        stmt_name,
                         vtype,
                         indent,
                     )
@@ -3457,7 +3485,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         stmt, ternary_init
                     )
                 atomic_init = self.generate_hlsl_typed_buffer_atomic_statement(
-                    initial_value, stmt.name, vtype
+                    initial_value, stmt_name, vtype
                 )
                 if atomic_init is not None:
                     return self.hlsl_record_generated_statement_int_constants(
@@ -3499,11 +3527,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         elif isinstance(stmt, ArrayNode):
             element_type = self.map_type(stmt.element_type)
             size = get_array_size_from_node(stmt)
+            stmt_name = self.hlsl_declaration_identifier_name(stmt.name)
 
             if size is None:
-                return f"{indent_str}{element_type}[1024] {stmt.name};\n"
+                return f"{indent_str}{element_type}[1024] {stmt_name};\n"
             else:
-                return f"{indent_str}{element_type}[{size}] {stmt.name};\n"
+                return f"{indent_str}{element_type}[{size}] {stmt_name};\n"
 
         elif isinstance(stmt, AssignmentNode):
             ternary_assignment = (
@@ -4138,6 +4167,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 and func_name not in getattr(self, "function_return_types", {})
             ):
                 return self.expression_result_type(args[0])
+            bitcast_result_type = self.hlsl_bitcast_result_type(func_name, args)
+            if bitcast_result_type is not None:
+                return bitcast_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
             if func_name == "dot" and args:
@@ -4437,6 +4469,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def generate_for(self, node, indent):
         indent_str = "    " * indent
         previous_local_variable_types = dict(self.local_variable_types)
+        previous_identifier_aliases = dict(self.current_identifier_aliases)
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
         )
@@ -4480,6 +4513,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return code
         finally:
             self.local_variable_types = previous_local_variable_types
+            self.current_identifier_aliases = previous_identifier_aliases
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
@@ -4496,6 +4530,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def generate_scoped_statement_body(self, body, indent):
         previous_local_variable_types = dict(self.local_variable_types)
+        previous_identifier_aliases = dict(self.current_identifier_aliases)
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
         )
@@ -4508,6 +4543,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.generate_statement_body(body, indent)
         finally:
             self.local_variable_types = previous_local_variable_types
+            self.current_identifier_aliases = previous_identifier_aliases
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
@@ -4518,6 +4554,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         pattern = getattr(node, "pattern", "item")
         iterable_node = getattr(node, "iterable", "")
         previous_local_variable_types = dict(self.local_variable_types)
+        previous_identifier_aliases = dict(self.current_identifier_aliases)
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
         )
@@ -4529,6 +4566,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         try:
             self.local_variable_types[pattern] = "int"
+            pattern_name = self.hlsl_declaration_identifier_name(pattern)
             self.current_unsupported_glsl_buffer_block_local_variables.discard(pattern)
 
             if isinstance(iterable_node, RangeNode):
@@ -4536,14 +4574,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 end = self.generate_expression(iterable_node.end)
                 comparator = "<=" if iterable_node.inclusive else "<"
                 code = (
-                    f"{indent_str}for (int {pattern} = {start}; "
-                    f"{pattern} {comparator} {end}; ++{pattern}) {{\n"
+                    f"{indent_str}for (int {pattern_name} = {start}; "
+                    f"{pattern_name} {comparator} {end}; ++{pattern_name}) {{\n"
                 )
             else:
                 iterable = self.generate_expression(iterable_node)
                 code = (
-                    f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; "
-                    f"++{pattern}) {{\n"
+                    f"{indent_str}for (int {pattern_name} = 0; "
+                    f"{pattern_name} < {iterable}; ++{pattern_name}) {{\n"
                 )
 
             code += self.generate_scoped_statement_body(
@@ -4553,6 +4591,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return code
         finally:
             self.local_variable_types = previous_local_variable_types
+            self.current_identifier_aliases = previous_identifier_aliases
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
@@ -4717,12 +4756,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if unsupported_value is not None:
                 return unsupported_value
             name = getattr(expr, "name", str(expr))
-            return enum_value_expression(self, name)
+            enum_value = enum_value_expression(self, name)
+            if enum_value != name:
+                return enum_value
+            return self.hlsl_identifier_name(name)
         elif isinstance(expr, VariableNode):
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
-            return enum_value_expression(self, expr.name)
+            enum_value = enum_value_expression(self, expr.name)
+            if enum_value != expr.name:
+                return enum_value
+            return self.hlsl_identifier_name(expr.name)
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             left = self.generate_expression(getattr(expr, "left", ""))
             right = self.generate_expression(getattr(expr, "right", ""))
@@ -5154,6 +5199,51 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
+
+    def hlsl_identifier_name(self, name):
+        return self.current_identifier_aliases.get(name, name)
+
+    def hlsl_declaration_identifier_name(self, name):
+        if not isinstance(name, str):
+            return name
+        if name in self.current_identifier_aliases:
+            return self.current_identifier_aliases[name]
+        if (
+            name not in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES
+            and name not in self.current_identifier_aliases.values()
+        ):
+            return name
+
+        used_names = set(self.local_variable_types)
+        used_names.update(self.global_variable_types)
+        used_names.update(self.current_identifier_aliases.values())
+        alias = f"{name}_"
+        while alias in used_names or alias in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES:
+            alias += "_"
+        self.current_identifier_aliases[name] = alias
+        return alias
+
+    def hlsl_bitcast_result_type(self, func_name, args):
+        if (
+            not func_name
+            or func_name in getattr(self, "function_return_types", {})
+            or not args
+        ):
+            return None
+        target_component = self.HLSL_BITCAST_FUNCTION_TARGETS.get(func_name)
+        if target_component is None:
+            return None
+
+        source_type = self.expression_result_type(args[0])
+        mapped_source_type = self.map_type(source_type or target_component)
+        for source_component in ("float", "int", "uint"):
+            if mapped_source_type == source_component:
+                return target_component
+            if mapped_source_type.startswith(source_component):
+                suffix = mapped_source_type[len(source_component) :]
+                if suffix in {"2", "3", "4"}:
+                    return f"{target_component}{suffix}"
+        return target_component
 
     def hlsl_function_name_is_shadowed(self, func_name):
         return func_name in self.local_variable_types or func_name in getattr(
@@ -12530,7 +12620,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         param_type = self.directx_resource_declaration_type(param_type)
         param_type = self.apply_hlsl_parameter_qualifiers(param_type, parameter)
-        return format_c_style_array_declaration(param_type, parameter.name)
+        return format_c_style_array_declaration(
+            param_type, self.hlsl_declaration_identifier_name(parameter.name)
+        )
 
     def append_required_hlsl_stage_parameter_parameters(
         self, params_str, func_name, existing_param_names=None
