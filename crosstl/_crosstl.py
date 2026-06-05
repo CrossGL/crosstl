@@ -348,6 +348,39 @@ def _format_artifact_rollup(label, counts):
     )
 
 
+def _format_validation_artifact_rollup(label, counts):
+    if not isinstance(counts, Mapping):
+        return None
+
+    entries = []
+    for target, row in counts.items():
+        if not isinstance(target, str) or not target.strip():
+            continue
+        if not isinstance(row, Mapping):
+            continue
+        artifact_count = row.get("artifactCount")
+        ok_count = row.get("okCount")
+        failed_count = row.get("failedCount")
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (artifact_count, ok_count, failed_count)
+        ):
+            continue
+        entries.append((target, artifact_count, ok_count, failed_count))
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: (-item[1], item[0]))
+    return f"{label}: " + ", ".join(
+        (
+            f"{target}={artifact_count} "
+            f"{'artifact' if artifact_count == 1 else 'artifacts'} "
+            f"({ok_count} ok, {failed_count} failed)"
+        )
+        for target, artifact_count, ok_count, failed_count in entries
+    )
+
+
 def _format_project_config_counts(project):
     if not isinstance(project, Mapping):
         return None
@@ -395,6 +428,9 @@ def _format_project_report_inspection(payload):
     )
     validation_toolchain_run_counts = payload.get("validation", {}).get(
         "toolchainRunStatusCounts"
+    )
+    validation_artifact_status_by_target = payload.get("validation", {}).get(
+        "artifactStatusByTarget"
     )
     validation_result = payload.get("validation", {}).get("result", {})
     validation_summary = (
@@ -466,6 +502,12 @@ def _format_project_report_inspection(payload):
             f"{validation_summary.get('okCount', 0)} ok, "
             f"{validation_summary.get('failedCount', 0)} failed"
         )
+        validation_artifacts_by_target = _format_validation_artifact_rollup(
+            "Validation artifacts by target",
+            validation_artifact_status_by_target,
+        )
+        if validation_artifacts_by_target:
+            lines.append(validation_artifacts_by_target)
         source_hashes = _format_count_rollup(
             "Validation source hashes",
             validation_summary.get("sourceHashStatusCounts"),

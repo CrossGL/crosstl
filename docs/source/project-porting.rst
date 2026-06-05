@@ -97,9 +97,10 @@ Inspect an existing report as a concise JSON or text summary:
 
 Report inspection includes validation status, project counts, project
 configuration counts, failed artifacts, diagnostic code and missing-capability
-rollups, source-map count rollups, diagnostics, diagnostic and failed-artifact
-truncation counts, external corpus rollups, and migration actions. It exits
-nonzero when validation finds report errors.
+rollups, validation artifact target rollups, source-map count rollups,
+diagnostics, diagnostic and failed-artifact truncation counts, external corpus
+rollups, and migration actions. It exits nonzero when validation finds report
+errors.
 
 Configuration
 -------------

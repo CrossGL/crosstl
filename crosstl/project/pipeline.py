@@ -1589,6 +1589,34 @@ def _validation_toolchain_run_status_counts(runs: Sequence[Any]) -> dict[str, in
     return _status_counts(runs, "status", VALIDATION_TOOLCHAIN_RUN_STATUSES)
 
 
+def _validation_artifact_status_by_target(
+    artifact_checks: Sequence[Any],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact_check in artifact_checks:
+        if not isinstance(artifact_check, Mapping):
+            continue
+        target = artifact_check.get("target")
+        target_name = (
+            target.strip() if isinstance(target, str) and target.strip() else "unknown"
+        )
+        row = counts.setdefault(
+            target_name,
+            {
+                "artifactCount": 0,
+                "okCount": 0,
+                "failedCount": 0,
+            },
+        )
+        row["artifactCount"] += 1
+        status = artifact_check.get("status")
+        if status == "ok":
+            row["okCount"] += 1
+        elif status == "failed":
+            row["failedCount"] += 1
+    return {target: counts[target] for target in sorted(counts)}
+
+
 def _validate_artifacts(
     artifacts: Sequence[Mapping[str, Any]],
     targets: Sequence[str],
@@ -1841,6 +1869,11 @@ def inspect_project_report(
         if isinstance(validation_result, Mapping)
         else []
     )
+    validation_artifacts = (
+        validation_result.get("artifacts")
+        if isinstance(validation_result, Mapping)
+        else []
+    )
     validation_toolchain_runs = (
         validation_result.get("toolchainRuns")
         if isinstance(validation_result, Mapping)
@@ -1862,6 +1895,12 @@ def inspect_project_report(
         "validation": {
             "success": bool(validation_report.get("success")),
             "diagnosticCounts": dict(validation_report.get("diagnosticCounts", {})),
+            "artifactStatusByTarget": _validation_artifact_status_by_target(
+                validation_artifacts
+                if isinstance(validation_artifacts, Sequence)
+                and not isinstance(validation_artifacts, (str, bytes, bytearray))
+                else []
+            ),
             "toolchainStatusCounts": _validation_toolchain_status_counts(
                 validation_toolchains
                 if isinstance(validation_toolchains, Sequence)
