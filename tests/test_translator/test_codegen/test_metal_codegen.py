@@ -310,6 +310,90 @@ def test_metal_user_defined_frac_and_lerp_functions_are_preserved():
     assert "mix(" not in generated_code
 
 
+def test_metal_glsl_bitcast_builtins_lower_to_as_type():
+    shader = """
+    shader MetalBitcasts {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float f = 1.0;
+                uint u = 1u;
+                int i = 1;
+                vec3 v = vec3(1.0, 2.0, 3.0);
+                int signedBits = floatBitsToInt(f);
+                uint unsignedBits = floatBitsToUint(f);
+                float fromInt = intBitsToFloat(i);
+                float fromUint = uintBitsToFloat(u);
+                ivec3 vectorBits = floatBitsToInt(v);
+                vec3 fromVectorBits = intBitsToFloat(vectorBits);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "__attribute__((unused)) int signedBits = as_type<int>(f);" in generated_code
+    assert (
+        "__attribute__((unused)) uint unsignedBits = as_type<uint>(f);"
+        in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float fromInt = as_type<float>(i);" in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float fromUint = as_type<float>(u);" in generated_code
+    )
+    assert "int3 vectorBits = as_type<int3>(v);" in generated_code
+    assert (
+        "__attribute__((unused)) float3 fromVectorBits = as_type<float3>(vectorBits);"
+        in generated_code
+    )
+    assert "floatBitsToInt(" not in generated_code
+    assert "floatBitsToUint(" not in generated_code
+    assert "intBitsToFloat(" not in generated_code
+    assert "uintBitsToFloat(" not in generated_code
+
+
+def test_metal_user_defined_bitcast_function_names_are_preserved():
+    shader = """
+    shader MetalUserBitcastNames {
+        compute {
+            int floatBitsToInt(float value) {
+                return 7;
+            }
+
+            float uintBitsToFloat(uint value) {
+                return 1.0;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int signedBits = floatBitsToInt(1.0);
+                float fromUint = uintBitsToFloat(1u);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "int floatBitsToInt(float value)" in generated_code
+    assert "float uintBitsToFloat(uint value)" in generated_code
+    assert (
+        "__attribute__((unused)) int signedBits = floatBitsToInt(1.0);"
+        in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float fromUint = uintBitsToFloat(1u);"
+        in generated_code
+    )
+    assert "as_type<int>(" not in generated_code
+    assert "as_type<float>(" not in generated_code
+
+
 def test_metal_hlsl_frac_and_lerp_aliases_compile_when_toolchain_is_available():
     shader = """
     shader MetalHlslMathAliasCompile {

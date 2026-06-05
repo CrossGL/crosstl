@@ -6035,6 +6035,53 @@ def test_hlsl_inverse_sqrt_alias_avoids_shadowed_rsqrt_target():
     assert "float invLength = (rsqrt(lengthSquared) + rsqrt);" not in generated_code
 
 
+def test_hlsl_direct_rsqrt_infers_result_type_and_avoids_shadowed_target():
+    shader = """
+    shader HlslDirectRsqrtRobustness {
+        fragment {
+            vec4 main(vec3 normal @ TEXCOORD0, float lengthSquared @ TEXCOORD1) @ gl_FragColor {
+                let invScale = rsqrt((normal * normal) + vec3(1.0));
+                float rsqrt = lengthSquared;
+                float invLength = rsqrt(lengthSquared) + rsqrt;
+                return vec4(invScale * invLength, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "float3 invScale = rsqrt(((normal * normal) + " "float3(1.0, 1.0, 1.0)));"
+    ) in generated_code
+    assert "float rsqrt = lengthSquared;" in generated_code
+    assert "float invLength = ((1.0 / sqrt(lengthSquared)) + rsqrt);" in generated_code
+    assert "float invLength = (rsqrt(lengthSquared) + rsqrt);" not in generated_code
+
+
+def test_hlsl_user_defined_rsqrt_result_type_is_not_builtin_inferred():
+    shader = """
+    shader HlslUserRsqrtInference {
+        float rsqrt(vec3 value) {
+            return value.x;
+        }
+
+        fragment {
+            vec4 main(vec3 normal @ TEXCOORD0) @ gl_FragColor {
+                let invLength = rsqrt(normal);
+                return vec4(invLength, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float rsqrt(float3 value)" in generated_code
+    assert "float invLength = rsqrt(normal);" in generated_code
+    assert "float3 invLength = rsqrt(normal);" not in generated_code
+
+
 def test_hlsl_user_defined_inversesqrt_is_not_lowered():
     shader = """
     shader HlslInverseSqrtShadowing {

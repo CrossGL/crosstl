@@ -349,6 +349,12 @@ class MetalCodeGen:
         "smoothstep",
         "step",
     }
+    METAL_BITCAST_FUNCTION_TARGETS = {
+        "floatBitsToInt": "int",
+        "floatBitsToUint": "uint",
+        "intBitsToFloat": "float",
+        "uintBitsToFloat": "float",
+    }
     METAL_WAVE_INTRINSIC_ARITIES = {
         "WaveGetLaneCount": 0,
         "WaveGetLaneIndex": 0,
@@ -6136,6 +6142,9 @@ class MetalCodeGen:
                 and func_name not in self.user_function_names
             ):
                 return self.expression_result_type(args[0])
+            bitcast_result_type = self.metal_bitcast_result_type(func_name, args)
+            if bitcast_result_type is not None:
+                return bitcast_result_type
             if func_name in {"mix", "clamp", "min", "max"} and args:
                 return self.expression_result_type(args[0])
             if is_resource_size_query_operation(func_name) and args:
@@ -7281,6 +7290,9 @@ class MetalCodeGen:
                     else derivative_name
                 )
                 return f"{derivative_call_name}({arg})"
+            bitcast_call = self.generate_metal_bitcast_call(func_name, expr.args)
+            if bitcast_call is not None:
+                return bitcast_call
             if (
                 func_name in self.METAL_STDLIB_BUILTIN_FUNCTIONS
                 and func_name not in self.user_function_names
@@ -7608,6 +7620,31 @@ class MetalCodeGen:
             func_name in self.local_variable_types
             or func_name in self.user_function_names
         )
+
+    def metal_bitcast_result_type(self, func_name, args):
+        if (
+            func_name not in self.METAL_BITCAST_FUNCTION_TARGETS
+            or func_name in self.user_function_names
+            or len(args or []) != 1
+        ):
+            return None
+
+        argument_type = self.expression_result_type(args[0])
+        mapped_argument_type = self.map_type(argument_type)
+        match = re.fullmatch(r"(?:float|int|uint)([234])?", mapped_argument_type)
+        if match is None:
+            return self.METAL_BITCAST_FUNCTION_TARGETS[func_name]
+
+        width = match.group(1) or ""
+        return f"{self.METAL_BITCAST_FUNCTION_TARGETS[func_name]}{width}"
+
+    def generate_metal_bitcast_call(self, func_name, args):
+        target_type = self.metal_bitcast_result_type(func_name, args)
+        if target_type is None:
+            return None
+
+        arg = self.generate_expression(args[0])
+        return f"as_type<{target_type}>({arg})"
 
     def generate_binary_operand(self, expr):
         rendered = self.generate_expression(expr)

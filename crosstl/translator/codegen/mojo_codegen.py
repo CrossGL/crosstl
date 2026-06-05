@@ -13682,6 +13682,8 @@ class MojoCodeGen:
                 return vector_func_name
             if func_name in MOJO_MATRIX_TYPES:
                 return func_name
+            if func_name in self.function_return_types:
+                return self.function_return_types[func_name]
             if func_name in {"fract", "frac"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "roundEven" and expr.args:
@@ -13692,7 +13694,7 @@ class MojoCodeGen:
                 return "float"
             if func_name == "normalize" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
-            if func_name == "mix" and expr.args:
+            if func_name in {"mix", "lerp"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name in {"degrees", "radians"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"

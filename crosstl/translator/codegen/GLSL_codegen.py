@@ -5284,6 +5284,7 @@ class GLSLCodeGen:
         )
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
+        previous_identifier_aliases = self.current_identifier_aliases
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -5297,6 +5298,7 @@ class GLSLCodeGen:
             self.current_structured_buffer_access_parameters
         )
         self.local_variable_types = {}
+        self.current_identifier_aliases = dict(self.current_identifier_aliases)
         self.current_generic_function_substitutions = (
             getattr(func, "_generic_substitutions", {}) or {}
         )
@@ -5388,7 +5390,12 @@ class GLSLCodeGen:
 
             semantic = self.semantic_from_node(p)
 
-            declaration = format_c_style_array_declaration(param_type, p.name)
+            parameter_name = (
+                self.glsl_parameter_identifier_name(p.name)
+                if shader_type is None
+                else p.name
+            )
+            declaration = format_c_style_array_declaration(param_type, parameter_name)
             if self.is_storage_image_type(param_type):
                 memory_qualifiers = self.resource_memory_qualifiers(p)
                 if memory_qualifiers:
@@ -5417,6 +5424,7 @@ class GLSLCodeGen:
             )
             self.current_function_return_type = previous_function_return_type
             self.local_variable_types = previous_local_variable_types
+            self.current_identifier_aliases = previous_identifier_aliases
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -5517,7 +5525,6 @@ class GLSLCodeGen:
         previous_stage_return_type = self.current_stage_return_type
         previous_stage_entry_type = self.current_stage_entry_type
         previous_local_variable_types = self.local_variable_types
-        previous_identifier_aliases = self.current_identifier_aliases
         previous_compile_time_int_constants = self.current_compile_time_int_constants
         previous_compile_time_int_vector_constants = (
             self.current_compile_time_int_vector_constants
@@ -7557,6 +7564,22 @@ class GLSLCodeGen:
         if var_type is None:
             var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
         return self.type_name_string(var_type) or "float"
+
+    def glsl_parameter_identifier_name(self, name):
+        if name not in self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS:
+            return name
+
+        used_names = set(self.local_variable_types)
+        used_names.update(self.current_identifier_aliases.values())
+        used_names.update(self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS)
+
+        alias = f"{name}_"
+        suffix = 1
+        while alias in used_names:
+            suffix += 1
+            alias = f"{name}_{suffix}"
+        self.current_identifier_aliases[name] = alias
+        return alias
 
     def glsl_local_identifier_name(self, name):
         reserved_names = self.current_stage_declared_names()

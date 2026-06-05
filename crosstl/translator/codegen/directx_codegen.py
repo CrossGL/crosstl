@@ -4126,8 +4126,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     self.expression_result_type(args[0])
                 )
             if (
-                func_name in {"frac", "fract", "inverseSqrt", "inversesqrt", "mod"}
+                func_name
+                in {"frac", "fract", "inverseSqrt", "inversesqrt", "rsqrt", "mod"}
                 and args
+                and func_name not in getattr(self, "function_return_types", {})
             ):
                 return self.expression_result_type(args[0])
             if (
@@ -5139,7 +5141,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"({left} + (({right} - {left}) * {weight}))"
 
         if (
-            func_name in {"inverseSqrt", "inversesqrt"}
+            func_name in {"inverseSqrt", "inversesqrt", "rsqrt"}
             and len(args) == 1
             and self.hlsl_function_name_is_shadowed("rsqrt")
         ):

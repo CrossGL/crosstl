@@ -19299,6 +19299,44 @@ def test_builtin_alias_targets_qualify_shadowed_rust_math_helpers_and_smoke_comp
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_texture_builtin_alias_targets_qualify_shadowed_runtime_helpers_and_compile(
+    tmp_path,
+):
+    code = """
+    shader RustTextureAliasTargetShadowing {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec2 uv) {
+                float sample = 1.0;
+                float sample_sampler = 2.0;
+                let implicitColor = texture(colorMap, uv);
+                let explicitColor = texture(colorMap, linearSampler, uv);
+                return implicitColor + explicitColor
+                    + vec4(sample + sample_sampler, 0.0, 0.0, 0.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let sample: f32 = 1.0;" in generated_code
+    assert "let sample_sampler: f32 = 2.0;" in generated_code
+    assert "let implicitColor: Vec4<f32> = gpu::sample(*COLOR_MAP, uv);" in (
+        generated_code
+    )
+    assert (
+        "let explicitColor: Vec4<f32> = "
+        "gpu::sample_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv);"
+    ) in generated_code
+    assert "let implicitColor: Vec4<f32> = sample(*COLOR_MAP, uv);" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_builtin_function_calls_infer_rust_value_types_and_smoke_compile(tmp_path):
     code = """
     shader BuiltinInference {

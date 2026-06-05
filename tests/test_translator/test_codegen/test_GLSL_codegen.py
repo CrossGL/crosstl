@@ -23611,6 +23611,37 @@ def test_opengl_hlsl_lerp_alias_renames_local_mix_shadow():
     assert "float mix = weight;" not in generated_code
 
 
+def test_opengl_hlsl_aliases_rename_parameter_target_shadows():
+    shader = """
+    shader AliasParameterTargetShadow {
+        vec3 shade(vec3 cool, vec3 warm, float mix, float clamp) {
+            vec3 color = lerp(cool, warm, mix);
+            float alpha = saturate(clamp);
+            return color * alpha;
+        }
+
+        fragment {
+            vec4 main(float weight @ TEXCOORD0) @ gl_FragColor {
+                vec3 color = shade(vec3(0.1), vec3(0.9), weight, weight);
+                return vec4(color, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "vec3 shade(vec3 cool, vec3 warm, float mix_, float clamp_)" in generated_code
+    )
+    assert "vec3 color = mix(cool, warm, mix_);" in generated_code
+    assert "float alpha = clamp(clamp_, 0.0, 1.0);" in generated_code
+    assert "return (color * alpha);" in generated_code
+    assert "float mix, float clamp" not in generated_code
+    assert "lerp(" not in generated_code
+    assert "saturate(" not in generated_code
+
+
 def test_opengl_hlsl_rcp_alias_emits_reciprocal_expression():
     # Microsoft HLSL rcp computes a per-component reciprocal:
     # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/rcp

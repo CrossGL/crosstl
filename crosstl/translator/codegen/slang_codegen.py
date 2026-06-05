@@ -8439,6 +8439,11 @@ class SlangCodeGen:
                 return str(func_name)
             if isinstance(func_name, str) and self.matrix_value_info(func_name):
                 return str(func_name)
+            alias_result_type = self.builtin_alias_call_result_type(
+                func_name, getattr(expr, "args", [])
+            )
+            if alias_result_type is not None:
+                return alias_result_type
             return self.user_function_return_types.get(func_name)
         return None
 
@@ -8488,6 +8493,50 @@ class SlangCodeGen:
         mapped_callee = self.function_map.get(callee, callee)
         if mapped_callee in {"asfloat", "asint", "asuint"}:
             return mapped_callee
+        return None
+
+    def builtin_alias_call_result_type(self, func_name, args):
+        if not isinstance(func_name, str) or func_name in self.user_function_names:
+            return None
+
+        if func_name in {
+            "fract",
+            "dFdx",
+            "dFdy",
+            "dFdxCoarse",
+            "dFdxFine",
+            "dFdyCoarse",
+            "dFdyFine",
+            "fwidth",
+            "inversesqrt",
+            "inverseSqrt",
+        }:
+            return self.expression_result_type(args[0]) if args else None
+
+        if func_name in {"mix", "mod"}:
+            return self.expression_result_type(args[0]) if args else None
+
+        return self.glsl_bitcast_result_type(func_name, args)
+
+    def glsl_bitcast_result_type(self, func_name, args):
+        component_type = {
+            "floatBitsToInt": "int",
+            "floatBitsToUint": "uint",
+            "intBitsToFloat": "float",
+            "uintBitsToFloat": "float",
+        }.get(func_name)
+        if component_type is None or not args:
+            return None
+
+        arg_type = self.expression_result_type(args[0])
+        if arg_type is None:
+            return None
+
+        arg_info = self.vector_value_info(arg_type)
+        if arg_info is not None:
+            return f"{component_type}{arg_info['size']}"
+        if self.is_scalar_value_type(arg_type):
+            return component_type
         return None
 
     def generate_call_arguments(self, args, expected_types):

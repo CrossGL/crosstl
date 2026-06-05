@@ -2824,6 +2824,7 @@ def test_user_defined_glsl_bitcast_function_names_are_not_lowered():
 
             void main() {
                 int signedBits = floatBitsToInt(1.0);
+                let inferredSignedBits = floatBitsToInt(2.0);
                 float fromUint = uintBitsToFloat(1u);
             }
         }
@@ -2837,9 +2838,45 @@ def test_user_defined_glsl_bitcast_function_names_are_not_lowered():
     assert "int floatBitsToInt(float value)" in generated_code
     assert "float uintBitsToFloat(uint value)" in generated_code
     assert "int signedBits = floatBitsToInt(1.0);" in generated_code
+    assert "int inferredSignedBits = floatBitsToInt(2.0);" in generated_code
     assert "float fromUint = uintBitsToFloat(1u);" in generated_code
     assert "asint(" not in generated_code
     assert "asfloat(" not in generated_code
+
+
+def test_builtin_alias_calls_infer_let_result_types():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                let dx = dFdx(uv);
+                let nested = dFdy(dFdx(uv));
+                let inv = inverseSqrt(4.0);
+                let edge = fwidth(uv.x);
+                let bits = floatBitsToUint(inv);
+                let unpacked = uintBitsToFloat(bits);
+                let packed = floatBitsToUint(vec2(1.0, 2.0));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2 dx = ddx(uv);" in generated_code
+    assert "float2 nested = ddy(ddx(uv));" in generated_code
+    assert "float inv = rsqrt(4.0);" in generated_code
+    assert "float edge = fwidth(uv.x);" in generated_code
+    assert "uint bits = asuint(inv);" in generated_code
+    assert "float unpacked = asfloat(bits);" in generated_code
+    assert "uint2 packed = asuint(float2(1.0, 2.0));" in generated_code
+    assert "auto dx" not in generated_code
+    assert "auto nested" not in generated_code
+    assert "auto inv" not in generated_code
+    assert "auto bits" not in generated_code
 
 
 def test_glsl_derivative_builtins_lower_to_slang_ddx_ddy():

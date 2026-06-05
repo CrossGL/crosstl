@@ -12621,6 +12621,9 @@ class VulkanSPIRVCodeGen:
                 return self.variable_value_types.get(
                     variable.id
                 ) or self.value_types.get(variable.id)
+            builtin_type = self.infer_builtin_expression_result_type(name)
+            if builtin_type is not None:
+                return builtin_type
             return None
         if isinstance(expr, FunctionCallNode):
             callee_name = self.function_call_name(expr)
@@ -12685,6 +12688,40 @@ class VulkanSPIRVCodeGen:
             return true_type or false_type
         if isinstance(expr, MatchNode):
             return self.infer_match_expression_result_type(expr)
+        return None
+
+    def infer_builtin_expression_result_type(self, name: str) -> Optional[SpirvId]:
+        builtin_type = self.infer_builtin_variable_result_type(name)
+        if builtin_type is not None:
+            return builtin_type
+
+        if not isinstance(name, str) or "." not in name:
+            return None
+
+        base_name, member_name = name.rsplit(".", 1)
+        base_type = self.infer_builtin_variable_result_type(base_name)
+        if base_type is None:
+            return None
+
+        member_info = self.vector_member_info(base_type.type.base_type, member_name)
+        if member_info is not None:
+            return member_info[1]
+
+        swizzle_info = self.vector_swizzle_info(base_type.type.base_type, member_name)
+        if swizzle_info is not None:
+            return swizzle_info[2]
+
+        return None
+
+    def infer_builtin_variable_result_type(self, name: str) -> Optional[SpirvId]:
+        compute_info = self.compute_builtin_info(name)
+        if compute_info is not None:
+            return self.map_crossgl_type(compute_info[0])
+
+        stage_info = self.stage_builtin_info(name)
+        if stage_info is not None:
+            return self.map_crossgl_type(stage_info[0])
+
         return None
 
     def infer_match_expression_result_type(self, node: MatchNode) -> Optional[SpirvId]:

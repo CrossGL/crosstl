@@ -18469,6 +18469,64 @@ def test_builtin_function_call_names_are_mapped():
     assert "fmod(" not in generated_code
 
 
+def test_lerp_alias_result_type_feeds_nested_vector_builtin_lowering():
+    code = """
+    shader NumericAliases {
+        compute {
+            void main() {
+                vec3 a = vec3(-1.0, 0.5, 2.0);
+                vec3 b = vec3(0.0, 1.0, 3.0);
+                vec3 blended = saturate(lerp(a, b, 0.5));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn lerp(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4], "
+        "t: Float32) -> SIMD[DType.float32, 4]:"
+    ) in generated_code
+    assert (
+        "fn _crossgl_saturate_f32_3_4(v: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:"
+    ) in generated_code
+    assert (
+        "var blended: SIMD[DType.float32, 4] = "
+        "_crossgl_saturate_f32_3_4(lerp(a, b, 0.5))"
+    ) in generated_code
+    assert "saturate(lerp(" not in generated_code
+
+
+def test_user_defined_lerp_return_type_is_not_treated_as_builtin_alias():
+    code = """
+    shader NumericAliases {
+        compute {
+            bool lerp(float value, float threshold, float unused) {
+                return value > threshold;
+            }
+
+            void main() {
+                float selected = mix(0.0, 1.0, lerp(2.0, 1.0, 0.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn lerp(value: Float32, threshold: Float32, unused: Float32) -> Bool:"
+        in generated_code
+    )
+    assert (
+        "var selected: Float32 = (1.0 if lerp(2.0, 1.0, 0.0) else 0.0)"
+        in generated_code
+    )
+    assert "var selected: Float32 = lerp(0.0, 1.0, lerp(" not in generated_code
+
+
 def test_mod_builtin_lowers_to_crossgl_floor_semantics_helpers():
     code = """
     shader NumericWrap {

@@ -8727,13 +8727,23 @@ class RustCodeGen:
         return f"CglSqrt::cgl_sqrt({self.generate_expression(args[0])})"
 
     def rust_imported_math_callable_name(self, func_name):
+        helper_module = self.rust_imported_helper_module(func_name)
         if (
             isinstance(func_name, str)
-            and func_name in self.rust_imported_math_function_names()
+            and helper_module is not None
             and self.rust_function_name_is_shadowed(func_name)
         ):
-            return f"math::{func_name}"
+            return f"{helper_module}::{func_name}"
         return func_name
+
+    def rust_imported_helper_module(self, func_name):
+        if func_name in self.rust_imported_math_function_names():
+            return "math"
+        if self.is_rust_texture_helper_name(func_name):
+            return "gpu"
+        if str(func_name).startswith(("image_", "buffer_", "subgroup_")):
+            return "gpu"
+        return None
 
     def rust_function_name_is_shadowed(self, func_name):
         return (
@@ -9002,7 +9012,8 @@ class RustCodeGen:
     def generate_texture_helper_call(self, helper_name, args):
         self.validate_rust_texture_helper_call(helper_name, args)
         generated_args = ", ".join(self.generate_expression(arg) for arg in args or [])
-        return f"{helper_name}({generated_args})"
+        callable_name = self.rust_imported_math_callable_name(helper_name)
+        return f"{callable_name}({generated_args})"
 
     def rust_hlsl_texture_member_operations(self):
         return {

@@ -18155,6 +18155,56 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_match_expression_infers_builtin_alias_member_result_type(self, tmp_path):
+        source_code = """
+        shader MatchBuiltinAliasInference {
+            compute {
+                void main() {
+                    int mode = 1;
+                    let lane = match mode {
+                        0 => SV_DispatchThreadID.x,
+                        _ => SV_GroupThreadID.y
+                    };
+                    uint result = lane;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+
+        assert uint_type is not None
+        uint_pointer = re.search(
+            rf"(%\d+) = OpTypePointer Function {re.escape(uint_type.group(1))}",
+            spv_code,
+        )
+        assert uint_pointer is not None
+
+        spirv_named_variable(
+            spv_code,
+            "lane",
+            pointer_type=uint_pointer.group(1),
+            storage_class="Function",
+        )
+        dispatch_id = spirv_named_variable(
+            spv_code, "SV_DispatchThreadID", storage_class="Input"
+        )
+        group_thread_id = spirv_named_variable(
+            spv_code, "SV_GroupThreadID", storage_class="Input"
+        )
+
+        assert f"OpDecorate {dispatch_id} BuiltIn GlobalInvocationId" in spv_code
+        assert f"OpDecorate {group_thread_id} BuiltIn LocalInvocationId" in spv_code
+        assert "Unknown type None" not in spv_code
+        assert "OpConvertUToF" not in spv_code
+        assert "OpConvertFToU" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_match_expression_return_emits_selected_spirv_value(self, tmp_path):
         source_code = """
         shader MatchReturnSmoke {
