@@ -2969,7 +2969,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     node.expression_type = result_type
                 return fma_call
 
-        if func_name == "mix" and len(args) == 3:
+        if func_name in {"mix", "lerp"} and len(args) == 3:
             mix_call = self.generate_mix_call(raw_args, args)
             if mix_call is not None:
                 return mix_call
@@ -6506,6 +6506,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return self.fused_multiply_add_result_type(raw_args)
             if func_name == "step" and len(raw_args) == 2:
                 return self.step_result_type(raw_args)
+            if func_name == "lerp" and raw_args:
+                return self.expression_result_type(raw_args[0]) or (
+                    self.expression_result_type(raw_args[1])
+                    if len(raw_args) > 1
+                    else None
+                )
             buffer_result_type = self.buffer_call_result_type(node)
             if buffer_result_type is not None:
                 return buffer_result_type

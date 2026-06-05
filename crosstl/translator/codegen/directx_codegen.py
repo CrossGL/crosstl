@@ -5113,12 +5113,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_builtin_function_call(self, func_name, args):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
+        if (
+            func_name in {"inverseSqrt", "inversesqrt"}
+            and len(args) == 1
+            and self.hlsl_function_name_is_shadowed("rsqrt")
+        ):
+            arg = self.generate_expression(args[0])
+            return f"(1.0 / sqrt({arg}))"
+
         if func_name != "mod" or len(args) != 2:
             return None
 
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
+
+    def hlsl_function_name_is_shadowed(self, func_name):
+        return func_name in self.local_variable_types or func_name in getattr(
+            self, "function_return_types", {}
+        )
 
     def interpolation_function_call(self, func_name, args):
         if not func_name or func_name in getattr(self, "function_return_types", {}):

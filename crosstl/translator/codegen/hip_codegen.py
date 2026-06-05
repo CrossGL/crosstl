@@ -3752,7 +3752,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         elif func_name == "clamp":
             if len(args) == 3:
                 return self.generate_clamp_call(raw_args, args)
-        elif func_name == "mix":
+        elif func_name in {"mix", "lerp"}:
             if len(args) == 3:
                 mix_call = self.generate_mix_call(raw_args, args)
                 if mix_call is not None:
@@ -8757,6 +8757,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if func_name == "ReportHit":
                 return "bool"
             raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
+            if (
+                func_name == "lerp"
+                and len(raw_args) == 3
+                and not self.is_user_defined_function(func_name)
+            ):
+                return self.expression_result_type(raw_args[0]) or (
+                    self.expression_result_type(raw_args[1])
+                    if len(raw_args) > 1
+                    else None
+                )
             if func_name == "step" and len(raw_args) == 2:
                 return self.step_result_type(raw_args)
             buffer_result_type = self.buffer_call_result_type(node)

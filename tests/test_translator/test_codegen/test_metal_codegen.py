@@ -307,6 +307,29 @@ def test_metal_inverse_sqrt_aliases_lower_to_msl_rsqrt():
     assert "inversesqrt(" not in generated_code
 
 
+def test_metal_inverse_sqrt_alias_qualifies_rsqrt_when_local_name_shadows_it():
+    shader = """
+    shader MetalInverseSqrtTargetShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float rsqrt = float(tid.x) + 1.0;
+                float scalar = inverseSqrt(rsqrt);
+                vec3 vectorValue = inversesqrt(vec3(rsqrt));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float rsqrt = float(tid.x) + 1.0;" in generated_code
+    assert "float scalar = metal::rsqrt(rsqrt);" in generated_code
+    assert "float3 vectorValue = metal::rsqrt(float3(rsqrt));" in generated_code
+    assert "float scalar = rsqrt(rsqrt);" not in generated_code
+
+
 def test_metal_user_defined_inverse_sqrt_aliases_are_preserved():
     shader = """
     shader MetalUserInverseSqrtAliases {
@@ -386,6 +409,37 @@ def test_metal_derivative_aliases_lower_to_msl_dfdx_dfdy():
     assert "ddy(" not in generated_code
     assert "dFdx(" not in generated_code
     assert "dFdy(" not in generated_code
+
+
+def test_metal_derivative_aliases_qualify_targets_when_local_names_shadow_them():
+    shader = """
+    shader MetalDerivativeAliasTargetShadow {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                float dfdx = uv.x;
+                float dfdy = uv.y;
+                vec2 dx = ddx(uv);
+                vec2 dy = ddy(uv);
+                float gx = dFdx(uv.x);
+                float gy = dFdy(uv.y);
+                return vec4(dx.x + dy.x, dx.y + dy.y, gx + dfdx, gy + dfdy);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float dfdx = uv.x;" in generated_code
+    assert "float dfdy = uv.y;" in generated_code
+    assert "float2 dx = metal::dfdx(uv);" in generated_code
+    assert "float2 dy = metal::dfdy(uv);" in generated_code
+    assert "float gx = metal::dfdx(uv.x);" in generated_code
+    assert "float gy = metal::dfdy(uv.y);" in generated_code
+    assert "float2 dx = dfdx(uv);" not in generated_code
+    assert "float2 dy = dfdy(uv);" not in generated_code
 
 
 def test_metal_user_defined_derivative_alias_functions_are_preserved():

@@ -23543,6 +23543,51 @@ def test_opengl_hlsl_saturate_alias_emits_three_argument_clamp():
     assert "clamp(color)" not in generated_code
 
 
+def test_opengl_hlsl_saturate_alias_renames_local_clamp_shadow():
+    shader = """
+    shader SaturateAliasLocalClampShadow {
+        fragment {
+            vec4 main(float weight @ TEXCOORD0) @ gl_FragColor {
+                float clamp = weight;
+                float alpha = saturate(weight);
+                return vec4(alpha + clamp);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float clamp_ = weight;" in generated_code
+    assert "float alpha = clamp(weight, 0.0, 1.0);" in generated_code
+    assert "vec4((alpha + clamp_))" in generated_code
+    assert "float clamp = weight;" not in generated_code
+    assert "saturate(" not in generated_code
+
+
+def test_opengl_user_defined_saturate_function_is_preserved():
+    shader = """
+    shader UserSaturate {
+        float saturate(float value) {
+            return value * 2.0;
+        }
+
+        fragment {
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {
+                float adjusted = saturate(value);
+                return vec4(adjusted);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float saturate(float value)" in generated_code
+    assert "float adjusted = saturate(value);" in generated_code
+    assert "clamp(" not in generated_code
+
+
 def test_opengl_hlsl_lerp_alias_renames_local_mix_shadow():
     shader = """
     shader LerpAliasLocalMixShadow {

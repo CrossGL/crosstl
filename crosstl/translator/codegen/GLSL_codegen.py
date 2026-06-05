@@ -581,7 +581,7 @@ class GLSLCodeGen:
     GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
     GLSL_PARAMETER_QUALIFIERS = {"out", "inout"}
     GLSL_RESERVED_IDENTIFIERS = {"active", "input", "output"}
-    GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {"mix"}
+    GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {"clamp", "mix"}
     GLSL_INTERPOLATION_FUNCTIONS = {
         "interpolateAtCentroid": 1,
         "interpolateAtSample": 2,
@@ -8217,7 +8217,11 @@ class GLSLCodeGen:
                 if self.is_vector_value_type(right_type):
                     return right_type
                 return left_type or right_type
-            if func_name == "saturate" and args:
+            if (
+                func_name == "saturate"
+                and args
+                and func_name not in self.function_return_types
+            ):
                 return self.expression_result_type(args[0])
             if (
                 func_name == "rcp"
@@ -9238,7 +9242,8 @@ class GLSLCodeGen:
             if mad_call is not None:
                 return mad_call
 
-            func_name = self.function_map.get(func_name, func_name)
+            if original_func_name not in self.function_return_types:
+                func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
 
             static_generic_call = generate_static_generic_numeric_call(
@@ -9342,7 +9347,7 @@ class GLSLCodeGen:
         return self.generate_glsl_wave_operation(node.operation, node.arguments)
 
     def generate_saturate_call(self, func_name, args):
-        if func_name != "saturate":
+        if func_name != "saturate" or func_name in self.function_return_types:
             return None
         if len(args) != 1:
             raise ValueError("OpenGL saturate alias requires 1 argument")

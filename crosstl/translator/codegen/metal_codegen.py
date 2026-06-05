@@ -7254,7 +7254,12 @@ class MetalCodeGen:
                 and func_name not in self.user_function_names
             ):
                 arg = self.generate_expression(expr.args[0])
-                return f"rsqrt({arg})"
+                rsqrt_name = (
+                    "metal::rsqrt"
+                    if self.metal_function_name_is_shadowed("rsqrt")
+                    else "rsqrt"
+                )
+                return f"{rsqrt_name}({arg})"
             derivative_name = self.METAL_DERIVATIVE_FUNCTION_ALIASES.get(func_name)
             if (
                 derivative_name is not None
@@ -7262,7 +7267,12 @@ class MetalCodeGen:
                 and func_name not in self.user_function_names
             ):
                 arg = self.generate_expression(expr.args[0])
-                return f"{derivative_name}({arg})"
+                derivative_call_name = (
+                    f"metal::{derivative_name}"
+                    if self.metal_function_name_is_shadowed(derivative_name)
+                    else derivative_name
+                )
+                return f"{derivative_call_name}({arg})"
             if func_name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"{func_name}({args})"

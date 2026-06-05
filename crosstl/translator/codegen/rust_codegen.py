@@ -8538,7 +8538,8 @@ class RustCodeGen:
             self.validate_rust_texture_helper_call(func_name, args)
             if func_name == "saturate" and len(args) == 1:
                 arg = self.generate_expression(args[0])
-                return f"clamp({arg}, 0.0, 1.0)"
+                clamp_name = self.rust_imported_math_callable_name("clamp")
+                return f"{clamp_name}({arg}, 0.0, 1.0)"
 
             reciprocal_call = self.generate_reciprocal_call(func_name, args)
             if reciprocal_call is not None:
@@ -8602,7 +8603,8 @@ class RustCodeGen:
                 return self.generate_matrix_constructor_call(func_name, args)
 
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
-            return f"{self.rust_callable_name(func_name or callee)}({args_str})"
+            callable_name = self.rust_imported_math_callable_name(func_name or callee)
+            return f"{self.rust_callable_name(callable_name)}({args_str})"
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             return self.generate_member_access_expression(expr)
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
@@ -8723,6 +8725,107 @@ class RustCodeGen:
 
         self.required_generic_math_traits.add("CglSqrt")
         return f"CglSqrt::cgl_sqrt({self.generate_expression(args[0])})"
+
+    def rust_imported_math_callable_name(self, func_name):
+        if (
+            isinstance(func_name, str)
+            and func_name in self.rust_imported_math_function_names()
+            and self.rust_function_name_is_shadowed(func_name)
+        ):
+            return f"math::{func_name}"
+        return func_name
+
+    def rust_function_name_is_shadowed(self, func_name):
+        return (
+            func_name in self.local_variable_names
+            or func_name in self.user_function_names
+        )
+
+    def rust_imported_math_function_names(self):
+        return {
+            "abs",
+            "acos",
+            "all",
+            "any",
+            "asin",
+            "atan",
+            "atan2",
+            "ceil",
+            "clamp",
+            "cos",
+            "cosh",
+            "cross",
+            "degrees",
+            "determinant",
+            "dfdx",
+            "dfdx_coarse",
+            "dfdx_fine",
+            "dfdy",
+            "dfdy_coarse",
+            "dfdy_fine",
+            "distance",
+            "dot",
+            "equal",
+            "exp",
+            "exp2",
+            "faceforward",
+            "find_lsb",
+            "find_msb",
+            "floor",
+            "fract",
+            "fwidth",
+            "fwidth_coarse",
+            "fwidth_fine",
+            "greater_than",
+            "greater_than_equal",
+            "inverse",
+            "isfinite",
+            "isinf",
+            "isnan",
+            "ldexp",
+            "length",
+            "lerp",
+            "less_than",
+            "less_than_equal",
+            "log",
+            "log2",
+            "matrix_comp_mult",
+            "max",
+            "min",
+            "modulo",
+            "normalize",
+            "not_equal",
+            "outer_product",
+            "pack_double_2x32",
+            "pack_half_2x16",
+            "pack_snorm_2x16",
+            "pack_snorm_4x8",
+            "pack_unorm_2x16",
+            "pack_unorm_4x8",
+            "pow",
+            "radians",
+            "reflect",
+            "refract",
+            "round",
+            "round_even",
+            "rsqrt",
+            "sign",
+            "sin",
+            "sinh",
+            "smoothstep",
+            "sqrt",
+            "step",
+            "tan",
+            "tanh",
+            "transpose",
+            "trunc",
+            "unpack_double_2x32",
+            "unpack_half_2x16",
+            "unpack_snorm_2x16",
+            "unpack_snorm_4x8",
+            "unpack_unorm_2x16",
+            "unpack_unorm_4x8",
+        }
 
     def generate_cuda_shuffle_intrinsic_call(self, func_name, args):
         if func_name != "__shfl_down_sync" or len(args or []) < 3:

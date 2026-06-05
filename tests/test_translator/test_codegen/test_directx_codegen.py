@@ -5984,6 +5984,26 @@ def test_hlsl_inverse_sqrt_alias_lowers_to_rsqrt_intrinsic():
     assert "inverseSqrt(" not in generated_code
 
 
+def test_hlsl_inverse_sqrt_alias_avoids_shadowed_rsqrt_target():
+    shader = """
+    shader HlslInverseSqrtTargetShadowing {
+        fragment {
+            vec4 main(float lengthSquared @ TEXCOORD0) @ gl_FragColor {
+                float rsqrt = lengthSquared;
+                float invLength = inverseSqrt(lengthSquared) + rsqrt;
+                return vec4(invLength, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float rsqrt = lengthSquared;" in generated_code
+    assert "float invLength = ((1.0 / sqrt(lengthSquared)) + rsqrt);" in generated_code
+    assert "float invLength = (rsqrt(lengthSquared) + rsqrt);" not in generated_code
+
+
 def test_hlsl_user_defined_inversesqrt_is_not_lowered():
     shader = """
     shader HlslInverseSqrtShadowing {

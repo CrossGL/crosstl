@@ -2796,6 +2796,35 @@ def test_glsl_derivative_builtins_lower_to_slang_ddx_ddy():
     assert "dFdy(" not in generated_code
 
 
+def test_glsl_fine_coarse_derivative_builtins_lower_to_slang_aliases():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                vec2 dxFine = dFdxFine(uv);
+                vec2 dxCoarse = dFdxCoarse(uv);
+                vec2 dyFine = dFdyFine(uv);
+                vec2 dyCoarse = dFdyCoarse(uv);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2 dxFine = ddx_fine(uv);" in generated_code
+    assert "float2 dxCoarse = ddx_coarse(uv);" in generated_code
+    assert "float2 dyFine = ddy_fine(uv);" in generated_code
+    assert "float2 dyCoarse = ddy_coarse(uv);" in generated_code
+    assert "dFdxFine(" not in generated_code
+    assert "dFdxCoarse(" not in generated_code
+    assert "dFdyFine(" not in generated_code
+    assert "dFdyCoarse(" not in generated_code
+
+
 def test_user_defined_derivative_function_names_are_not_lowered():
     code = """
     shader BuiltinGap {
@@ -2826,6 +2855,38 @@ def test_user_defined_derivative_function_names_are_not_lowered():
     assert "float dy = dFdy(0.5);" in generated_code
     assert "float dx = ddx(0.5);" not in generated_code
     assert "float dy = ddy(0.5);" not in generated_code
+
+
+def test_user_defined_fine_coarse_derivative_function_names_are_not_lowered():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            float dFdxFine(float x) {
+                return x + 1.0;
+            }
+
+            float dFdyCoarse(float x) {
+                return x - 1.0;
+            }
+
+            void main() {
+                float dx = dFdxFine(0.5);
+                float dy = dFdyCoarse(0.5);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float dFdxFine(float x)" in generated_code
+    assert "float dFdyCoarse(float x)" in generated_code
+    assert "float dx = dFdxFine(0.5);" in generated_code
+    assert "float dy = dFdyCoarse(0.5);" in generated_code
+    assert "ddx_fine(" not in generated_code
+    assert "ddy_coarse(" not in generated_code
 
 
 def test_saturate_builtin_lowers_to_slang_clamp():

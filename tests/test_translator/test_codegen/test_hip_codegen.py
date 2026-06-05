@@ -2710,6 +2710,84 @@ class TestHipCodeGen:
         assert " = mix(" not in hip_code
         assert " = lerp(" not in hip_code
 
+    def test_hlsl_lerp_alias_lowers_to_hip_mix_arithmetic(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                float nextX() {
+                    return 0.0;
+                }
+
+                float nextY() {
+                    return 1.0;
+                }
+
+                float nextT() {
+                    return 0.25;
+                }
+
+                void main() {
+                    float a = lerp(0.0, 1.0, 0.25);
+                    float complex = lerp(nextX(), nextY(), nextT());
+                    vec3 vx = vec3(1.0, 2.0, 3.0);
+                    vec3 vy = vec3(4.0, 5.0, 6.0);
+                    vec3 v = lerp(vx, vy, 0.5);
+                    vec3 wrapped = fract(lerp(vx, vy, 0.5));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float a = (0.0 + ((1.0 - 0.0) * 0.25));" in hip_code
+        assert (
+            "__device__ inline float cgl_float_mix(float x, float y, float a)"
+            in hip_code
+        )
+        assert "float complex = cgl_float_mix(nextX(), nextY(), nextT());" in hip_code
+        assert (
+            "__device__ inline float3 cgl_float3_mix_scalar"
+            "(float3 x, float3 y, float a)" in hip_code
+        )
+        assert "float3 v = cgl_float3_mix_scalar(vx, vy, 0.5);" in hip_code
+        assert (
+            "float3 wrapped = cgl_float3_fract("
+            "cgl_float3_mix_scalar(vx, vy, 0.5));" in hip_code
+        )
+        assert " = lerp(" not in hip_code
+        assert "cgl_fract_float(cgl_float3_mix_scalar" not in hip_code
+
+    def test_user_defined_lerp_function_is_not_lowered_to_hip_builtin(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                float lerp(float x, float y, float t) {
+                    return x + y + t;
+                }
+
+                void main() {
+                    float adjusted = lerp(0.0, 1.0, 0.25);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__device__ float lerp(float x, float y, float t)" in hip_code
+        assert "float adjusted = lerp(0.0, 1.0, 0.25);" in hip_code
+        assert "float adjusted = (0.0 + ((1.0 - 0.0) * 0.25));" not in hip_code
+        assert "cgl_float_mix(0.0, 1.0, 0.25)" not in hip_code
+
     def test_bool_vector_mix_lowers_to_hip_select(self):
         source_code = """
         shader TestShader {

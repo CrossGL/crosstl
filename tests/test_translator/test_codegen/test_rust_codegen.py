@@ -19267,6 +19267,38 @@ def test_builtin_function_call_names_are_mapped():
     assert "saturate(" not in generated_code
 
 
+def test_builtin_alias_targets_qualify_shadowed_rust_math_helpers_and_smoke_compile(
+    tmp_path,
+):
+    code = """
+    shader RustMathAliasTargetShadowing {
+        fragment {
+            float main(float value) {
+                float fract = value;
+                float clamp = value;
+                float rsqrt = value;
+                float computed = frac(value) + saturate(value) + inverseSqrt(value);
+                return computed + fract + clamp + rsqrt;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let fract: f32 = value;" in generated_code
+    assert "let clamp: f32 = value;" in generated_code
+    assert "let rsqrt: f32 = value;" in generated_code
+    assert (
+        "let computed: f32 = ((math::fract(value) + "
+        "math::clamp(value, 0.0, 1.0)) + math::rsqrt(value));"
+    ) in generated_code
+    assert "let computed: f32 = ((fract(value) + clamp(value, 0.0, 1.0))" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_builtin_function_calls_infer_rust_value_types_and_smoke_compile(tmp_path):
     code = """
     shader BuiltinInference {

@@ -18717,6 +18717,67 @@ def test_user_defined_inverse_sqrt_function_is_not_lowered_to_rsqrt():
     assert "var scalarValue: Float32 = rsqrt(4.0)" not in generated_code
 
 
+def test_angle_conversion_builtins_lower_to_mojo_arithmetic():
+    code = """
+    shader NumericAliases {
+        compute {
+            void main() {
+                float scalarRadians = radians(180.0);
+                float scalarDegrees = degrees(3.14159265);
+                vec3 vectorRadians = radians(vec3(0.0, 90.0, 180.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "var scalarRadians: Float32 = (180.0 * 0.017453292519943295)" in generated_code
+    )
+    assert (
+        "var scalarDegrees: Float32 = (3.14159265 * 57.29577951308232)"
+        in generated_code
+    )
+    assert (
+        "var vectorRadians: SIMD[DType.float32, 4] = "
+        "(SIMD[DType.float32, 4](0.0, 90.0, 180.0, 0.0) "
+        "* 0.017453292519943295)" in generated_code
+    )
+    assert "radians(" not in generated_code
+    assert "degrees(" not in generated_code
+
+
+def test_user_defined_angle_conversion_functions_are_not_lowered():
+    code = """
+    shader NumericAliases {
+        compute {
+            float radians(float value) {
+                return value + 1.0;
+            }
+
+            float degrees(float value) {
+                return value - 1.0;
+            }
+
+            void main() {
+                float scalarRadians = radians(180.0);
+                float scalarDegrees = degrees(3.14159265);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn radians(value: Float32) -> Float32:" in generated_code
+    assert "fn degrees(value: Float32) -> Float32:" in generated_code
+    assert "var scalarRadians: Float32 = radians(180.0)" in generated_code
+    assert "var scalarDegrees: Float32 = degrees(3.14159265)" in generated_code
+    assert "0.017453292519943295" not in generated_code
+    assert "57.29577951308232" not in generated_code
+
+
 def test_user_defined_mix_function_is_not_lowered_to_lerp():
     code = """
     shader main {

@@ -8269,6 +8269,8 @@ class MojoCodeGen:
                 saturate_call = self.generate_saturate_call(expr.args)
                 if saturate_call is not None:
                     return saturate_call
+            if func_name in {"degrees", "radians"}:
+                return self.generate_angle_conversion_call(func_name, expr.args)
             if func_name == "mix":
                 bool_mix_call = self.generate_bool_mix_call(expr.args)
                 if bool_mix_call is not None:
@@ -9597,6 +9599,18 @@ class MojoCodeGen:
         arg_expr = self.generate_expression(args[0])
         self.required_math_helpers.add("clamp")
         return f"clamp({arg_expr}, 0.0, 1.0)"
+
+    def generate_angle_conversion_call(self, func_name, args):
+        if len(args) != 1:
+            generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+            return f"{func_name}({generated_args})"
+
+        factor = {
+            "degrees": "57.29577951308232",
+            "radians": "0.017453292519943295",
+        }[func_name]
+        arg_expr = self.generate_expression(args[0])
+        return f"({arg_expr} * {factor})"
 
     def generate_bool_mix_call(self, args):
         if len(args) != 3:
@@ -13679,6 +13693,8 @@ class MojoCodeGen:
             if func_name == "normalize" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "mix" and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"degrees", "radians"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "pow" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"

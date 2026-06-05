@@ -771,6 +771,31 @@ class TestCudaCodeGen:
         assert "float adjusted = mix(0.0, 1.0, 0.25);" in cuda_code
         assert "float adjusted = lerp(0.0, 1.0, 0.25);" not in cuda_code
 
+    def test_user_defined_lerp_function_is_not_lowered_to_cuda_builtin(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                float lerp(float x, float y, float t) {
+                    return x + y + t;
+                }
+
+                void main() {
+                    float adjusted = lerp(0.0, 1.0, 0.25);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float lerp(float x, float y, float t)" in cuda_code
+        assert "float adjusted = lerp(0.0, 1.0, 0.25);" in cuda_code
+        assert "float adjusted = (0.0 + ((1.0 - 0.0) * 0.25));" not in cuda_code
+
     def test_user_defined_fma_and_mad_functions_are_not_lowered_to_cuda_builtins(
         self,
     ):
@@ -3629,6 +3654,40 @@ class TestCudaCodeGen:
         assert "float3 v = lerp(" not in cuda_code
         assert "double2 p = lerp(" not in cuda_code
         assert " = mix(" not in cuda_code
+
+    def test_lerp_builtin_lowers_like_mix_for_cuda(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float scalar = lerp(0.0, 1.0, 0.25);
+                    vec3 vx = vec3(1.0, 2.0, 3.0);
+                    vec3 vy = vec3(4.0, 5.0, 6.0);
+                    vec3 v = lerp(vx, vy, 0.5);
+                    vec3 wrapped = fract(lerp(vx, vy, 0.5));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float scalar = (0.0 + ((1.0 - 0.0) * 0.25));" in cuda_code
+        assert (
+            "__device__ inline float3 cgl_float3_mix_scalar"
+            "(float3 x, float3 y, float a)" in cuda_code
+        )
+        assert "float3 v = cgl_float3_mix_scalar(vx, vy, 0.5);" in cuda_code
+        assert (
+            "float3 wrapped = cgl_float3_fract("
+            "cgl_float3_mix_scalar(vx, vy, 0.5));" in cuda_code
+        )
+        assert "lerp(" not in cuda_code
+        assert "float3 wrapped = cgl_fract_float(" not in cuda_code
 
     def test_bool_vector_mix_lowers_to_cuda_select(self):
         source_code = """
