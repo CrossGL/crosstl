@@ -18555,6 +18555,50 @@ def test_round_even_builtin_lowers_to_mojo_helper():
     assert "roundEven(" not in generated_code
 
 
+def test_inverse_sqrt_alias_lowers_to_mojo_rsqrt():
+    code = """
+    shader NumericAliases {
+        compute {
+            void main() {
+                float scalarValue = inverseSqrt(4.0);
+                vec2 vectorValue = inverseSqrt(vec2(4.0, 9.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var scalarValue: Float32 = rsqrt(4.0)" in generated_code
+    assert (
+        "var vectorValue: SIMD[DType.float32, 2] = "
+        "rsqrt(SIMD[DType.float32, 2](4.0, 9.0))" in generated_code
+    )
+    assert "inverseSqrt(" not in generated_code
+
+
+def test_user_defined_inverse_sqrt_function_is_not_lowered_to_rsqrt():
+    code = """
+    shader NumericAliases {
+        compute {
+            float inverseSqrt(float value) {
+                return value + 1.0;
+            }
+
+            void main() {
+                float scalarValue = inverseSqrt(4.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn inverseSqrt(value: Float32) -> Float32:" in generated_code
+    assert "var scalarValue: Float32 = inverseSqrt(4.0)" in generated_code
+    assert "var scalarValue: Float32 = rsqrt(4.0)" not in generated_code
+
+
 def test_user_defined_mix_function_is_not_lowered_to_lerp():
     code = """
     shader main {

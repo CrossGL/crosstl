@@ -19454,6 +19454,43 @@ def test_inverse_sqrt_alias_preserves_vector_shape_and_smoke_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_hlsl_rcp_intrinsic_lowers_to_rust_reciprocal_and_smoke_compile(tmp_path):
+    code = """
+    shader ReciprocalIntrinsicInference {
+        fragment {
+            vec4 main(vec3 value, mat2 transform, float scalar) {
+                let inv_value = rcp(value);
+                let inv_scalar = rcp(scalar);
+                let inv_transform = rcp(transform);
+                return vec4(
+                    inv_value + vec3(
+                        inv_transform.c0.x,
+                        inv_transform.c0.y,
+                        inv_transform.c1.x
+                    ),
+                    inv_scalar
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let inv_value: Vec3<f32> = Vec3::<f32>::new("
+        "(1.0 / value.x), (1.0 / value.y), (1.0 / value.z));"
+    ) in generated_code
+    assert "let inv_scalar: f32 = (1.0 / scalar);" in generated_code
+    assert (
+        "let inv_transform: Mat2<f32> = Mat2::<f32>::new("
+        "(1.0 / transform.c0.x), (1.0 / transform.c0.y), "
+        "(1.0 / transform.c1.x), (1.0 / transform.c1.y));"
+    ) in generated_code
+    assert "rcp(" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_user_defined_inverse_sqrt_function_is_not_lowered_to_rsqrt():
     code = """
     shader UserDefinedInverseSqrt {
@@ -19474,6 +19511,28 @@ def test_user_defined_inverse_sqrt_function_is_not_lowered_to_rsqrt():
     assert "pub fn inverseSqrt(value: f32) -> f32" in generated_code
     assert "return inverseSqrt(value);" in generated_code
     assert "rsqrt(" not in generated_code
+
+
+def test_user_defined_rcp_function_is_not_lowered_to_reciprocal():
+    code = """
+    shader UserDefinedRcp {
+        float rcp(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            float main(float value) {
+                return rcp(value);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn rcp(value: f32) -> f32" in generated_code
+    assert "return rcp(value);" in generated_code
+    assert "1.0 / value" not in generated_code
 
 
 def test_rounding_intrinsics_preserve_float_input_shape_and_smoke_compile(tmp_path):

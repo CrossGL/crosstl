@@ -2640,19 +2640,29 @@ class TestCudaCodeGen:
 
         assert "int scalar = (5 % 2);" in cuda_code
         assert (
+            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
+        )
+        assert "return lhs - rhs * floorf(lhs / rhs);" in cuda_code
+        assert (
+            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
+            in cuda_code
+        )
+        assert "return lhs - rhs * floor(lhs / rhs);" in cuda_code
+        assert (
             "__device__ inline float3 cgl_float3_mod(float3 lhs, float3 rhs)"
             in cuda_code
         )
         assert (
-            "return make_float3(fmodf(lhs.x, rhs.x), fmodf(lhs.y, rhs.y), fmodf(lhs.z, rhs.z));"
-            in cuda_code
+            "return make_float3(cgl_mod_float(lhs.x, rhs.x), "
+            "cgl_mod_float(lhs.y, rhs.y), cgl_mod_float(lhs.z, rhs.z));" in cuda_code
         )
         assert (
             "__device__ inline double2 cgl_double2_mod(double2 lhs, double2 rhs)"
             in cuda_code
         )
         assert (
-            "return make_double2(fmod(lhs.x, rhs.x), fmod(lhs.y, rhs.y));" in cuda_code
+            "return make_double2(cgl_mod_double(lhs.x, rhs.x), "
+            "cgl_mod_double(lhs.y, rhs.y));" in cuda_code
         )
         assert "__device__ inline int3 cgl_int3_mod(int3 lhs, int3 rhs)" in cuda_code
         assert (
@@ -2674,12 +2684,14 @@ class TestCudaCodeGen:
         assert "float3 builtin = fmodf(a, b);" not in cuda_code
         assert "a %= b;" not in cuda_code
         assert "da %= db;" not in cuda_code
+        assert "fmodf(" not in cuda_code
+        assert "fmod(" not in cuda_code
         assert "int3 im = (ia % ib);" not in cuda_code
         assert "ia %= ib;" not in cuda_code
         assert "uint4 um = (ua % ub);" not in cuda_code
         assert "ua %= ub;" not in cuda_code
 
-    def test_scalar_float_modulo_uses_cuda_fmod(self):
+    def test_scalar_float_modulo_uses_cuda_floor_semantics(self, tmp_path):
         source_code = """
         shader TestShader {
             compute {
@@ -2712,11 +2724,20 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "float fm = fmodf(fa, fb);" in cuda_code
-        assert "float flit = fmodf(5.5, 2.0);" in cuda_code
-        assert "fa = fmodf(fa, fb);" in cuda_code
-        assert "double dm = fmod(da, db);" in cuda_code
-        assert "da = fmod(da, db);" in cuda_code
+        assert (
+            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
+        )
+        assert "return lhs - rhs * floorf(lhs / rhs);" in cuda_code
+        assert (
+            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
+            in cuda_code
+        )
+        assert "return lhs - rhs * floor(lhs / rhs);" in cuda_code
+        assert "float fm = cgl_mod_float(fa, fb);" in cuda_code
+        assert "float flit = cgl_mod_float(5.5, 2.0);" in cuda_code
+        assert "fa = cgl_mod_float(fa, fb);" in cuda_code
+        assert "double dm = cgl_mod_double(da, db);" in cuda_code
+        assert "da = cgl_mod_double(da, db);" in cuda_code
         assert "int im = (ia % ib);" in cuda_code
         assert "ia %= ib;" in cuda_code
         assert "uint um = (ua % ub);" in cuda_code
@@ -2725,6 +2746,35 @@ class TestCudaCodeGen:
         assert "double dm = (da % db);" not in cuda_code
         assert "fa %= fb;" not in cuda_code
         assert "da %= db;" not in cuda_code
+        assert "fmodf(" not in cuda_code
+        assert "fmod(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_user_defined_mod_function_is_not_lowered_to_cuda_builtin(self):
+        source_code = """
+        shader TestShader {
+            float mod(float x, float y) {
+                return x + y;
+            }
+
+            compute {
+                void main() {
+                    float value = mod(1.0, 2.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float mod(float x, float y)" in cuda_code
+        assert "return (x + y);" in cuda_code
+        assert "float value = mod(1.0, 2.0);" in cuda_code
+        assert "cgl_mod_float" not in cuda_code
 
     def test_vector_comparisons_emit_cuda_bool_vector_constructors(self):
         source_code = """
@@ -3131,7 +3181,11 @@ class TestCudaCodeGen:
         assert "float a = rsqrtf(x);" in cuda_code
         assert "float b = roundf(x);" in cuda_code
         assert "float c = truncf(x);" in cuda_code
-        assert "float d = fmodf(x, 2.0);" in cuda_code
+        assert (
+            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
+        )
+        assert "return lhs - rhs * floorf(lhs / rhs);" in cuda_code
+        assert "float d = cgl_mod_float(x, 2.0);" in cuda_code
         assert "float e = asinf(x);" in cuda_code
         assert "float f = atan2f(x, 1.0);" in cuda_code
         assert "float g = exp2f(x);" in cuda_code
@@ -3140,6 +3194,7 @@ class TestCudaCodeGen:
         assert "float i = lerp(0.0, 1.0, 0.25);" not in cuda_code
         assert "inversesqrt(" not in cuda_code
         assert "mod(" not in cuda_code
+        assert "fmodf(" not in cuda_code
         assert "mix(" not in cuda_code
         assert "atan2(" not in cuda_code
 

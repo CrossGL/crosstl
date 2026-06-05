@@ -2386,6 +2386,77 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_rsqrt_alias_lowers_to_spirv_inverse_sqrt_extinst(self, tmp_path):
+        source_code = """
+        shader RsqrtAlias {
+            compute {
+                void main() {
+                    float scalar = rsqrt(4.0);
+                    vec2 vector = rsqrt(vec2(4.0, 9.0));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 2",
+            spv_code,
+        )
+        assert vec2_type is not None
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"InverseSqrt %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(vec2_type.group(1))} %\d+ "
+            r"InverseSqrt %\d+",
+            spv_code,
+        )
+        assert "rsqrt" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_user_defined_rsqrt_function_shadows_builtin_alias(self, tmp_path):
+        source_code = """
+        shader UserRsqrt {
+            float rsqrt(float x) {
+                return x + 1.0;
+            }
+
+            compute {
+                void main() {
+                    float value = rsqrt(4.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        rsqrt_function = re.search(
+            r"(?P<function>%\d+) = OpFunction %\d+ None %\d+\n"
+            r"%\d+ = OpFunctionParameter %\d+",
+            spv_code,
+        )
+
+        assert rsqrt_function is not None
+        assert re.search(
+            rf"%\d+ = OpFunctionCall %\d+ "
+            rf"{re.escape(rsqrt_function.group('function'))} %\d+",
+            spv_code,
+        )
+        assert " InverseSqrt " not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_malformed_std450_math_builtins_emit_diagnostics(self, tmp_path):
         source_code = """
         shader MalformedStd450Builtins {

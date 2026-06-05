@@ -1340,6 +1340,7 @@ class MojoCodeGen:
             "tan": "tan",
             "sqrt": "sqrt",
             "inversesqrt": "rsqrt",
+            "inverseSqrt": "rsqrt",
             "pow": "power",
             "roundEven": "round_even",
             "abs": "abs",

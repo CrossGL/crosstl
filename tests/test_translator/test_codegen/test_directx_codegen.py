@@ -5906,6 +5906,30 @@ def test_hlsl_inversesqrt_lowers_to_rsqrt_intrinsic():
     assert "inversesqrt(" not in generated_code
 
 
+def test_hlsl_inverse_sqrt_alias_lowers_to_rsqrt_intrinsic():
+    shader = """
+    shader HlslInverseSqrtAliasLowering {
+        fragment {
+            vec4 main(vec3 normal @ TEXCOORD0) @ gl_FragColor {
+                vec3 invScale = inverseSqrt((normal * normal) + vec3(1.0));
+                float invLength = inverseSqrt(dot(normal, normal));
+                return vec4(invScale * invLength, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # WGSL spells this builtin inverseSqrt; HLSL uses rsqrt for reciprocal
+    # square root and preserves scalar/vector result shape.
+    assert (
+        "float3 invScale = rsqrt(((normal * normal) + " "float3(1.0, 1.0, 1.0)));"
+    ) in generated_code
+    assert "float invLength = rsqrt(dot(normal, normal));" in generated_code
+    assert "inverseSqrt(" not in generated_code
+
+
 def test_hlsl_user_defined_inversesqrt_is_not_lowered():
     shader = """
     shader HlslInverseSqrtShadowing {
@@ -5926,6 +5950,29 @@ def test_hlsl_user_defined_inversesqrt_is_not_lowered():
 
     assert "float inversesqrt(float value)" in generated_code
     assert "float invLength = inversesqrt(lengthSquared);" in generated_code
+    assert "rsqrt(" not in generated_code
+
+
+def test_hlsl_user_defined_inverse_sqrt_alias_is_not_lowered():
+    shader = """
+    shader HlslInverseSqrtAliasShadowing {
+        float inverseSqrt(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(float lengthSquared @ TEXCOORD0) @ gl_FragColor {
+                float invLength = inverseSqrt(lengthSquared);
+                return vec4(invLength, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float inverseSqrt(float value)" in generated_code
+    assert "float invLength = inverseSqrt(lengthSquared);" in generated_code
     assert "rsqrt(" not in generated_code
 
 

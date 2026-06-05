@@ -384,6 +384,7 @@ class RustCodeGen:
             "degrees": "degrees",
             "radians": "radians",
             "sqrt": "sqrt",
+            "rcp": "rcp",
             "inversesqrt": "rsqrt",
             "inverseSqrt": "rsqrt",
             "pow": "pow",
@@ -7288,6 +7289,46 @@ class RustCodeGen:
             target_type,
         )
 
+    def generate_reciprocal_call(self, func_name, args):
+        if func_name != "rcp" or len(args or []) != 1:
+            return None
+
+        arg = args[0]
+        arg_type = self.expression_result_type(arg)
+        scalar_type = self.normalize_scalar_type(arg_type)
+        if scalar_type in {"f32", "f64"}:
+            return f"(1.0 / {self.generate_expression(arg)})"
+
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            component_type = self.normalize_scalar_type(vector_info["component_type"])
+            if component_type not in {"f32", "f64"}:
+                return None
+            temp_bindings = []
+            lanes = self.vector_argument_lane_expressions(
+                arg, vector_info, temp_bindings, component_type
+            )
+            lanes = [f"(1.0 / {lane})" for lane in lanes]
+            return self.generate_constructor_call(
+                self.map_type(arg_type), lanes, temp_bindings
+            )
+
+        matrix_info = self.matrix_type_info(arg_type)
+        if matrix_info is not None:
+            component_type = self.normalize_scalar_type(matrix_info["component_type"])
+            if component_type not in {"f32", "f64"}:
+                return None
+            temp_bindings = []
+            lanes = self.matrix_argument_lane_expressions(
+                arg, matrix_info, temp_bindings, component_type
+            )
+            lanes = [f"(1.0 / {lane})" for lane in lanes]
+            return self.generate_constructor_call(
+                self.map_type(arg_type), lanes, temp_bindings
+            )
+
+        return None
+
     def is_numeric_literal_expression(self, expr):
         if isinstance(expr, (int, float)) and not isinstance(expr, bool):
             return True
@@ -8497,6 +8538,10 @@ class RustCodeGen:
             if func_name == "saturate" and len(args) == 1:
                 arg = self.generate_expression(args[0])
                 return f"clamp({arg}, 0.0, 1.0)"
+
+            reciprocal_call = self.generate_reciprocal_call(func_name, args)
+            if reciprocal_call is not None:
+                return reciprocal_call
 
             scalar_mul_add = self.generate_scalar_mul_add_call(func_name, args)
             if scalar_mul_add is not None:
@@ -11676,6 +11721,7 @@ class RustCodeGen:
             mapped_name
             in {
                 "sqrt",
+                "rcp",
                 "rsqrt",
                 "abs",
                 "floor",

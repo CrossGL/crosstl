@@ -762,6 +762,7 @@ class HLSLCodeGen:
             "dFdx": "ddx",
             "dFdy": "ddy",
             "fract": "frac",
+            "inverseSqrt": "rsqrt",
             "inversesqrt": "rsqrt",
             "mix": "lerp",
         }
@@ -4120,7 +4121,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.hlsl_transpose_result_type(
                     self.expression_result_type(args[0])
                 )
-            if func_name in {"fract", "mod"} and args:
+            if func_name in {"fract", "inverseSqrt", "inversesqrt", "mod"} and args:
                 return self.expression_result_type(args[0])
             if func_name == "mix" and args:
                 return self.expression_result_type(args[0])

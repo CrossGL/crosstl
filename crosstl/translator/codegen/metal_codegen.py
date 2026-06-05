@@ -6110,6 +6110,12 @@ class MetalCodeGen:
                 and func_name not in self.user_function_names
             ):
                 return self.expression_result_type(args[0])
+            if (
+                func_name in {"inverseSqrt", "inversesqrt"}
+                and args
+                and func_name not in self.user_function_names
+            ):
+                return self.expression_result_type(args[0])
             if func_name in {"mix", "clamp", "min", "max"} and args:
                 return self.expression_result_type(args[0])
             if is_resource_size_query_operation(func_name) and args:
@@ -7225,6 +7231,13 @@ class MetalCodeGen:
             ):
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"mix({args})"
+            if (
+                func_name in {"inverseSqrt", "inversesqrt"}
+                and len(expr.args) == 1
+                and func_name not in self.user_function_names
+            ):
+                arg = self.generate_expression(expr.args[0])
+                return f"rsqrt({arg})"
             if func_name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"{func_name}({args})"

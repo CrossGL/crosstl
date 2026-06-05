@@ -958,6 +958,35 @@ class TestHipCodeGen:
         assert "float inv = rsqrt(x);" not in hip_code
         assert "double invD = rsqrt(d);" not in hip_code
 
+    def test_inverse_sqrt_alias_lowers_to_hip_inverse_sqrt_math(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float x = 4.0;
+                    float inv = inverseSqrt(x);
+                    vec3 v = inverseSqrt(vec3(4.0, 9.0, 16.0));
+                    double d = 4.0;
+                    double invD = inverseSqrt(d);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float inv = rsqrtf(x);" in hip_code
+        assert (
+            "float3 v = cgl_float3_inversesqrt(make_float3(4.0, 9.0, 16.0));"
+            in hip_code
+        )
+        assert "double invD = (1.0 / sqrt(d));" in hip_code
+        assert "inverseSqrt(" not in hip_code
+
     def test_user_defined_rsqrt_function_is_not_lowered_to_hip_builtin(self):
         source_code = """
         shader TestShader {
@@ -981,6 +1010,31 @@ class TestHipCodeGen:
 
         assert "__device__ float rsqrt(float x)" in hip_code
         assert "float inv = rsqrt(4.0);" in hip_code
+        assert "rsqrtf(4.0)" not in hip_code
+
+    def test_user_defined_inverse_sqrt_function_is_not_lowered_to_hip_builtin(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                float inverseSqrt(float x) {
+                    return x + 1.0;
+                }
+
+                void main() {
+                    float inv = inverseSqrt(4.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__device__ float inverseSqrt(float x)" in hip_code
+        assert "float inv = inverseSqrt(4.0);" in hip_code
         assert "rsqrtf(4.0)" not in hip_code
 
     def test_type_conversion(self):
@@ -1010,6 +1064,7 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
 
         assert codegen.function_map.get("sqrt") == "sqrtf"
+        assert codegen.function_map.get("inverseSqrt") == "rsqrtf"
         assert codegen.function_map.get("rsqrt") == "rsqrtf"
         assert codegen.function_map.get("pow") == "powf"
         assert codegen.function_map.get("sin") == "sinf"

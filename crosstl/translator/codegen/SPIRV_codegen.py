@@ -8155,6 +8155,7 @@ class VulkanSPIRVCodeGen:
             "frac": "fract",
             "inverseSqrt": "inversesqrt",
             "lerp": "mix",
+            "rsqrt": "inversesqrt",
         }.get(function_name, function_name)
         synchronization_call = self.call_synchronization_function(function_name, args)
         if synchronization_call is not None:

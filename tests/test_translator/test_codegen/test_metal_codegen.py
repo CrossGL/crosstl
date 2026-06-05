@@ -261,6 +261,80 @@ def test_metal_hlsl_frac_and_lerp_aliases_compile_when_toolchain_is_available():
     compile_with_metal_if_available(generated_code)
 
 
+def test_metal_inverse_sqrt_aliases_lower_to_msl_rsqrt():
+    shader = """
+    shader MetalInverseSqrtAliases {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float scalar = inverseSqrt(float(tid.x) + 1.0);
+                vec3 vectorValue = inversesqrt(vec3(1.0, 4.0, 9.0));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float scalar = rsqrt(float(tid.x) + 1.0);" in generated_code
+    assert "float3 vectorValue = rsqrt(float3(1.0, 4.0, 9.0));" in generated_code
+    assert "inverseSqrt(" not in generated_code
+    assert "inversesqrt(" not in generated_code
+
+
+def test_metal_user_defined_inverse_sqrt_aliases_are_preserved():
+    shader = """
+    shader MetalUserInverseSqrtAliases {
+        compute {
+            float inverseSqrt(float value) {
+                return value + 1.0;
+            }
+
+            float inversesqrt(float value) {
+                return value + 2.0;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float scalar = inverseSqrt(float(tid.x) + 1.0);
+                float lower = inversesqrt(float(tid.y) + 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float inverseSqrt(float value)" in generated_code
+    assert "float inversesqrt(float value)" in generated_code
+    assert "float scalar = inverseSqrt(float(tid.x) + 1.0);" in generated_code
+    assert "float lower = inversesqrt(float(tid.y) + 1.0);" in generated_code
+    assert "rsqrt(" not in generated_code
+
+
+def test_metal_inverse_sqrt_aliases_compile_when_toolchain_is_available():
+    shader = """
+    shader MetalInverseSqrtAliasCompile {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float scalar = inverseSqrt(float(tid.x) + 1.0);
+                vec3 vectorValue = inversesqrt(vec3(1.0, 4.0, 9.0));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "inverseSqrt(" not in generated_code
+    assert "inversesqrt(" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
     shader = """
     shader SynchronizationBuiltins {
