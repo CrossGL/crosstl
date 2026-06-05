@@ -1036,6 +1036,13 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["summary"]["diagnosticsByCode"] == {}
     assert payload["summary"]["missingCapabilityCounts"] == {}
     assert payload["summary"]["unitsBySourceBackend"] == {"cgl": 1}
+    assert payload["summary"]["artifactsBySourceBackend"] == {
+        "cgl": {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+    }
     assert payload["summary"]["artifactsByTarget"] == {
         "opengl": {
             "artifactCount": 1,
@@ -4297,6 +4304,13 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     "diagnosticsByCode": {},
                     "missingCapabilityCounts": {},
                     "unitsBySourceBackend": {"metal": 1},
+                    "artifactsBySourceBackend": {
+                        "unknown": {
+                            "artifactCount": 1,
+                            "translatedCount": 0,
+                            "failedCount": 1,
+                        }
+                    },
                     "artifactsByTarget": {
                         "metal": {
                             "artifactCount": 1,
@@ -4371,6 +4385,9 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
         diagnostic["message"]
     )
     assert "summary.unitsBySourceBackend must match units" in diagnostic["message"]
+    assert "summary.artifactsBySourceBackend must match artifacts" in (
+        diagnostic["message"]
+    )
     assert "summary.artifactsByTarget must match artifacts" in diagnostic["message"]
     assert "summary.sourceMapCount must match artifact source maps" in (
         diagnostic["message"]
@@ -6064,6 +6081,10 @@ def test_project_cli_inspect_report_text_includes_report_rollups(tmp_path):
 
     assert result.returncode == 0
     assert "Units by source backend: cgl=1" in result.stdout
+    assert (
+        "Artifacts by source backend: cgl=2 artifacts (2 translated, 0 failed)"
+        in result.stdout
+    )
     assert (
         "Artifacts by target: cgl=1 artifact (1 translated, 0 failed), "
         "opengl=1 artifact (1 translated, 0 failed)"

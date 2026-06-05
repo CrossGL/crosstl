@@ -478,6 +478,12 @@ def _format_project_report_inspection(payload):
     )
     if units_by_source_backend:
         lines.append(units_by_source_backend)
+    artifacts_by_source_backend = _format_artifact_rollup(
+        "Artifacts by source backend",
+        summary.get("artifactsBySourceBackend"),
+    )
+    if artifacts_by_source_backend:
+        lines.append(artifacts_by_source_backend)
     artifacts_by_target = _format_artifact_rollup(
         "Artifacts by target",
         summary.get("artifactsByTarget"),

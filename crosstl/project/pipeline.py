@@ -358,6 +358,28 @@ def _artifact_counts_by_target(
     return {target: counts[target] for target in sorted(counts)}
 
 
+def _artifact_counts_by_source_backend(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact in artifacts:
+        source_backend = str(artifact.get("sourceBackend", "unknown"))
+        row = counts.setdefault(
+            source_backend,
+            {
+                "artifactCount": 0,
+                "translatedCount": 0,
+                "failedCount": 0,
+            },
+        )
+        row["artifactCount"] += 1
+        if artifact.get("status") == "translated":
+            row["translatedCount"] += 1
+        elif artifact.get("status") == "failed":
+            row["failedCount"] += 1
+    return {source_backend: counts[source_backend] for source_backend in sorted(counts)}
+
+
 def _source_map_counts(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     source_map_count = sum(1 for artifact in artifacts if artifact.get("sourceMap"))
     return {
@@ -1086,6 +1108,9 @@ class ProjectPortabilityReport:
                 "diagnosticsByCode": _diagnostic_counts_by_code(self.diagnostics),
                 "missingCapabilityCounts": _missing_capability_counts(self.diagnostics),
                 "unitsBySourceBackend": _unit_counts_by_source_backend(self.units),
+                "artifactsBySourceBackend": _artifact_counts_by_source_backend(
+                    self.artifacts
+                ),
                 "artifactsByTarget": _artifact_counts_by_target(self.artifacts),
                 **source_map_counts,
             },
@@ -3737,6 +3762,14 @@ def _summary_contract_reasons(
                 summary.get("failedCount"),
                 failed_count,
                 "failed artifacts",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.artifactsBySourceBackend",
+                summary.get("artifactsBySourceBackend"),
+                _artifact_counts_by_source_backend(artifact_records),
+                "artifacts",
             )
         )
         reasons.extend(
