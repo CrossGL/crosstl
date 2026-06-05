@@ -154,6 +154,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "target/variant directory containment" in backend_support["notes"]
         assert "artifact target suffix consistency" in backend_support["notes"]
+        assert "failed artifact error metadata" in backend_support["notes"]
         assert "required and canonical artifact provenance" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -170,6 +171,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_path_suffix_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_failed_artifacts_without_error"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

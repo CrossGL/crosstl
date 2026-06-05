@@ -196,7 +196,8 @@ Project reports are JSON documents with:
   Artifact provenance records the
   ``single-file-translate`` pipeline and uses ``crossgl`` as the intermediate
   marker only when both source and target backends route through the CrossGL
-  bridge. Invalid project output directories are recorded as failed artifacts
+  bridge. Full reports require failed artifacts to carry an actionable error
+  string. Invalid project output directories are recorded as failed artifacts
   without writing files.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
@@ -213,10 +214,11 @@ Project reports are JSON documents with:
   checks, source and
   generated hash checks, duplicate artifact identity checks, per-artifact
   source/generated hash status fields, aggregate validation artifact and
-  hash-status summary counts, required artifact provenance and provenance value
-  checks, source-map record shape, span consistency, and anchor consistency
-  checks, external corpus record, per-entry artifact count, and summary checks,
-  summary consistency checks, migration action shape and target declaration checks,
+  hash-status summary counts, failed artifact error metadata checks, required
+  artifact provenance and provenance value checks, source-map record shape, span
+  consistency, and anchor consistency checks, external corpus record, per-entry
+  artifact count, and summary checks, summary consistency checks, migration
+  action shape and target declaration checks,
   preserved diagnostic shape, span consistency, and target declaration checks,
   validation toolchain status consistency checks, validation artifact and
   toolchain run record shape and duplicate identity checks, validation artifact

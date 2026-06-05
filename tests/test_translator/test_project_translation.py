@@ -3329,6 +3329,31 @@ def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
     assert "artifacts[0].status must be translated or failed" in (diagnostic["message"])
 
 
+def test_validate_project_report_rejects_failed_artifacts_without_error(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    artifact["status"] = "failed"
+    artifact.pop("error", None)
+    payload["summary"]["translatedCount"] = 0
+    payload["summary"]["failedCount"] = 1
+    payload["summary"]["artifactsByTarget"]["cgl"]["translatedCount"] = 0
+    payload["summary"]["artifactsByTarget"]["cgl"]["failedCount"] = 1
+    report_path = repo / "out" / "missing-failed-artifact-error-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].error must be a string" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_artifacts_with_escaped_source_paths(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
