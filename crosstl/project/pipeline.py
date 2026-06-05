@@ -2797,6 +2797,7 @@ def _validation_artifact_contract_reasons(
     declared_artifacts_by_identity: (
         Mapping[ArtifactIdentity, DeclaredArtifact] | None
     ) = None,
+    require_hash_statuses: bool = False,
 ) -> list[str]:
     prefix = f"validation.artifacts[{index}]"
     if not isinstance(artifact, Mapping):
@@ -2840,6 +2841,11 @@ def _validation_artifact_contract_reasons(
     if identity is not None and declared_artifacts_by_identity is not None:
         referenced_artifact = declared_artifacts_by_identity.get(identity)
     source_hash_status = artifact.get("sourceHashStatus")
+    if require_hash_statuses and "sourceHashStatus" not in artifact:
+        reasons.append(
+            f"{prefix}.sourceHashStatus must be recorded "
+            "when validation.summary is present"
+        )
     if (
         "sourceHashStatus" in artifact
         and source_hash_status not in SOURCE_HASH_VALIDATION_STATUSES
@@ -2849,6 +2855,11 @@ def _validation_artifact_contract_reasons(
             f"{', '.join(sorted(SOURCE_HASH_VALIDATION_STATUSES))}"
         )
     generated_hash_status = artifact.get("generatedHashStatus")
+    if require_hash_statuses and "generatedHashStatus" not in artifact:
+        reasons.append(
+            f"{prefix}.generatedHashStatus must be recorded "
+            "when validation.summary is present"
+        )
     if (
         "generatedHashStatus" in artifact
         and generated_hash_status not in GENERATED_HASH_VALIDATION_STATUSES
@@ -3039,6 +3050,7 @@ def _validation_contract_reasons(
         reasons.extend(_duplicate_toolchain_target_contract_reasons(toolchains))
 
     artifact_checks = validation.get("artifacts")
+    summarized_validation = "summary" in validation
     if not isinstance(artifact_checks, list):
         reasons.append("validation.artifacts must be a list")
     else:
@@ -3051,6 +3063,7 @@ def _validation_contract_reasons(
                     declared_variants=declared_variants,
                     declared_artifact_identities=declared_artifact_identities,
                     declared_artifacts_by_identity=declared_artifacts_by_identity,
+                    require_hash_statuses=summarized_validation,
                 )
             )
         reasons.extend(

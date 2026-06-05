@@ -219,9 +219,10 @@ Project reports are JSON documents with:
   source artifact checks, project metadata, target normalization, and config
   count checks, unit and skipped record shape checks, artifact record shape
   checks, source and
-  generated hash checks, duplicate artifact identity checks, per-artifact
-  source/generated hash status fields, aggregate validation artifact and
-  hash-status summary counts, full-report source hash checks, failed artifact
+  generated hash checks, duplicate artifact identity checks, required
+  source/generated hash status fields for summarized validation artifacts,
+  aggregate validation artifact and hash-status summary counts, full-report
+  source hash checks, failed artifact
   error metadata checks, translated artifact error metadata rejection, required
   artifact provenance and provenance value checks, failed artifact generated
   metadata rejection, required translated artifact source maps, source-map

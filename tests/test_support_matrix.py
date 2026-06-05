@@ -253,6 +253,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "single file-level source-map mapping" in backend_support["notes"]
         assert "repository-relative file paths" in backend_support["notes"]
+        assert "required summarized validation artifact hash status fields" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_altered_migration_non_goals"
@@ -291,6 +294,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_diagnostic_locations_outside_project"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_summarized_validation_without_"
+            "hash_statuses"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

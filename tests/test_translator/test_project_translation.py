@@ -2296,6 +2296,42 @@ def test_validate_project_report_rejects_inconsistent_validation_artifact_status
     )
 
 
+def test_validate_project_report_rejects_summarized_validation_without_hash_statuses(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out", validate=True)
+    payload = report.to_json()
+    validation_artifact = payload["validation"]["artifacts"][0]
+    validation_artifact.pop("sourceHashStatus")
+    validation_artifact.pop("generatedHashStatus")
+    payload["validation"]["summary"][
+        "sourceHashStatusCounts"
+    ] = _source_hash_status_counts()
+    payload["validation"]["summary"][
+        "generatedHashStatusCounts"
+    ] = _generated_hash_status_counts()
+    report_path = repo / "out" / "validation-artifact-missing-hash-status-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.artifacts[0].sourceHashStatus must be recorded "
+        "when validation.summary is present"
+    ) in diagnostic["message"]
+    assert (
+        "validation.artifacts[0].generatedHashStatus must be recorded "
+        "when validation.summary is present"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_validation_ok_for_failed_report_artifact(
     tmp_path,
 ):
