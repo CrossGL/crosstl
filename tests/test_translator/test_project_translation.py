@@ -1332,6 +1332,17 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
         "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
     }
+    assert payload["artifactStatusByTarget"] == {
+        "cgl": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
+    }
+    assert payload["sourceHashStatusCounts"] == _source_hash_status_counts(ok=1)
+    assert payload["generatedHashStatusCounts"] == _generated_hash_status_counts(ok=1)
+    assert payload["toolchainStatusCounts"] == {
+        "available": 0,
+        "not-configured": 1,
+        "unavailable": 0,
+    }
+    assert payload["toolchainRunStatusCounts"] == {"failed": 0, "ok": 0}
 
 
 def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
@@ -5017,6 +5028,12 @@ def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatc
     assert payload["validation"]["toolchainRuns"][0]["stderr"] == (
         "shader validation failed"
     )
+    assert payload["toolchainStatusCounts"] == {
+        "available": 1,
+        "not-configured": 0,
+        "unavailable": 0,
+    }
+    assert payload["toolchainRunStatusCounts"] == {"failed": 1, "ok": 0}
 
 
 def test_validate_project_report_records_toolchain_timeouts(tmp_path, monkeypatch):
@@ -5055,6 +5072,7 @@ def test_validate_project_report_records_toolchain_timeouts(tmp_path, monkeypatc
         f"Validation toolchain timed out after "
         f"{project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
     )
+    assert payload["toolchainRunStatusCounts"] == {"failed": 1, "ok": 0}
 
 
 def test_inspect_project_report_summarizes_toolchain_run_failures(
@@ -5221,6 +5239,15 @@ def test_validate_project_report_records_failed_artifacts(tmp_path):
             **{"not-applicable": 1}
         ),
     }
+    assert payload["artifactStatusByTarget"] == {
+        "not-a-backend": {"artifactCount": 1, "okCount": 0, "failedCount": 1}
+    }
+    assert payload["sourceHashStatusCounts"] == _source_hash_status_counts(
+        **{"not-recorded": 1}
+    )
+    assert payload["generatedHashStatusCounts"] == _generated_hash_status_counts(
+        **{"not-applicable": 1}
+    )
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.failed-artifact"
     assert diagnostic["location"]["file"] == "simple.cgl"
@@ -5906,6 +5933,15 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     assert payload["success"] is False
     assert payload["diagnosticsByCode"] == {"project.validate.failed-artifact": 1}
     assert payload["missingCapabilityCounts"] == {"batch.translation": 1}
+    assert payload["artifactStatusByTarget"] == {
+        "not-a-backend": {"artifactCount": 1, "okCount": 0, "failedCount": 1}
+    }
+    assert payload["sourceHashStatusCounts"] == _source_hash_status_counts(
+        **{"not-recorded": 1}
+    )
+    assert payload["generatedHashStatusCounts"] == _generated_hash_status_counts(
+        **{"not-applicable": 1}
+    )
     assert payload["diagnostics"][0]["code"] == "project.validate.failed-artifact"
 
 

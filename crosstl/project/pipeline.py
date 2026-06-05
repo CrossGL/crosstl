@@ -2046,6 +2046,9 @@ def inspect_project_report(
         if isinstance(validation_result, Mapping)
         else []
     )
+    artifact_status_by_target = validation_report.get("artifactStatusByTarget")
+    toolchain_status_counts = validation_report.get("toolchainStatusCounts")
+    toolchain_run_status_counts = validation_report.get("toolchainRunStatusCounts")
     payload: dict[str, Any] = {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": REPORT_INSPECTION_KIND,
@@ -2067,23 +2070,26 @@ def inspect_project_report(
             "missingCapabilityCounts": dict(
                 validation_report.get("missingCapabilityCounts", {})
             ),
-            "artifactStatusByTarget": _validation_artifact_status_by_target(
-                validation_artifacts
-                if isinstance(validation_artifacts, Sequence)
-                and not isinstance(validation_artifacts, (str, bytes, bytearray))
-                else []
+            "artifactStatusByTarget": (
+                dict(artifact_status_by_target)
+                if isinstance(artifact_status_by_target, Mapping)
+                else _validation_artifact_status_by_target(
+                    _record_sequence(validation_artifacts)
+                )
             ),
-            "toolchainStatusCounts": _validation_toolchain_status_counts(
-                validation_toolchains
-                if isinstance(validation_toolchains, Sequence)
-                and not isinstance(validation_toolchains, (str, bytes, bytearray))
-                else []
+            "toolchainStatusCounts": (
+                dict(toolchain_status_counts)
+                if isinstance(toolchain_status_counts, Mapping)
+                else _validation_toolchain_status_counts(
+                    _record_sequence(validation_toolchains)
+                )
             ),
-            "toolchainRunStatusCounts": _validation_toolchain_run_status_counts(
-                validation_toolchain_runs
-                if isinstance(validation_toolchain_runs, Sequence)
-                and not isinstance(validation_toolchain_runs, (str, bytes, bytearray))
-                else []
+            "toolchainRunStatusCounts": (
+                dict(toolchain_run_status_counts)
+                if isinstance(toolchain_run_status_counts, Mapping)
+                else _validation_toolchain_run_status_counts(
+                    _record_sequence(validation_toolchain_runs)
+                )
             ),
             "result": (
                 dict(validation_result)
@@ -2331,11 +2337,26 @@ def _toolchain_output_text(output: Any) -> str:
     return str(output)
 
 
+def _record_sequence(value: Any) -> Sequence[Any]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return value
+    return ()
+
+
 def _validation_report_payload(
     path: Path,
     diagnostics: Sequence[Mapping[str, Any]],
     validation: Mapping[str, Any],
 ) -> dict[str, Any]:
+    validation_artifacts = _record_sequence(validation.get("artifacts"))
+    validation_toolchains = _record_sequence(validation.get("toolchains"))
+    validation_toolchain_runs = _record_sequence(validation.get("toolchainRuns"))
+    validation_summary = validation.get("summary")
+    validation_summary = (
+        dict(validation_summary) if isinstance(validation_summary, Mapping) else {}
+    )
+    source_hash_status_counts = validation_summary.get("sourceHashStatusCounts")
+    generated_hash_status_counts = validation_summary.get("generatedHashStatusCounts")
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": "crosstl-project-validation-report",
@@ -2348,6 +2369,25 @@ def _validation_report_payload(
         "diagnosticsByCode": _payload_diagnostic_counts_by_code(diagnostics) or {},
         "missingCapabilityCounts": (
             _payload_missing_capability_counts(diagnostics) or {}
+        ),
+        "artifactStatusByTarget": _validation_artifact_status_by_target(
+            validation_artifacts
+        ),
+        "toolchainStatusCounts": _validation_toolchain_status_counts(
+            validation_toolchains
+        ),
+        "toolchainRunStatusCounts": _validation_toolchain_run_status_counts(
+            validation_toolchain_runs
+        ),
+        "sourceHashStatusCounts": (
+            dict(source_hash_status_counts)
+            if isinstance(source_hash_status_counts, Mapping)
+            else {}
+        ),
+        "generatedHashStatusCounts": (
+            dict(generated_hash_status_counts)
+            if isinstance(generated_hash_status_counts, Mapping)
+            else {}
         ),
         "diagnostics": list(diagnostics),
         "validation": dict(validation),

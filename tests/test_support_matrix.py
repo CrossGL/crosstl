@@ -328,6 +328,8 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "validation diagnostic-code and missing-capability rollups" in (
             backend_support["notes"]
         )
+        assert "direct validation report artifact target" in backend_support["notes"]
+        assert "toolchain run status" in backend_support["notes"]
         assert "required summarized validation toolchain target coverage" in (
             backend_support["notes"]
         )

@@ -102,7 +102,8 @@ Toolchain smoke checks only run for translated artifacts that still exist inside
 the repository. Each smoke check is bounded by a short subprocess timeout, and
 timeouts are reported as failed toolchain runs. Validation reports include
 severity, diagnostic-code, and missing-capability rollups for generated and
-preserved diagnostics.
+preserved diagnostics, plus artifact target, hash-status, toolchain status,
+and toolchain-run status rollups for validation results.
 
 Inspect an existing report as a concise JSON or text summary:
 
@@ -252,7 +253,9 @@ Project reports are JSON documents with:
   checks, source and
   generated hash checks, duplicate artifact identity checks, required
   source/generated hash status fields for summarized validation artifacts,
-  aggregate validation artifact and hash-status summary counts, full-report
+  aggregate validation artifact and hash-status summary counts, direct
+  validation report artifact target, hash-status, toolchain status, and
+  toolchain-run status rollups, full-report
   source hash checks, failed artifact
   error metadata checks, translated artifact error metadata rejection, required
   artifact provenance and provenance value checks, failed artifact generated
