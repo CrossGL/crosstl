@@ -200,8 +200,8 @@ Project reports are JSON documents with:
   and generator name/pipeline/package-version fields.
 - ``project`` metadata: root, config path, source roots, include/exclude
   patterns, targets, output directory, source override map, include
-  directories, define and variant maps, and source override/define/variant
-  counts.
+  directories, define and variant maps, and counts for source overrides,
+  include directories, defines, and variants.
 - ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
   source backend, target backend, diagnostic code (``diagnosticsByCode``), and
   missing capability (``missingCapabilityCounts``).

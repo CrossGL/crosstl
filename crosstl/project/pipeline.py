@@ -1065,6 +1065,7 @@ class ProjectPortabilityReport:
                 "sourceOverrides": dict(sorted(self.config.source_overrides.items())),
                 "sourceOverrideCount": len(self.config.source_overrides),
                 "includeDirs": list(self.config.include_dirs),
+                "includeDirCount": len(self.config.include_dirs),
                 "defines": dict(sorted(self.config.defines.items())),
                 "defineCount": len(self.config.defines),
                 "variants": {
@@ -2058,6 +2059,7 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
     }
     for field_name in (
         "sourceOverrideCount",
+        "includeDirCount",
         "defineCount",
         "variantCount",
         "externalCorpusManifest",
@@ -2808,6 +2810,19 @@ def _project_metadata_contract_reasons(
                     f"project.{field_name}", project.get(field_name)
                 )
             )
+
+    include_dirs = project.get("includeDirs")
+    include_dirs_is_list = isinstance(include_dirs, list) and all(
+        isinstance(item, str) for item in include_dirs
+    )
+    if _optional_project_field(
+        project, "includeDirCount", required=require_full_metadata
+    ):
+        include_dir_count = project.get("includeDirCount")
+        if not _is_non_negative_int(include_dir_count):
+            reasons.append("project.includeDirCount must be a non-negative integer")
+        elif include_dirs_is_list and include_dir_count != len(include_dirs):
+            reasons.append("project.includeDirCount must match project.includeDirs")
 
     defines = project.get("defines")
     defines_is_mapping = isinstance(defines, Mapping)

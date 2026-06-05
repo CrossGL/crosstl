@@ -1043,6 +1043,7 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
             "failedCount": 0,
         }
     }
+    assert payload["project"]["includeDirCount"] == 0
     assert payload["artifacts"][0]["source"] == "shaders/graphics/simple.cgl"
     assert payload["artifacts"][0]["target"] == "opengl"
     assert payload["artifacts"][0]["path"] == (
@@ -1685,6 +1686,7 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
                     "targets": ["opengl"],
                     "outputDir": "out",
                     "includeDirs": "include",
+                    "includeDirCount": "1",
                     "defines": {"USE_FAST_PATH": 1},
                     "defineCount": 2,
                     "sourceOverrides": {"gpu/*.shader": 1},
@@ -1713,6 +1715,9 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
         diagnostic["message"]
     )
     assert "project.includeDirs must be a list of strings" in diagnostic["message"]
+    assert "project.includeDirCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
     assert "project.defines values must be strings" in diagnostic["message"]
     assert "project.defineCount must match project.defines" in diagnostic["message"]
     assert "project.sourceOverrides values must be strings" in (diagnostic["message"])
@@ -1724,6 +1729,48 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     assert "project.variants.debug must be an object" in diagnostic["message"]
     assert "project.variants. values must be strings" in diagnostic["message"]
     assert "project.variantCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_include_dir_count_mismatches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-include-dir-count-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "sourceRoots": ["."],
+                    "includePatterns": [],
+                    "excludePatterns": [],
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "sourceOverrides": {},
+                    "sourceOverrideCount": 0,
+                    "includeDirs": ["includes", "generated/includes"],
+                    "includeDirCount": 1,
+                    "defines": {},
+                    "defineCount": 0,
+                    "variants": {},
+                    "variantCount": 0,
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.includeDirCount must match project.includeDirs" in (
         diagnostic["message"]
     )
 
@@ -5956,7 +6003,10 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
     )
 
     assert result.returncode == 0
-    assert "Project config: sourceOverrides=1, defines=1, variants=2" in result.stdout
+    assert (
+        "Project config: sourceOverrides=1, includeDirs=0, defines=1, variants=2"
+        in result.stdout
+    )
     assert "MODE" not in result.stdout
 
 
