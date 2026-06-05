@@ -188,11 +188,12 @@ Project reports are JSON documents with:
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, and source overrides.
 - ``artifacts``: attempted outputs with source path, source backend, target,
-  optional variant name, target/variant-scoped output path, status, source
-  hash, generated artifact hash, pipeline provenance, and file-granularity
-  source-map anchors for successful translations. Full reports require artifact
-  source paths to match declared translation units and artifact source backend
-  names to match those units. Artifact provenance records the
+  optional variant name, target/variant-scoped output path with the target
+  backend suffix, status, source hash, generated artifact hash, pipeline
+  provenance, and file-granularity source-map anchors for successful
+  translations. Full reports require artifact source paths to match declared
+  translation units and artifact source backend names to match those units.
+  Artifact provenance records the
   ``single-file-translate`` pipeline and uses ``crossgl`` as the intermediate
   marker only when both source and target backends route through the CrossGL
   bridge. Invalid project output directories are recorded as failed artifacts

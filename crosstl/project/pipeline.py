@@ -1291,16 +1291,19 @@ def _artifact_path(
     target: str,
     variant: str | None = None,
 ) -> Path:
-    extension = (
-        ".cgl"
-        if target in {"cgl", "crossgl"}
-        else get_backend_extension(target) or ".out"
-    )
+    extension = _artifact_target_extension(target)
     relative = Path(unit.relative_path)
     base = config.output_path / target
     if variant is not None:
         base = base / _variant_output_segment(variant)
     return base / relative.with_suffix(extension)
+
+
+def _artifact_target_extension(target: str) -> str:
+    normalized_target = _normalized_targets([target])[0]
+    if normalized_target in CROSSL_TARGETS:
+        return ".cgl"
+    return get_backend_extension(normalized_target) or ".out"
 
 
 def _variant_jobs(
@@ -3805,6 +3808,11 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     reasons.append(
                         f"artifacts[{index}].path must be under "
                         "project.outputDir target/variant directory"
+                    )
+                elif Path(path).suffix.lower() != _artifact_target_extension(target):
+                    reasons.append(
+                        f"artifacts[{index}].path suffix must match "
+                        f"artifacts[{index}].target"
                     )
             source_backend = artifact.get("sourceBackend")
             if has_summary or "sourceBackend" in artifact:

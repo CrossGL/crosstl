@@ -3438,6 +3438,40 @@ def test_validate_project_report_rejects_artifact_paths_outside_target_dir(
     assert expected in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_artifact_path_suffix_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+    misplaced_output = repo / "out" / "opengl" / "simple.hlsl"
+    misplaced_output.write_text(
+        (repo / "out" / "opengl" / "simple.glsl").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    payload["artifacts"][0]["path"] = "out/opengl/simple.hlsl"
+    payload["artifacts"][0]["generatedHash"] = project_pipeline._source_hash(
+        misplaced_output
+    )
+    source_map = payload["artifacts"][0]["sourceMap"]
+    source_map["generated"]["file"] = "out/opengl/simple.hlsl"
+    source_map["mappings"][0]["generated"]["file"] = "out/opengl/simple.hlsl"
+    report_path = repo / "out" / "artifact-suffix-mismatch-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].path suffix must match artifacts[0].target" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_artifacts_with_escaped_output_paths(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
