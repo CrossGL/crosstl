@@ -177,6 +177,23 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         ) in backend_support["evidence"]
 
 
+def test_project_source_provenance_documents_source_map_mapping_checks():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.source_provenance"]
+
+    for backend_support in feature["support"].values():
+        assert "non-empty source-map mappings" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_empty_source_map_mappings"
+        ) in backend_support["evidence"]
+
+
 def test_project_validation_hooks_document_migration_contract_checks():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(
@@ -196,6 +213,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "failed artifact error metadata" in backend_support["notes"]
         assert "required and canonical artifact provenance" in backend_support["notes"]
         assert "required translated artifact source maps" in backend_support["notes"]
+        assert "non-empty source-map mappings" in backend_support["notes"]
         assert "repository-relative file paths" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -229,6 +247,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_current_translated_artifacts_"
             "without_source_maps"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_empty_source_map_mappings"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

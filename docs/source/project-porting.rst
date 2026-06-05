@@ -219,10 +219,10 @@ Project reports are JSON documents with:
   source/generated hash status fields, aggregate validation artifact and
   hash-status summary counts, failed artifact error metadata checks, required
   artifact provenance and provenance value checks, required translated artifact
-  source maps, source-map record shape, span consistency, and anchor consistency
-  checks, external corpus record, per-entry artifact count, and summary checks,
-  summary consistency checks, migration action shape and target declaration
-  checks,
+  source maps, source-map record shape, non-empty mapping list, span
+  consistency, and anchor consistency checks, external corpus record, per-entry
+  artifact count, and summary checks, summary consistency checks, migration
+  action shape and target declaration checks,
   preserved diagnostic shape, repository-relative file path, span consistency,
   and target declaration checks, validation toolchain status consistency
   checks, validation artifact and toolchain run record shape and duplicate

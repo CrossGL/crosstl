@@ -3677,6 +3677,25 @@ def test_validate_project_report_rejects_malformed_source_maps(tmp_path):
     assert "artifacts[0].sourceMap.mappings must be a list" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_empty_source_map_mappings(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["artifacts"][0]["sourceMap"]["mappings"] = []
+    report_path = repo / "out" / "empty-source-map-mappings-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].sourceMap.mappings must not be empty" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_inconsistent_source_map_anchors(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
