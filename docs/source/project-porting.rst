@@ -122,11 +122,11 @@ project counts, project configuration path and counts, failed artifacts,
 diagnostic code and missing-capability rollups, validation diagnostic-code,
 missing-capability, and artifact target rollups, report source-backend,
 file-extension, and artifact target rollups, source-map count, granularity,
-target, and source-backend rollups, diagnostics, configurable diagnostic and
-failed-artifact truncation counts, external corpus rollups, and migration
-actions. ``--format sarif`` emits the inspection diagnostics as SARIF for
-code-scanning workflows. Inspection exits nonzero when validation finds report
-errors.
+target, and source-backend rollups, include-directory status counts,
+diagnostics, configurable diagnostic and failed-artifact truncation counts,
+external corpus rollups, and migration actions. ``--format sarif`` emits the
+inspection diagnostics as SARIF for code-scanning workflows. Inspection exits
+nonzero when validation finds report errors.
 
 Configuration
 -------------
@@ -170,13 +170,17 @@ override-only files do not require broad include globs. CLI source overrides are
 merged with this configuration before scan or translation. Invalid override
 backend names are reported as configuration diagnostics.
 Include directories, defines, and named
-variants are recorded in project reports. Missing include directories are
-reported as configuration diagnostics. Include directories that resolve outside
-the repository are reported as non-blocking configuration diagnostics so reports
-retain portability and provenance context. Existing include directories that
-remain inside the repository, plus configured defines, are passed to source
-frontends that expose preprocessor options. CLI include and define overrides are
-merged with this configuration before scan or translation.
+variants are recorded in project reports. Project reports include
+order-preserving include-directory status records and status counts so missing,
+non-directory, outside-project, and frontend-visible active include directories
+can be triaged without re-running discovery. Missing include directories,
+include entries that resolve to files or other non-directory paths, and include
+directories that resolve outside the repository are reported as non-blocking
+configuration diagnostics so reports retain portability and provenance context.
+Existing include directories that remain inside the repository, plus configured
+defines, are passed to source frontends that expose preprocessor options. CLI
+include and define overrides are merged with this configuration before scan or
+translation.
 ``output_dir`` must resolve inside the repository root; paths that escape the
 repository are reported as configuration diagnostics and artifacts are not
 written. When named variants are configured, project translation emits one
@@ -214,9 +218,9 @@ Project reports are JSON documents with:
   and generator name/pipeline/package-version fields.
 - ``project`` metadata: root, config path, source roots, include/exclude
   patterns, targets, output directory, source override map, include
-  directories, define and variant maps, and counts for source roots,
-  include patterns, exclude patterns, source overrides, include directories,
-  defines, and variants.
+  directories, include-directory status records and status counts, define and
+  variant maps, and counts for source roots, include patterns, exclude
+  patterns, source overrides, include directories, defines, and variants.
 - ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
   unit source backend, unit file extension, skipped reason, skipped file
   extension, artifact source backend, variant, target backend, source-map
@@ -262,7 +266,8 @@ Project reports are JSON documents with:
   source/generated hash status fields for summarized validation artifacts,
   aggregate validation artifact and hash-status summary counts, direct
   validation report artifact target, hash-status, toolchain status, and
-  toolchain-run status rollups, full-report
+  toolchain-run status rollups, include-directory status record and count
+  consistency checks, full-report
   source-map granularity, target, and source-backend rollup checks, source hash
   checks, failed artifact
   error metadata checks, translated artifact error metadata rejection, required

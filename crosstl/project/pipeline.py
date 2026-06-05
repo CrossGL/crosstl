@@ -79,6 +79,9 @@ SOURCE_HASH_VALIDATION_STATUSES = frozenset(
 GENERATED_HASH_VALIDATION_STATUSES = frozenset(
     ("ok", "missing", "mismatch", "not-applicable", "not-recorded", "outside-project")
 )
+INCLUDE_DIR_STATUSES = frozenset(
+    ("active", "missing", "not-directory", "outside-project")
+)
 VALIDATION_TOOLCHAIN_RUN_STATUSES = frozenset(("ok", "failed"))
 VARIANT_OUTPUT_SAFE_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
@@ -785,15 +788,48 @@ def _resolved_include_dirs(config: ProjectConfig) -> list[str]:
     return include_dirs
 
 
+def _include_dir_status_for_path(config: ProjectConfig, path: Path) -> str:
+    if not _is_relative_to(path, config.root):
+        return "outside-project"
+    if not path.exists():
+        return "missing"
+    if not path.is_dir():
+        return "not-directory"
+    return "active"
+
+
+def _include_dir_status_records(config: ProjectConfig) -> list[dict[str, Any]]:
+    records = []
+    for include_dir in config.include_dirs:
+        absolute_dir = _resolved_include_dir(config, include_dir)
+        status = _include_dir_status_for_path(config, absolute_dir)
+        records.append(
+            {
+                "path": include_dir,
+                "resolvedPath": str(absolute_dir),
+                "status": status,
+                "frontendVisible": status == "active",
+            }
+        )
+    return records
+
+
+def _include_dir_status_counts(
+    records: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts = {status: 0 for status in sorted(INCLUDE_DIR_STATUSES)}
+    for record in records:
+        status = record.get("status")
+        if isinstance(status, str) and status in counts:
+            counts[status] += 1
+    return {status: count for status, count in counts.items() if count}
+
+
 def _frontend_include_dirs(config: ProjectConfig) -> list[str]:
     include_dirs = []
     for include_dir in config.include_dirs:
         absolute_dir = _resolved_include_dir(config, include_dir)
-        if (
-            _is_relative_to(absolute_dir, config.root)
-            and absolute_dir.exists()
-            and absolute_dir.is_dir()
-        ):
+        if _include_dir_status_for_path(config, absolute_dir) == "active":
             include_dirs.append(str(absolute_dir))
     return include_dirs
 
@@ -1009,7 +1045,8 @@ def _include_dir_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     location = _config_location(config)
     for include_dir in config.include_dirs:
         absolute_dir = _resolved_include_dir(config, include_dir)
-        if not _is_relative_to(absolute_dir, config.root):
+        status = _include_dir_status_for_path(config, absolute_dir)
+        if status == "outside-project":
             diagnostics.append(
                 ProjectDiagnostic(
                     severity="warning",
@@ -1023,13 +1060,27 @@ def _include_dir_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
                 )
             )
             continue
-        if not absolute_dir.exists():
+        if status == "missing":
             diagnostics.append(
                 ProjectDiagnostic(
                     severity="warning",
                     code="project.config.missing-include-dir",
                     message=(
                         f"Configured include directory does not exist: {include_dir}"
+                    ),
+                    location=location,
+                    missing_capabilities=["include.resolution"],
+                )
+            )
+            continue
+        if status == "not-directory":
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="warning",
+                    code="project.config.include-dir-not-directory",
+                    message=(
+                        "Configured include directory resolves to a file or "
+                        f"non-directory path: {include_dir}"
                     ),
                     location=location,
                     missing_capabilities=["include.resolution"],
@@ -1195,6 +1246,7 @@ class ProjectPortabilityReport:
         )
         diagnostics = [diagnostic.to_json() for diagnostic in self.diagnostics]
         source_map_rollups = _source_map_rollups(self.artifacts)
+        include_dir_status = _include_dir_status_records(self.config)
         external_corpus = _external_corpus_report(
             self.config, self.units, self.artifacts, self.targets
         )
@@ -1224,6 +1276,10 @@ class ProjectPortabilityReport:
                 "sourceOverrideCount": len(self.config.source_overrides),
                 "includeDirs": list(self.config.include_dirs),
                 "includeDirCount": len(self.config.include_dirs),
+                "includeDirStatus": include_dir_status,
+                "includeDirStatusCounts": _include_dir_status_counts(
+                    include_dir_status
+                ),
                 "defines": dict(sorted(self.config.defines.items())),
                 "defineCount": len(self.config.defines),
                 "variants": {
@@ -2273,6 +2329,8 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         "excludePatternCount",
         "sourceOverrideCount",
         "includeDirCount",
+        "includeDirStatus",
+        "includeDirStatusCounts",
         "defineCount",
         "variantCount",
         "externalCorpusManifest",
@@ -3062,6 +3120,115 @@ def _variant_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     return reasons
 
 
+def _project_root_path(project: Mapping[str, Any]) -> Path | None:
+    root = project.get("root")
+    if not _is_non_empty_string(root):
+        return None
+    root_path = Path(root)
+    if not root_path.is_absolute() or not root_path.exists() or not root_path.is_dir():
+        return None
+    return root_path
+
+
+def _include_dir_status_contract_reasons(
+    project: Mapping[str, Any],
+    include_dirs: Any,
+    *,
+    require_counts: bool,
+) -> list[str]:
+    records = project.get("includeDirStatus")
+    if not isinstance(records, list):
+        return ["project.includeDirStatus must be a list"]
+
+    reasons = []
+    include_dirs_is_list = isinstance(include_dirs, list) and all(
+        isinstance(item, str) for item in include_dirs
+    )
+    if include_dirs_is_list and len(records) != len(include_dirs):
+        reasons.append("project.includeDirStatus must match project.includeDirs")
+
+    root_path = _project_root_path(project)
+    valid_records = []
+    for index, record in enumerate(records):
+        prefix = f"project.includeDirStatus[{index}]"
+        if not isinstance(record, Mapping):
+            reasons.append(f"{prefix} must be an object")
+            continue
+
+        valid_records.append(record)
+        include_path = record.get("path")
+        resolved_path = record.get("resolvedPath")
+        status = record.get("status")
+        frontend_visible = record.get("frontendVisible")
+
+        if not isinstance(include_path, str):
+            reasons.append(f"{prefix}.path must be a string")
+        elif (
+            include_dirs_is_list
+            and index < len(include_dirs)
+            and include_path != include_dirs[index]
+        ):
+            reasons.append(f"{prefix}.path must match project.includeDirs[{index}]")
+
+        if not _is_non_empty_string(resolved_path):
+            reasons.append(f"{prefix}.resolvedPath must be a string")
+        elif not Path(resolved_path).is_absolute():
+            reasons.append(f"{prefix}.resolvedPath must be an absolute path")
+
+        if not isinstance(status, str) or status not in INCLUDE_DIR_STATUSES:
+            reasons.append(f"{prefix}.status must be a known include directory status")
+        if not isinstance(frontend_visible, bool):
+            reasons.append(f"{prefix}.frontendVisible must be a boolean")
+
+        if (
+            root_path is None
+            or not isinstance(include_path, str)
+            or not _is_non_empty_string(resolved_path)
+            or not Path(resolved_path).is_absolute()
+            or not isinstance(status, str)
+            or status not in INCLUDE_DIR_STATUSES
+            or not isinstance(frontend_visible, bool)
+        ):
+            continue
+
+        expected_path = Path(include_path)
+        if not expected_path.is_absolute():
+            expected_path = root_path / expected_path
+        expected_path = expected_path.resolve()
+        actual_resolved_path = Path(resolved_path).resolve()
+        if actual_resolved_path != expected_path:
+            reasons.append(
+                f"{prefix}.resolvedPath must match the resolved include directory"
+            )
+        expected_status = (
+            "outside-project"
+            if not _is_relative_to(expected_path, root_path)
+            else (
+                "missing"
+                if not expected_path.exists()
+                else "not-directory" if not expected_path.is_dir() else "active"
+            )
+        )
+        if status != expected_status:
+            reasons.append(f"{prefix}.status must match the resolved include directory")
+        if frontend_visible != (expected_status == "active"):
+            reasons.append(f"{prefix}.frontendVisible must match status")
+
+    if require_counts or "includeDirStatusCounts" in project:
+        counts = project.get("includeDirStatusCounts")
+        expected_counts = _include_dir_status_counts(valid_records)
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "project.includeDirStatusCounts",
+                counts,
+                expected_counts,
+                "project.includeDirStatus",
+            )
+        )
+
+    return reasons
+
+
 def _optional_project_field(
     project: Mapping[str, Any], key: str, *, required: bool
 ) -> bool:
@@ -3118,6 +3285,21 @@ def _project_metadata_contract_reasons(
             reasons.append("project.includeDirCount must be a non-negative integer")
         elif include_dirs_is_list and include_dir_count != len(include_dirs):
             reasons.append("project.includeDirCount must match project.includeDirs")
+
+    if _optional_project_field(
+        project, "includeDirStatus", required=require_full_metadata
+    ):
+        reasons.extend(
+            _include_dir_status_contract_reasons(
+                project,
+                include_dirs,
+                require_counts=require_full_metadata,
+            )
+        )
+    elif "includeDirStatusCounts" in project:
+        reasons.append(
+            "project.includeDirStatusCounts requires project.includeDirStatus"
+        )
 
     defines = project.get("defines")
     defines_is_mapping = isinstance(defines, Mapping)

@@ -475,6 +475,42 @@ def test_scan_project_reports_include_dirs_outside_project_without_hiding_units(
     assert "../outside-includes" in diagnostic["message"]
 
 
+def test_scan_project_reports_include_dir_files_without_hiding_units(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (repo / "include-file").write_text("// not a directory\n", encoding="utf-8")
+    (shader_dir / "main.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include_dirs = ["include-file"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report().to_json()
+
+    assert [unit.relative_path for unit in scan.units] == ["shaders/main.cgl"]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.include-dir-not-directory"
+    assert diagnostic["location"]["file"] == "crosstl.toml"
+    assert diagnostic["missingCapabilities"] == ["include.resolution"]
+    assert "include-file" in diagnostic["message"]
+    assert payload["project"]["includeDirStatus"] == [
+        {
+            "path": "include-file",
+            "resolvedPath": str((repo / "include-file").resolve()),
+            "status": "not-directory",
+            "frontendVisible": False,
+        }
+    ]
+    assert payload["project"]["includeDirStatusCounts"] == {"not-directory": 1}
+
+
 def test_project_config_rejects_malformed_variant_entries(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -782,9 +818,11 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
     include_dir = repo / "includes"
+    include_file = repo / "include-file"
     outside_dir = tmp_path / "outside-includes"
     shader_dir.mkdir(parents=True)
     include_dir.mkdir(parents=True)
+    include_file.write_text("// not a directory\n", encoding="utf-8")
     outside_dir.mkdir()
     (shader_dir / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     (repo / "crosstl.toml").write_text(
@@ -793,7 +831,12 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            include_dirs = ["includes", "missing-includes", "../outside-includes"]
+            include_dirs = [
+                "includes",
+                "missing-includes",
+                "include-file",
+                "../outside-includes",
+            ]
             """).strip(),
         encoding="utf-8",
     )
@@ -823,11 +866,45 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
     assert payload["project"]["includeDirs"] == [
         "includes",
         "missing-includes",
+        "include-file",
         "../outside-includes",
     ]
+    assert payload["project"]["includeDirStatus"] == [
+        {
+            "path": "includes",
+            "resolvedPath": str(include_dir.resolve()),
+            "status": "active",
+            "frontendVisible": True,
+        },
+        {
+            "path": "missing-includes",
+            "resolvedPath": str((repo / "missing-includes").resolve()),
+            "status": "missing",
+            "frontendVisible": False,
+        },
+        {
+            "path": "include-file",
+            "resolvedPath": str(include_file.resolve()),
+            "status": "not-directory",
+            "frontendVisible": False,
+        },
+        {
+            "path": "../outside-includes",
+            "resolvedPath": str(outside_dir.resolve()),
+            "status": "outside-project",
+            "frontendVisible": False,
+        },
+    ]
+    assert payload["project"]["includeDirStatusCounts"] == {
+        "active": 1,
+        "missing": 1,
+        "not-directory": 1,
+        "outside-project": 1,
+    }
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["diagnosticsByCode"] == {
         "project.config.include-dir-outside-project": 1,
+        "project.config.include-dir-not-directory": 1,
         "project.config.missing-include-dir": 1,
     }
 
@@ -1864,6 +1941,132 @@ def test_validate_project_report_rejects_project_config_count_mismatches(tmp_pat
         diagnostic["message"]
     )
     assert "project.includeDirCount must match project.includeDirs" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_malformed_include_dir_status_records(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "invalid-include-dir-status-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "includeDirs": ["includes"],
+                    "includeDirCount": 1,
+                    "includeDirStatus": [
+                        {
+                            "path": 1,
+                            "resolvedPath": "includes",
+                            "status": "ready",
+                            "frontendVisible": "yes",
+                        },
+                        "not a record",
+                    ],
+                    "includeDirStatusCounts": [],
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.includeDirStatus must match project.includeDirs" in (
+        diagnostic["message"]
+    )
+    assert "project.includeDirStatus[0].path must be a string" in (
+        diagnostic["message"]
+    )
+    assert "project.includeDirStatus[0].resolvedPath must be an absolute path" in (
+        diagnostic["message"]
+    )
+    assert (
+        "project.includeDirStatus[0].status must be a known include directory status"
+        in diagnostic["message"]
+    )
+    assert "project.includeDirStatus[0].frontendVisible must be a boolean" in (
+        diagnostic["message"]
+    )
+    assert "project.includeDirStatus[1] must be an object" in diagnostic["message"]
+    assert "project.includeDirStatusCounts must be an object" in (diagnostic["message"])
+
+
+def test_validate_project_report_rejects_include_dir_status_count_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    include_dir = repo / "includes"
+    repo.mkdir()
+    include_dir.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            include_dirs = ["includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out").to_json()
+    report["project"]["includeDirStatusCounts"] = {"missing": 1}
+    report_path = repo / "out" / "invalid-include-dir-status-count-report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.includeDirStatusCounts must match project.includeDirStatus" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_stale_include_dir_status(tmp_path):
+    repo = tmp_path / "repo"
+    include_dir = repo / "includes"
+    repo.mkdir()
+    include_dir.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            include_dirs = ["includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out").to_json()
+    report["project"]["includeDirStatus"][0]["status"] = "missing"
+    report_path = repo / "out" / "stale-include-dir-status-report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "project.includeDirStatus[0].status must match the resolved include directory"
+        in diagnostic["message"]
+    )
+    assert "project.includeDirStatusCounts must match project.includeDirStatus" in (
         diagnostic["message"]
     )
 
@@ -6373,6 +6576,52 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
         "release=1 artifact (1 translated, 0 failed)"
     ) in result.stdout
     assert "MODE" not in result.stdout
+
+
+def test_project_cli_inspect_report_text_includes_include_dir_status(tmp_path):
+    repo = tmp_path / "repo"
+    include_dir = repo / "includes"
+    repo.mkdir()
+    include_dir.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            include_dirs = ["includes", "missing-includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Include dirs by status: active=1, missing=1" in result.stdout
+
+    payload = inspect_project_report(report_path)
+    assert payload["report"]["project"]["includeDirStatusCounts"] == {
+        "active": 1,
+        "missing": 1,
+    }
+    assert payload["report"]["project"]["includeDirStatus"][0]["status"] == "active"
+    assert payload["report"]["project"]["includeDirStatus"][1]["status"] == "missing"
 
 
 def test_project_cli_inspect_report_text_includes_skipped_reason_rollups(tmp_path):
