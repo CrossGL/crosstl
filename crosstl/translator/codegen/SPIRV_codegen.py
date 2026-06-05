@@ -379,6 +379,11 @@ class VulkanSPIRVCodeGen:
             self.require_capability("StorageImageMultisample")
             if arrayed:
                 self.require_capability("ImageMSArray")
+        if dim == "Cube" and arrayed:
+            if sampled == 2:
+                self.require_capability("ImageCubeArray")
+            else:
+                self.require_capability("SampledCubeArray")
         if sampled == 1 and dim == "1D":
             self.require_capability("Sampled1D")
 

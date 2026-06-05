@@ -5318,6 +5318,32 @@ def test_glsl_global_uniforms_do_not_consume_resource_bindings():
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
 
 
+def test_glsl_reserved_global_uniform_names_are_aliased():
+    code = """
+    shader ReservedGlobalUniform {
+        uniform float input;
+        uniform float input_;
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                float value = input + input_;
+                return vec4(value, input, input_, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "uniform float input_2;" in generated_code
+    assert "uniform float input_;" in generated_code
+    assert "uniform float input;" not in generated_code
+    assert "float value = (input_2 + input_);" in generated_code
+    assert "fragColor = vec4(value, input_2, input_, 1.0);" in generated_code
+
+
 def test_glsl_cbuffer_binding_attributes_drive_layout_bindings():
     code = """
     shader CBufferBindings {

@@ -3853,6 +3853,41 @@ class TestCudaCodeGen:
         assert "texture(tex, sampleState" not in cuda_code
         assert "texture(colorMap, linearSampler" not in cuda_code
 
+    def test_texture_bias_emits_cuda_diagnostic_instead_of_dropping_argument(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TextureBiasCUDA {
+            sampler2D colorMap;
+            sampler linearSampler;
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    vec4 biased = texture(colorMap, uv, 0.75);
+                    vec4 biasedWithSampler = texture(colorMap, linearSampler, uv, 0.25);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "float4 biased = /* unsupported CUDA sampled resource call: "
+            "texture bias on sampler2D */ make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            in cuda_code
+        )
+        assert (
+            "float4 biasedWithSampler = /* unsupported CUDA sampled resource call: "
+            "texture bias on sampler2D */ make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            in cuda_code
+        )
+        assert "tex2D<float4>(colorMap, uv.x, uv.y, 0.75)" not in cuda_code
+        assert "tex2D<float4>(colorMap, uv.x, uv.y, 0.25)" not in cuda_code
+        if shutil.which("nvcc") is not None:
+            compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_hlsl_style_texture_resource_types_emit_cuda_sampler_types(self):
         source_code = """
         shader Resources {

@@ -3911,6 +3911,14 @@ mod gpu {
         0
     }
 
+    pub fn subgroup_id() -> u32 {
+        0
+    }
+
+    pub fn num_subgroups() -> u32 {
+        1
+    }
+
     pub fn subgroup_elect() -> bool {
         false
     }
@@ -25257,6 +25265,34 @@ def test_rust_top_level_constants_and_compute_builtins_compile(tmp_path):
     assert "gl_LocalInvocationID" not in generated_code
     assert "gl_GlobalInvocationID" not in generated_code
     assert "gl_NumWorkGroups" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_subgroup_builtin_expressions_lower_to_helpers(tmp_path):
+    code = """
+    shader RustSubgroupBuiltinExpressions {
+        compute {
+            void main() {
+                uint lane = gl_SubgroupInvocationID;
+                uint size = gl_SubgroupSize;
+                uint subgroup = gl_SubgroupID;
+                uint subgroupCount = gl_NumSubgroups;
+                uint combined = lane + size + subgroup + subgroupCount;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let lane: u32 = subgroup_invocation_id();" in generated_code
+    assert "let size: u32 = subgroup_size();" in generated_code
+    assert "let subgroup: u32 = subgroup_id();" in generated_code
+    assert "let subgroupCount: u32 = num_subgroups();" in generated_code
+    assert "gl_SubgroupInvocationID" not in generated_code
+    assert "gl_SubgroupSize" not in generated_code
+    assert "gl_SubgroupID" not in generated_code
+    assert "gl_NumSubgroups" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

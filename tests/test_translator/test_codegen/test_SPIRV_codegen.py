@@ -14764,6 +14764,33 @@ class TestVulkanSPIRVCodeGen:
         assert "imageStore" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_storage_cube_array_image_declares_required_capability(self, tmp_path):
+        source_code = """
+        shader CubeArrayStorageImage {
+            imageCubeArray cubeLayers @rgba16f;
+
+            compute {
+                void main() {
+                    ivec4 coord = ivec4(1, 2, 3, 0);
+                    vec4 color = imageLoad(cubeLayers, coord);
+                    imageStore(cubeLayers, coord, color);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpCapability ImageCubeArray" in spv_code
+        assert "OpCapability SampledCubeArray" not in spv_code
+        assert " Cube 0 1 0 2 Rgba16f" in spv_code
+        assert "OpImageRead" in spv_code
+        assert "OpImageWrite" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_spirv_texture_sampling_supports_regular_and_shadow_samplers(
         self, tmp_path
     ):
@@ -14851,6 +14878,8 @@ class TestVulkanSPIRVCodeGen:
         ]:
             assert image_signature in spv_code
 
+        assert "OpCapability SampledCubeArray" in spv_code
+        assert "OpCapability ImageCubeArray" not in spv_code
         assert spv_code.count("OpImageSampleImplicitLod") == 5
         assert spv_code.count("OpImageSampleDrefImplicitLod") == 4
         assert "OpImageSampleExplicitLod" not in spv_code

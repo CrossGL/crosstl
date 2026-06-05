@@ -10826,6 +10826,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
             if coordinate_diagnostic is not None:
                 return coordinate_diagnostic
+            if func_name == "texture" and len(args) > coord_index + 1:
+                return self.unsupported_sampled_resource_call(
+                    "texture bias", texture_type, args
+                )
             grad_x = None
             grad_y = None
             if func_name == "textureGrad" and len(args) > coord_index + 2:

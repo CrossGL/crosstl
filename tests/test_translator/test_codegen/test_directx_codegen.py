@@ -428,6 +428,31 @@ def test_directx_interpolation_builtins_reject_wrong_arity():
         generate_code(parse_code(tokenize_code(shader)))
 
 
+def test_directx_derivative_builtins_lower_to_hlsl_intrinsics():
+    shader = """
+    shader DerivativeBuiltins {
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                let dx = dFdx(input.uv.x);
+                let dy = dFdy(input.uv.y);
+                return vec4(dx, dy, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float dx = ddx(input.uv.x);" in generated_code
+    assert "float dy = ddy(input.uv.y);" in generated_code
+    assert "dFdx(" not in generated_code
+    assert "dFdy(" not in generated_code
+
+
 def test_hlsl_float16_ir_aliases_map_to_half_and_min_precision_names():
     shader = """
     shader Float16IRSmoke {

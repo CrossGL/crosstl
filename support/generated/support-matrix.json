@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 918
+        "test_count": 919
       },
       "translator_codegen": {
         "exists": true,
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1030
+        "test_count": 1031
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 480,
+        "unsupported_marker_count": 482,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 810
+        "test_count": 811
       },
       "translator_codegen": {
         "exists": true,
@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 820
+        "test_count": 821
       },
       "translator_codegen": {
         "exists": true,
@@ -493,7 +493,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 175,
+        "unsupported_marker_count": 176,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 620
+        "test_count": 621
       },
       "translator_codegen": {
         "exists": true,
@@ -925,7 +925,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 795
+        "test_count": 796
       },
       "translator_codegen": {
         "exists": true,

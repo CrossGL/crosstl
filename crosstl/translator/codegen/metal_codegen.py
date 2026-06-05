@@ -555,6 +555,8 @@ class MetalCodeGen:
         self.structured_buffer_length_variables = []
         self.structured_buffer_counter_variables = []
         self.metal_buffer_resource_variables = []
+        self.metal_program_scope_value_globals = set()
+        self.metal_program_scope_value_global_types = {}
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
         self.cbuffer_parameter_names = {}
@@ -984,6 +986,8 @@ class MetalCodeGen:
         self.structured_buffer_length_variables = []
         self.structured_buffer_counter_variables = []
         self.metal_buffer_resource_variables = []
+        self.metal_program_scope_value_globals = set()
+        self.metal_program_scope_value_global_types = {}
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
         self.lowered_glsl_buffer_block_struct_names = set()
@@ -1791,17 +1795,24 @@ class MetalCodeGen:
                 self.sampler_variables.append((node, binding, array_size))
                 sampler_register = max(sampler_register, binding + resource_count)
             else:
-                declaration = format_c_style_array_declaration(
-                    self.map_type(vtype), node.name
-                )
+                mapped_type = self.map_type(vtype)
+                declaration = format_c_style_array_declaration(mapped_type, var_name)
                 if array_suffix:
                     declaration = f"{declaration}{array_suffix}"
-                declaration = f"{self.global_variable_qualifier(node)}{declaration}"
+                qualifier = self.global_variable_qualifier(node)
+                declaration = f"{qualifier}{declaration}"
+                self.record_metal_program_scope_value_global(var_name, vtype, qualifier)
                 initial_value = getattr(node, "initial_value", None)
                 if initial_value is not None:
                     expected_type = getattr(node, "var_type", vtype)
                     init_expr = self.generate_expression_with_expected(
                         initial_value, expected_type
+                    )
+                    code += f"{declaration} = {init_expr};\n"
+                elif self.global_value_variable_requires_initializer(qualifier):
+                    code += f"{self.metal_program_scope_global_initializer_diagnostic(var_name)}\n"
+                    init_expr = self.metal_program_scope_global_default_initializer(
+                        mapped_type, array_suffix
                     )
                     code += f"{declaration} = {init_expr};\n"
                 else:
@@ -5204,8 +5215,32 @@ class MetalCodeGen:
             if address_space in qualifiers:
                 return f"{address_space} "
         if qualifiers & {"const", "readonly"}:
-            return "const "
-        return ""
+            return "constant "
+        return "constant "
+
+    def record_metal_program_scope_value_global(self, name, vtype, qualifier):
+        if not name or not self.global_value_variable_requires_initializer(qualifier):
+            return
+        self.metal_program_scope_value_globals.add(name)
+        self.metal_program_scope_value_global_types[name] = self.type_name_string(vtype)
+
+    def global_value_variable_requires_initializer(self, qualifier):
+        return str(qualifier or "").strip().startswith("constant")
+
+    def metal_program_scope_global_default_initializer(
+        self, mapped_type, array_suffix=""
+    ):
+        _base_type, mapped_array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix or mapped_array_suffix:
+            return "{}"
+        return self.metal_default_value_expression(mapped_type)
+
+    def metal_program_scope_global_initializer_diagnostic(self, name):
+        return (
+            "/* unsupported Metal program-scope global initializer: "
+            f"'{name}' needs an initializer in the constant address space; "
+            "using zero initializer */"
+        )
 
     def local_variable_qualifier(self, node):
         qualifiers = {
@@ -5680,7 +5715,10 @@ class MetalCodeGen:
         if expr is None:
             return None
         if isinstance(expr, VariableNode):
-            return self.local_variable_types.get(getattr(expr, "name", None))
+            name = getattr(expr, "name", None)
+            return self.local_variable_types.get(
+                name
+            ) or self.metal_program_scope_value_global_types.get(name)
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
         if isinstance(expr, BinaryOpNode):
@@ -6114,6 +6152,11 @@ class MetalCodeGen:
         )
         if readonly_parameter_store is not None:
             return readonly_parameter_store
+        readonly_global_store = (
+            self.readonly_metal_program_scope_global_assignment_diagnostic(target)
+        )
+        if readonly_global_store is not None:
+            return readonly_global_store
         readonly_mesh_payload_alias = (
             self.readonly_metal_mesh_payload_alias_assignment_diagnostic(target, value)
         )
@@ -11147,6 +11190,19 @@ class MetalCodeGen:
         return (
             "/* unsupported Metal parameter store: parameter "
             f"'{root_name}' is {reason} */"
+        )
+
+    def readonly_metal_program_scope_global_assignment_diagnostic(self, target):
+        root_name = self.assignment_target_root_name(target)
+        if (
+            root_name not in self.metal_program_scope_value_globals
+            or root_name in self.local_variable_types
+        ):
+            return None
+        target_name = self.assignment_target_display_name(target) or root_name
+        return (
+            "/* unsupported Metal program-scope global store: global "
+            f"'{target_name}' is emitted in the constant address space */"
         )
 
     def readonly_metal_mesh_payload_assignment_diagnostic(self, target):

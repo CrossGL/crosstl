@@ -2638,8 +2638,8 @@ def test_metal_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
     assert "uint words[3];" in generated_code
     assert "int64_t signedValue;" in generated_code
     assert "uint64_t offsets[2];" in generated_code
-    assert "int globalBytes[2];" in generated_code
-    assert "uint64_t globalCounters[2];" in generated_code
+    assert "constant int globalBytes[2] = {};" in generated_code
+    assert "constant uint64_t globalCounters[2] = {};" in generated_code
     assert "int smalls[2];" in generated_code
     assert "uint count;" in generated_code
     assert "int64_t delta;" in generated_code
@@ -2657,6 +2657,44 @@ def test_metal_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
         "ptrdiff_t",
     ):
         assert invalid_token not in generated_code
+
+
+def test_metal_program_scope_value_globals_use_constant_address_space_and_initializers():
+    shader = """
+    shader MetalProgramScopeGlobals {
+        float initializedScale = 2.0;
+        vec2 missingBias;
+        int counters[2];
+
+        compute {
+            void main() {
+                initializedScale = 3.0;
+                float value = initializedScale + missingBias.x + float(counters[0]);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "constant float initializedScale = 2.0;" in generated_code
+    assert (
+        "/* unsupported Metal program-scope global initializer: 'missingBias' "
+        "needs an initializer in the constant address space; using zero initializer */"
+        in generated_code
+    )
+    assert "constant float2 missingBias = float2(0);" in generated_code
+    assert (
+        "/* unsupported Metal program-scope global initializer: 'counters' needs "
+        "an initializer in the constant address space; using zero initializer */"
+        in generated_code
+    )
+    assert "constant int counters[2] = {};" in generated_code
+    assert (
+        "/* unsupported Metal program-scope global store: global 'initializedScale' "
+        "is emitted in the constant address space */" in generated_code
+    )
+    assert "initializedScale = 3.0;" not in generated_code
 
 
 def test_metal_fixed_width_nested_array_aliases_map_to_valid_metal_types():

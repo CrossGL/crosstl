@@ -745,6 +745,8 @@ class HLSLCodeGen:
         }
         self.function_map = {
             "atomicAdd": "InterlockedAdd",
+            "dFdx": "ddx",
+            "dFdy": "ddy",
             "fract": "frac",
             "mix": "lerp",
         }

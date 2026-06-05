@@ -7499,6 +7499,20 @@ class GLSLCodeGen:
         self.current_identifier_aliases[name] = alias
         return alias
 
+    def glsl_global_identifier_name(self, name):
+        if name not in self.GLSL_RESERVED_IDENTIFIERS:
+            return name
+
+        used_names = set(self.global_variable_types)
+        used_names.update(self.current_identifier_aliases.values())
+        alias = f"{name}_"
+        suffix = 1
+        while alias in used_names:
+            suffix += 1
+            alias = f"{name}_{suffix}"
+        self.current_identifier_aliases[name] = alias
+        return alias
+
     def match_binding_name(self, name):
         return self.glsl_local_identifier_name(name)
 
@@ -7568,14 +7582,19 @@ class GLSLCodeGen:
     def generate_global_variable_declaration(
         self, node, declaration, vtype, mapped_type_for_layout=None
     ):
+        name = self.resource_node_name(node, "")
         builtin_output = self.fragment_output_variable_builtin_target(node)
         if builtin_output is not None:
-            self.current_identifier_aliases[self.resource_node_name(node, "")] = (
-                builtin_output
-            )
+            self.current_identifier_aliases[name] = builtin_output
             return ""
 
         qualifier = self.global_variable_qualifier(node)
+        emitted_name = self.glsl_global_identifier_name(name)
+        if emitted_name != name:
+            declaration = format_c_style_array_declaration(
+                mapped_type_for_layout if mapped_type_for_layout is not None else vtype,
+                emitted_name,
+            )
         initializer = ""
         initial_value = getattr(node, "initial_value", None)
         if initial_value is not None:
