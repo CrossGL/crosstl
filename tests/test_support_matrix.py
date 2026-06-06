@@ -342,7 +342,7 @@ def test_project_include_resolution_documents_status_reporting():
             backend_support["notes"]
         )
         assert "unresolved include dependency samples" in backend_support["notes"]
-        assert "not-supported include-path processing artifact samples" in (
+        assert "sampled include-path processing artifact metadata" in (
             backend_support["notes"]
         )
         assert "includeDependencies records" in backend_support["notes"]

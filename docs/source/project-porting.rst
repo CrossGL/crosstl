@@ -207,7 +207,10 @@ not be consumed by the selected source frontend. Include-path processing
 summaries and text reports also roll up by source backend and by named variant
 when variants are configured. Report inspection includes sampled artifacts
 whose active include paths could not be forwarded, so the affected source,
-target, and frontend are visible without reading every artifact record.
+target, and frontend are visible without reading every artifact record. It also
+includes sampled artifact include-path processing metadata with status,
+frontend support, and include path counts, so artifact-level include forwarding
+state can be triaged from the report summary.
 During scan, project reports also record ``#include`` directives discovered in
 translation units. Each dependency record keeps the include target, local,
 system, or dynamic kind, line and column, and a status of ``resolved``,

@@ -1237,6 +1237,73 @@ def _format_include_path_processing_issue_lines(include_path_processing):
     return lines
 
 
+def _format_include_path_processing_artifact_line(artifact):
+    if not isinstance(artifact, Mapping):
+        return None
+
+    source = artifact.get("source")
+    path = artifact.get("path")
+    if not isinstance(source, str) or not source:
+        return None
+    if not isinstance(path, str) or not path:
+        return None
+
+    details = []
+    source_backend = artifact.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        details.append(f"sourceBackend={source_backend}")
+    target = artifact.get("target")
+    if isinstance(target, str) and target:
+        details.append(f"target={target}")
+    variant = artifact.get("variant")
+    if isinstance(variant, str) and variant:
+        details.append(f"variant={variant}")
+    status = artifact.get("status")
+    if isinstance(status, str) and status:
+        details.append(f"status={status}")
+    frontend = artifact.get("frontend")
+    if isinstance(frontend, str) and frontend:
+        details.append(f"frontend={frontend}")
+    supports_include_paths = artifact.get("supportsIncludePaths")
+    if isinstance(supports_include_paths, bool):
+        details.append(f"supportsIncludePaths={str(supports_include_paths).lower()}")
+    include_path_count = artifact.get("includePathCount")
+    if (
+        isinstance(include_path_count, int)
+        and not isinstance(include_path_count, bool)
+        and include_path_count >= 0
+    ):
+        details.append(f"includePaths={include_path_count}")
+
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"- {source} -> {path}{suffix}"
+
+
+def _format_include_path_processing_artifact_lines(include_path_processing):
+    if not isinstance(include_path_processing, Mapping):
+        return []
+    artifacts = include_path_processing.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return []
+
+    lines = ["Include path processing artifacts:"]
+    for artifact in artifacts:
+        line = _format_include_path_processing_artifact_line(artifact)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = include_path_processing.get("truncatedArtifactCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_include_dependency_issue_line(dependency):
     if not isinstance(dependency, Mapping):
         return None
@@ -1588,6 +1655,11 @@ def _format_project_report_inspection(payload):
     )
     if include_path_processing_by_variant:
         lines.append(include_path_processing_by_variant)
+    lines.extend(
+        _format_include_path_processing_artifact_lines(
+            payload.get("includePathProcessing")
+        )
+    )
     lines.extend(
         _format_include_path_processing_issue_lines(
             payload.get("includePathProcessing")

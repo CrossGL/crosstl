@@ -1405,6 +1405,20 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
         "byStatus": {"not-supported": 1},
         "bySourceBackend": {"cgl": {"not-supported": 1}},
         "byVariant": {},
+        "artifactCount": 1,
+        "truncatedArtifactCount": 0,
+        "artifacts": [
+            {
+                "source": "shaders/simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "opengl",
+                "path": artifact_path,
+                "status": "not-supported",
+                "frontend": "lexer",
+                "supportsIncludePaths": False,
+                "includePathCount": 1,
+            }
+        ],
         "notSupportedArtifactCount": 1,
         "truncatedNotSupportedArtifactCount": 0,
         "notSupportedArtifacts": [
@@ -1426,6 +1440,12 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
         "Include path processing by source backend: cgl=(not-supported=1)"
         in result.stdout
     )
+    assert "Include path processing artifacts:" in result.stdout
+    assert (
+        f"- shaders/simple.cgl -> {artifact_path} "
+        "(sourceBackend=cgl, target=opengl, status=not-supported, "
+        "frontend=lexer, supportsIncludePaths=false, includePaths=1)"
+    ) in result.stdout
     assert "Include path processing issues:" in result.stdout
     assert (
         f"- shaders/simple.cgl -> opengl at {artifact_path}: "
@@ -8993,6 +9013,20 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
         "byVariant": {},
+        "artifactCount": 1,
+        "truncatedArtifactCount": 0,
+        "artifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "status": "not-requested",
+                "frontend": "lexer",
+                "supportsIncludePaths": False,
+                "includePathCount": 0,
+            }
+        ],
         "notSupportedArtifactCount": 0,
         "truncatedNotSupportedArtifactCount": 0,
         "notSupportedArtifacts": [],
@@ -9781,6 +9815,12 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         "Include path processing by source backend: cgl=(not-requested=1)"
         in result.stdout
     )
+    assert "Include path processing artifacts:" in result.stdout
+    assert (
+        "- simple.cgl -> out/cgl/simple.cgl "
+        "(sourceBackend=cgl, target=cgl, status=not-requested, "
+        "frontend=lexer, supportsIncludePaths=false, includePaths=0)"
+    ) in result.stdout
     assert "Source maps by granularity: file=1" in result.stdout
     assert "Source maps by target: cgl=1" in result.stdout
     assert "Source maps by source backend: cgl=1" in result.stdout

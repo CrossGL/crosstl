@@ -4207,15 +4207,7 @@ def _inspection_include_path_processing_artifact(
     include_path_processing = artifact.get("includePathProcessing")
     if not isinstance(include_path_processing, Mapping):
         return None
-    if include_path_processing.get("status") != "not-supported":
-        return None
     include_path_count = include_path_processing.get("includePathCount")
-    if (
-        not isinstance(include_path_count, int)
-        or isinstance(include_path_count, bool)
-        or include_path_count <= 0
-    ):
-        return None
 
     sample = {
         "source": artifact.get("source"),
@@ -4225,11 +4217,32 @@ def _inspection_include_path_processing_artifact(
         "status": include_path_processing.get("status"),
         "frontend": include_path_processing.get("frontend"),
         "supportsIncludePaths": include_path_processing.get("supportsIncludePaths"),
-        "includePathCount": include_path_count,
     }
+    if (
+        isinstance(include_path_count, int)
+        and not isinstance(include_path_count, bool)
+        and include_path_count >= 0
+    ):
+        sample["includePathCount"] = include_path_count
     if "variant" in artifact:
         sample["variant"] = artifact.get("variant")
     return {key: value for key, value in sample.items() if value is not None}
+
+
+def _inspection_unsupported_include_path_processing_artifact(
+    artifact: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    sample = _inspection_include_path_processing_artifact(artifact)
+    if sample is None or sample.get("status") != "not-supported":
+        return None
+    include_path_count = sample.get("includePathCount")
+    if (
+        not isinstance(include_path_count, int)
+        or isinstance(include_path_count, bool)
+        or include_path_count <= 0
+    ):
+        return None
+    return sample
 
 
 def _inspection_include_path_processing_summary(
@@ -4245,11 +4258,15 @@ def _inspection_include_path_processing_summary(
     if not isinstance(by_status, Mapping) or not isinstance(by_source_backend, Mapping):
         return {"available": False}
 
+    include_path_processing_artifacts = []
     not_supported_artifacts = []
     for artifact in _record_sequence(artifacts):
         if not isinstance(artifact, Mapping):
             continue
         sample = _inspection_include_path_processing_artifact(artifact)
+        if sample:
+            include_path_processing_artifacts.append(sample)
+        sample = _inspection_unsupported_include_path_processing_artifact(artifact)
         if sample:
             not_supported_artifacts.append(sample)
 
@@ -4270,6 +4287,15 @@ def _inspection_include_path_processing_summary(
             if isinstance(by_variant, Mapping)
             else {}
         ),
+        "artifactCount": len(include_path_processing_artifacts),
+        "truncatedArtifactCount": max(
+            0,
+            len(include_path_processing_artifacts)
+            - INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT,
+        ),
+        "artifacts": include_path_processing_artifacts[
+            :INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT
+        ],
         "notSupportedArtifactCount": len(not_supported_artifacts),
         "truncatedNotSupportedArtifactCount": max(
             0,
