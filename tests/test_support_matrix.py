@@ -415,7 +415,7 @@ def test_project_macro_variants_document_artifact_define_maps():
             "define-processing status, source-backend, and variant rollups"
             in backend_support["notes"]
         )
-        assert "not-supported define-processing artifact samples" in (
+        assert "sampled define-processing artifact metadata" in (
             backend_support["notes"]
         )
         assert (

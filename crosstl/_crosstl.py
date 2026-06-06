@@ -1114,6 +1114,73 @@ def _format_define_processing_issue_lines(define_processing):
     return lines
 
 
+def _format_define_processing_artifact_line(artifact):
+    if not isinstance(artifact, Mapping):
+        return None
+
+    source = artifact.get("source")
+    path = artifact.get("path")
+    if not isinstance(source, str) or not source:
+        return None
+    if not isinstance(path, str) or not path:
+        return None
+
+    details = []
+    source_backend = artifact.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        details.append(f"sourceBackend={source_backend}")
+    target = artifact.get("target")
+    if isinstance(target, str) and target:
+        details.append(f"target={target}")
+    variant = artifact.get("variant")
+    if isinstance(variant, str) and variant:
+        details.append(f"variant={variant}")
+    status = artifact.get("status")
+    if isinstance(status, str) and status:
+        details.append(f"status={status}")
+    frontend = artifact.get("frontend")
+    if isinstance(frontend, str) and frontend:
+        details.append(f"frontend={frontend}")
+    supports_defines = artifact.get("supportsDefines")
+    if isinstance(supports_defines, bool):
+        details.append(f"supportsDefines={str(supports_defines).lower()}")
+    define_count = artifact.get("defineCount")
+    if (
+        isinstance(define_count, int)
+        and not isinstance(define_count, bool)
+        and define_count >= 0
+    ):
+        details.append(f"defines={define_count}")
+
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"- {source} -> {path}{suffix}"
+
+
+def _format_define_processing_artifact_lines(define_processing):
+    if not isinstance(define_processing, Mapping):
+        return []
+    artifacts = define_processing.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return []
+
+    lines = ["Define processing artifacts:"]
+    for artifact in artifacts:
+        line = _format_define_processing_artifact_line(artifact)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = define_processing.get("truncatedArtifactCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_include_path_processing_issue_line(artifact):
     line = _format_artifact_identity_line(artifact)
     if not line:
@@ -1495,6 +1562,9 @@ def _format_project_report_inspection(payload):
     )
     if define_processing_by_variant:
         lines.append(define_processing_by_variant)
+    lines.extend(
+        _format_define_processing_artifact_lines(payload.get("defineProcessing"))
+    )
     lines.extend(_format_define_processing_issue_lines(payload.get("defineProcessing")))
     include_path_processing = _format_count_rollup(
         "Include path processing",

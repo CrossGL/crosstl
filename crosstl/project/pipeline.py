@@ -4059,15 +4059,7 @@ def _inspection_define_processing_artifact(
     define_processing = artifact.get("defineProcessing")
     if not isinstance(define_processing, Mapping):
         return None
-    if define_processing.get("status") != "not-supported":
-        return None
     define_count = define_processing.get("defineCount")
-    if (
-        not isinstance(define_count, int)
-        or isinstance(define_count, bool)
-        or define_count <= 0
-    ):
-        return None
 
     sample = {
         "source": artifact.get("source"),
@@ -4077,11 +4069,32 @@ def _inspection_define_processing_artifact(
         "status": define_processing.get("status"),
         "frontend": define_processing.get("frontend"),
         "supportsDefines": define_processing.get("supportsDefines"),
-        "defineCount": define_count,
     }
+    if (
+        isinstance(define_count, int)
+        and not isinstance(define_count, bool)
+        and define_count >= 0
+    ):
+        sample["defineCount"] = define_count
     if "variant" in artifact:
         sample["variant"] = artifact.get("variant")
     return {key: value for key, value in sample.items() if value is not None}
+
+
+def _inspection_unsupported_define_processing_artifact(
+    artifact: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    sample = _inspection_define_processing_artifact(artifact)
+    if sample is None or sample.get("status") != "not-supported":
+        return None
+    define_count = sample.get("defineCount")
+    if (
+        not isinstance(define_count, int)
+        or isinstance(define_count, bool)
+        or define_count <= 0
+    ):
+        return None
+    return sample
 
 
 def _inspection_define_processing_summary(
@@ -4097,11 +4110,15 @@ def _inspection_define_processing_summary(
     if not isinstance(by_status, Mapping) or not isinstance(by_source_backend, Mapping):
         return {"available": False}
 
+    define_processing_artifacts = []
     not_supported_artifacts = []
     for artifact in _record_sequence(artifacts):
         if not isinstance(artifact, Mapping):
             continue
         sample = _inspection_define_processing_artifact(artifact)
+        if sample:
+            define_processing_artifacts.append(sample)
+        sample = _inspection_unsupported_define_processing_artifact(artifact)
         if sample:
             not_supported_artifacts.append(sample)
 
@@ -4122,6 +4139,15 @@ def _inspection_define_processing_summary(
             if isinstance(by_variant, Mapping)
             else {}
         ),
+        "artifactCount": len(define_processing_artifacts),
+        "truncatedArtifactCount": max(
+            0,
+            len(define_processing_artifacts)
+            - DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT,
+        ),
+        "artifacts": define_processing_artifacts[
+            :DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT
+        ],
         "notSupportedArtifactCount": len(not_supported_artifacts),
         "truncatedNotSupportedArtifactCount": max(
             0,

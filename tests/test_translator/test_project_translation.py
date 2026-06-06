@@ -1598,6 +1598,33 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "debug": {"forwarded": 1},
         "release": {"forwarded": 1},
     }
+    assert inspection["defineProcessing"]["artifactCount"] == 2
+    assert inspection["defineProcessing"]["truncatedArtifactCount"] == 0
+    assert inspection["defineProcessing"]["artifacts"] == [
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "opengl",
+            "path": "translated/opengl/debug/simple.glsl",
+            "status": "forwarded",
+            "frontend": "lexer",
+            "supportsDefines": True,
+            "defineCount": 2,
+            "variant": "debug",
+        },
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "opengl",
+            "path": "translated/opengl/release/simple.glsl",
+            "status": "forwarded",
+            "frontend": "lexer",
+            "supportsDefines": True,
+            "defineCount": 2,
+            "variant": "release",
+        },
+    ]
+    assert "MODE" not in json.dumps(inspection["defineProcessing"]["artifacts"])
     assert inspection["includePathProcessing"]["byVariant"] == {
         "debug": {"not-requested": 1},
         "release": {"not-requested": 1},
@@ -1792,6 +1819,20 @@ def test_translate_project_records_define_processing_without_frontend_support(
         "byStatus": {"not-supported": 1},
         "bySourceBackend": {"rust": {"not-supported": 1}},
         "byVariant": {},
+        "artifactCount": 1,
+        "truncatedArtifactCount": 0,
+        "artifacts": [
+            {
+                "source": "shader.rs",
+                "sourceBackend": "rust",
+                "target": "cgl",
+                "path": "translated/cgl/shader.cgl",
+                "status": "not-supported",
+                "frontend": "lexer",
+                "supportsDefines": False,
+                "defineCount": 1,
+            }
+        ],
         "notSupportedArtifactCount": 1,
         "truncatedNotSupportedArtifactCount": 0,
         "notSupportedArtifacts": [
@@ -8710,6 +8751,20 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
         "byVariant": {},
+        "artifactCount": 1,
+        "truncatedArtifactCount": 0,
+        "artifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "status": "not-requested",
+                "frontend": "lexer",
+                "supportsDefines": True,
+                "defineCount": 0,
+            }
+        ],
         "notSupportedArtifactCount": 0,
         "truncatedNotSupportedArtifactCount": 0,
         "notSupportedArtifacts": [],
@@ -9511,6 +9566,12 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert "Source remaps: 1" in result.stdout
     assert "Define processing: not-requested=1" in result.stdout
     assert "Define processing by source backend: cgl=(not-requested=1)" in result.stdout
+    assert "Define processing artifacts:" in result.stdout
+    assert (
+        "- simple.cgl -> out/cgl/simple.cgl "
+        "(sourceBackend=cgl, target=cgl, status=not-requested, "
+        "frontend=lexer, supportsDefines=true, defines=0)"
+    ) in result.stdout
     assert "Include path processing: not-requested=1" in result.stdout
     assert (
         "Include path processing by source backend: cgl=(not-requested=1)"

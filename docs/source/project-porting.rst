@@ -197,7 +197,10 @@ define maps that were not requested or could not be consumed by that frontend.
 Summary, inspection payloads, and text reports also include define-processing
 rollups by source backend and by named variant when variants are configured, so
 frontend-specific and variant-specific preprocessing gaps are visible without
-reading every artifact record.
+reading every artifact record. Report inspection also includes sampled artifact
+define-processing metadata with status, frontend support, and define counts,
+but not define values, so artifact-level preprocessing state can be triaged
+without exposing configuration values.
 They also record ``includePathProcessing`` metadata so active include-directory
 paths can be distinguished from include paths that were not requested or could
 not be consumed by the selected source frontend. Include-path processing
