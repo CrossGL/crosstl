@@ -152,10 +152,10 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "source-extension" in backend_support["notes"]
         assert "skipped-extension" in backend_support["notes"]
         assert "invalid-report markers" in backend_support["notes"]
-        assert (
-            "project-config count, source-root status, and include-directory "
-            "status rollups" in backend_support["notes"]
-        )
+        assert "project-config count" in backend_support["notes"]
+        assert "variant-name summaries" in backend_support["notes"]
+        assert "source-root status" in backend_support["notes"]
+        assert "include-directory status rollups" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_root_status"
@@ -213,6 +213,7 @@ def test_project_report_inspection_documents_rollups():
     feature = features["project.report_inspection"]
 
     for backend_support in feature["support"].values():
+        assert "variant-name summaries" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_map_counts"
@@ -316,6 +317,9 @@ def test_project_macro_variants_document_artifact_define_maps():
     for backend_support in feature["support"].values():
         assert backend_support["status"] == "partial"
         assert "records each artifact applied define map" in backend_support["notes"]
+        assert "inspection summaries expose variant names without define values" in (
+            backend_support["notes"]
+        )
         assert "malformed define/variant metadata including empty mapping keys" in (
             backend_support["notes"]
         )
@@ -325,6 +329,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_define_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_project_config_counts"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

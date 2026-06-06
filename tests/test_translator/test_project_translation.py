@@ -7482,6 +7482,7 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
     report = translate_project(load_project_config(repo), output_dir="out")
     report_path = repo / "out" / "portability-report.json"
     report.write_json(report_path)
+    payload = inspect_project_report(report_path)
 
     result = subprocess.run(
         [
@@ -7506,6 +7507,8 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
         f"{len(project_pipeline.DEFAULT_EXCLUDE_PATTERNS)}, sourceOverrides=1, "
         "includeDirs=0, defines=1, variants=2" in result.stdout
     )
+    assert payload["report"]["project"]["variantNames"] == ["debug", "release"]
+    assert "Project variants: debug, release" in result.stdout
     assert (
         "Artifacts by variant: debug=1 artifact (1 translated, 0 failed), "
         "release=1 artifact (1 translated, 0 failed)"

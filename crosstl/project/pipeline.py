@@ -2726,6 +2726,11 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
     ):
         if field_name in project:
             summary[field_name] = project[field_name]
+    variants = project.get("variants")
+    if isinstance(variants, Mapping):
+        summary["variantNames"] = sorted(
+            name for name in variants if isinstance(name, str) and name
+        )
     return summary
 
 

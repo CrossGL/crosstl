@@ -603,6 +603,20 @@ def _format_project_config_counts(project):
     return "Project config: " + ", ".join(entries)
 
 
+def _format_project_variant_names(project):
+    if not isinstance(project, Mapping):
+        return None
+
+    variant_names = project.get("variantNames")
+    if not isinstance(variant_names, list):
+        return None
+
+    names = [name for name in variant_names if isinstance(name, str) and name]
+    if not names:
+        return None
+    return "Project variants: " + ", ".join(names)
+
+
 def _format_project_config_path(project):
     if not isinstance(project, Mapping) or "config" not in project:
         return None
@@ -830,9 +844,14 @@ def _format_project_report_inspection(payload):
     report_status = _format_report_status(report, validation_diagnostic_codes)
     if report_status:
         lines.insert(2, report_status)
+    project_insert_index = 3
     project_config_counts = _format_project_config_counts(project)
     if project_config_counts:
-        lines.insert(3, project_config_counts)
+        lines.insert(project_insert_index, project_config_counts)
+        project_insert_index += 1
+    project_variant_names = _format_project_variant_names(project)
+    if project_variant_names:
+        lines.insert(project_insert_index, project_variant_names)
     project_status_lines = []
     source_root_status = _format_count_rollup(
         "Source roots by status",

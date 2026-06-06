@@ -221,7 +221,8 @@ were skipped.
 Project reports include configured define and variant names and values, and
 artifact records include the applied define map used for that translation
 attempt. Review reports before sharing them outside the repository if those
-values include private build metadata.
+values include private build metadata. Compact inspection summaries list
+configured variant names without printing define names or values.
 
 Report Shape
 ------------
@@ -296,8 +297,8 @@ Project reports are JSON documents with:
 - ``validation``: report contract checks, generated timestamp and generator
   metadata checks, report inspection summaries, failed
   source artifact checks, project metadata, target normalization, and config
-  count checks, unit and skipped record shape checks, artifact record shape
-  checks, source and
+  count checks including compact variant-name inspection summaries, unit and
+  skipped record shape checks, artifact record shape checks, source and
   generated hash checks, duplicate artifact identity checks, required
   source/generated hash status fields for summarized validation artifacts,
   aggregate validation artifact and hash-status summary counts, direct
