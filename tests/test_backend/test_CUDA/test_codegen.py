@@ -9419,6 +9419,30 @@ class TestCudaCodeGen:
         )
         assert "data[indices[0] as usize] = value;" in result
 
+    def test_cuda_load_cache_intrinsics_from_programming_guide_pointer_address_conversion(
+        self,
+    ):
+        code = """
+        __device__ float load_cached(const float* data, int idx) {
+            const float* ptr = data + idx;
+            float direct = __ldg(ptr);
+            float hinted = __ldcg(data + idx + 1);
+            return direct + hinted;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "var ptr: ptr<f32> = (data + idx);" in result
+        assert "var direct: f32 = (*ptr);" in result
+        assert "var hinted: f32 = (*((data + idx) + 1));" in result
+        assert "cuda load cache intrinsic" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_qualified_declaration_conversion(self):
         code = """
         static float cached = 1.0f;

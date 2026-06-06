@@ -139,8 +139,8 @@ def test_external_rocm_device_globals_symbol_api_codegen_reparse():
         "bytes: size_bytes"
     ) in crossgl
     assert (
-        "// Kernel launch: test_globals_kernel<<<vec3<u32>(64), vec3<u32>(1), "
-        "0, hipStreamDefault>>>()"
+        "// Kernel launch: test_globals_kernel<<<vec3<u32>(64, 1, 1), "
+        "vec3<u32>(1, 1, 1), 0, hipStreamDefault>>>()"
     ) in crossgl
 
 
@@ -363,7 +363,7 @@ def test_external_rocm_inline_assembly_kernel_codegen_reparse():
     assert '// HIP inline assembly outputs: "=v"(out[((x * width) + y)])' in crossgl
     assert (
         "// Kernel launch: matrix_transpose_kernel<<<vec3<u32>((width / 8), "
-        "(width / 8)), vec3<u32>(8, 8), 0, hipStreamDefault>>>()" in crossgl
+        "(width / 8), 1), vec3<u32>(8, 8, 1), 0, hipStreamDefault>>>()" in crossgl
     )
 
 

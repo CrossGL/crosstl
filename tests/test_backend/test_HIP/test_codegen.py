@@ -1667,14 +1667,36 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var windowSize: vec3<u32> = vec3<u32>(512, 512);" in result
+        assert "var windowSize: vec3<u32> = vec3<u32>(512, 512, 1);" in result
         assert "var windowBlockSize: vec3<u32> = vec3<u32>(16, 16, 1);" in result
         assert (
             "var windowGridSize: vec3<u32> = "
             "vec3<u32>((windowSize.x / windowBlockSize.x), "
-            "(windowSize.y / windowBlockSize.y));"
+            "(windowSize.y / windowBlockSize.y), 1);"
         ) in result
         assert "const dim3(" not in result
+
+    def test_rocm_docs_dim3_constructor_defaults_conversion(self):
+        code = """
+        void launch() {
+            dim3 all_default = dim3();
+            dim3 one_dim(256);
+            dim3 two_dim(16, 8);
+            dim3 three_dim(16, 8, 4);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var all_default: vec3<u32> = vec3<u32>(1, 1, 1);" in result
+        assert "var one_dim: vec3<u32> = vec3<u32>(256, 1, 1);" in result
+        assert "var two_dim: vec3<u32> = vec3<u32>(16, 8, 1);" in result
+        assert "var three_dim: vec3<u32> = vec3<u32>(16, 8, 4);" in result
 
     def test_constructor_style_vector_declaration_conversion(self):
         code = """
@@ -1821,7 +1843,7 @@ class TestHipCodeGen:
         assert "var globalSurf: image2D;" in result
         assert "void launch(sampler2D paramTex, image3D paramVolume)" in result
         assert "var grid: vec3<u32> = vec3<u32>(16, 8, 1);" in result
-        assert "var block: vec3<u32> = vec3<u32>(32);" in result
+        assert "var block: vec3<u32> = vec3<u32>(32, 1, 1);" in result
         assert "var v: vec3<f32> = vec3<f32>(1.0f, 2.0f, 3.0f);" in result
         assert "var d: vec2<f64> = vec2<f64>(1.0, 2.0);" in result
         assert "var ids: vec4<u32> = vec4<u32>(1u, 2u, 3u, 4u);" in result
@@ -2384,7 +2406,8 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert (
-            "// Kernel launch: kernel<<<vec3<u32>(4), vec3<u32>(64), "
+            "// Kernel launch: kernel<<<vec3<u32>(4, 1, 1), "
+            "vec3<u32>(64, 1, 1), "
             "0, hipStreamDefault>>>()"
         ) in result
         assert "// Arguments: data" in result
@@ -2409,8 +2432,8 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert (
-            "// Kernel launch: scale<float><<<vec3<u32>(1), vec3<u32>(32)>>>()"
-            in result
+            "// Kernel launch: scale<float><<<vec3<u32>(1, 1, 1), "
+            "vec3<u32>(32, 1, 1)>>>()" in result
         )
         assert "// Arguments: data, 2.0f" in result
 
@@ -2443,9 +2466,9 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert (
-            "// Kernel launch: kernel<T, F><<<vec3<u32>(new_size(factor, curr)), "
-            "vec3<u32>(block_size), (factor * sizeof(T)), hipStreamDefault>>>()"
-            in result
+            "// Kernel launch: kernel<T, F><<<vec3<u32>(new_size(factor, curr), "
+            "1, 1), vec3<u32>(block_size, 1, 1), "
+            "(factor * sizeof(T)), hipStreamDefault>>>()" in result
         )
         assert "// Arguments: front, back, kernel_op, zero_elem, curr" in result
         assert "HIP_KERNEL_NAME" not in result
@@ -2896,8 +2919,8 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert (
-            "// Kernel launch: scale<float><<<vec3<u32>(1), vec3<u32>(32), 0, 0>>>()"
-            in result
+            "// Kernel launch: scale<float><<<vec3<u32>(1, 1, 1), "
+            "vec3<u32>(32, 1, 1), 0, 0>>>()" in result
         )
         assert "// Arguments: data, 2.0f" in result
         assert "hipLaunchKernelGGL" not in result
@@ -2927,7 +2950,8 @@ class TestHipCodeGen:
         assert (
             "// Kernel launch: "
             "example_union_storage_types<block_size, items_per_thread, int>"
-            "<<<vec3<u32>(grid_size), vec3<u32>(block_size), 0, 0>>>()" in result
+            "<<<vec3<u32>(grid_size, 1, 1), "
+            "vec3<u32>(block_size, 1, 1), 0, 0>>>()" in result
         )
         assert "// Arguments: device_input, device_output" in result
         assert "HIP_KERNEL_NAME" not in result

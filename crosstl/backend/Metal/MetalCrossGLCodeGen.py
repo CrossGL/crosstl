@@ -1856,7 +1856,7 @@ class MetalToCrossGLConverter:
     def metal_synchronization_function_call(self, name, args):
         unscoped_name = str(name).split("::")[-1]
 
-        if unscoped_name == "threadgroup_barrier":
+        if unscoped_name in {"threadgroup_barrier", "simdgroup_barrier"}:
             flags = self.metal_mem_flag_names(args)
             if flags == {"mem_threadgroup"}:
                 return "workgroupBarrier()"

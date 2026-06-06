@@ -4791,6 +4791,10 @@ class HipToCrossGLConverter:
         if warp_intrinsic is not None:
             return warp_intrinsic
 
+        dim3_constructor = self.format_hip_dim3_constructor_call(func_name, args)
+        if dim3_constructor is not None:
+            return dim3_constructor
+
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         return f"{crossgl_func}({args_str})"
@@ -5802,6 +5806,15 @@ class HipToCrossGLConverter:
         if vector_name == "vec1":
             return args[0]
         return f"{vector_name}<{element_type}>({', '.join(args)})"
+
+    def format_hip_dim3_constructor_call(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+        if function_name != "dim3" or len(args) > 3:
+            return None
+
+        padded_args = list(args) + ["1"] * (3 - len(args))
+        return f"vec3<u32>({', '.join(padded_args)})"
 
     def format_lambda_call(self, args):
         if not args:

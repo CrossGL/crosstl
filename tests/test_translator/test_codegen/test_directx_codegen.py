@@ -435,6 +435,50 @@ def test_directx_interpolation_modifiers_are_preserved_on_stage_interfaces():
     assert "noperspective float2 affineUv : TEXCOORD3" in generated_code
 
 
+def test_directx_precise_modifiers_emit_hlsl_declaration_syntax_from_docs():
+    # Microsoft Learn HLSL variable syntax recommends marking precise shader
+    # outputs directly on structure fields, output parameters, or entry returns.
+    shader = """
+    shader DirectXPreciseOutputs {
+        fragment {
+            struct FragmentOutput {
+                vec4 color @ SV_Target @precise;
+            }
+
+            @precise
+            vec4 preciseReturn(vec4 color @ TEXCOORD0) @ SV_Target {
+                return color;
+            }
+
+            void writeOutput(
+                out vec4 outputColor @ SV_Target @precise,
+                vec4 value @ TEXCOORD0
+            ) {
+                outputColor = value;
+            }
+
+            vec4 main(vec4 color @ TEXCOORD0) @ SV_Target {
+                vec4 localColor @precise = color * 2.0;
+                return localColor;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "precise float4 color: SV_Target;" in generated_code
+    assert (
+        "void writeOutput(out precise float4 outputColor : SV_Target" in generated_code
+    )
+    assert (
+        "precise float4 preciseReturn(float4 color : TEXCOORD0): SV_Target"
+        in generated_code
+    )
+    assert "precise float4 localColor = (color * 2.0);" in generated_code
+    assert ": precise" not in generated_code
+
+
 def test_directx_user_defined_interpolation_names_are_not_lowered():
     shader = """
     shader InterpolationShadowing {

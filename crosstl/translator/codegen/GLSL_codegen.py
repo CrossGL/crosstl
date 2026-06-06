@@ -940,6 +940,7 @@ class GLSLCodeGen:
             "gl_Position": "gl_Position",
             "gl_PointSize": "gl_PointSize",
             "gl_ClipDistance": "gl_ClipDistance",
+            "gl_CullDistance": "gl_CullDistance",
             # Fragment outputs
             "gl_FragColor": "layout(location = 0)",
             "gl_FragColor0": "layout(location = 0)",
@@ -6899,7 +6900,12 @@ class GLSLCodeGen:
         return candidate
 
     def is_vertex_builtin_output(self, name):
-        return name in {"gl_Position", "gl_PointSize", "gl_ClipDistance"}
+        return name in {
+            "gl_Position",
+            "gl_PointSize",
+            "gl_ClipDistance",
+            "gl_CullDistance",
+        }
 
     def stage_input_member_maps(self, func, shader_type):
         if shader_type not in {"vertex", "fragment"}:
