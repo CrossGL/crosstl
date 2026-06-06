@@ -583,6 +583,26 @@ def _include_dependency_counts_by_source_backend(
     return dict(sorted(counts.items()))
 
 
+def _include_dependency_counts_by_source_backend_status(
+    units: Sequence[ProjectTranslationUnit],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for unit in units:
+        if not _is_non_empty_string(unit.source_backend):
+            continue
+        for dependency in unit.include_dependencies:
+            if not isinstance(dependency, Mapping):
+                continue
+            status = dependency.get("status")
+            if not isinstance(status, str) or status not in INCLUDE_DEPENDENCY_STATUSES:
+                continue
+            row = counts.setdefault(unit.source_backend, {})
+            row[status] = row.get(status, 0) + 1
+    return {
+        backend: dict(sorted(row.items())) for backend, row in sorted(counts.items())
+    }
+
+
 def _artifact_counts_by_target(
     artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, dict[str, int]]:
@@ -2079,6 +2099,9 @@ class ProjectPortabilityReport:
                 ),
                 "includeDependenciesBySourceBackend": (
                     _include_dependency_counts_by_source_backend(self.units)
+                ),
+                "includeDependenciesBySourceBackendStatus": (
+                    _include_dependency_counts_by_source_backend_status(self.units)
                 ),
                 "skippedByReason": _skipped_counts_by_reason(self.skipped),
                 "skippedByExtension": _skipped_counts_by_extension(self.skipped),
@@ -4111,6 +4134,7 @@ def _inspection_include_dependency_summary(
     by_kind = summary.get("includeDependenciesByKind")
     by_resolved_from = summary.get("includeDependenciesByResolvedFrom")
     by_source_backend = summary.get("includeDependenciesBySourceBackend")
+    by_source_backend_status = summary.get("includeDependenciesBySourceBackendStatus")
     if (
         not isinstance(dependency_count, int)
         or isinstance(dependency_count, bool)
@@ -4163,6 +4187,15 @@ def _inspection_include_dependency_summary(
         ),
         "bySourceBackend": (
             dict(by_source_backend) if isinstance(by_source_backend, Mapping) else {}
+        ),
+        "bySourceBackendStatus": (
+            {
+                source_backend: dict(counts)
+                for source_backend, counts in by_source_backend_status.items()
+                if isinstance(source_backend, str) and isinstance(counts, Mapping)
+            }
+            if isinstance(by_source_backend_status, Mapping)
+            else {}
         ),
         "resolvedDependencyCount": len(resolved_dependencies),
         "truncatedResolvedDependencyCount": max(
@@ -4702,6 +4735,32 @@ def _payload_include_dependency_counts_by_source_backend(
         if dependency_count:
             counts[source_backend] = counts.get(source_backend, 0) + dependency_count
     return dict(sorted(counts.items()))
+
+
+def _payload_include_dependency_counts_by_source_backend_status(
+    units: Sequence[Any],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            continue
+        source_backend = unit.get("sourceBackend")
+        if not _is_non_empty_string(source_backend):
+            continue
+        dependencies = unit.get("includeDependencies")
+        if not isinstance(dependencies, list):
+            continue
+        for dependency in dependencies:
+            if not isinstance(dependency, Mapping):
+                continue
+            status = dependency.get("status")
+            if not isinstance(status, str) or status not in INCLUDE_DEPENDENCY_STATUSES:
+                continue
+            row = counts.setdefault(source_backend, {})
+            row[status] = row.get(status, 0) + 1
+    return {
+        backend: dict(sorted(row.items())) for backend, row in sorted(counts.items())
+    }
 
 
 def _payload_skipped_counts_by_reason(skipped: Sequence[Any]) -> dict[str, int]:
@@ -7114,6 +7173,15 @@ def _summary_contract_reasons(
                     "summary.includeDependenciesBySourceBackend",
                     summary.get("includeDependenciesBySourceBackend"),
                     _payload_include_dependency_counts_by_source_backend(units),
+                    "unit include dependencies",
+                )
+            )
+        if "includeDependenciesBySourceBackendStatus" in summary:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "summary.includeDependenciesBySourceBackendStatus",
+                    summary.get("includeDependenciesBySourceBackendStatus"),
+                    _payload_include_dependency_counts_by_source_backend_status(units),
                     "unit include dependencies",
                 )
             )

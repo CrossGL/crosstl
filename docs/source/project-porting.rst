@@ -276,8 +276,9 @@ Project reports are JSON documents with:
   source-map source backend, source-map variant, source-remap target,
   source-remap source backend, source-remap variant, include dependency kind,
   include dependency status, include dependency source backend, include
-  dependency resolution source, diagnostic code (``diagnosticsByCode``), and
-  missing capability (``missingCapabilityCounts``).
+  dependency source-backend status, include dependency resolution source,
+  diagnostic code (``diagnosticsByCode``), and missing capability
+  (``missingCapabilityCounts``).
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, source hashes, and source
   overrides. Units that contain ``#include`` directives also include
@@ -383,8 +384,8 @@ Project reports are JSON documents with:
   status consistency checks,
   include dependency record shape and include dependency summary consistency,
   current include dependency status, resolved-path, resolved-hash,
-  source-backend rollup, and resolution-source checks, resolved and unresolved
-  include inspection samples,
+  source-backend status rollup, and resolution-source checks, resolved and
+  unresolved include inspection samples,
   artifact source, source-backend,
   target, variant, and source-relative output layout declaration checks,
   translated artifact existence checks, escaped output directory and

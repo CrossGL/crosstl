@@ -322,9 +322,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert "text inspection identifies inactive include directories by path" in (
             backend_support["notes"]
         )
-        assert "include dependency status, kind, source-backend, resolution-source" in (
-            backend_support["notes"]
-        )
+        assert (
+            "include dependency status, kind, source-backend, "
+            "source-backend status, resolution-source"
+        ) in backend_support["notes"]
         assert "resolved and unresolved include dependency samples" in (
             backend_support["notes"]
         )
@@ -333,7 +334,9 @@ def test_project_include_resolution_documents_status_reporting():
             backend_support["notes"]
         )
         assert "includeDependencies records" in backend_support["notes"]
-        assert "summary rollups including source-backend" in (backend_support["notes"])
+        assert "summary rollups including source-backend, source-backend status" in (
+            backend_support["notes"]
+        )
         assert "current status, resolved path, resolved include hash" in (
             backend_support["notes"]
         )
