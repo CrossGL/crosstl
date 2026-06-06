@@ -35,10 +35,10 @@ jobs:
           ]
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
         OS: [ubuntu-latest, windows-latest, macOS-latest]
-        include:
+        exclude:
           - python-version: "3.8"
             OS: windows-latest
-            runner: windows-2022
+        include:
           - python-version: "3.9"
             OS: windows-latest
             runner: windows-2022
