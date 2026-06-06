@@ -1488,6 +1488,13 @@ def _format_project_report_inspection(payload):
     )
     if include_dependencies_by_kind:
         lines.append(include_dependencies_by_kind)
+    include_dependencies_by_source_backend = _format_count_rollup(
+        "Include dependencies by source backend",
+        summary.get("includeDependenciesBySourceBackend"),
+        include_zero=False,
+    )
+    if include_dependencies_by_source_backend:
+        lines.append(include_dependencies_by_source_backend)
     include_dependencies_by_resolved_from = _format_count_rollup(
         "Include dependencies by resolution source",
         summary.get("includeDependenciesByResolvedFrom"),

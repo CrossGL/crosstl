@@ -709,6 +709,7 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
         "include-dir": 1,
         "source": 1,
     }
+    assert payload["summary"]["includeDependenciesBySourceBackend"] == {"opengl": 6}
     assert payload["summary"]["diagnosticsByCode"] == {
         "project.scan.dynamic-include": 1,
         "project.scan.include-outside-project": 1,
@@ -739,6 +740,7 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
     payload["summary"]["includeDependencyCount"] = 2
     payload["summary"]["includeDependenciesByKind"] = {"module": 1}
     payload["summary"]["includeDependenciesByResolvedFrom"] = {"workspace": 1}
+    payload["summary"]["includeDependenciesBySourceBackend"] = {"cgl": 1}
     report_path = repo / "bad-include-dependencies-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -777,6 +779,10 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
     )
     assert (
         "summary.includeDependenciesByResolvedFrom must match unit include "
+        "dependencies"
+    ) in diagnostic["message"]
+    assert (
+        "summary.includeDependenciesBySourceBackend must match unit include "
         "dependencies"
     ) in diagnostic["message"]
 
@@ -8579,6 +8585,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "byStatus": {},
         "byKind": {},
         "byResolvedFrom": {},
+        "bySourceBackend": {},
         "resolvedDependencyCount": 0,
         "truncatedResolvedDependencyCount": 0,
         "resolvedDependencies": [],
@@ -9116,6 +9123,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     assert result.returncode == 0
     assert "Include dependencies by status: missing=1, resolved=1" in result.stdout
     assert "Include dependencies by kind: local=1, system=1" in result.stdout
+    assert "Include dependencies by source backend: opengl=2" in result.stdout
     assert "Include dependencies by resolution source: include-dir=1" in result.stdout
     assert "Resolved include dependencies:" in result.stdout
     assert (
@@ -9132,6 +9140,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
         "byStatus": {"missing": 1, "resolved": 1},
         "byKind": {"local": 1, "system": 1},
         "byResolvedFrom": {"include-dir": 1},
+        "bySourceBackend": {"opengl": 2},
         "resolvedDependencyCount": 1,
         "truncatedResolvedDependencyCount": 0,
         "resolvedDependencies": [
