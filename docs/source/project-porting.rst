@@ -337,8 +337,10 @@ Project reports are JSON documents with:
   generated/original mapping for compiler ``--source-remap`` consumers. The
   report records the sidecar path, hash, generated-file identity, summary
   rollups by target and source backend, and bounded inspection samples for
-  source-map and source-remap artifacts. The project pipeline does not claim
-  fine-grained source-map coverage yet.
+  source-map and source-remap artifacts. Validation checks that file-level
+  source-map spans still cover the current source and generated files, and that
+  compiler source-remap sidecars use the closed schema-1 field set. The project
+  pipeline does not claim fine-grained source-map coverage yet.
   Artifact provenance records the
   ``single-file-translate`` pipeline and uses ``crossgl`` as the intermediate
   marker only when both source and target backends route through the CrossGL
@@ -397,8 +399,9 @@ Project reports are JSON documents with:
   checks, failed artifact generated metadata rejection, required translated
   artifact source maps, required CrossGL artifact source remaps, source-map
   record shape, non-empty mapping list, single file-level mapping, span
-  consistency, anchor consistency, source-remap metadata shape, sidecar hash,
-  and sidecar content checks, external
+  consistency, anchor consistency, current file-level source-map span coverage,
+  source-remap metadata shape, sidecar hash, closed compiler sidecar field
+  sets, and sidecar content checks, external
   corpus record, per-entry artifact count, and summary checks, summary
   consistency checks, migration action shape and target declaration checks,
   preserved diagnostic shape, repository-relative file path, span consistency,

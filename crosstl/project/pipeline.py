@@ -28,6 +28,21 @@ REPORT_KIND = "crosstl-project-portability-report"
 REPORT_INSPECTION_KIND = "crosstl-project-report-inspection"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
+SOURCE_MAP_SPAN_FIELDS = (
+    "file",
+    "line",
+    "column",
+    "offset",
+    "length",
+    "endLine",
+    "endColumn",
+    "endOffset",
+)
+COMPILER_SOURCE_REMAP_PAYLOAD_FIELDS = frozenset(
+    ("schemaVersion", "generatedFile", "mappings")
+)
+COMPILER_SOURCE_REMAP_MAPPING_FIELDS = frozenset(("generated", "original"))
+COMPILER_SOURCE_REMAP_SPAN_FIELDS = frozenset(SOURCE_MAP_SPAN_FIELDS)
 REPORT_GENERATOR_PIPELINE = "project-porting"
 REPORT_ARTIFACT_PROVENANCE_PIPELINES = ("single-file-translate",)
 REPORT_ARTIFACT_PROVENANCE_INTERMEDIATES = ("crossgl",)
@@ -2743,6 +2758,16 @@ def _artifact_source_remap(
     }
 
 
+def _unsupported_mapping_field_reasons(
+    prefix: str, value: Mapping[str, Any], allowed_fields: frozenset[str]
+) -> list[str]:
+    reasons = []
+    for field_name in sorted(value, key=str):
+        if field_name not in allowed_fields:
+            reasons.append(f"{prefix}.{field_name} is not allowed")
+    return reasons
+
+
 def _compiler_source_remap_span_reasons(prefix: str, value: Any) -> list[str]:
     reasons = _source_map_span_reasons(prefix, value)
     if reasons:
@@ -2750,6 +2775,11 @@ def _compiler_source_remap_span_reasons(prefix: str, value: Any) -> list[str]:
 
     if not isinstance(value, Mapping):
         return reasons
+    reasons.extend(
+        _unsupported_mapping_field_reasons(
+            prefix, value, COMPILER_SOURCE_REMAP_SPAN_FIELDS
+        )
+    )
 
     file_path = value["file"]
     if not _is_stable_relative_posix_path(file_path):
@@ -2770,7 +2800,9 @@ def _compiler_source_remap_payload_reasons(payload: Any) -> list[str]:
     if not isinstance(payload, Mapping):
         return ["$ must be an object"]
 
-    reasons = []
+    reasons = _unsupported_mapping_field_reasons(
+        "$", payload, COMPILER_SOURCE_REMAP_PAYLOAD_FIELDS
+    )
     if payload.get("schemaVersion") != SOURCE_REMAP_SCHEMA_VERSION:
         reasons.append("$.schemaVersion must be 1")
 
@@ -2792,6 +2824,11 @@ def _compiler_source_remap_payload_reasons(payload: Any) -> list[str]:
         if not isinstance(mapping, Mapping):
             reasons.append(f"{mapping_prefix} must be an object")
             continue
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                mapping_prefix, mapping, COMPILER_SOURCE_REMAP_MAPPING_FIELDS
+            )
+        )
         generated = mapping.get("generated")
         original = mapping.get("original")
         reasons.extend(
@@ -3223,6 +3260,95 @@ def _validation_artifact_status_by_variant(
     return {variant: counts[variant] for variant in sorted(counts)}
 
 
+def _source_map_file_span_mismatch_reasons(
+    prefix: str,
+    span: Any,
+    expected_span: Mapping[str, Any],
+    expected_name: str,
+) -> list[str]:
+    if not isinstance(span, Mapping):
+        return []
+    reasons = []
+    for field_name in SOURCE_MAP_SPAN_FIELDS:
+        if span.get(field_name) != expected_span[field_name]:
+            expected_field_name = "path" if field_name == "file" else field_name
+            reasons.append(
+                f"{prefix}.{field_name} must match "
+                f"{expected_name} {expected_field_name}"
+            )
+    return reasons
+
+
+def _source_map_file_span_validation_diagnostics(
+    artifact: Mapping[str, Any],
+    config: ProjectConfig,
+    artifact_path: Path,
+    *,
+    source_hash_status: str,
+    generated_hash_status: str,
+) -> list[ProjectDiagnostic]:
+    if artifact.get("status") != "translated":
+        return []
+
+    source_map = artifact.get("sourceMap")
+    if (
+        not isinstance(source_map, Mapping)
+        or source_map.get("mappingGranularity") != "file"
+    ):
+        return []
+
+    reasons = []
+    source = artifact.get("source")
+    if source_hash_status in {"ok", "not-recorded"} and _is_non_empty_string(source):
+        source_path = _resolve_report_path(config, source)
+        if (
+            _is_relative_to(source_path, config.root)
+            and source_path.exists()
+            and source_path.is_file()
+        ):
+            reasons.extend(
+                _source_map_file_span_mismatch_reasons(
+                    "sourceMap.source",
+                    source_map.get("source"),
+                    _file_span(source_path, source).to_json(),
+                    "source file",
+                )
+            )
+
+    artifact_report_path = artifact.get("path")
+    if (
+        generated_hash_status in {"ok", "not-recorded"}
+        and _is_non_empty_string(artifact_report_path)
+        and _is_relative_to(artifact_path, config.root)
+        and artifact_path.exists()
+        and artifact_path.is_file()
+    ):
+        reasons.extend(
+            _source_map_file_span_mismatch_reasons(
+                "sourceMap.generated",
+                source_map.get("generated"),
+                _file_span(artifact_path, artifact_report_path).to_json(),
+                "generated artifact",
+            )
+        )
+
+    if not reasons:
+        return []
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.validate.source-map-file-span-mismatch",
+            message=(
+                "Source map file-level spans do not match current files: "
+                f"{artifact.get('path')}: {'; '.join(reasons)}"
+            ),
+            location=SourceLocation(file=str(artifact.get("source", ""))),
+            target=str(artifact.get("target", "")),
+            missing_capabilities=["source.provenance"],
+        )
+    ]
+
+
 def _source_remap_validation_diagnostics(
     artifact: Mapping[str, Any], config: ProjectConfig
 ) -> list[ProjectDiagnostic]:
@@ -3441,6 +3567,7 @@ def _validate_artifacts(
         )
         generated_hash = artifact.get("generatedHash")
         source_remap_diagnostics: list[ProjectDiagnostic] = []
+        source_map_diagnostics: list[ProjectDiagnostic] = []
         if artifact.get("status") == "translated":
             if not artifact_inside_project:
                 generated_hash_status = "outside-project"
@@ -3469,6 +3596,14 @@ def _validate_artifacts(
                 artifact, config
             )
             diagnostics.extend(source_remap_diagnostics)
+            source_map_diagnostics = _source_map_file_span_validation_diagnostics(
+                artifact,
+                config,
+                artifact_path,
+                source_hash_status=source_hash_status,
+                generated_hash_status=generated_hash_status,
+            )
+            diagnostics.extend(source_map_diagnostics)
         if artifact.get("status") == "failed":
             error = str(artifact.get("error", "")).strip()
             message = (
@@ -3499,6 +3634,7 @@ def _validate_artifacts(
                 and source_hash_status in {"ok", "not-recorded"}
                 and generated_hash_status in {"ok", "not-recorded"}
                 and not source_remap_diagnostics
+                and not source_map_diagnostics
                 else "failed"
             ),
             "sourceHashStatus": source_hash_status,
@@ -5766,15 +5902,7 @@ def _diagnostic_location_contract_reasons(prefix: str, value: Any) -> list[str]:
         reasons.append(f"{prefix}.file must be a string")
     elif not _is_repository_relative_report_path(file):
         reasons.append(f"{prefix}.file must be repository-relative")
-    for field_name in (
-        "line",
-        "column",
-        "offset",
-        "length",
-        "endLine",
-        "endColumn",
-        "endOffset",
-    ):
+    for field_name in SOURCE_MAP_SPAN_FIELDS[1:]:
         if not _is_non_negative_int(value.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a non-negative integer")
     if reasons:
@@ -8031,15 +8159,7 @@ def _source_map_span_reasons(prefix: str, value: Any) -> list[str]:
     reasons = []
     if not _is_non_empty_string(value.get("file")):
         reasons.append(f"{prefix}.file must be a string")
-    for field_name in (
-        "line",
-        "column",
-        "offset",
-        "length",
-        "endLine",
-        "endColumn",
-        "endOffset",
-    ):
+    for field_name in SOURCE_MAP_SPAN_FIELDS[1:]:
         if not _is_non_negative_int(value.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a non-negative integer")
     if reasons:

@@ -6659,6 +6659,57 @@ def test_validate_project_report_rejects_inconsistent_source_map_spans(tmp_path)
     ) in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_incomplete_file_level_source_map_spans(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    source_map = artifact["sourceMap"]
+    for span in (source_map["source"], source_map["generated"]):
+        span["length"] -= 1
+        span["endOffset"] -= 1
+    source_map["mappings"][0]["source"] = dict(source_map["source"])
+    source_map["mappings"][0]["generated"] = dict(source_map["generated"])
+    source_remap_path = repo / artifact["sourceRemap"]["path"]
+    source_remap_path.write_text(
+        json.dumps(
+            project_pipeline._source_remap_payload(source_map),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
+    report_path = repo / "out" / "incomplete-source-map-span-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert validation["validation"]["summary"]["failedCount"] == 1
+    assert validation["validation"]["artifacts"][0]["sourceHashStatus"] == "ok"
+    assert validation["validation"]["artifacts"][0]["generatedHashStatus"] == "ok"
+    assert validation["diagnosticsByCode"] == {
+        "project.validate.source-map-file-span-mismatch": 1,
+    }
+    assert validation["missingCapabilityCounts"] == {"source.provenance": 1}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["missingCapabilities"] == ["source.provenance"]
+    assert "sourceMap.source.length must match source file length" in (
+        diagnostic["message"]
+    )
+    assert "sourceMap.generated.length must match generated artifact length" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -6929,6 +6980,48 @@ def test_validate_project_report_rejects_source_remap_content_mismatches(tmp_pat
     }
 
 
+def test_validate_project_report_rejects_source_remap_sidecar_extra_fields(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    source_remap_path = repo / artifact["sourceRemap"]["path"]
+    source_remap_payload = json.loads(source_remap_path.read_text(encoding="utf-8"))
+    source_remap_payload["extra"] = True
+    source_remap_payload["mappings"][0]["extra"] = True
+    source_remap_payload["mappings"][0]["generated"]["extra"] = True
+    source_remap_payload["mappings"][0]["original"]["extra"] = True
+    source_remap_path.write_text(
+        json.dumps(source_remap_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
+    report_path = repo / "out" / "source-remap-extra-field-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"]["summary"]["failedCount"] == 1
+    assert validation["diagnosticsByCode"] == {
+        "project.validate.source-remap-invalid": 1,
+        "project.validate.source-remap-mismatch": 1,
+    }
+    diagnostic = next(
+        diagnostic
+        for diagnostic in validation["diagnostics"]
+        if diagnostic["code"] == "project.validate.source-remap-invalid"
+    )
+    assert "$.extra is not allowed" in diagnostic["message"]
+    assert "$.mappings[0].extra is not allowed" in diagnostic["message"]
+    assert "$.mappings[0].generated.extra is not allowed" in diagnostic["message"]
+    assert "$.mappings[0].original.extra is not allowed" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_compiler_incompatible_source_remap_sidecar(
     tmp_path,
 ):
@@ -6965,9 +7058,14 @@ def test_validate_project_report_rejects_compiler_incompatible_source_remap_side
     assert validation["success"] is False
     assert validation["validation"]["summary"]["failedCount"] == 1
     assert validation["diagnosticsByCode"] == {
+        "project.validate.source-map-file-span-mismatch": 1,
         "project.validate.source-remap-invalid": 1,
     }
-    diagnostic = validation["diagnostics"][0]
+    diagnostic = next(
+        diagnostic
+        for diagnostic in validation["diagnostics"]
+        if diagnostic["code"] == "project.validate.source-remap-invalid"
+    )
     assert "Source remap sidecar is not compiler-compatible" in diagnostic["message"]
     assert "$.mappings[0].generated.length must be greater than zero" in (
         diagnostic["message"]

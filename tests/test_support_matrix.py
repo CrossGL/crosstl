@@ -694,6 +694,12 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "source-remap summary rollups including variant rollups" in (
             backend_support["notes"]
         )
+        assert "current file-level source-map span coverage" in (
+            backend_support["notes"]
+        )
+        assert "closed compiler source-remap sidecar field sets" in (
+            backend_support["notes"]
+        )
         assert "bounded source-map and source-remap artifact inspection samples" in (
             backend_support["notes"]
         )
@@ -757,6 +763,15 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_compiler_incompatible_source_"
             "remap_sidecar"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_incomplete_file_level_source_"
+            "map_spans"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_source_remap_sidecar_extra_fields"
         ) in backend_support["evidence"]
 
 
