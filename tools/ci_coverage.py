@@ -838,6 +838,7 @@ def full_suite_failure_summary_report(workflow: str) -> dict[str, dict[str, bool
             "upload_on_failure": "if: always()" in upload_step,
             "upload_ignores_missing_files": "if-no-files-found: ignore" in upload_step,
             "upload_retention": "retention-days: 30" in upload_step,
+            "upload_nonfatal": "continue-on-error: true" in upload_step,
             "upload_after_summary": workflow_job_step_after(
                 workflow,
                 job,

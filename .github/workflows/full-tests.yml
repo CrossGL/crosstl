@@ -52,6 +52,7 @@ jobs:
 
       - name: Upload complete test failure summary
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: full-test-failure-summary
@@ -199,6 +200,7 @@ jobs:
 
       - name: Upload shader validator failure summary
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: shader-validator-failure-summary-${{ matrix.os }}
@@ -366,6 +368,7 @@ jobs:
 
       - name: Upload compiler smoke failure summary
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: compiler-smoke-linux-failure-summary
@@ -429,6 +432,7 @@ jobs:
 
       - name: Upload Metal compiler smoke failure summary
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: compiler-smoke-macos-failure-summary
