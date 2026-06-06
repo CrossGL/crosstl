@@ -480,7 +480,7 @@ class GLSLParser:
 
             if self.current_token[0] == "STRUCT":
                 struct_node, extra_vars = self.parse_struct()
-                structs.append(struct_node)
+                self.append_struct_with_nested(structs, struct_node)
                 for var in extra_vars:
                     global_variables.append(var)
                 continue
@@ -509,7 +509,7 @@ class GLSLParser:
                 and self.peek_non_newline()[0] == "LBRACE"
             ):
                 struct_node, block_vars = self.parse_interface_block(qualifiers, layout)
-                structs.append(struct_node)
+                self.append_struct_with_nested(structs, struct_node)
                 self.append_interface_block_vars(
                     block_vars, uniforms, io_variables, global_variables
                 )
@@ -519,7 +519,7 @@ class GLSLParser:
                 qualifiers.append(self.current_token[1])
                 self.eat("IDENTIFIER")
                 struct_node, block_vars = self.parse_interface_block(qualifiers, layout)
-                structs.append(struct_node)
+                self.append_struct_with_nested(structs, struct_node)
                 self.append_interface_block_vars(
                     block_vars, uniforms, io_variables, global_variables
                 )
@@ -529,7 +529,7 @@ class GLSLParser:
                 struct_node, extra_vars = self.parse_struct(
                     qualifiers=qualifiers, layout=layout
                 )
-                structs.append(struct_node)
+                self.append_struct_with_nested(structs, struct_node)
                 for var in extra_vars:
                     lowered = {q.lower() for q in var.qualifiers or []}
                     if "uniform" in lowered:
@@ -603,6 +603,15 @@ class GLSLParser:
             self.shader_type = inferred_shader_type
             self.apply_main_shader_type(shader, inferred_shader_type)
         return shader
+
+    def append_struct_with_nested(self, structs, struct_node):
+        structs.extend(getattr(struct_node, "nested_structs", []) or [])
+        structs.append(struct_node)
+
+    def struct_nodes_with_nested(self, struct_node):
+        nodes = list(getattr(struct_node, "nested_structs", []) or [])
+        nodes.append(struct_node)
+        return nodes
 
     def apply_main_shader_type(self, shader, shader_type):
         for function in shader.functions:
@@ -1265,11 +1274,23 @@ class GLSLParser:
         self.eat("LBRACE")
 
         members = []
+        nested_structs = []
         while self.current_token[0] != "RBRACE":
             self.skip_newlines()
             if self.current_token[0] == "RBRACE":
                 break
             member_qualifiers, member_layout = self.parse_declaration_prefix()
+            if self.current_token[0] == "STRUCT":
+                nested_struct, member_nodes = self.parse_struct(
+                    qualifiers=member_qualifiers,
+                    layout=member_layout,
+                )
+                nested_structs.extend(
+                    getattr(nested_struct, "nested_structs", []) or []
+                )
+                nested_structs.append(nested_struct)
+                members.extend(member_nodes)
+                continue
             member_type = self.parse_type()
             members.extend(
                 self.parse_variable_declarations(
@@ -1290,7 +1311,9 @@ class GLSLParser:
         else:
             self.eat("SEMICOLON")
 
-        return StructNode(name, members), variables
+        struct_node = StructNode(name, members)
+        struct_node.nested_structs = nested_structs
+        return struct_node, variables
 
     def next_anonymous_struct_name(self):
         name = f"AnonymousStruct{self.anonymous_struct_count}"
@@ -1305,17 +1328,28 @@ class GLSLParser:
         self.eat("LBRACE")
 
         members = []
+        nested_structs = []
         while self.current_token[0] != "RBRACE":
             self.skip_newlines()
             if self.current_token[0] == "RBRACE":
                 break
             member_qualifiers, member_layout = self.parse_declaration_prefix()
-            member_type = self.parse_type()
-            member_nodes = self.parse_variable_declarations(
-                member_type,
-                qualifiers=member_qualifiers,
-                layout=member_layout,
-            )
+            if self.current_token[0] == "STRUCT":
+                nested_struct, member_nodes = self.parse_struct(
+                    qualifiers=member_qualifiers,
+                    layout=member_layout,
+                )
+                nested_structs.extend(
+                    getattr(nested_struct, "nested_structs", []) or []
+                )
+                nested_structs.append(nested_struct)
+            else:
+                member_type = self.parse_type()
+                member_nodes = self.parse_variable_declarations(
+                    member_type,
+                    qualifiers=member_qualifiers,
+                    layout=member_layout,
+                )
             for member_node in member_nodes:
                 member_node.interface_block = block_name
                 member_node.interface_member_layout = member_layout
@@ -1347,6 +1381,7 @@ class GLSLParser:
         struct_node.interface_instance_is_array = instance_is_array
         struct_node.interface_array_size = array_size
         struct_node.interface_array_sizes = array_sizes
+        struct_node.nested_structs = nested_structs
         block_vars = []
 
         if instance_name:
@@ -1805,7 +1840,7 @@ class GLSLParser:
             return DiscardNode()
         if self.current_token[0] == "STRUCT":
             struct_node, extra_vars = self.parse_struct()
-            return [struct_node, *extra_vars]
+            return [*self.struct_nodes_with_nested(struct_node), *extra_vars]
 
         if self.is_local_function_prototype_start():
             self.skip_local_function_prototype()
@@ -1815,7 +1850,7 @@ class GLSLParser:
             qualifiers = self.parse_qualifiers()
             if self.current_token[0] == "STRUCT":
                 struct_node, extra_vars = self.parse_struct(qualifiers=qualifiers)
-                return [struct_node, *extra_vars]
+                return [*self.struct_nodes_with_nested(struct_node), *extra_vars]
             type_name = self.parse_type()
             self.skip_newlines()
             return self.parse_variable_declarations(type_name, qualifiers=qualifiers)

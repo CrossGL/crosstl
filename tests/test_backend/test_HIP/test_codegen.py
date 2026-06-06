@@ -2368,6 +2368,27 @@ class TestHipCodeGen:
         assert "// Kernel launch: kernel<<<grid, block, 128, stream>>>()" in result
         assert "// Arguments: data, 1" in result
 
+    def test_kernel_launch_arguments_can_start_on_next_line_conversion(self):
+        code = """
+        void host(float* data) {
+            kernel<<<dim3(4), dim3(64), 0, hipStreamDefault>>>
+                (data);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// Kernel launch: kernel<<<vec3<u32>(4), vec3<u32>(64), "
+            "0, hipStreamDefault>>>()"
+        ) in result
+        assert "// Arguments: data" in result
+
     def test_templated_kernel_launch_conversion(self):
         code = """
         template <typename T>

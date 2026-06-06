@@ -2058,6 +2058,10 @@ class MetalParser:
 
         post_attributes = self.parse_attributes()
         attributes.extend(post_attributes)
+        trailing_return_type = self.parse_optional_trailing_return_type(attributes)
+        if trailing_return_type is not None:
+            return_type = trailing_return_type
+            attributes.extend(self.parse_attributes())
         attribute_qualifier, attributes = self.extract_stage_attributes(attributes)
         if qualifier is None:
             qualifier = attribute_qualifier
@@ -2079,6 +2083,17 @@ class MetalParser:
             attributes=attributes,
             qualifier=qualifier,  # Also store as single qualifier for backward compatibility
         )
+
+    def parse_optional_trailing_return_type(self, attributes):
+        if self.current_token[0] != "ARROW":
+            return None
+        self.eat("ARROW")
+        trailing_attributes = self.parse_attributes()
+        return_type, _return_qualifiers = self.parse_type_specifier(
+            attributes=trailing_attributes
+        )
+        attributes.extend(trailing_attributes)
+        return return_type
 
     def extract_stage_attributes(self, attributes):
         qualifier = None
