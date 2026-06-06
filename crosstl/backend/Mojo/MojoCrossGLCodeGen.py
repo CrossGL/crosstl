@@ -114,6 +114,7 @@ class MojoToCrossGLConverter:
     def __init__(self):
         self.user_function_names = set()
         self.user_function_arities = {}
+        self.imported_module_aliases = {}
         self.scoped_value_names = []
         self.function_body_depth = 0
         self.type_map = {
@@ -245,6 +246,7 @@ class MojoToCrossGLConverter:
     def generate(self, ast):
         self.user_function_arities = self.collect_user_function_arities(ast)
         self.user_function_names = set(self.user_function_arities)
+        self.imported_module_aliases = self.collect_imported_module_aliases(ast)
         self.scoped_value_names = []
         global_value_names = [
             getattr(variable, "name", None)
@@ -361,6 +363,33 @@ class MojoToCrossGLConverter:
         if arg_count is None:
             return func_name in self.user_function_arities
         return arg_count in self.user_function_arities.get(func_name, set())
+
+    def collect_imported_module_aliases(self, ast):
+        aliases = {}
+        for import_node in getattr(ast, "includes", []) or []:
+            if getattr(import_node, "items", None):
+                continue
+
+            module_name = getattr(
+                import_node, "module_name", getattr(import_node, "module", None)
+            )
+            if module_name not in {"math", "simd"}:
+                continue
+
+            alias = getattr(import_node, "alias", None)
+            if alias:
+                aliases[self.map_identifier_name(alias)] = module_name
+        return aliases
+
+    def resolve_imported_function_name(self, func_name):
+        if not isinstance(func_name, str) or "." not in func_name:
+            return func_name
+
+        qualifier, member = func_name.split(".", 1)
+        module_name = self.imported_module_aliases.get(qualifier)
+        if not module_name:
+            return func_name
+        return f"{module_name}.{member}"
 
     def push_value_scope(self, names=None):
         scope = set()
@@ -1153,7 +1182,8 @@ class MojoToCrossGLConverter:
         mapped_name = self.map_identifier_name(func_name)
         if self.is_user_defined_function(func_name, arg_count):
             return mapped_name
-        return self.function_map.get(func_name, mapped_name)
+        resolved_name = self.resolve_imported_function_name(func_name)
+        return self.function_map.get(resolved_name, mapped_name)
 
     def map_operator(self, op):
         if op == "is":

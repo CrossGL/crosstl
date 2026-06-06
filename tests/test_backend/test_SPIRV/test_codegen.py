@@ -3095,6 +3095,30 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_VERTEX_ID_INSTANCE_ID_BUILTINS_ASSEMBLY = """
+; Reduced from legacy GLSL vertex built-ins accepted by SPIR-V assembly tools.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %vertex_id %instance_id %position
+OpDecorate %vertex_id BuiltIn VertexId
+OpDecorate %instance_id BuiltIn InstanceId
+OpDecorate %position BuiltIn Position
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_int = OpTypePointer Input %int
+%ptr_output_v4float = OpTypePointer Output %v4float
+%vertex_id = OpVariable %ptr_input_int Input
+%instance_id = OpVariable %ptr_input_int Input
+%position = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_FRAGMENT_SAMPLE_AND_VIEW_BUILTINS_ASSEMBLY = """
 ; Reduced from Vulkan fragment interface built-ins found in SwiftShader/glslang output.
 OpCapability Shader
@@ -4893,6 +4917,22 @@ def test_glslang_relaxed_precision_interface_codegen_reparse():
     assert "outColor = color;" in generated_code
     assert "RelaxedPrecision" not in generated_code
     assert "outColor = loaded;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_vertex_id_instance_id_builtin_aliases_codegen_reparse():
+    tokens = tokenize_code(SPIRV_VERTEX_ID_INSTANCE_ID_BUILTINS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int gl_VertexID @input @gl_VertexID;" in generated_code
+    assert "int gl_InstanceID @input @gl_InstanceID;" in generated_code
+    assert "float4 gl_Position @output @gl_Position;" in generated_code
+    assert "@builtin(vertexid)" not in generated_code
+    assert "@builtin(instanceid)" not in generated_code
+    assert "int VertexId @input" not in generated_code
+    assert "int InstanceId @input" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

@@ -319,18 +319,24 @@ def format_shader_code(code, backend, output_path=None):
     # Map backend to language
     language_map = {
         "metal": ShaderLanguage.METAL,
+        "msl": ShaderLanguage.METAL,
         "directx": ShaderLanguage.HLSL,
         "hlsl": ShaderLanguage.HLSL,
+        "dx": ShaderLanguage.HLSL,
         "opengl": ShaderLanguage.GLSL,
         "glsl": ShaderLanguage.GLSL,
+        "ogl": ShaderLanguage.GLSL,
         "vulkan": ShaderLanguage.SPIRV,
         "spirv": ShaderLanguage.SPIRV,
         "spv": ShaderLanguage.SPIRV,
         "mojo": ShaderLanguage.MOJO,
         "rust": ShaderLanguage.RUST,
+        "rs": ShaderLanguage.RUST,
         "cuda": ShaderLanguage.CUDA,
+        "cu": ShaderLanguage.CUDA,
         "hip": ShaderLanguage.HIP,
         "slang": ShaderLanguage.SLANG,
+        "slangh": ShaderLanguage.SLANG,
     }
 
     language = language_map.get(backend_key)

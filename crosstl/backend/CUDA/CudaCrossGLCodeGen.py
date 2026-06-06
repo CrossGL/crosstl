@@ -5895,4 +5895,16 @@ class CudaToCrossGLConverter:
             "dim3": "vec3<u32>",
         }
 
-        return function_mapping.get(func_name, func_name)
+        normalized_func_name = self.normalize_cuda_builtin_function_name(func_name)
+        return function_mapping.get(normalized_func_name, func_name)
+
+    def normalize_cuda_builtin_function_name(self, func_name):
+        if not isinstance(func_name, str):
+            return func_name
+        normalized_name = func_name
+        if normalized_name.startswith("::"):
+            normalized_name = normalized_name[2:]
+        for namespace in ("cuda::std::", "std::"):
+            if normalized_name.startswith(namespace):
+                return normalized_name[len(namespace) :]
+        return normalized_name
