@@ -1377,6 +1377,7 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
         "available": True,
         "byStatus": {"not-supported": 1},
         "bySourceBackend": {"cgl": {"not-supported": 1}},
+        "byVariant": {},
         "notSupportedArtifactCount": 1,
         "truncatedNotSupportedArtifactCount": 0,
         "notSupportedArtifacts": [
@@ -1558,13 +1559,25 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "debug": {"forwarded": 1},
         "release": {"forwarded": 1},
     }
+    assert payload["summary"]["includePathProcessingByVariant"] == {
+        "debug": {"not-requested": 1},
+        "release": {"not-requested": 1},
+    }
     assert inspection["defineProcessing"]["byVariant"] == {
         "debug": {"forwarded": 1},
         "release": {"forwarded": 1},
     }
+    assert inspection["includePathProcessing"]["byVariant"] == {
+        "debug": {"not-requested": 1},
+        "release": {"not-requested": 1},
+    }
     assert result.returncode == 0
     assert (
         "Define processing by variant: debug=(forwarded=1), release=(forwarded=1)"
+    ) in result.stdout
+    assert (
+        "Include path processing by variant: "
+        "debug=(not-requested=1), release=(not-requested=1)"
     ) in result.stdout
     assert [artifact["path"] for artifact in payload["artifacts"]] == [
         "translated/opengl/debug/simple.glsl",
@@ -2353,6 +2366,7 @@ def test_validate_project_report_rejects_include_path_processing_summary_mismatc
     payload["summary"]["includePathProcessingBySourceBackend"] = {
         "cgl": {"forwarded": 1}
     }
+    payload["summary"]["includePathProcessingByVariant"] = {"debug": {"forwarded": 1}}
     report_path = repo / "out" / "portability-report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -2368,6 +2382,10 @@ def test_validate_project_report_rejects_include_path_processing_summary_mismatc
     ) in diagnostic["message"]
     assert (
         "summary.includePathProcessingBySourceBackend must match "
+        "artifact include path processing"
+    ) in diagnostic["message"]
+    assert (
+        "summary.includePathProcessingByVariant must match "
         "artifact include path processing"
     ) in diagnostic["message"]
 
@@ -8476,6 +8494,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "available": True,
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
+        "byVariant": {},
         "notSupportedArtifactCount": 0,
         "truncatedNotSupportedArtifactCount": 0,
         "notSupportedArtifacts": [],

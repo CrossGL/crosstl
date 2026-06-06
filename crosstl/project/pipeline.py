@@ -861,6 +861,32 @@ def _include_path_processing_counts_by_source_backend(
     return {source: dict(sorted(row.items())) for source, row in sorted(counts.items())}
 
 
+def _include_path_processing_counts_by_variant(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact in artifacts:
+        variant = artifact.get("variant")
+        if not _is_non_empty_string(variant):
+            continue
+        include_path_processing = artifact.get("includePathProcessing")
+        status = (
+            include_path_processing.get("status")
+            if isinstance(include_path_processing, Mapping)
+            else "unknown"
+        )
+        if (
+            not isinstance(status, str)
+            or status not in INCLUDE_PATH_PROCESSING_STATUSES
+        ):
+            status = "unknown"
+        row = counts.setdefault(variant, {})
+        row[status] = row.get(status, 0) + 1
+    return {
+        variant: dict(sorted(row.items())) for variant, row in sorted(counts.items())
+    }
+
+
 def _include_path_processing_rollups(
     artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -870,6 +896,9 @@ def _include_path_processing_rollups(
         ),
         "includePathProcessingBySourceBackend": (
             _include_path_processing_counts_by_source_backend(artifacts)
+        ),
+        "includePathProcessingByVariant": _include_path_processing_counts_by_variant(
+            artifacts
         ),
     }
 
@@ -3936,6 +3965,7 @@ def _inspection_include_path_processing_summary(
 
     by_status = summary.get("includePathProcessingByStatus")
     by_source_backend = summary.get("includePathProcessingBySourceBackend")
+    by_variant = summary.get("includePathProcessingByVariant")
     if not isinstance(by_status, Mapping) or not isinstance(by_source_backend, Mapping):
         return {"available": False}
 
@@ -3955,6 +3985,15 @@ def _inspection_include_path_processing_summary(
             for source_backend, counts in by_source_backend.items()
             if isinstance(source_backend, str) and isinstance(counts, Mapping)
         },
+        "byVariant": (
+            {
+                variant: dict(counts)
+                for variant, counts in by_variant.items()
+                if isinstance(variant, str) and isinstance(counts, Mapping)
+            }
+            if isinstance(by_variant, Mapping)
+            else {}
+        ),
         "notSupportedArtifactCount": len(not_supported_artifacts),
         "truncatedNotSupportedArtifactCount": max(
             0,
@@ -7117,6 +7156,15 @@ def _summary_contract_reasons(
                 "artifact include path processing",
             )
         )
+        if "includePathProcessingByVariant" in summary:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "summary.includePathProcessingByVariant",
+                    summary.get("includePathProcessingByVariant"),
+                    include_path_processing_rollups["includePathProcessingByVariant"],
+                    "artifact include path processing",
+                )
+            )
         source_map_rollups = _source_map_rollups(artifact_records)
         reasons.extend(
             _count_field_contract_reasons(

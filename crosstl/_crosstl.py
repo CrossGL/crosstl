@@ -1361,6 +1361,13 @@ def _format_project_report_inspection(payload):
     )
     if include_path_processing:
         lines.append(include_path_processing)
+    include_path_processing_by_variant = _format_nested_count_rollup(
+        "Include path processing by variant",
+        summary.get("includePathProcessingByVariant"),
+        include_zero=False,
+    )
+    if include_path_processing_by_variant:
+        lines.append(include_path_processing_by_variant)
     lines.extend(
         _format_include_path_processing_issue_lines(
             payload.get("includePathProcessing")

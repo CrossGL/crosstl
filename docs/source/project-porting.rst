@@ -199,10 +199,11 @@ variant when variants are configured, so variant-specific preprocessing gaps are
 visible without reading every artifact record.
 They also record ``includePathProcessing`` metadata so active include-directory
 paths can be distinguished from include paths that were not requested or could
-not be consumed by the selected source frontend. Report inspection includes
-sampled artifacts whose active include paths could not be forwarded, so the
-affected source, target, and frontend are visible without reading every
-artifact record.
+not be consumed by the selected source frontend. Include-path processing
+summaries also roll up by named variant when variants are configured. Report
+inspection includes sampled artifacts whose active include paths could not be
+forwarded, so the affected source, target, and frontend are visible without
+reading every artifact record.
 During scan, project reports also record ``#include`` directives discovered in
 translation units. Each dependency record keeps the include target, local,
 system, or dynamic kind, line and column, and a status of ``resolved``,
@@ -303,8 +304,9 @@ Project reports are JSON documents with:
   define overrides, and require ``defineProcessing`` metadata to match the
   artifact define map, registered source frontend support, and summary rollups
   including named-variant rollups. Full reports also require
-  ``includePathProcessing`` metadata to match active include-directory records
-  and registered source frontend support.
+  ``includePathProcessing`` metadata to match active include-directory records,
+  registered source frontend support, and summary rollups including
+  named-variant rollups.
   Successful artifact records in full reports must include file-level
   source-map anchors. Generated CrossGL artifacts also include a
   compiler-compatible ``source-remap`` sidecar with a file-level
@@ -352,7 +354,8 @@ Project reports are JSON documents with:
   checks, full-report artifact matrix coverage and artifact define map checks,
   artifact define-processing metadata and status/source-backend/variant rollup
   checks,
-  artifact include-path processing metadata and rollup checks,
+  artifact include-path processing metadata and status/source-backend/variant
+  rollup checks,
   artifact matrix emitted/translated/failed/missing/extra/completion count and
   target/variant rollup checks,
   full-report source-map granularity, target, and source-backend rollup checks,
