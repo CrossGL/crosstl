@@ -2079,6 +2079,59 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_TEXTURE_PROJ_OFFSET_ASSEMBLY = """
+; Reduced from glslangValidator output for textureProjOffset,
+; textureProjLodOffset, and textureProjGradOffset on a 2D sampled image.
+; glslang emits OpImageSampleProj* with ConstOffset image operands.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %uvq %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %color_tex "colorTex"
+OpName %uvq "uvq"
+OpName %out_color "outColor"
+OpDecorate %color_tex DescriptorSet 0
+OpDecorate %color_tex Binding 0
+OpDecorate %uvq Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2float = OpTypeVector %float 2
+%v3float = OpTypeVector %float 3
+%v2int = OpTypeVector %int 2
+%v4float = OpTypeVector %float 4
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%ptr_input_v3float = OpTypePointer Input %v3float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %float 0.0
+%half = OpConstant %float 0.5
+%lod = OpConstant %float 1.0
+%int_1 = OpConstant %int 1
+%int_2 = OpConstant %int 2
+%offset = OpConstantComposite %v2int %int_1 %int_2
+%dx = OpConstantComposite %v2float %half %zero
+%dy = OpConstantComposite %v2float %zero %half
+%color_tex = OpVariable %ptr_sampled UniformConstant
+%uvq = OpVariable %ptr_input_v3float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_tex = OpLoad %sampled %color_tex
+%loaded_uvq = OpLoad %v3float %uvq
+%implicit_offset = OpImageSampleProjImplicitLod %v4float %loaded_tex %loaded_uvq ConstOffset %offset
+%lod_offset = OpImageSampleProjExplicitLod %v4float %loaded_tex %loaded_uvq Lod|ConstOffset %lod %offset
+%grad_offset = OpImageSampleProjExplicitLod %v4float %loaded_tex %loaded_uvq Grad|ConstOffset %dx %dy %offset
+OpStore %out_color %implicit_offset
+OpStore %out_color %lod_offset
+OpStore %out_color %grad_offset
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_TEXEL_FETCH_OFFSET_ASSEMBLY = """
 ; Reduced from glslangValidator output for texelFetchOffset(colorTex, pixel, 2, ivec2(1, 2)).
 ; glslang emits OpImageFetch with the combined Lod|ConstOffset image operand mask.
@@ -4954,6 +5007,33 @@ def test_glslang_texture_lod_offset_preserves_const_offset_codegen_reparse():
         "outColor = textureLodOffset(colorTex, uv, 1.0, int2(1, 2));" in generated_code
     )
     assert "outColor = textureLod(colorTex, uv, 1.0);" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_texture_proj_offset_preserves_const_offset_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_TEXTURE_PROJ_OFFSET_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "float3 uvq @input @location(0);" in generated_code
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "outColor = textureProjOffset(colorTex, uvq, int2(1, 2));" in generated_code
+    assert (
+        "outColor = textureProjLodOffset(colorTex, uvq, 1.0, int2(1, 2));"
+        in generated_code
+    )
+    assert (
+        "outColor = textureProjGradOffset(colorTex, uvq, float2(0.5, 0.0), "
+        "float2(0.0, 0.5), int2(1, 2));" in generated_code
+    )
+    assert "outColor = textureProj(colorTex, uvq);" not in generated_code
+    assert "outColor = textureProjLod(colorTex, uvq, 1.0);" not in generated_code
+    assert (
+        "outColor = textureProjGrad(colorTex, uvq, float2(0.5, 0.0), "
+        "float2(0.0, 0.5));" not in generated_code
+    )
     assert "Unhandled statement type" not in generated_code
 
 

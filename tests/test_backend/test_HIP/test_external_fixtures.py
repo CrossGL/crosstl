@@ -694,6 +694,48 @@ def test_external_rocm_texture_management_tex2d_atomic_codegen_reparse():
     assert "atomicAdd(histogram[bin_idx], 1);" in crossgl
 
 
+def test_external_rocm_texture_management_lod_grad_gather_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/ROCm/rocm-examples
+    # commit: cf369da68f209c315074204bd0eb61d1a5c015d1
+    # path: HIP-Basic/texture_management/main.hip
+    source = """
+    __global__ void sample_texture_variants(float4* out,
+                                            hipTextureObject_t tex_obj,
+                                            float2 uv,
+                                            float lod) {
+        float2 dx = make_float2(1.0f, 0.0f);
+        float2 dy = make_float2(0.0f, 1.0f);
+        float4 sampled_lod = tex2DLod<float4>(tex_obj, uv.x, uv.y, lod);
+        float4 sampled_grad = tex2DGrad<float4>(tex_obj, uv, dx, dy);
+        float4 gathered = tex2Dgather<float4>(tex_obj, uv.x, uv.y, 2);
+        out[threadIdx.x] = sampled_lod + sampled_grad + gathered;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert body[2].value.name == "tex2DLod<float4>"
+    assert body[3].value.name == "tex2DGrad<float4>"
+    assert body[4].value.name == "tex2Dgather<float4>"
+    assert "sampler2D tex_obj" in crossgl
+    assert "var sampled_lod: vec4<f32> = textureLod(" in crossgl
+    assert "tex_obj, vec2<f32>(uv.x, uv.y), lod" in crossgl
+    assert "var sampled_grad: vec4<f32> = textureGrad(tex_obj, uv, dx, dy);" in crossgl
+    assert (
+        "var gathered: vec4<f32> = textureGather(tex_obj, vec2<f32>(uv.x, uv.y), 2);"
+        in crossgl
+    )
+    assert (
+        "out[gl_LocalInvocationID.x] = ((sampled_lod + sampled_grad) + gathered);"
+        in (crossgl)
+    )
+    assert "tex2DLod" not in crossgl
+    assert "tex2DGrad" not in crossgl
+    assert "tex2Dgather" not in crossgl
+
+
 def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
     source = """
     __global__ void matrix_transpose_kernel(float* out,

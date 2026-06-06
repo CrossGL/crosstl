@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 892
+        "test_count": 893
       },
       "translator_codegen": {
         "exists": true,
@@ -607,7 +607,7 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 133,
+        "unsupported_marker_count": 134,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -697,7 +697,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 729
+        "test_count": 731
       },
       "translator_codegen": {
         "exists": true,
@@ -949,7 +949,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 409,
+        "unsupported_marker_count": 410,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -1039,7 +1039,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 726
+        "test_count": 727
       },
       "translator_codegen": {
         "exists": true,
@@ -3369,7 +3369,8 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texture_coordinate_shapes_emit_hip_helpers_or_diagnostics",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_offset_and_projected_texture_calls_emit_hip_diagnostics",
-            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texel_fetch_coordinate_shapes_emit_hip_helpers_or_diagnostics"
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texel_fetch_coordinate_shapes_emit_hip_helpers_or_diagnostics",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_external_rocm_texture_management_lod_grad_gather_codegen_reparse"
           ],
           "notes": "Covers HIP textureLod/textureGrad across sampler families, texelFetchOffset for target-valid sampled textures, and deterministic diagnostics for target-invalid textureOffset, bias, projected-offset, shadow, multisample, coordinate, and derivative combinations.",
           "status": "supported"
@@ -3568,7 +3569,8 @@
         },
         "hip": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texture_gather_calls_emit_hip_intrinsics_and_diagnostics"
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texture_gather_calls_emit_hip_intrinsics_and_diagnostics",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_external_rocm_texture_management_lod_grad_gather_codegen_reparse"
           ],
           "notes": "Covers HIP 2D textureGather lowering with component selection, split sampler arguments, parameters, and deterministic diagnostics for unsupported gather offsets, offset arrays, coordinate ranks, components, and non-2D target shapes.",
           "status": "supported"

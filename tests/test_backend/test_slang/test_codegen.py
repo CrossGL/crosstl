@@ -2378,6 +2378,73 @@ def test_texture_compare_offset_method_call_codegen():
     assert "shadowMap.SampleCmp" not in generated_code
 
 
+def test_texture_compare_bias_method_call_codegen_from_hlsl_overloads():
+    code = """
+    Texture2D<float> shadowMap;
+    Texture2DArray<float> shadowArray;
+    TextureCube<float> cubeShadow;
+    SamplerComparisonState cmpSampler;
+
+    float4 main(
+        float2 uv,
+        float3 uvLayer,
+        float3 direction,
+        float depth,
+        float bias,
+        int2 offset
+    ) {
+        uint status;
+        float sampled = shadowMap.SampleCmpBias(cmpSampler, uv, depth, bias);
+        float offsetSampled = shadowArray.SampleCmpBias(
+            cmpSampler,
+            uvLayer,
+            depth,
+            bias,
+            offset,
+            0.0,
+            status
+        );
+        float cubeSampled = cubeShadow.SampleCmpBias(
+            cmpSampler,
+            direction,
+            depth,
+            bias,
+            0.0,
+            status
+        );
+        return float4(sampled + offsetSampled + cubeSampled);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D shadowMap;" in generated_code
+    assert "sampler2DArray shadowArray;" in generated_code
+    assert "samplerCube cubeShadow;" in generated_code
+    assert "sampler cmpSampler;" in generated_code
+    assert (
+        "unsupported Slang texture overload extras for SampleCmpBias: "
+        "dropped LOD bias"
+    ) in generated_code
+    assert (
+        "unsupported Slang texture overload extras for SampleCmpBias: "
+        "dropped LOD bias, LOD clamp, status output"
+    ) in generated_code
+    assert "textureCompare(shadowMap, cmpSampler, uv, depth)" in generated_code
+    assert (
+        "textureCompareOffset(shadowArray, cmpSampler, uvLayer, depth, offset)"
+        in generated_code
+    )
+    assert "textureCompare(cubeShadow, cmpSampler, direction, depth)" in generated_code
+    assert ".SampleCmpBias(" not in generated_code
+    assert "textureCompare(shadowMap, cmpSampler, uv, depth, bias)" not in (
+        generated_code
+    )
+    assert "textureCompareOffset(cubeShadow" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_texture_gather_cmp_method_call_codegen_from_core_module_docs():
     # Source: Slang stdlib reference for _Texture.GatherCmp documents explicit
     # SamplerComparisonState and combined texture-sampler overloads with compare
