@@ -1,6 +1,7 @@
 """Parser that builds CrossGL AST nodes from lexer tokens."""
 
 import logging
+from copy import deepcopy
 
 from .ast import (
     ArrayAccessNode,
@@ -290,6 +291,15 @@ class Parser:
     def finalize_shader(self, shader):
         return validate_shader_cbuffers(shader)
 
+    def append_parsed_nodes(self, collection, parsed):
+        """Append one parsed node or extend a list of parsed nodes."""
+        if not parsed:
+            return
+        if isinstance(parsed, list):
+            collection.extend(node for node in parsed if node)
+            return
+        collection.append(parsed)
+
     def parse(self):
         """Parse a complete CrossGL translation unit into a ``ShaderNode``."""
         structs = []
@@ -422,13 +432,17 @@ class Parser:
                 elif self.is_cbuffer_declaration():
                     cbuffers.append(self.parse_cbuffer_as_struct(attributes))
                 elif self.is_variable_declaration():
-                    global_variables.append(self.parse_variable_declaration(attributes))
+                    self.append_parsed_nodes(
+                        global_variables, self.parse_variable_declaration(attributes)
+                    )
                 else:
                     self.skip_unknown_token()
             elif self.is_function_declaration():
                 functions.append(self.parse_function())
             elif self.is_variable_declaration():
-                global_variables.append(self.parse_variable_declaration())
+                self.append_parsed_nodes(
+                    global_variables, self.parse_variable_declaration()
+                )
             elif self.current_token[0] in SHADER_STAGE_TOKEN_TYPES:
                 stage_func = self.parse_shader_stage()
                 functions.append(stage_func)
@@ -534,14 +548,18 @@ class Parser:
                 elif self.is_cbuffer_declaration():
                     cbuffers.append(self.parse_cbuffer_as_struct(attributes))
                 elif self.is_variable_declaration():
-                    global_variables.append(self.parse_variable_declaration(attributes))
+                    self.append_parsed_nodes(
+                        global_variables, self.parse_variable_declaration(attributes)
+                    )
                 else:
                     self.skip_unknown_token()
             elif self.is_function_declaration():
                 func = self.parse_function()
                 functions.append(func)
             elif self.is_variable_declaration():
-                global_variables.append(self.parse_variable_declaration())
+                self.append_parsed_nodes(
+                    global_variables, self.parse_variable_declaration()
+                )
             else:
                 self.skip_unknown_token()
 
@@ -634,7 +652,9 @@ class Parser:
                 elif self.is_cbuffer_declaration():
                     local_cbuffers.append(self.parse_cbuffer_as_struct(attributes))
                 elif self.is_variable_declaration():
-                    local_variables.append(self.parse_variable_declaration(attributes))
+                    self.append_parsed_nodes(
+                        local_variables, self.parse_variable_declaration(attributes)
+                    )
                 else:
                     self.skip_unknown_token()
             elif self.current_token_starts_attributed_cbuffer_declaration():
@@ -659,7 +679,9 @@ class Parser:
                 if func.name == "main":
                     main_function = func
             elif self.is_variable_declaration():
-                local_variables.append(self.parse_variable_declaration())
+                self.append_parsed_nodes(
+                    local_variables, self.parse_variable_declaration()
+                )
             else:
                 self.skip_unknown_token()
 
@@ -1062,8 +1084,7 @@ class Parser:
         members = []
         while self.current_token[0] != "RBRACE":
             member = self.parse_struct_member()
-            if member:
-                members.append(member)
+            self.append_parsed_nodes(members, member)
         self.eat("RBRACE")
 
         variable_name = self.default_layout_buffer_instance_name(block_name)
@@ -1233,8 +1254,7 @@ class Parser:
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             member = self.parse_struct_member()
-            if member:
-                members.append(member)
+            self.append_parsed_nodes(members, member)
 
         if self.current_token[0] == "EOF":
             return None
@@ -1323,14 +1343,7 @@ class Parser:
             ]
 
         member_type = self.parse_type()
-
-        if self.current_token[0] == "LBRACKET":
-            self.eat("LBRACKET")
-            size = None
-            if self.current_token[0] != "RBRACKET":
-                size = self.parse_expression()
-            self.eat("RBRACKET")
-            member_type = ArrayType(member_type, size)
+        member_type = self.parse_array_suffixes(member_type)
 
         if not self.current_token_is_binding_identifier():
             # Skip malformed member
@@ -1340,37 +1353,42 @@ class Parser:
                 self.skip_unknown_token()
             return None
 
-        name = self.parse_binding_identifier()
+        members = []
+        while True:
+            if not self.current_token_is_binding_identifier():
+                while self.current_token[0] not in ["SEMICOLON", "RBRACE", "EOF"]:
+                    self.skip_unknown_token()
+                if self.current_token[0] == "SEMICOLON":
+                    self.skip_unknown_token()
+                return members or None
 
-        while self.current_token[
-            0
-        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
-            allow_single_square=False
-        ):
-            self.eat("LBRACKET")
-            size = None
-            if self.current_token[0] != "RBRACKET":
-                size = self.parse_expression()
-            self.eat("RBRACKET")
-            member_type = ArrayType(member_type, size)
+            name = self.parse_binding_identifier()
+            declarator_type = self.parse_array_suffixes(deepcopy(member_type))
 
-        attributes = list(leading_attributes)
-        attributes.extend(qualifier_attributes)
-        attributes.extend(self.parse_post_declaration_attributes())
+            attributes = list(leading_attributes)
+            attributes.extend(qualifier_attributes)
+            attributes.extend(self.parse_post_declaration_attributes())
 
-        if self.current_token[0] != "SEMICOLON":
-            # Skip malformed member
+            member = StructMemberNode(
+                name=name, member_type=declarator_type, attributes=attributes
+            )
+
+            if self.current_token[0] == "COMMA":
+                members.append(member)
+                self.eat("COMMA")
+                continue
+
+            if self.current_token[0] == "SEMICOLON":
+                members.append(member)
+                self.eat("SEMICOLON")
+                return members[0] if len(members) == 1 else members
+
+            # Skip malformed member suffix while preserving earlier declarators.
             while self.current_token[0] not in ["SEMICOLON", "RBRACE", "EOF"]:
                 self.skip_unknown_token()
             if self.current_token[0] == "SEMICOLON":
                 self.skip_unknown_token()
-            return None
-
-        self.eat("SEMICOLON")
-
-        return StructMemberNode(
-            name=name, member_type=member_type, attributes=attributes
-        )
+            return members or None
 
     def parse_enum(self):
         """Parse an enum declaration and its variants."""
@@ -1717,51 +1735,79 @@ class Parser:
             name = self.parse_binding_identifier()
             self.eat("COLON")
             var_type = self.parse_type()
+            var_type = self.parse_array_suffixes(var_type)
+
+            attributes.extend(self.parse_post_declaration_attributes())
+            var_type = self.parse_array_suffixes(var_type)
+
+            initial_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                initial_value = self.parse_expression()
+
+            self.eat("SEMICOLON")
+
+            return VariableNode(
+                name=name,
+                var_type=var_type,
+                initial_value=initial_value,
+                qualifiers=qualifiers,
+                attributes=attributes,
+                is_mutable="const" not in qualifiers,
+            )
+
         else:
             var_type = self.parse_type()
-            name = self.parse_binding_identifier()
+            declarations = []
+            while True:
+                declarations.append(
+                    self.parse_variable_declarator(var_type, qualifiers, attributes)
+                )
+                if self.current_token[0] != "COMMA":
+                    break
+                self.eat("COMMA")
 
-        while self.current_token[
-            0
-        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
-            allow_single_square=False
-        ):
-            self.eat("LBRACKET")
-            size = None
-            if self.current_token[0] != "RBRACKET":
-                size = self.parse_expression()
-            self.eat("RBRACKET")
-            var_type = ArrayType(var_type, size)
+            self.eat("SEMICOLON")
+            return declarations[0] if len(declarations) == 1 else declarations
 
+    def parse_variable_declarator(self, base_type, qualifiers, declaration_attributes):
+        """Parse one declarator after a shared C-style variable type."""
+        var_type = self.parse_array_suffixes(deepcopy(base_type))
+        name = self.parse_binding_identifier()
+        var_type = self.parse_array_suffixes(var_type)
+
+        attributes = list(declaration_attributes)
         attributes.extend(self.parse_post_declaration_attributes())
-
-        while self.current_token[
-            0
-        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
-            allow_single_square=False
-        ):
-            self.eat("LBRACKET")
-            size = None
-            if self.current_token[0] != "RBRACKET":
-                size = self.parse_expression()
-            self.eat("RBRACKET")
-            var_type = ArrayType(var_type, size)
+        var_type = self.parse_array_suffixes(var_type)
 
         initial_value = None
         if self.current_token[0] == "EQUALS":
             self.eat("EQUALS")
             initial_value = self.parse_expression()
 
-        self.eat("SEMICOLON")
-
         return VariableNode(
             name=name,
             var_type=var_type,
             initial_value=initial_value,
-            qualifiers=qualifiers,
+            qualifiers=list(qualifiers),
             attributes=attributes,
             is_mutable="const" not in qualifiers,
         )
+
+    def parse_array_suffixes(self, type_node):
+        """Parse one or more non-attribute array suffixes after a type/name."""
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
+            self.eat("LBRACKET")
+            size = None
+            if self.current_token[0] != "RBRACKET":
+                size = self.parse_expression()
+            self.eat("RBRACKET")
+            type_node = ArrayType(type_node, size)
+        return type_node
 
     def parse_variable_qualifiers(self):
         """Parse declaration qualifiers that precede a variable type."""
@@ -2503,8 +2549,7 @@ class Parser:
 
         while self.current_token[0] != "RBRACE":
             stmt = self.parse_statement()
-            if stmt:
-                statements.append(stmt)
+            self.append_parsed_nodes(statements, stmt)
 
         self.eat("RBRACE")
         return BlockNode(statements)
@@ -2564,6 +2609,11 @@ class Parser:
         """Parse metadata that decorates the following statement."""
         attributes = self.parse_attribute_annotations()
         statement = self.parse_statement()
+        if isinstance(statement, list):
+            for node in statement:
+                existing = getattr(node, "attributes", [])
+                node.attributes = [*attributes, *existing]
+            return statement
         existing = getattr(statement, "attributes", [])
         statement.attributes = [*attributes, *existing]
         return statement
@@ -3704,8 +3754,7 @@ class Parser:
 
         while self.current_token[0] != "RBRACE":
             member = self.parse_struct_member()
-            if member:
-                members.append(member)
+            self.append_parsed_nodes(members, member)
 
         self.eat("RBRACE")
 
@@ -4278,7 +4327,7 @@ class Parser:
         statements = []
         while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
             stmt = self.parse_statement()
-            statements.append(stmt)
+            self.append_parsed_nodes(statements, stmt)
 
         return CaseNode(value=value, statements=statements)
 
@@ -4290,6 +4339,6 @@ class Parser:
         statements = []
         while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
             stmt = self.parse_statement()
-            statements.append(stmt)
+            self.append_parsed_nodes(statements, stmt)
 
         return CaseNode(value=None, statements=statements)

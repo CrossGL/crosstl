@@ -53,15 +53,21 @@ ISSUE_REF_PATTERN = (
     r"|#\d+"
     r")"
 )
+ISSUE_REF_SEPARATOR_PATTERN = r"(?:,|,?\s+and)"
 CLOSING_BLOCK_RE = re.compile(
-    r"\b(?:{})\b\s*:?\s+(?P<refs>{}(?:\s*(?:,|and)\s*{})*)".format(
-        "|".join(KEYWORDS), ISSUE_REF_PATTERN, ISSUE_REF_PATTERN
+    r"\b(?:{})\b\s*:?\s+(?P<refs>{}(?:\s*{}\s*{})*)".format(
+        "|".join(KEYWORDS),
+        ISSUE_REF_PATTERN,
+        ISSUE_REF_SEPARATOR_PATTERN,
+        ISSUE_REF_PATTERN,
     ),
     re.IGNORECASE,
 )
 REFERENCE_BLOCK_RE = re.compile(
-    r"\b(?:refs?|references?)\b\s*:?\s+(?P<refs>{}(?:\s*(?:,|and)\s*{})*)".format(
-        ISSUE_REF_PATTERN, ISSUE_REF_PATTERN
+    r"\b(?:refs?|references?)\b\s*:?\s+(?P<refs>{}(?:\s*{}\s*{})*)".format(
+        ISSUE_REF_PATTERN,
+        ISSUE_REF_SEPARATOR_PATTERN,
+        ISSUE_REF_PATTERN,
     ),
     re.IGNORECASE,
 )

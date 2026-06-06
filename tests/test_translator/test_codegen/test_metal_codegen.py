@@ -304,6 +304,95 @@ def test_metal_direct_stdlib_builtins_qualify_when_local_names_shadow_them():
     assert "float smooth = smoothstep(0.0, 1.0, scalar);" not in generated_code
 
 
+def test_metal_common_math_builtins_qualify_when_local_names_shadow_them():
+    shader = """
+    shader MetalCommonMathTargetShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                vec3 value = vec3(float(tid.x), 1.0, 2.0);
+                vec3 up = vec3(0.0, 1.0, 0.0);
+                float min = 0.0;
+                float max = 1.0;
+                float length = 2.0;
+                float distance = 3.0;
+                float normalize = 4.0;
+                float reflect = 5.0;
+                float refract = 6.0;
+                float fract = 7.0;
+                float rsqrt = 8.0;
+                float clamped = min(max(length, 0.0), 1.0);
+                float magnitude = length(value);
+                float separation = distance(value, up);
+                vec3 unit = normalize(value);
+                vec3 reflected = reflect(unit, up);
+                vec3 refracted = refract(unit, up, 0.5);
+                float phase = fract(float(tid.x) * 0.25);
+                float inv = rsqrt(max + 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float min = 0.0;" in generated_code
+    assert "float max = 1.0;" in generated_code
+    assert "float length = 2.0;" in generated_code
+    assert "float normalize = 4.0;" in generated_code
+    assert "float clamped = metal::min(metal::max(length, 0.0), 1.0);" in generated_code
+    assert "float magnitude = metal::length(value);" in generated_code
+    assert "float separation = metal::distance(value, up);" in generated_code
+    assert "float3 unit = metal::normalize(value);" in generated_code
+    assert "float3 reflected = metal::reflect(unit, up);" in generated_code
+    assert "float3 refracted = metal::refract(unit, up, 0.5);" in generated_code
+    assert (
+        "__attribute__((unused)) float phase = "
+        "metal::fract(float(tid.x) * 0.25);" in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float inv = metal::rsqrt(max + 1.0);" in generated_code
+    )
+    assert "float clamped = min(max(length, 0.0), 1.0);" not in generated_code
+    assert "float3 unit = normalize(value);" not in generated_code
+
+
+def test_metal_user_defined_stdlib_function_names_are_preserved():
+    shader = """
+    shader MetalUserStdlibNames {
+        compute {
+            float min(float left, float right) {
+                return left + right;
+            }
+
+            vec3 normalize(vec3 value) {
+                return value + vec3(1.0);
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float total = min(1.0, 2.0);
+                vec3 shifted = normalize(vec3(float(tid.x), 0.0, 0.0));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float min(float left, float right)" in generated_code
+    assert "float3 normalize(float3 value)" in generated_code
+    assert "__attribute__((unused)) float total = min(1.0, 2.0);" in generated_code
+    assert (
+        "__attribute__((unused)) float3 shifted = "
+        "normalize(float3(float(tid.x), 0.0, 0.0));" in generated_code
+    )
+    assert "metal::min(" not in generated_code
+    assert "metal::normalize(" not in generated_code
+
+
 def test_metal_user_defined_frac_and_lerp_functions_are_preserved():
     shader = """
     shader MetalUserHlslMathNames {

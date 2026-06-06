@@ -9721,8 +9721,27 @@ class VulkanSPIRVCodeGen:
         """Create a loop merge instruction for loops."""
         self.emit(f"OpLoopMerge %{merge_label.id} %{continue_label.id} {loop_control}")
 
+    def current_spirv_return_type(self) -> Optional[SpirvId]:
+        """Return the actual SPIR-V return type for the current function."""
+        if self.current_function_name is not None:
+            signature = self.resolve_function_signature(self.current_function_name)
+            if signature is not None:
+                return signature[0]
+        return self.current_return_type
+
     def create_return(self):
         """Create a return instruction."""
+        return_type = self.current_spirv_return_type()
+        if return_type is not None and return_type.type.base_type != "void":
+            function_name = self.current_function_name or "<unknown>"
+            self.emit(
+                f"; WARNING: Bare return in non-void function {function_name}; "
+                "using default return value"
+            )
+            default_value = self.default_value_for_type(return_type)
+            self.create_return_value(default_value)
+            return
+
         self.emit("OpReturn")
 
     def create_return_value(self, value: SpirvId):

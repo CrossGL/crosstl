@@ -8454,6 +8454,15 @@ class RustCodeGen:
             if bool_vector_not is not None:
                 return bool_vector_not
             operand = self.generate_expression(operand_expr)
+            if op == "!":
+                operand_type = self.normalize_scalar_type(
+                    self.expression_result_type(operand_expr)
+                )
+                if operand_type is not None and operand_type != "bool":
+                    zero_literal = (
+                        "0.0" if operand_type in {"f16", "f32", "f64"} else "0"
+                    )
+                    return f"({operand} == {zero_literal})"
             return f"({op}{operand})"
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
@@ -11814,6 +11823,18 @@ class RustCodeGen:
                 return scalar_type
             return left_type or right_type
         if isinstance(expr, UnaryOpNode):
+            operator = self.map_operator(
+                getattr(expr, "operator", getattr(expr, "op", None))
+            )
+            if operator == "!":
+                operand_type = self.expression_result_type(expr.operand)
+                operand_vector = self.vector_type_info(operand_type)
+                if (
+                    operand_vector is not None
+                    and operand_vector["component_type"] == "bool"
+                ):
+                    return operand_type
+                return "bool"
             return self.expression_result_type(expr.operand)
         if isinstance(expr, TernaryOpNode):
             vector_ternary_plan = self.bool_vector_ternary_plan(
