@@ -69,7 +69,9 @@ class RustCodeGen:
             "int": "i32",
             "short": "i16",
             "long": "i64",
+            "int64_t": "i64",
             "uint": "u32",
+            "uint64_t": "u64",
             "ushort": "u16",
             "ulong": "u64",
             "float": "f32",
@@ -420,6 +422,8 @@ class RustCodeGen:
             "floatBitsToUint": "float_bits_to_uint",
             "intBitsToFloat": "int_bits_to_float",
             "uintBitsToFloat": "uint_bits_to_float",
+            "doubleBitsToLong": "double_bits_to_long",
+            "longBitsToDouble": "long_bits_to_double",
             "packUnorm2x16": "pack_unorm_2x16",
             "packSnorm2x16": "pack_snorm_2x16",
             "packUnorm4x8": "pack_unorm_4x8",
@@ -8864,9 +8868,11 @@ class RustCodeGen:
             return None
 
         target_component_type = {
+            "doubleBitsToLong": "ulong",
             "floatBitsToInt": "int",
             "floatBitsToUint": "uint",
             "intBitsToFloat": "float",
+            "longBitsToDouble": "double",
             "uintBitsToFloat": "float",
         }.get(func_name)
         if target_component_type is None:
@@ -8876,13 +8882,21 @@ class RustCodeGen:
         arg_type = self.expression_result_type(arg)
         source_component_type = self.bitcast_argument_component_type(arg_type)
         expected_source_component_type = {
+            "doubleBitsToLong": "double",
             "floatBitsToInt": "float",
             "floatBitsToUint": "float",
             "intBitsToFloat": "int",
+            "longBitsToDouble": "ulong",
             "uintBitsToFloat": "uint",
         }[func_name]
         if source_component_type != expected_source_component_type:
             return None
+
+        arg_expr = self.generate_expression(arg)
+        if func_name == "doubleBitsToLong":
+            return f"{arg_expr}.to_bits()"
+        if func_name == "longBitsToDouble":
+            return f"f64::from_bits({arg_expr})"
 
         target_type = self.bitcast_value_type(arg_type, target_component_type)
         if target_type is None:
@@ -11536,6 +11550,8 @@ class RustCodeGen:
             "uint": "u32",
             "long": "i64",
             "ulong": "u64",
+            "int64_t": "i64",
+            "uint64_t": "u64",
             "half": "f16",
             "float": "f32",
             "double": "f64",
@@ -12179,9 +12195,11 @@ class RustCodeGen:
             return self.promoted_value_type(arg_types[0], arg_types[1]) or arg_types[0]
 
         bitcast_component_type = {
+            "double_bits_to_long": "ulong",
             "float_bits_to_int": "int",
             "float_bits_to_uint": "uint",
             "int_bits_to_float": "float",
+            "long_bits_to_double": "double",
             "uint_bits_to_float": "float",
         }.get(mapped_name)
         if bitcast_component_type is not None and arg_types:

@@ -2129,6 +2129,29 @@ def test_mojo_std_math_module_alias_builtins_lower_to_crossgl():
     parse_crossgl(generated_code)
 
 
+def test_mojo_std_math_fma_aliases_lower_to_crossgl():
+    # Reduced from https://mojolang.org/docs/std/math/math/fma/
+    code = """
+    from std.math import fma as fused
+    import std.math as math_ops
+
+    fn main(x: Float32, y: Float32, z: Float32):
+        let imported = fused(x, y, z)
+        let module_call = math_ops.fma(x, y, z)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let imported = fma(x, y, z);" in generated_code
+    assert "let module_call = fma(x, y, z);" in generated_code
+    assert "fused(" not in generated_code
+    assert "math_ops.fma(" not in generated_code
+
+    parse_crossgl(generated_code)
+
+
 def test_user_defined_std_math_from_import_alias_call_does_not_lower_to_builtin():
     code = """
     from std.math import sqrt as root

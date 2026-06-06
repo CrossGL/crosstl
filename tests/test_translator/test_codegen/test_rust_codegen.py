@@ -20292,6 +20292,35 @@ def test_bit_reinterpret_intrinsics_preserve_shape_and_smoke_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_double_bit_reinterpret_intrinsics_lower_to_rust_primitives(tmp_path):
+    code = """
+    shader DoubleBitReinterpretIntrinsicInference {
+        fragment {
+            double main(double value, uint64_t rawBits) {
+                let encoded = doubleBitsToLong(value);
+                let decoded = longBitsToDouble(rawBits);
+                let roundTripped = longBitsToDouble(doubleBitsToLong(value));
+                return decoded + roundTripped + longBitsToDouble(encoded);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn main(value: f64, rawBits: u64) -> f64" in generated_code
+    assert "let encoded: u64 = value.to_bits();" in generated_code
+    assert "let decoded: f64 = f64::from_bits(rawBits);" in generated_code
+    assert "let roundTripped: f64 = f64::from_bits(value.to_bits());" in generated_code
+    assert "return ((decoded + roundTripped) + f64::from_bits(encoded));" in (
+        generated_code
+    )
+    assert "doubleBitsToLong(" not in generated_code
+    assert "longBitsToDouble(" not in generated_code
+    assert "uint64_t" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_as_bitcast_aliases_lower_to_rust_helpers_and_smoke_compile(tmp_path):
     code = """
     shader AsBitcastAliasInference {

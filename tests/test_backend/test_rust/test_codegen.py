@@ -2900,6 +2900,27 @@ def test_rust_std_float_bit_methods_convert_to_crossgl_intrinsics():
     crosstl.translator.parse(result)
 
 
+def test_rust_std_double_bit_methods_convert_to_crossgl_intrinsics():
+    code = """
+    fn bitcast_round_trip64(value: f64, raw_bits: u64) -> f64 {
+        let encoded = value.to_bits();
+        let decoded = f64::from_bits(raw_bits);
+        let round_tripped = f64::from_bits(value.to_bits());
+        return decoded + round_tripped + long_bits_to_double(encoded);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "encoded = doubleBitsToLong(value);" in result
+    assert "decoded = longBitsToDouble(raw_bits);" in result
+    assert "round_tripped = longBitsToDouble(doubleBitsToLong(value));" in result
+    assert "long_bits_to_double(encoded)" not in result
+    assert ".to_bits(" not in result
+    assert "f64::from_bits(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_user_defined_float_bit_method_names_are_preserved():
     code = """
     struct Bits {

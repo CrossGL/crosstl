@@ -362,9 +362,12 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "sampler2D texUnorm;",
-            "result[threadId.x] = {asuint(f.x), u.x, uint(f.x * 255.0), v.x};",
+            (
+                "result[threadId.x] = "
+                "{floatBitsToUint(f.x), u.x, uint(f.x * 255.0), v.x};"
+            ),
         ],
-        "not_contains": ["255.f"],
+        "not_contains": ["asuint(", "255.f"],
     },
     {
         "id": "slang_texture2darray_load_int4",

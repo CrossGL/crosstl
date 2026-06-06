@@ -226,6 +226,7 @@ class MojoToCrossGLConverter:
             "math.floor": "floor",
             "math.ceil": "ceil",
             "math.exp": "exp",
+            "math.fma": "fma",
             "math.fract": "fract",
             "math.log": "log",
             "math.fmod": "mod",
