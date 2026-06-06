@@ -314,7 +314,7 @@ def test_project_include_resolution_documents_status_reporting():
         assert "include dependency record shape, summary rollups" in (
             backend_support["notes"]
         )
-        assert "current status, resolved path, and source/include-dir" in (
+        assert "current status, resolved path, resolved include hash" in (
             backend_support["notes"]
         )
         assert (
@@ -324,6 +324,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_records_include_dependency_resolution"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_stale_include_dependency_hashes"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

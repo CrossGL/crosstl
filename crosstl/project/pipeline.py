@@ -1133,6 +1133,7 @@ def _scan_include_dependencies(
         }
         if resolved_path:
             dependency["resolvedPath"] = resolved_path
+            dependency["resolvedHash"] = _source_hash(config.root / resolved_path)
         if resolved_from:
             dependency["resolvedFrom"] = resolved_from
         dependencies.append(dependency)
@@ -4393,6 +4394,17 @@ def _include_dependency_contract_reasons(
             f"{prefix}.resolvedPath must be omitted unless status is resolved"
         )
 
+    if status == "resolved":
+        reasons.extend(
+            _hash_contract_reasons(
+                f"{prefix}.resolvedHash", dependency.get("resolvedHash")
+            )
+        )
+    elif "resolvedHash" in dependency:
+        reasons.append(
+            f"{prefix}.resolvedHash must be omitted unless status is resolved"
+        )
+
     resolved_from = dependency.get("resolvedFrom")
     if "resolvedFrom" in dependency and resolved_from not in {"source", "include-dir"}:
         reasons.append(f"{prefix}.resolvedFrom must be source or include-dir")
@@ -4473,6 +4485,11 @@ def _current_include_dependency_contract_reasons(
         reasons.append(f"{prefix}.resolvedPath must match current include resolution")
     if dependency.get("resolvedFrom") != expected_from:
         reasons.append(f"{prefix}.resolvedFrom must match current include resolution")
+    resolved_hash = dependency.get("resolvedHash")
+    if not _hash_contract_reasons(f"{prefix}.resolvedHash", resolved_hash):
+        include_path = (root_path / expected_path).resolve()
+        if not _hash_matches_report(_source_hash(include_path), resolved_hash):
+            reasons.append(f"{prefix}.resolvedHash must match current include file")
     return reasons
 
 

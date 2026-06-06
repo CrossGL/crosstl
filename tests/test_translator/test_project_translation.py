@@ -650,6 +650,7 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
             "line": 2,
             "column": 1,
             "resolvedPath": "shaders/local.inc",
+            "resolvedHash": project_pipeline._source_hash(shader_dir / "local.inc"),
             "resolvedFrom": "source",
         },
         {
@@ -659,6 +660,7 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
             "line": 3,
             "column": 1,
             "resolvedPath": "includes/shared.inc",
+            "resolvedHash": project_pipeline._source_hash(include_dir / "shared.inc"),
             "resolvedFrom": "include-dir",
         },
         {
@@ -728,6 +730,7 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
     dependency["status"] = "resolved"
     dependency["line"] = 0
     dependency["resolvedPath"] = "../outside.inc"
+    dependency["resolvedHash"] = {"algorithm": "md5", "value": "not-a-sha"}
     dependency["resolvedFrom"] = "workspace"
     payload["summary"]["includeDependencyCount"] = 2
     payload["summary"]["includeDependenciesByKind"] = {"module": 1}
@@ -750,6 +753,13 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
         "units[0].includeDependencies[0].resolvedPath must be repository-relative"
         in (diagnostic["message"])
     )
+    assert "units[0].includeDependencies[0].resolvedHash.algorithm must be sha256" in (
+        diagnostic["message"]
+    )
+    assert (
+        "units[0].includeDependencies[0].resolvedHash.value must be a lowercase "
+        "64-character hex digest"
+    ) in diagnostic["message"]
     assert (
         "units[0].includeDependencies[0].resolvedFrom must be source or include-dir"
         in (diagnostic["message"])
@@ -788,6 +798,34 @@ def test_validate_project_report_rejects_stale_include_dependency_resolution(
         "units[0].includeDependencies[0].status must match current include resolution"
         in diagnostic["message"]
     )
+
+
+def test_validate_project_report_rejects_stale_include_dependency_hashes(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "local.inc").write_text("vec4 local_color();\n", encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "local.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+
+    report = scan_project(repo).to_report(targets=["cgl"])
+    report_path = repo / "include-dependencies-report.json"
+    report.write_json(report_path)
+    (shader_dir / "local.inc").write_text("vec4 changed_color();\n", encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "units[0].includeDependencies[0].resolvedHash must match current "
+        "include file"
+    ) in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_include_dependency_resolution_mismatches(

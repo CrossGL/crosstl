@@ -260,7 +260,10 @@ Project reports are JSON documents with:
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, source hashes, and source
   overrides. Units that contain ``#include`` directives also include
-  ``includeDependencies`` records for project-level include triage.
+  ``includeDependencies`` records for project-level include triage. Resolved
+  include dependencies record repository-relative include paths, resolution
+  source, and SHA-256 hashes so report validation can detect include file
+  content drift after scan.
 - ``skipped``: repository-relative files intentionally left untranslated with
   reason codes and source override metadata when an override selected an
   unsupported source backend. Full reports require skipped source override
@@ -344,7 +347,8 @@ Project reports are JSON documents with:
   record shape and duplicate identity checks, validation artifact and
   toolchain target coverage and status consistency checks,
   include dependency record shape and include dependency summary consistency,
-  current include dependency status, resolved-path, and resolution-source checks,
+  current include dependency status, resolved-path, resolved-hash, and
+  resolution-source checks,
   artifact source, source-backend,
   target, variant, and source-relative output layout declaration checks,
   translated artifact existence checks, escaped output directory and
