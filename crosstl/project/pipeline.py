@@ -7182,6 +7182,17 @@ def _project_metadata_contract_reasons(
         config_path = project.get("config")
         if config_path is not None and not isinstance(config_path, str):
             reasons.append("project.config must be a string or null")
+        elif config_path is not None:
+            if not config_path.strip():
+                reasons.append("project.config must be a non-empty string or null")
+            elif require_full_metadata:
+                resolved_config_path = Path(config_path)
+                if not resolved_config_path.is_absolute():
+                    reasons.append("project.config must be an absolute path")
+                elif not resolved_config_path.exists():
+                    reasons.append("project.config must exist")
+                elif not resolved_config_path.is_file():
+                    reasons.append("project.config must be a file")
 
     for field_name in (
         "sourceRoots",

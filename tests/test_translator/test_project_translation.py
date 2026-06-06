@@ -4294,6 +4294,39 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     )
 
 
+def test_validate_project_report_rejects_invalid_project_config_paths(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    base_payload = translate_project(load_project_config(repo)).to_json()
+
+    cases = (
+        ("relative", "crosstl.toml", "project.config must be an absolute path"),
+        ("missing", str(repo / "missing.toml"), "project.config must exist"),
+        ("directory", str(repo), "project.config must be a file"),
+    )
+    for name, config_value, expected_message in cases:
+        payload = json.loads(json.dumps(base_payload))
+        payload["project"]["config"] = config_value
+        report_path = repo / f"invalid-project-config-{name}.json"
+        report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        validation = validate_project_report(report_path)
+
+        assert validation["success"] is False
+        assert validation["validation"] == {"toolchains": [], "artifacts": []}
+        diagnostic = validation["diagnostics"][0]
+        assert diagnostic["code"] == "project.validate.invalid-report"
+        assert expected_message in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_empty_project_mapping_keys(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
