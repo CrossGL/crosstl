@@ -1219,7 +1219,16 @@ class MetalToCrossGLConverter:
         return f"{' '.join(address_spaces)} " if address_spaces else ""
 
     def is_sampler_variable(self, var):
-        return self.normalized_metal_type(getattr(var, "vtype", None)) == "sampler"
+        return self.is_sampler_type(getattr(var, "vtype", None))
+
+    def is_sampler_type(self, metal_type):
+        normalized = self.normalized_metal_type(metal_type)
+        if normalized == "sampler":
+            return True
+        array_type = self.metal_array_type_parts(normalized)
+        return bool(
+            array_type and self.normalized_metal_type(array_type[0]) == "sampler"
+        )
 
     def format_decl(self, var, include_semantic=False, declare_name=True):
         alignas_prefix = ""

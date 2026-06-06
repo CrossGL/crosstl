@@ -4674,13 +4674,17 @@ class CudaToCrossGLConverter:
             return self.format_unsupported_cooperative_group_statement(
                 group_kind, member_name, args
             )
-        if member_name in {"thread_rank", "size", "num_threads"}:
+        if member_name in {"thread_rank", "size", "num_threads", "block_rank"}:
             return self.format_unsupported_cooperative_group_expression(
                 group_kind, member_name
             )
-        if member_name in {"thread_index", "dim_threads"}:
+        if member_name in {"thread_index", "dim_threads", "dim_blocks"}:
             return self.format_unsupported_cooperative_group_expression(
                 group_kind, member_name, "vec3<u32>(0, 0, 0)"
+            )
+        if member_name == "map_shared_rank" and args:
+            return self.format_unsupported_cooperative_group_expression(
+                group_kind, member_name, self.visit(args[0]), args=args
             )
         return self.format_unsupported_cooperative_group_expression(
             group_kind, member_name, args=args
@@ -4899,6 +4903,7 @@ class CudaToCrossGLConverter:
             "grid_group",
             "multi_grid_group",
             "coalesced_group",
+            "cluster_group",
         }:
             return {"kind": base_name}
         base_name = self.cooperative_group_base_name(base_type)
@@ -4923,6 +4928,7 @@ class CudaToCrossGLConverter:
             "this_thread_block": "thread_block",
             "this_grid": "grid_group",
             "this_multi_grid": "multi_grid_group",
+            "this_cluster": "cluster_group",
             "coalesced_threads": "coalesced_group",
             "tiled_partition": "thread_block_tile",
         }

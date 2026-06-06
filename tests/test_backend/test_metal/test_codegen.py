@@ -2494,6 +2494,32 @@ def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():
     assert "texture_.sample(sampler(" in metal
 
 
+def test_codegen_omits_global_constexpr_sampler_array_argument_for_roundtrip():
+    # Apple MSL supports arrays of samplers declared in program scope.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constexpr array<sampler, 2> samplers = {
+        sampler(address::clamp_to_zero),
+        sampler(coord::pixel)
+    };
+
+    fragment float4 sampleIndexedSampler(texture2d<float> tex, float2 uv) {
+        return tex.sample(samplers[0], uv);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "texture(tex, uv)" in crossgl
+    assert "sampler[2]" not in crossgl
+    assert "samplers" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "tex.sample(sampler(" in metal
+
+
 def test_roundtrip_local_constexpr_sampler_options_from_apple_texture_sample():
     code = """
     struct RasterizerData {

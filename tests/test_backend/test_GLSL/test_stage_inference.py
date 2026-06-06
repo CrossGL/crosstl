@@ -162,6 +162,30 @@ def reverse_plain_glsl(source: str, file_path: str = "/tmp/upstream-sample.glsl"
         ),
         pytest.param(
             """
+            #version 460 core
+            #extension GL_ARB_separate_shader_objects : enable
+
+            layout(location = 0) out flat int vertexIndex;
+            layout(location = 1) out flat int instanceIndex;
+
+            void main() {
+                vertexIndex = gl_VertexIndex;
+                instanceIndex = gl_InstanceIndex;
+            }
+            """,
+            "vertex",
+            ShaderStage.VERTEX,
+            [
+                "vertex {",
+                "flat int vertexIndex @location(0);",
+                "flat int instanceIndex @location(1);",
+                "output.vertexIndex = gl_VertexIndex;",
+                "output.instanceIndex = gl_InstanceIndex;",
+            ],
+            id="khronos-vulkan-vertex-index-builtins-infer-vertex",
+        ),
+        pytest.param(
+            """
             #version 300 es
             precision highp float;
 
@@ -282,7 +306,8 @@ def test_plain_glsl_registry_infers_stage_from_real_world_snippets(
 
     assert ast.shader_type == expected_shader_type
     assert expected_stage in parsed.stages
-    assert ShaderStage.VERTEX not in parsed.stages
+    if expected_stage != ShaderStage.VERTEX:
+        assert ShaderStage.VERTEX not in parsed.stages
     for expected in expected_crossgl:
         assert expected in crossgl
 

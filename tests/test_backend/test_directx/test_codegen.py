@@ -547,6 +547,28 @@ def test_codegen_shaderlab_legacy_tex2d_imports_canonical_texture_call():
     assert "_MainTex.Sample(_MainTexSampler, i.uv)" in hlsl
 
 
+def test_codegen_legacy_texcube_from_microsoft_docs_imports_canonical_texture_call():
+    # Source: Microsoft Learn "Writing HLSL Shaders in Direct3D 9",
+    # Samplers and Texture Objects cube sampling example.
+    hlsl = textwrap.dedent("""
+        texture tex0;
+        samplerCUBE s_CUBE;
+
+        float3 sample_CUBE(float3 tex : TEXCOORD0) : COLOR
+        {
+          return texCUBE(s_CUBE, tex);
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(hlsl)
+
+    assert "samplerCube s_CUBE;" in crossgl
+    assert "return texture(s_CUBE, tex);" in crossgl
+    assert "texCUBE(" not in crossgl
+    assert "samplerCUBE" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_shaderlab_fixed_precision_aliases_reparse_and_regenerate_hlsl():
     shaderlab = textwrap.dedent("""
         Shader "Custom/FixedPrecisionAliases"
