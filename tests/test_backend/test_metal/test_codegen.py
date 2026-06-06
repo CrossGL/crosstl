@@ -320,6 +320,42 @@ def test_codegen_texture2d_array_sample_preserves_array_slice_from_filament_sdl(
     assert "uint((float3(vert.texcoord, 1)).z)" in metal
 
 
+def test_codegen_texture2d_array_alias_preserves_sample_slice():
+    code = """
+    using ColorArray = texture2d_array<float>;
+
+    float4 sampleSlice(ColorArray tex, sampler s, float2 uv) {
+        return tex.sample(s, uv, 2);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "typedef sampler2DArray ColorArray;" not in crossgl
+    assert "vec4 sampleSlice(sampler2DArray tex, sampler s, vec2 uv)" in crossgl
+    assert "texture(tex, s, vec3(uv, 2))" in crossgl
+    assert "textureLod(tex, s, uv, 2)" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_storage_texture_alias_uses_image_read_write():
+    code = """
+    typedef texture2d<float, access::read_write> RWColor;
+
+    float4 readWrite(RWColor tex, uint2 p, float4 value) {
+        tex.write(value, p);
+        return tex.read(p);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "typedef image2D RWColor;" not in crossgl
+    assert "vec4 readWrite(image2D tex @readwrite, uvec2 p, vec4 value)" in crossgl
+    assert "imageStore(tex, p, value);" in crossgl
+    assert "return imageLoad(tex, p);" in crossgl
+    assert "unsupported Metal sampled texture write" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_return_type_before_stage_qualifier_from_metal_cpp_sample():
     code = """
     #include <metal_stdlib>

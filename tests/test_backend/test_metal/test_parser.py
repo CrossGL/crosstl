@@ -895,6 +895,38 @@ def test_parse_packed_and_simd_types():
     parse_ok(code)
 
 
+def test_parse_common_vector_type_aliases():
+    code = """
+    using Half2 = half2;
+    using Float4 = float4;
+    typedef packed_float3 PackedFloat3;
+
+    struct AliasedTypes {
+        Half2 uv;
+        Float4 color;
+        PackedFloat3 position;
+    };
+    """
+    ast = parse_ok(code)
+    members = ast.structs[0].members
+
+    assert [alias.name for alias in ast.typedefs] == [
+        "Half2",
+        "Float4",
+        "PackedFloat3",
+    ]
+    assert [alias.alias_type for alias in ast.typedefs] == [
+        "half2",
+        "float4",
+        "packed_float3",
+    ]
+    assert [member.vtype for member in members] == [
+        "Half2",
+        "Float4",
+        "PackedFloat3",
+    ]
+
+
 def test_parse_ms_and_depth_textures():
     code = """
     fragment float4 fragment_main(texture2d_ms<float> msTex [[texture(0)]],

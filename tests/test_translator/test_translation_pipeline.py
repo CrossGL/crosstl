@@ -52,6 +52,25 @@ NATIVE_SOURCE_SNIPPETS = {
     ),
 }
 
+NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS = {
+    "cuda_header": (
+        "shader.cuh",
+        NATIVE_SOURCE_SNIPPETS["cuda"][1],
+    ),
+    "cuda_long": (
+        "shader.cuda",
+        NATIVE_SOURCE_SNIPPETS["cuda"][1],
+    ),
+    "rust_long": (
+        "shader.rust",
+        NATIVE_SOURCE_SNIPPETS["rust"][1],
+    ),
+    "slang_header": (
+        "shader.slangh",
+        NATIVE_SOURCE_SNIPPETS["slang"][1],
+    ),
+}
+
 
 def _write_source(tmp_path, filename, source):
     path = tmp_path / filename
@@ -108,6 +127,19 @@ def test_cgl_translate_api_accepts_registered_backend_aliases(tmp_path, backend)
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
 def test_native_sources_translate_to_parseable_crossgl(tmp_path, source_name):
     filename, source = NATIVE_SOURCE_SNIPPETS[source_name]
+    source_path = _write_source(tmp_path, filename, source)
+
+    generated = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    crosstl.translator.parse(generated)
+
+
+@pytest.mark.parametrize("alias_name", sorted(NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS))
+def test_native_source_extension_aliases_translate_to_parseable_crossgl(
+    tmp_path, alias_name
+):
+    filename, source = NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS[alias_name]
     source_path = _write_source(tmp_path, filename, source)
 
     generated = crosstl.translate(str(source_path), backend="cgl", format_output=False)
@@ -182,6 +214,21 @@ def test_native_source_to_registered_target_pipeline_is_total(
     tmp_path, source_name, target_backend
 ):
     filename, source = NATIVE_SOURCE_SNIPPETS[source_name]
+    source_path = _write_source(tmp_path, filename, source)
+
+    generated = crosstl.translate(
+        str(source_path), backend=target_backend, format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+
+
+@pytest.mark.parametrize("alias_name", sorted(NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS))
+@pytest.mark.parametrize("target_backend", codegen.backend_names())
+def test_native_source_extension_alias_to_registered_target_pipeline_is_total(
+    tmp_path, alias_name, target_backend
+):
+    filename, source = NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS[alias_name]
     source_path = _write_source(tmp_path, filename, source)
 
     generated = crosstl.translate(

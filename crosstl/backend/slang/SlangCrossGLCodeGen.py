@@ -402,6 +402,7 @@ class SlangToCrossGLConverter:
             "TEXCOORD4": "TexCoord4",
             "TEXCOORD5": "TexCoord5",
             "TEXCOORD6": "TexCoord6",
+            "TEXCOORD7": "TexCoord7",
             # Vertex inputs instance
             "FRONT_FACE": "gl_IsFrontFace",
             "PRIMITIVE_ID": "gl_PrimitiveID",
@@ -770,7 +771,11 @@ class SlangToCrossGLConverter:
         self.push_storage_image_resource_scope(func.params)
         for param in func.params:
             self.register_identifier_declaration(param)
-        params = ", ".join(self.generate_parameter(p) for p in func.params)
+        preserve_parameter_qualifiers = self.is_entry_like_function(func)
+        params = ", ".join(
+            self.generate_parameter(p, preserve_parameter_qualifiers)
+            for p in func.params
+        )
         semantic = self.map_semantic(func.semantic)
         semantic_suffix = f" {semantic}" if semantic else ""
         code += (
@@ -785,15 +790,37 @@ class SlangToCrossGLConverter:
         self.pop_identifier_scope()
         return code
 
-    def generate_parameter(self, param):
+    def generate_parameter(self, param, preserve_qualifiers=False):
+        qualifier_prefix = self.format_parameter_qualifier_prefix(
+            param, preserve_qualifiers
+        )
         parameter = (
-            f"{self.map_parameter_type(param.vtype)} {self.format_identifier(param.name)}"
+            f"{qualifier_prefix}{self.map_parameter_type(param.vtype)} "
+            f"{self.format_identifier(param.name)}"
             f"{self.format_array_suffixes(param)}"
         )
         semantic = self.map_semantic(param.semantic)
         if semantic:
             parameter += f" {semantic}"
         return parameter
+
+    def is_entry_like_function(self, func):
+        return bool(
+            normalize_stage_name(getattr(func, "qualifier", None))
+            or getattr(func, "semantic", None)
+            or getattr(func, "name", None) == "main"
+        )
+
+    def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
+        if not preserve_qualifiers:
+            return ""
+        allowed_qualifiers = {"in", "out", "inout"}
+        qualifiers = [
+            str(qualifier)
+            for qualifier in getattr(param, "qualifiers", []) or []
+            if str(qualifier).lower() in allowed_qualifiers
+        ]
+        return f"{' '.join(qualifiers)} " if qualifiers else ""
 
     def format_array_suffixes(self, node, is_main=False):
         sizes = getattr(node, "array_sizes", None)

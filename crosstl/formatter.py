@@ -50,7 +50,7 @@ class CodeFormatter:
     def detect_language(self, file_path):
         ext = Path(file_path).suffix.lower()
 
-        if ext in [".hlsl", ".fx"]:
+        if ext in [".hlsl", ".hlsli", ".fx", ".fxh"]:
             return ShaderLanguage.HLSL
         elif ext in [".glsl", ".vert", ".frag", ".comp", ".geom", ".tese", ".tesc"]:
             return ShaderLanguage.GLSL
@@ -58,7 +58,7 @@ class CodeFormatter:
             return ShaderLanguage.METAL
         elif ext in [".spvasm", ".vulkan"]:
             return ShaderLanguage.SPIRV
-        elif ext in [".slang"]:
+        elif ext in [".slang", ".slangh"]:
             return ShaderLanguage.SLANG
         elif ext in [".rs", ".rust"]:
             return ShaderLanguage.RUST

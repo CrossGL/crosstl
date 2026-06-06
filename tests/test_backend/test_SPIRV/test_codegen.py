@@ -3434,6 +3434,16 @@ def test_translate_api_rejects_binary_spv_source_with_clear_error(tmp_path):
         crosstl.translate(str(shader_path), backend="rust", format_output=False)
 
 
+def test_translate_api_rejects_binary_spv_mislabeled_as_spvasm(tmp_path):
+    import crosstl
+
+    shader_path = tmp_path / "fragment.spvasm"
+    shader_path.write_bytes(b"\x03\x02\x23\x07")
+
+    with pytest.raises(ValueError, match=re.escape(BINARY_SPIRV_UNSUPPORTED_MESSAGE)):
+        crosstl.translate(str(shader_path), backend="rust", format_output=False)
+
+
 def test_spirv_assembly_location_decorated_interfaces_codegen():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
     ast = parse_code(tokens)

@@ -343,6 +343,49 @@ def test_uppercase_hlsl_system_semantics_codegen_from_vireo_fixture():
     cgl_translator.parse(generated_code)
 
 
+def test_texcoord7_semantic_codegen_matches_directx_common_semantics():
+    code = """
+    struct VertexOutput {
+        float2 uv7 : TEXCOORD7;
+    };
+
+    [shader("fragment")]
+    float4 fragmentMain(VertexOutput input, float2 fallbackUV : TEXCOORD7) : SV_Target0
+    {
+        return float4(input.uv7 + fallbackUV, 0.0, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec2 uv7 @ TexCoord7;" in generated_code
+    assert "vec2 fallbackUV @ TexCoord7" in generated_code
+    assert "@ TEXCOORD7" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_entry_parameter_storage_qualifiers_codegen_matches_directx_signature_shape():
+    code = """
+    [shader("fragment")]
+    void fragmentMain(in float2 uv : TEXCOORD0, out float4 color : SV_Target0)
+    {
+        color = float4(uv, 0.0, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "void fragmentMain(in vec2 uv @ TexCoord0, out vec4 color @ Out_Color0)"
+        in generated_code
+    )
+    cgl_translator.parse(generated_code)
+
+
 def test_struct_methods_do_not_break_field_codegen():
     code = """
     struct Primitive {
