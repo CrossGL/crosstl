@@ -7148,6 +7148,25 @@ def test_fixed_array_conversion():
         pytest.fail(f"Fixed array conversion failed: {e}")
 
 
+def test_const_expression_array_size_codegen_from_rust_gpu_const_generics():
+    code = """
+    fn shade<const LANES: usize>(
+        values: [Vec4; {LANES + 1}],
+        scratch: [[f32; 2]; {LANES + 1}],
+    ) {
+        let local: [u32; {LANES + 1}];
+        use_values(values, scratch, local);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void shade(vec4 values[LANES+1], float scratch[LANES+1][2])" in result
+    assert "uint local_[LANES+1];" in result
+    assert "[{LANES+1}]" not in result
+    crosstl.translator.parse(result)
+
+
 def test_reference_array_conversion():
     code = """
     pub struct Filter {

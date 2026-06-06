@@ -2466,6 +2466,34 @@ def test_spirv_assembly_function_parameters_parse():
     ]
 
 
+def test_spirv_assembly_pointer_function_parameter_parse():
+    code = """
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpName %value "value"
+    %void = OpTypeVoid
+    %float = OpTypeFloat 32
+    %v4float = OpTypeVector %float 4
+    %ptr_function_v4float = OpTypePointer Function %v4float
+    %fn = OpTypeFunction %void %ptr_function_v4float
+    %helper = OpFunction %void None %fn
+    %value = OpFunctionParameter %ptr_function_v4float
+    %label = OpLabel
+    %loaded = OpLoad %v4float %value
+    OpStore %value %loaded
+    OpReturn
+    OpFunctionEnd
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    param = ast.functions[0].params[0]
+
+    assert param.vtype == "vec4"
+    assert param.qualifiers == ["inout"]
+    assert param.spirv_type_id == "%ptr_function_v4float"
+
+
 def test_spirv_assembly_type_only_module_is_rejected():
     code = """
     OpCapability Shader

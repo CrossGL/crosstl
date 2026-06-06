@@ -1911,6 +1911,24 @@ def test_fixed_array_type_and_repeated_literal_parsing():
         pytest.fail(f"Fixed array parsing failed: {e}")
 
 
+def test_const_expression_array_size_parsing_from_rust_gpu_const_generics():
+    code = """
+    fn shade<const LANES: usize>(
+        values: [Vec4; {LANES + 1}],
+        scratch: [[f32; 2]; {LANES + 1}],
+    ) {
+        let local: [u32; {LANES + 1}];
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.params[0].vtype == "Vec4[LANES+1]"
+    assert function.params[1].vtype == "f32[LANES+1][2]"
+    assert function.body[0].vtype == "u32[LANES+1]"
+
+
 def test_reference_array_type_parsing():
     code = """
     fn sample_arrays(weights: &[f32; 4], output: &mut [Vec3<f32>; 2]) {

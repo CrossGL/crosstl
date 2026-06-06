@@ -1003,6 +1003,9 @@ class VulkanParser:
                     (None, parameter_type_id)
                     for parameter_type_id in function_type.get("parameter_types", [])
                 ]
+            written_pointer_parameter_ids = self.spirv_written_pointer_parameter_ids(
+                parameter_records, raw_instructions, types
+            )
             params = []
             for index, (parameter_id, parameter_type_id) in enumerate(
                 parameter_records
@@ -1020,6 +1023,11 @@ class VulkanParser:
                             if parameter_id
                             else f"param{index}"
                         ),
+                    ),
+                    qualifiers=self.spirv_function_parameter_qualifiers(
+                        parameter_type_id,
+                        types,
+                        parameter_id in written_pointer_parameter_ids,
                     ),
                     spirv_id=parameter_id,
                     spirv_type_id=parameter_type_id,
@@ -4030,6 +4038,55 @@ class VulkanParser:
         return self.spirv_type_name(type_id, types) or self.spirv_fallback_identifier(
             type_id, "param_type"
         )
+
+    def spirv_written_pointer_parameter_ids(
+        self, parameter_records, raw_instructions, types
+    ):
+        alias_origins = {
+            parameter_id: parameter_id
+            for parameter_id, parameter_type_id in parameter_records
+            if parameter_id
+            and types.get(parameter_type_id, {}).get("kind") == "pointer"
+        }
+        written_parameter_ids = set()
+
+        for result_id, opcode, operands, _line_number in raw_instructions:
+            if (
+                result_id
+                and opcode
+                in {
+                    "OpAccessChain",
+                    "OpInBoundsAccessChain",
+                    "OpPtrAccessChain",
+                    "OpInBoundsPtrAccessChain",
+                }
+                and len(operands) >= 2
+                and operands[1] in alias_origins
+            ):
+                alias_origins[result_id] = alias_origins[operands[1]]
+                continue
+
+            if (
+                result_id
+                and opcode == "OpCopyObject"
+                and len(operands) >= 2
+                and operands[1] in alias_origins
+            ):
+                alias_origins[result_id] = alias_origins[operands[1]]
+                continue
+
+            if opcode in {"OpStore", "OpCopyMemory", "OpAtomicStore"} and operands:
+                written_parameter_id = alias_origins.get(operands[0])
+                if written_parameter_id:
+                    written_parameter_ids.add(written_parameter_id)
+
+        return written_parameter_ids
+
+    def spirv_function_parameter_qualifiers(self, type_id, types, is_written):
+        type_info = types.get(type_id, {})
+        if is_written and type_info.get("kind") == "pointer":
+            return ["inout"]
+        return []
 
     def parse_spirv_assembly_instructions(self, code):
         instructions = []

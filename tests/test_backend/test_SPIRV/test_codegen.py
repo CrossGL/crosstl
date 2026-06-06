@@ -726,6 +726,47 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_POINTER_PARAMETER_FUNCTION_CALL_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from a helper taking an inout
+; vec4 parameter backed by a Function storage-class pointer.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %main "main"
+OpName %helper "helper("
+OpName %value "value"
+OpName %out_color "outColor"
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_function_v4float = OpTypePointer Function %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%helper_fn = OpTypeFunction %void %ptr_function_v4float
+%main_fn = OpTypeFunction %void
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%out_color = OpVariable %ptr_output_v4float Output
+%helper = OpFunction %void None %helper_fn
+%value = OpFunctionParameter %ptr_function_v4float
+%helper_label = OpLabel
+%loaded = OpLoad %v4float %value
+%negated = OpFNegate %v4float %loaded
+OpStore %value %negated
+OpReturn
+OpFunctionEnd
+%main = OpFunction %void None %main_fn
+%main_label = OpLabel
+%local = OpVariable %ptr_function_v4float Function %red
+%call = OpFunctionCall %void %helper %local
+%local_value = OpLoad %v4float %local
+OpStore %out_color %local_value
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_SELECTION_MERGE_ASSEMBLY = """
 ; Source tool: glslangValidator -V -H, reduced from a fragment shader
 ; containing if (value > 0.0) { outColor = red; } else { outColor = blue; }.
@@ -4000,6 +4041,24 @@ def test_spirv_glslang_void_function_call_codegen_reparse():
     assert "void helper()" in generated_code
     assert "OpFunctionCall" not in generated_code
     assert "call;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_glslang_pointer_parameter_function_call_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_POINTER_PARAMETER_FUNCTION_CALL_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "void helper(inout float4 value)" in generated_code
+    assert "value = -value;" in generated_code
+    assert "float4 local = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "helper(local);" in generated_code
+    assert "outColor = local;" in generated_code
+    assert "float4* value" not in generated_code
+    assert "outColor = local_value;" not in generated_code
+    assert "OpFunctionParameter" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
