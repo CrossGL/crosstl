@@ -289,9 +289,13 @@ def test_plain_glsl_registry_infers_vulkan_stage_from_glslang_suffix(
 @pytest.mark.parametrize(
     ("suffix", "expected_shader_type", "expected_stage"),
     [
+        (".vert.glsl", "vertex", ShaderStage.VERTEX),
+        (".frag.glsl", "fragment", ShaderStage.FRAGMENT),
+        (".comp.glsl", "compute", ShaderStage.COMPUTE),
         (".rgen.glsl", "ray_generation", ShaderStage.RAY_GENERATION),
         (".rchit.glsl", "ray_closest_hit", ShaderStage.RAY_CLOSEST_HIT),
         (".mesh.glsl", "mesh", ShaderStage.MESH),
+        (".FRAG.GLSL", "fragment", ShaderStage.FRAGMENT),
     ],
 )
 def test_plain_glsl_registry_infers_vulkan_stage_from_compound_suffix(
@@ -314,6 +318,26 @@ def test_plain_glsl_registry_infers_vulkan_stage_from_compound_suffix(
     assert ast.shader_type == expected_shader_type
     assert expected_stage in parsed.stages
     assert f"{expected_shader_type} {{" in crossgl
+
+
+@pytest.mark.parametrize(
+    ("extension", "expected_shader_type"),
+    [
+        (".vert.glsl", "vertex"),
+        (".frag.glsl", "fragment"),
+        (".comp.glsl", "compute"),
+        (".rgen.glsl", "ray_generation"),
+        (".FRAG.GLSL", "fragment"),
+    ],
+)
+def test_plain_glsl_registry_infers_stage_from_explicit_compound_extension_string(
+    extension,
+    expected_shader_type,
+):
+    register_default_sources()
+    spec = SOURCE_REGISTRY.get("glsl")
+
+    assert spec.shader_type_from_path(extension) == expected_shader_type
 
 
 def test_plain_glsl_registry_keeps_vertex_output_varying_when_position_is_written():

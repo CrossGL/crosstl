@@ -23,7 +23,7 @@ register_backend(
         name="cuda",
         codegen_class=CudaCodeGen,
         aliases=("cu",),
-        file_extensions=(".cu",),
+        file_extensions=(".cu", ".cuh", ".cuda"),
         format_backend="cuda",
     )
 )
@@ -77,7 +77,7 @@ register_backend(
         name="rust",
         codegen_class=RustCodeGen,
         aliases=("rust", "rs"),
-        file_extensions=(".rs",),
+        file_extensions=(".rs", ".rust"),
         format_backend="rust",
     )
 )

@@ -97,6 +97,7 @@ class SourceRegistry:
         self._by_name: dict[str, SourceSpec] = {}
         self._by_alias: dict[str, str] = {}
         self._by_extension: dict[str, str] = {}
+        self._unsupported_extensions: dict[str, str] = {}
 
     def register(self, spec: SourceSpec, *, overwrite: bool = False) -> SourceSpec:
         """Register a source spec and all of its aliases/extensions."""
@@ -126,8 +127,24 @@ class SourceRegistry:
                     continue
                 raise ValueError(f"Extension '{ext_key}' already registered")
             self._by_extension[ext_key] = name
+            self._unsupported_extensions.pop(ext_key, None)
 
         return spec
+
+    def register_unsupported_extension(
+        self, ext: str, message: str, *, overwrite: bool = False
+    ) -> None:
+        """Register a known-but-unsupported source extension diagnostic."""
+        ext_key = _normalize_extension(ext)
+        if not ext_key:
+            raise ValueError("Unsupported source extension must be non-empty")
+        if ext_key in self._by_extension and not overwrite:
+            raise ValueError(f"Extension '{ext_key}' already registered")
+        if ext_key in self._unsupported_extensions and not overwrite:
+            if self._unsupported_extensions[ext_key] == message:
+                return
+            raise ValueError(f"Unsupported extension '{ext_key}' already registered")
+        self._unsupported_extensions[ext_key] = message
 
     def resolve_name(self, name: str) -> str | None:
         """Resolve a source name or alias to its canonical registry name."""
@@ -154,10 +171,14 @@ class SourceRegistry:
             if looks_like_path or looks_like_filename:
                 _, ext = os.path.splitext(path_or_ext)
         ext_key = _normalize_extension(ext or "")
+        if ext_key in self._unsupported_extensions:
+            raise ValueError(self._unsupported_extensions[ext_key])
         name = self._by_extension.get(ext_key)
         if not name and ext_key.startswith("."):
             _, trailing_ext = os.path.splitext(ext_key)
             if trailing_ext and trailing_ext != ext_key:
+                if trailing_ext in self._unsupported_extensions:
+                    raise ValueError(self._unsupported_extensions[trailing_ext])
                 name = self._by_extension.get(_normalize_extension(trailing_ext))
         if not name:
             return None
@@ -173,6 +194,11 @@ class SourceRegistry:
 
 
 SOURCE_REGISTRY = SourceRegistry()
+
+BINARY_SPIRV_UNSUPPORTED_MESSAGE = (
+    "Binary SPIR-V input files (.spv) are not supported; provide SPIR-V "
+    "assembly (.spvasm) or disassemble the binary with spirv-dis first."
+)
 
 
 def _load_cgl():
@@ -273,11 +299,16 @@ _GLSL_EXTENSION_SHADER_TYPES = {
 
 
 def _glsl_shader_type_from_path(file_path: str) -> str | None:
-    stem, ext = os.path.splitext(file_path)
+    stem, ext = os.path.splitext(os.path.basename(file_path))
     ext = _normalize_extension(ext)
     if ext == ".glsl":
         _, stage_ext = os.path.splitext(stem)
         shader_type = _GLSL_EXTENSION_SHADER_TYPES.get(_normalize_extension(stage_ext))
+        if shader_type and shader_type != "auto":
+            return shader_type
+        shader_type = _GLSL_EXTENSION_SHADER_TYPES.get(
+            _normalize_extension(stem.lstrip("."))
+        )
         if shader_type and shader_type != "auto":
             return shader_type
     return _GLSL_EXTENSION_SHADER_TYPES.get(ext)
@@ -325,6 +356,12 @@ def register_default_sources() -> None:
     def _register(spec: SourceSpec) -> None:
         try:
             SOURCE_REGISTRY.register(spec)
+        except ValueError:
+            return
+
+    def _register_unsupported_extension(ext: str, message: str) -> None:
+        try:
+            SOURCE_REGISTRY.register_unsupported_extension(ext, message)
         except ValueError:
             return
 
@@ -385,7 +422,7 @@ def register_default_sources() -> None:
     _register(
         SourceSpec(
             name="slang",
-            extensions=(".slang",),
+            extensions=(".slang", ".slangh"),
             load_lexer_parser=_load_slang,
             reverse_codegen_factory=_reverse_slang,
             aliases=("slang",),
@@ -400,6 +437,7 @@ def register_default_sources() -> None:
             aliases=("spirv", "spv"),
         )
     )
+    _register_unsupported_extension(".spv", BINARY_SPIRV_UNSUPPORTED_MESSAGE)
     _register(
         SourceSpec(
             name="mojo",

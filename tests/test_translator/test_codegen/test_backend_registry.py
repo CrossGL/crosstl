@@ -3,6 +3,7 @@ import os
 import pytest
 
 import crosstl.translator.codegen as codegen
+from crosstl.formatter import CodeFormatter, ShaderLanguage
 from crosstl.translator import parse
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
@@ -65,6 +66,11 @@ TRANSLATE_API_ROUNDTRIP_BACKENDS = (
     "mojo",
     "rust",
     "spirv",
+)
+
+REAL_WORLD_TARGET_EXTENSION_BACKENDS = (
+    ("cuda", (".cu", ".cuh", ".cuda"), ShaderLanguage.CUDA),
+    ("rust", (".rs", ".rust"), ShaderLanguage.RUST),
 )
 
 
@@ -162,6 +168,36 @@ def test_source_registry_recognizes_directx_real_world_extensions(extension):
     assert (
         SOURCE_REGISTRY.get_by_extension(f"shader{extension.upper()}").name == "directx"
     )
+
+
+@pytest.mark.parametrize("extension", (".slang", ".slangh"))
+def test_source_registry_recognizes_slang_real_world_extensions(extension):
+    register_default_sources()
+
+    assert SOURCE_REGISTRY.get_by_extension(extension).name == "slang"
+    assert (
+        SOURCE_REGISTRY.get_by_extension(f"shader{extension.upper()}").name == "slang"
+    )
+
+
+@pytest.mark.parametrize(
+    ("backend", "extensions", "formatter_language"),
+    REAL_WORLD_TARGET_EXTENSION_BACKENDS,
+)
+def test_target_registry_real_world_extensions_match_source_and_formatter(
+    backend, extensions, formatter_language
+):
+    register_default_sources()
+    formatter = CodeFormatter()
+    spec = codegen.get_backend(backend)
+
+    assert spec is not None
+    assert tuple(spec.file_extensions) == extensions
+    assert codegen.get_backend_extension(backend) == extensions[0]
+
+    for extension in extensions:
+        assert SOURCE_REGISTRY.get_by_extension(extension).name == backend
+        assert formatter.detect_language(f"shader{extension}") == formatter_language
 
 
 def test_each_backend_has_codegen_tests():

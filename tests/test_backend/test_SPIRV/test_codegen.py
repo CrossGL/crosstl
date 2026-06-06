@@ -1,3 +1,4 @@
+import re
 from typing import List
 
 import pytest
@@ -6,6 +7,7 @@ from crosstl.backend.SPIRV import VulkanCrossGLCodeGen
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 from crosstl.backend.SPIRV.VulkanParser import VulkanParser
 from crosstl.translator import parse as parse_crossgl
+from crosstl.translator.source_registry import BINARY_SPIRV_UNSUPPORTED_MESSAGE
 
 
 def generate_code(ast_node):
@@ -3428,7 +3430,7 @@ def test_translate_api_rejects_binary_spv_source_with_clear_error(tmp_path):
     shader_path = tmp_path / "fragment.spv"
     shader_path.write_bytes(b"\x03\x02\x23\x07")
 
-    with pytest.raises(ValueError, match="Unsupported shader file type"):
+    with pytest.raises(ValueError, match=re.escape(BINARY_SPIRV_UNSUPPORTED_MESSAGE)):
         crosstl.translate(str(shader_path), backend="rust", format_output=False)
 
 

@@ -139,6 +139,14 @@ def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
     assert "gl_Position" not in generated
 
 
+def test_spirv_source_inference_distinguishes_assembly_from_binary():
+    register_default_sources()
+
+    assert SOURCE_REGISTRY.get_by_extension("shader.spvasm").name == "vulkan"
+    with pytest.raises(ValueError, match="Binary SPIR-V input files"):
+        SOURCE_REGISTRY.get_by_extension("shader.spv")
+
+
 def test_translate_decodes_legacy_hlsl_comment_bytes_with_replacement(tmp_path):
     source_path = tmp_path / "legacy-comment.hlsl"
     source_path.write_bytes(
@@ -150,6 +158,22 @@ def test_translate_decodes_legacy_hlsl_comment_bytes_with_replacement(tmp_path):
 
     _assert_generated_output_is_usable(generated)
     crosstl.translator.parse(generated)
+
+
+@pytest.mark.parametrize("filename", ("library.hlsli", "effect.fx", "effect.fxh"))
+def test_directx_real_world_extensions_translate_to_crossgl(tmp_path, filename):
+    source_path = _write_source(
+        tmp_path,
+        filename,
+        "float4 main(float4 pos : SV_Position) : SV_Target { return pos; }",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    crosstl.translator.parse(generated)
+    assert "fragment {" in generated
+    assert "vec4 main(vec4 pos @ gl_Position) @ gl_FragColor" in generated
 
 
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
