@@ -970,6 +970,7 @@ class MetalToCrossGLConverter:
             for alias in typedefs
             if isinstance(alias, TypeAliasNode)
             and not self.is_resource_type_alias(alias)
+            and not getattr(alias, "is_function_type", False)
         ]
         if emitted_typedefs:
             code += "    // Typedefs\n"

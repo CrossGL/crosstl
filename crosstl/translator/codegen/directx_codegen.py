@@ -520,6 +520,8 @@ class HLSLCodeGen:
         "atan2",
         # GLSL bitCount lowers to HLSL countbits.
         "countbits",
+        # GLSL bitfieldReverse lowers to HLSL reversebits.
+        "reversebits",
         # GLSL findLSB/findMSB lower to HLSL first-bit intrinsics.
         "firstbithigh",
         "firstbitlow",
@@ -797,6 +799,7 @@ class HLSLCodeGen:
         self.function_map = {
             "atomicAdd": "InterlockedAdd",
             "bitCount": "countbits",
+            "bitfieldReverse": "reversebits",
             "dFdx": "ddx",
             "dFdxCoarse": "ddx_coarse",
             "dFdxFine": "ddx_fine",
@@ -4229,6 +4232,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             countbits_result_type = self.hlsl_countbits_result_type(func_name, args)
             if countbits_result_type is not None:
                 return countbits_result_type
+            reversebits_result_type = self.hlsl_reversebits_result_type(func_name, args)
+            if reversebits_result_type is not None:
+                return reversebits_result_type
             firstbit_result_type = self.hlsl_firstbit_result_type(func_name, args)
             if firstbit_result_type is not None:
                 return firstbit_result_type
@@ -5323,6 +5329,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 suffix = source_type[len(component) :]
                 if suffix in {"2", "3", "4"}:
                     return f"uint{suffix}"
+        return "uint"
+
+    def hlsl_reversebits_result_type(self, func_name, args):
+        if func_name not in {"bitfieldReverse", "reversebits"}:
+            return None
+        if func_name in getattr(self, "function_return_types", {}):
+            return None
+
+        source_type = self.map_type(
+            (self.expression_result_type(args[0]) if args else None) or "uint"
+        )
+        for component in ("uint", "int"):
+            if source_type == component:
+                return component
+            if source_type.startswith(component):
+                suffix = source_type[len(component) :]
+                if suffix in {"2", "3", "4"}:
+                    return f"{component}{suffix}"
         return "uint"
 
     def hlsl_firstbit_result_type(self, func_name, args):

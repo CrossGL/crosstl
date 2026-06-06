@@ -2371,6 +2371,28 @@ def test_vulkan_attributes_on_cbuffer_parsing():
     assert cbuffer.members[0].name == "viewProj"
 
 
+def test_official_shader_parameter_cbuffer_register_space_parsing():
+    # Source: Slang shader parameter docs show vk::binding and register markup
+    # together on a cbuffer declaration.
+    code = """
+    [[vk::binding(2, 9)]]
+    cbuffer CSMUniforms : register(b0, space9)
+    {
+        float4 shadowCascadeDistances;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    cbuffer = ast.cbuffers[0]
+
+    assert cbuffer.name == "CSMUniforms"
+    assert cbuffer.register == "b0,space9"
+    assert cbuffer.attributes == [{"name": "vk::binding", "arguments": ["2", "9"]}]
+    assert [(member.vtype, member.name) for member in cbuffer.members] == [
+        ("float4", "shadowCascadeDistances")
+    ]
+
+
 def test_global_resource_array_parsing():
     code = """
     StructuredBuffer<float> inputs[2];

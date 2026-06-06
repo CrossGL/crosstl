@@ -1028,6 +1028,13 @@ class MetalParser:
         if self.is_union_alias_start():
             return self.parse_using_union_alias(alias_name)
         alias_type, _qualifiers = self.parse_type_specifier()
+        if self.current_token[0] == "LPAREN":
+            self.parse_parenthesized_parameter_tokens()
+            self.eat("SEMICOLON")
+            self.known_types.add(alias_name)
+            alias = TypeAliasNode(alias_type, alias_name)
+            alias.is_function_type = True
+            return alias
         self.eat("SEMICOLON")
         self.known_types.add(alias_name)
         return TypeAliasNode(alias_type, alias_name)

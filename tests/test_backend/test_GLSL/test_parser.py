@@ -133,6 +133,34 @@ def test_parse_function_header_with_newline_before_parameter_list_from_glsl_gram
     assert ast.functions[1].qualifiers == ["vertex"]
 
 
+def test_parse_layout_qualifier_with_newline_before_parens_from_glsl_grammar():
+    # GLSL 4.60 layout-qualifier is "layout ( ... )"; newlines are whitespace.
+    code = textwrap.dedent("""
+        #version 450 core
+
+        layout
+        (location = 0) in vec3 position;
+
+        layout(std140, binding = 0) uniform Scene {
+            layout
+            (offset = 16) vec4 tint;
+        };
+
+        void main()
+        {
+            gl_Position = vec4(position, 1.0);
+        }
+        """)
+
+    ast = parse_ok(code, "vertex")
+
+    position = next(var for var in ast.io_variables if var.name == "position")
+    scene = next(struct for struct in ast.structs if struct.name == "Scene")
+
+    assert position.layout == {"location": "0"}
+    assert scene.members[0].interface_member_layout == {"offset": "16"}
+
+
 def test_parse_function_parameters_without_names():
     code = textwrap.dedent("""
         #version 400 core

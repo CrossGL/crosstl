@@ -867,6 +867,7 @@ class GLSLParser:
     def parse_layout_qualifier(self):
         qualifiers = {}
         self.eat("LAYOUT")
+        self.skip_newlines()
         self.eat("LPAREN")
         self.skip_newlines()
         while self.current_token[0] != "RPAREN":
