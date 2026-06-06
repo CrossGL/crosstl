@@ -40,6 +40,7 @@ from .DirectxAst import (
 TYPE_TOKENS = {
     "FLOAT",
     "HALF",
+    "FIXED",
     "DOUBLE",
     "INT",
     "UINT",
@@ -207,6 +208,7 @@ EFFECT_BLOCK_KEYWORDS = {
 SCALAR_CONSTRUCTOR_TOKENS = {
     "FLOAT",
     "HALF",
+    "FIXED",
     "DOUBLE",
     "INT",
     "UINT",

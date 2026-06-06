@@ -164,6 +164,21 @@ HIP_BITCAST_FUNCTION_TARGETS = {
     "asuint": "uint",
 }
 
+HIP_UNSUPPORTED_FP16_VECTOR_TYPES = {
+    "vec3<f16>",
+    "vec4<f16>",
+    "vec3<float16>",
+    "vec4<float16>",
+    "vec3<half>",
+    "vec4<half>",
+    "f16vec3",
+    "f16vec4",
+    "float16vec3",
+    "float16vec4",
+    "half3",
+    "half4",
+}
+
 
 class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
     """Emit HIP source from the shared CrossGL translator AST."""
@@ -3707,6 +3722,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def hip_half_constructor_expression(self, constructor_type, raw_args, args):
         """Lower CrossGL FP16 constructors to HIP's documented half intrinsics."""
+        unsupported_type = self.hip_unsupported_fp16_vector_type(constructor_type)
+        if unsupported_type is not None:
+            self.raise_unsupported_hip_fp16_vector_type(unsupported_type)
+
         if constructor_type in {"f16", "half", "float16"}:
             if not args:
                 return "half{}"
@@ -5454,6 +5473,22 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def map_vector_arithmetic_type(self, type_name):
         return self.map_type(type_name)
+
+    def hip_unsupported_fp16_vector_type(self, type_name):
+        type_text = self.type_name_string(type_name)
+        if type_text is None:
+            return None
+        compact_type = "".join(str(type_text).split())
+        if compact_type in HIP_UNSUPPORTED_FP16_VECTOR_TYPES:
+            return compact_type
+        return None
+
+    def raise_unsupported_hip_fp16_vector_type(self, type_name):
+        raise ValueError(
+            "HIP does not support FP16 vector type "
+            f"{type_name}; supported FP16 HIP aliases are f16/half "
+            "and vec2<f16>/half2"
+        )
 
     def require_surface_read_helper(self, helper_name):
         helpers = {
@@ -8365,6 +8400,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             type_str = self.convert_type_node_to_string(type_name)
         else:
             type_str = str(type_name)
+
+        unsupported_type = self.hip_unsupported_fp16_vector_type(type_str)
+        if unsupported_type is not None:
+            self.raise_unsupported_hip_fp16_vector_type(unsupported_type)
 
         generic_enum_type = generic_enum_specialized_type_name(self, type_str)
         if generic_enum_type is not None:

@@ -547,6 +547,68 @@ def test_codegen_shaderlab_legacy_tex2d_imports_canonical_texture_call():
     assert "_MainTex.Sample(_MainTexSampler, i.uv)" in hlsl
 
 
+def test_codegen_shaderlab_fixed_precision_aliases_reparse_and_regenerate_hlsl():
+    shaderlab = textwrap.dedent("""
+        Shader "Custom/FixedPrecisionAliases"
+        {
+            SubShader
+            {
+                Pass
+                {
+                    CGPROGRAM
+                    sampler2D_half _MainTex;
+                    sampler2D_float _DetailTex;
+
+                    struct v2f {
+                        fixed2 uv : TEXCOORD0;
+                        fixed3 tint : COLOR0;
+                    };
+
+                    fixed4 frag(v2f i) : SV_Target
+                    {
+                        fixed alpha = 1.0;
+                        fixed2 uv = i.uv;
+                        fixed3 tint = i.tint;
+                        fixed4 baseColor = tex2D(_MainTex, uv);
+                        fixed4 detailColor = tex2D(_DetailTex, uv);
+                        return fixed4((baseColor.rgb * tint) + detailColor.rgb, alpha);
+                    }
+                    ENDCG
+                }
+            }
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(shaderlab)
+
+    assert "sampler2D _MainTex;" in crossgl
+    assert "sampler2D _DetailTex;" in crossgl
+    assert "float alpha = 1.0;" in crossgl
+    assert "vec2 uv = i.uv;" in crossgl
+    assert "vec3 tint = i.tint;" in crossgl
+    assert "vec4 baseColor = texture(_MainTex, uv);" in crossgl
+    assert "vec4 detailColor = texture(_DetailTex, uv);" in crossgl
+    assert "return vec4((baseColor.rgb * tint) + detailColor.rgb, alpha);" in crossgl
+    assert "fixed" not in crossgl
+    assert "sampler2D_half" not in crossgl
+    assert "sampler2D_float" not in crossgl
+    assert "tex2D(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D _MainTex" in hlsl
+    assert "Texture2D _DetailTex" in hlsl
+    assert "SamplerState _MainTexSampler" in hlsl
+    assert "SamplerState _DetailTexSampler" in hlsl
+    assert "float4 frag" in hlsl
+    assert "_MainTex.Sample(_MainTexSampler, uv)" in hlsl
+    assert "_DetailTex.Sample(_DetailTexSampler, uv)" in hlsl
+    assert "fixed" not in hlsl
+    assert "sampler2D_half" not in hlsl
+    assert "sampler2D_float" not in hlsl
+    assert "tex2D(" not in hlsl
+
+
 def test_codegen_shaderlab_legacy_tex2d_lod_bias_grad_imports_canonical_calls():
     shaderlab = textwrap.dedent("""
         Shader "Custom/LegacyTex2DVariants"

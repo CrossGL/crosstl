@@ -933,6 +933,50 @@ class TestVulkanSPIRVCodeGen:
         assert_matrix_constructs_have_exact_column_operands(spv_code)
         assert "WARNING" not in spv_code
 
+    def test_hlsl_16bit_matrix_aliases_lower_to_float_matrices(self):
+        source_code = """
+        shader Hlsl16BitMatrixAliasConstructors {
+            compute {
+                void main() {
+                    half3x2 halfMat = half3x2(
+                        1.0, 2.0, 3.0,
+                        4.0, 5.0, 6.0
+                    );
+                    min16float3x2 minMat = min16float3x2(
+                        1.0, 2.0, 3.0,
+                        4.0, 5.0, 6.0
+                    );
+                    float16_t3x2 explicitMat = float16_t3x2(
+                        1.0, 2.0, 3.0,
+                        4.0, 5.0, 6.0
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        assert float_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3\b",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert re.search(
+            rf"%\d+ = OpTypeMatrix {re.escape(vec3_type.group(1))} 2\b",
+            spv_code,
+        )
+        assert "OpTypeFloat 16" not in spv_code
+        for alias in ("half3x2", "min16float3x2", "float16_t3x2"):
+            assert alias not in spv_code
+        assert_vector_constructs_have_exact_scalar_operands(spv_code)
+        assert_matrix_constructs_have_exact_column_operands(spv_code)
+        assert "WARNING" not in spv_code
+
     def test_matrix_constructors_convert_between_float_and_double_matrices(self):
         source_code = """
         shader MixedPrecisionMatrixConstructors {

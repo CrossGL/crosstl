@@ -49,6 +49,8 @@ class HLSLToCrossGLConverter:
             "float32_t": "float",
             "half": "float16",
             "half1": "float16",
+            "fixed": "float",
+            "fixed1": "float",
             "float16_t": "float16",
             "double": "double",
             "double1": "double",
@@ -76,6 +78,10 @@ class HLSLToCrossGLConverter:
             "half2": "f16vec2",
             "half3": "f16vec3",
             "half4": "f16vec4",
+            # Unity fixed precision aliases lower to regular float CrossGL types.
+            "fixed2": "vec2",
+            "fixed3": "vec3",
+            "fixed4": "vec4",
             # Vector Types - double
             "double2": "dvec2",
             "double3": "dvec3",
@@ -112,6 +118,15 @@ class HLSLToCrossGLConverter:
             "half4x2": "f16mat4x2",
             "half4x3": "f16mat4x3",
             "half4x4": "f16mat4",
+            "fixed2x2": "mat2",
+            "fixed2x3": "mat2x3",
+            "fixed2x4": "mat2x4",
+            "fixed3x2": "mat3x2",
+            "fixed3x3": "mat3",
+            "fixed3x4": "mat3x4",
+            "fixed4x2": "mat4x2",
+            "fixed4x3": "mat4x3",
+            "fixed4x4": "mat4",
             # Matrix Types - double
             "double2x2": "dmat2",
             "double2x3": "dmat2x3",
@@ -126,6 +141,8 @@ class HLSLToCrossGLConverter:
             "Texture1D": "sampler1D",
             "Texture1DArray": "sampler1DArray",
             "Texture2D": "sampler2D",
+            "sampler2D_half": "sampler2D",
+            "sampler2D_float": "sampler2D",
             "Texture3D": "sampler3D",
             "TextureCube": "samplerCube",
             "Texture2DArray": "sampler2DArray",
@@ -256,10 +273,10 @@ class HLSLToCrossGLConverter:
             "GatherCmpAlpha": "3",
         }
         self.legacy_texture_function_sampler_types = {
-            "tex2D": {"sampler2D"},
-            "tex2Dlod": {"sampler2D"},
-            "tex2Dbias": {"sampler2D"},
-            "tex2Dgrad": {"sampler2D"},
+            "tex2D": {"sampler2D", "sampler2D_half", "sampler2D_float"},
+            "tex2Dlod": {"sampler2D", "sampler2D_half", "sampler2D_float"},
+            "tex2Dbias": {"sampler2D", "sampler2D_half", "sampler2D_float"},
+            "tex2Dgrad": {"sampler2D", "sampler2D_half", "sampler2D_float"},
         }
         self.buffer_method_map = {
             "Load": "buffer_load",
@@ -1136,7 +1153,7 @@ class HLSLToCrossGLConverter:
         base = self.canonical_composite_type(str(type_name or "").strip())
         match = re.fullmatch(
             r"(min16float|min10float|min16uint|min16int|min12int|float16_t|"
-            r"uint16_t|int16_t|double|float|half|uint|int|bool)([1-4])",
+            r"uint16_t|int16_t|double|float|half|fixed|uint|int|bool)([1-4])",
             base,
         )
         return int(match.group(2)) if match else None
@@ -1590,7 +1607,7 @@ class HLSLToCrossGLConverter:
             return "uint"
         if base.startswith(("int", "min16int", "min12int")):
             return "int"
-        if base.startswith(("float", "half", "min16float", "min10float")):
+        if base.startswith(("float", "half", "fixed", "min16float", "min10float")):
             return "float"
         return None
 
@@ -1624,7 +1641,7 @@ class HLSLToCrossGLConverter:
         base = self.canonical_composite_type(str(type_name or "").strip())
         match = re.fullmatch(
             r"(min16float|min10float|min16uint|min16int|min12int|float16_t|"
-            r"uint16_t|int16_t|double|float|half|uint|int|bool)[2-4]",
+            r"uint16_t|int16_t|double|float|half|fixed|uint|int|bool)[2-4]",
             base,
         )
         if match:
@@ -1827,7 +1844,7 @@ class HLSLToCrossGLConverter:
             return None
         if re.fullmatch(
             r"(?:min16float|min10float|min16uint|min16int|min12int|float16_t|"
-            r"uint16_t|int16_t|float|half|double|uint|int|bool)[2-4]",
+            r"uint16_t|int16_t|float|half|fixed|double|uint|int|bool)[2-4]",
             component_type,
         ):
             return int(component_type[-1])
@@ -1842,6 +1859,7 @@ class HLSLToCrossGLConverter:
             "int16_t",
             "float",
             "half",
+            "fixed",
             "double",
             "uint",
             "int",
@@ -3003,7 +3021,7 @@ class HLSLToCrossGLConverter:
             return None
 
         matrix_match = re.fullmatch(
-            r"(float|half|double|min16float|min10float|float16_t|int|uint|bool|"
+            r"(float|half|fixed|double|min16float|min10float|float16_t|int|uint|bool|"
             r"min16int|min12int|int16_t|min16uint|uint16_t|int64_t|uint64_t)"
             r"([1-4])x([1-4])",
             type_name,
@@ -3016,7 +3034,7 @@ class HLSLToCrossGLConverter:
             return scalar_size * int(rows_text) * int(cols_text)
 
         vector_match = re.fullmatch(
-            r"(float|half|double|min16float|min10float|float16_t|int|uint|bool|"
+            r"(float|half|fixed|double|min16float|min10float|float16_t|int|uint|bool|"
             r"min16int|min12int|int16_t|min16uint|uint16_t|int64_t|uint64_t)"
             r"([1-4])",
             type_name,
@@ -3056,6 +3074,7 @@ class HLSLToCrossGLConverter:
             "dword": 4,
             "float": 4,
             "float32_t": 4,
+            "fixed": 4,
             "int32_t": 4,
             "uint32_t": 4,
             "half": 2,
@@ -3491,7 +3510,7 @@ class HLSLToCrossGLConverter:
 
     def map_hlsl_matrix_alias_type(self, type_name):
         matrix_match = re.fullmatch(
-            r"(float|half|double|min16float|min10float|float16_t|int|uint|bool|"
+            r"(float|half|fixed|double|min16float|min10float|float16_t|int|uint|bool|"
             r"min16int|min12int|int16_t|min16uint|uint16_t)([1-4])x([1-4])",
             str(type_name).strip(),
         )
@@ -3559,6 +3578,7 @@ class HLSLToCrossGLConverter:
         prefixes = {
             "float": "vec",
             "half": "f16vec",
+            "fixed": "vec",
             "min16float": "f16vec",
             "min10float": "f16vec",
             "float16_t": "f16vec",
@@ -3590,6 +3610,7 @@ class HLSLToCrossGLConverter:
         prefixes = {
             "float": "mat",
             "half": "f16mat",
+            "fixed": "mat",
             "min16float": "f16mat",
             "min10float": "f16mat",
             "float16_t": "f16mat",

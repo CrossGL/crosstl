@@ -9606,6 +9606,17 @@ class MojoCodeGen:
             )
             return f"{helper_name}({arg_expr})"
 
+        matrix_info = self.matrix_type_info(arg_type)
+        if matrix_info is not None:
+            dtype, columns, rows = matrix_info
+            if dtype not in supported_float_dtypes:
+                return None
+            arg_expr = self.generate_expression(args[0])
+            self.required_matrix_types.add((dtype, columns, rows))
+            self.required_saturate_helpers.add(("matrix", dtype, columns, rows))
+            helper_name = self.saturate_matrix_helper_name(dtype, columns, rows)
+            return f"{helper_name}({arg_expr})"
+
         arg_dtype = self.expression_mojo_dtype(args[0])
         if arg_dtype not in supported_float_dtypes:
             return None
@@ -11951,11 +11962,18 @@ class MojoCodeGen:
         if self.required_ray_helpers:
             code += self.generate_ray_helpers()
 
+        non_matrix_saturate_helpers = {
+            key for key in self.required_saturate_helpers if key[0] != "matrix"
+        }
+        matrix_saturate_helpers = {
+            key for key in self.required_saturate_helpers if key[0] == "matrix"
+        }
+
         if (
             self.required_math_helpers
             or self.required_fract_helpers
             or self.required_mod_helpers
-            or self.required_saturate_helpers
+            or non_matrix_saturate_helpers
         ):
             code += "# CrossGL math helpers\n"
             for helper_name in sorted(self.required_math_helpers):
@@ -11964,7 +11982,7 @@ class MojoCodeGen:
                 code += self.generate_fract_helper(key)
             for key in sorted(self.required_mod_helpers):
                 code += self.generate_mod_helper(key)
-            for key in sorted(self.required_saturate_helpers):
+            for key in sorted(non_matrix_saturate_helpers):
                 code += self.generate_saturate_helper(key)
             code += "\n"
 
@@ -11972,6 +11990,12 @@ class MojoCodeGen:
             code += "# CrossGL matrix types\n"
             for key in sorted(self.required_matrix_types):
                 code += self.generate_matrix_type(key)
+            code += "\n"
+
+        if matrix_saturate_helpers:
+            code += "# CrossGL matrix math helpers\n"
+            for key in sorted(matrix_saturate_helpers):
+                code += self.generate_saturate_helper(key)
             code += "\n"
 
         if (
@@ -12858,7 +12882,7 @@ class MojoCodeGen:
         return f"_crossgl_mod_{dtype_suffix}_{source_width}_{storage_width}_{kind}"
 
     def generate_saturate_helper(self, key):
-        kind, dtype, source_width, storage_width = key
+        kind, dtype, width_or_columns, storage_width_or_rows = key
         scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
 
         if kind == "scalar":
@@ -12870,6 +12894,30 @@ class MojoCodeGen:
                 f"    return {value}\n\n"
             )
 
+        if kind == "matrix":
+            columns = width_or_columns
+            rows = storage_width_or_rows
+            matrix_type = self.matrix_type_name(dtype, columns, rows)
+            storage_rows = self.matrix_storage_rows(rows)
+            column_type = f"SIMD[{dtype}, {storage_rows}]"
+            pad_literal = self.matrix_zero_literal(dtype)
+            column_args = []
+            for column in range(columns):
+                components = [
+                    self.saturate_value_expression(f"m.c{column}[{row}]")
+                    for row in range(rows)
+                ]
+                if rows == 3:
+                    components.append(pad_literal)
+                column_args.append(f"{column_type}({', '.join(components)})")
+
+            helper_name = self.saturate_matrix_helper_name(dtype, columns, rows)
+            code = f"fn {helper_name}(m: {matrix_type}) -> {matrix_type}:\n"
+            code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
+            return code
+
+        source_width = width_or_columns
+        storage_width = storage_width_or_rows
         vector_type = f"SIMD[{dtype}, {storage_width}]"
         components = [
             self.saturate_value_expression(f"v[{index}]")
@@ -12894,6 +12942,10 @@ class MojoCodeGen:
     def saturate_vector_helper_name(self, dtype, source_width, storage_width):
         dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
         return f"_crossgl_saturate_{dtype_suffix}_{source_width}_{storage_width}"
+
+    def saturate_matrix_helper_name(self, dtype, columns, rows):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        return f"_crossgl_saturate_{dtype_suffix}_c{columns}_r{rows}"
 
     def generate_vector_binary_helper(self, dtype, op, helper_kind):
         scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]

@@ -108,17 +108,18 @@ TOKENS = tuple(
         # Matrix types (must come before vector and scalar types)
         (
             "MATRIX",
-            r"\b(float|half|double|int|uint|bool|min16float|min10float|"
+            r"\b(float|half|fixed|double|int|uint|bool|min16float|min10float|"
             r"min16int|min12int|min16uint)[1-4]x[1-4]\b",
         ),
         # Vector types (must come before scalar types)
-        ("FVECTOR", r"\b(float|half|double|min16float|min10float)[1-4]\b"),
+        ("FVECTOR", r"\b(float|half|fixed|double|min16float|min10float)[1-4]\b"),
         ("IVECTOR", r"\b(int|min16int|min12int)[1-4]\b"),
         ("UVECTOR", r"\b(uint|min16uint)[1-4]\b"),
         ("BVECTOR", r"\bbool[1-4]\b"),
         # Scalar types
         ("FLOAT", r"\bfloat\b"),
         ("HALF", r"\bhalf\b"),
+        ("FIXED", r"\bfixed\b"),
         ("DOUBLE", r"\bdouble\b"),
         ("INT", r"\bint\b"),
         ("UINT", r"\buint\b"),
@@ -319,6 +320,7 @@ KEYWORDS = {
     "TriangleStream": "TRIANGLESTREAM",
     "float": "FLOAT",
     "half": "HALF",
+    "fixed": "FIXED",
     "double": "DOUBLE",
     "int": "INT",
     "uint": "UINT",
@@ -440,6 +442,7 @@ class TokenType(Enum):
     BVECTOR = auto()
     FLOAT = auto()
     HALF = auto()
+    FIXED = auto()
     DOUBLE = auto()
     INT = auto()
     UINT = auto()

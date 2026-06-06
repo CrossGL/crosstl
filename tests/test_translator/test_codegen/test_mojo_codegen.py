@@ -19171,6 +19171,129 @@ def test_saturate_half3_builtin_lowers_componentwise_and_preserves_padding():
     assert "saturate(" not in generated_code
 
 
+def test_saturate_hlsl_float_matrix_builtin_lowers_componentwise():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                float2x3 m = float2x3(-1.0, 0.5, 2.0, 0.0, 1.5, -0.25);
+                float2x3 x = saturate(m);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn _crossgl_saturate_f32_c3_r2(m: CrossGLMatrixF32C3R2) "
+        "-> CrossGLMatrixF32C3R2:"
+    ) in generated_code
+    assert (
+        "return CrossGLMatrixF32C3R2("
+        "SIMD[DType.float32, 2]("
+        "0.0 if m.c0[0] < 0.0 else (1.0 if m.c0[0] > 1.0 else m.c0[0]), "
+        "0.0 if m.c0[1] < 0.0 else (1.0 if m.c0[1] > 1.0 else m.c0[1])), "
+        "SIMD[DType.float32, 2]("
+        "0.0 if m.c1[0] < 0.0 else (1.0 if m.c1[0] > 1.0 else m.c1[0]), "
+        "0.0 if m.c1[1] < 0.0 else (1.0 if m.c1[1] > 1.0 else m.c1[1])), "
+        "SIMD[DType.float32, 2]("
+        "0.0 if m.c2[0] < 0.0 else (1.0 if m.c2[0] > 1.0 else m.c2[0]), "
+        "0.0 if m.c2[1] < 0.0 else (1.0 if m.c2[1] > 1.0 else m.c2[1])))"
+    ) in generated_code
+    assert (
+        "var x: CrossGLMatrixF32C3R2 = _crossgl_saturate_f32_c3_r2(m)" in generated_code
+    )
+    assert "saturate(" not in generated_code
+
+
+def test_saturate_half_matrix_builtin_lowers_componentwise_and_preserves_padding():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                half3x2 h = half3x2(-1.0, 0.5, 2.0, 0.0, 1.5, -0.25);
+                half3x2 s = saturate(h);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn _crossgl_saturate_f16_c2_r3(m: CrossGLMatrixF16C2R3) "
+        "-> CrossGLMatrixF16C2R3:"
+    ) in generated_code
+    assert (
+        "return CrossGLMatrixF16C2R3("
+        "SIMD[DType.float16, 4]("
+        "0.0 if m.c0[0] < 0.0 else (1.0 if m.c0[0] > 1.0 else m.c0[0]), "
+        "0.0 if m.c0[1] < 0.0 else (1.0 if m.c0[1] > 1.0 else m.c0[1]), "
+        "0.0 if m.c0[2] < 0.0 else (1.0 if m.c0[2] > 1.0 else m.c0[2]), 0.0), "
+        "SIMD[DType.float16, 4]("
+        "0.0 if m.c1[0] < 0.0 else (1.0 if m.c1[0] > 1.0 else m.c1[0]), "
+        "0.0 if m.c1[1] < 0.0 else (1.0 if m.c1[1] > 1.0 else m.c1[1]), "
+        "0.0 if m.c1[2] < 0.0 else (1.0 if m.c1[2] > 1.0 else m.c1[2]), 0.0))"
+    ) in generated_code
+    assert (
+        "var s: CrossGLMatrixF16C2R3 = _crossgl_saturate_f16_c2_r3(h)" in generated_code
+    )
+    assert "saturate(" not in generated_code
+
+
+def test_saturate_integer_matrix_input_is_left_unmapped():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int2x2 n = int2x2(1, 2, 3, 4);
+                int2x2 x = saturate(n);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var x: CrossGLMatrixI32C2R2 = saturate(n)" in generated_code
+    assert "_crossgl_saturate" not in generated_code
+    assert "clamp(n, 0.0, 1.0)" not in generated_code
+
+
+def test_saturate_matrix_builtin_compiles_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    float2x3 clampMatrix() {
+        float2x3 m = float2x3(-1.0, 0.5, 2.0, 0.0, 1.5, -0.25);
+        return saturate(m);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += """
+fn main():
+    var value = clampMatrix()
+    print(value.c0)
+    print(value.c1)
+    print(value.c2)
+"""
+
+    source_path = tmp_path / "saturate_matrix.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[0.0, 0.5]" in result.stdout
+    assert "[1.0, 0.0]" in result.stdout
+
+
 def test_saturate_integer_vector_input_is_left_unmapped():
     code = """
     shader main {

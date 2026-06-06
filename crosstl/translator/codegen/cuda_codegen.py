@@ -113,6 +113,21 @@ CUDA_BITCAST_FUNCTION_TARGETS = {
     "asuint": "uint",
 }
 
+CUDA_UNSUPPORTED_FP16_VECTOR_TYPES = {
+    "vec3<f16>",
+    "vec4<f16>",
+    "vec3<float16>",
+    "vec4<float16>",
+    "vec3<half>",
+    "vec4<half>",
+    "f16vec3",
+    "f16vec4",
+    "float16vec3",
+    "float16vec4",
+    "half3",
+    "half4",
+}
+
 
 class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
     """Emit CUDA source from the shared CrossGL translator AST."""
@@ -2947,6 +2962,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def cuda_half_constructor_expression(self, constructor_type, raw_args, args):
         """Lower CrossGL FP16 constructors to CUDA's documented half intrinsics."""
+        unsupported_type = self.cuda_unsupported_fp16_vector_type(constructor_type)
+        if unsupported_type is not None:
+            self.raise_unsupported_cuda_fp16_vector_type(unsupported_type)
+
         if constructor_type in {"f16", "half", "float16"}:
             if not args:
                 return "half{}"
@@ -5948,6 +5967,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         crossgl_type = self.type_name_string(crossgl_type)
         if crossgl_type is None:
             return "void"
+
+        unsupported_type = self.cuda_unsupported_fp16_vector_type(crossgl_type)
+        if unsupported_type is not None:
+            self.raise_unsupported_cuda_fp16_vector_type(unsupported_type)
 
         geometry_stream_type = self.cuda_geometry_stream_mapped_type(crossgl_type)
         if geometry_stream_type is not None:
@@ -10199,6 +10222,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def map_vector_arithmetic_type(self, type_name):
         return self.convert_crossgl_type_to_cuda(type_name)
+
+    def cuda_unsupported_fp16_vector_type(self, type_name):
+        type_text = self.type_name_string(type_name)
+        if type_text is None:
+            return None
+        compact_type = "".join(str(type_text).split())
+        if compact_type in CUDA_UNSUPPORTED_FP16_VECTOR_TYPES:
+            return compact_type
+        return None
+
+    def raise_unsupported_cuda_fp16_vector_type(self, type_name):
+        raise ValueError(
+            "CUDA does not support FP16 vector type "
+            f"{type_name}; supported FP16 CUDA aliases are f16/half "
+            "and vec2<f16>/half2"
+        )
 
     def insert_helper_functions(self):
         if not self.helper_functions and not self.resource_query_info_required:

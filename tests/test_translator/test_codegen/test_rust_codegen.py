@@ -25852,16 +25852,23 @@ def test_rust_hlsl_matrix_alias_constructors_compile(tmp_path):
     shader RustHlslMatrixAliases {
         float3 firstColumn() {
             float3x2 basis = float3x2(1.0);
-            return basis.c0;
+            half3x2 halfBasis = half3x2(1.0);
+            min16float3x2 minBasis = min16float3x2(1.0);
+            float16_t3x2 explicitBasis = float16_t3x2(1.0);
+            return basis.c0 + halfBasis.c0 + minBasis.c0 + explicitBasis.c0;
         }
     }
     """
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
+    assert generated_code.count("Mat2x3::<f32>::new") == 4
     assert "let basis: Mat2x3<f32>" in generated_code
-    assert "Mat2x3::<f32>::new" in generated_code
-    assert "float3x2" not in generated_code
+    assert "let halfBasis: Mat2x3<f32>" in generated_code
+    assert "let minBasis: Mat2x3<f32>" in generated_code
+    assert "let explicitBasis: Mat2x3<f32>" in generated_code
+    for alias in ("float3x2", "half3x2", "min16float3x2", "float16_t3x2"):
+        assert alias not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

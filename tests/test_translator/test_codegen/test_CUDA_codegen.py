@@ -2306,6 +2306,37 @@ class TestCudaCodeGen:
         assert "f162" not in cuda_code
         assert "f16(" not in cuda_code
 
+    @pytest.mark.parametrize("vector_type", ["vec3<f16>", "vec4<f16>"])
+    def test_fp16_vec3_vec4_aliases_raise_cuda_diagnostic(self, vector_type):
+        source_code = f"""
+        shader TestShader {{
+            compute {{
+                {vector_type} unsupported() {{
+                    return {vector_type}(1.0, 2.0, 3.0, 4.0);
+                }}
+            }}
+        }}
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+
+        with pytest.raises(
+            ValueError,
+            match=f"CUDA does not support FP16 vector type {vector_type}",
+        ):
+            CudaCodeGen().generate(ast)
+
+    @pytest.mark.parametrize(
+        "vector_type",
+        ["f16vec3", "f16vec4", "float16vec3", "float16vec4", "half3", "half4"],
+    )
+    def test_fp16_wide_vector_alias_maps_raise_cuda_diagnostic(self, vector_type):
+        with pytest.raises(
+            ValueError,
+            match=f"CUDA does not support FP16 vector type {vector_type}",
+        ):
+            CudaCodeGen().convert_crossgl_type_to_cuda(vector_type)
+
     def test_composite_vector_constructors_flatten_cuda_lanes(self):
         source_code = """
         shader TestShader {

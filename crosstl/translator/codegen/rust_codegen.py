@@ -13258,7 +13258,10 @@ class RustCodeGen:
             return None
 
         compact = re.sub(r"\s+", "", str(type_name))
-        match = re.fullmatch(r"(float|double)([234])x([234])", compact)
+        match = re.fullmatch(
+            r"(float|double|half|min16float|float16_t)([234])x([234])",
+            compact,
+        )
         if match is None:
             return str(type_name)
 

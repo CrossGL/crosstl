@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 956
+        "test_count": 957
       },
       "translator_codegen": {
         "exists": true,
@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 856
+        "test_count": 857
       },
       "translator_codegen": {
         "exists": true,
@@ -493,8 +493,12 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 177,
+        "unsupported_marker_count": 192,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "CUDA_UNSUPPORTED_FP16_VECTOR_TYPES = {"
+          },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "self.reject_unsupported_generic_functions(ast_node)"
@@ -570,10 +574,6 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "f\"Unsupported {semantic} stage parameter semantic for CUDA \""
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "f\"Unsupported {semantic} stage parameter semantic for CUDA \""
           }
         ]
       },
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 647
+        "test_count": 649
       },
       "translator_codegen": {
         "exists": true,
@@ -607,8 +607,12 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 117,
+        "unsupported_marker_count": 132,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "HIP_UNSUPPORTED_FP16_VECTOR_TYPES = {"
+          },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "self.reject_unsupported_generic_functions(node)"
@@ -684,10 +688,6 @@
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "f\"Unsupported {semantic} return semantic for HIP codegen; \""
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "f\"Unsupported {semantic} stage parameter semantic for HIP codegen; \""
           }
         ]
       },
@@ -697,7 +697,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 695
+        "test_count": 697
       },
       "translator_codegen": {
         "exists": true,
@@ -811,7 +811,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 751
+        "test_count": 755
       },
       "translator_codegen": {
         "exists": true,

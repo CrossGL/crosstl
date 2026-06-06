@@ -9799,7 +9799,10 @@ class VulkanSPIRVCodeGen:
 
     def normalize_hlsl_matrix_type(self, type_str: str) -> str:
         compact = re.sub(r"\s+", "", str(type_str))
-        match = re.fullmatch(r"(float|double)([234])x([234])", compact)
+        match = re.fullmatch(
+            r"(float|double|half|min16float|float16_t)([234])x([234])",
+            compact,
+        )
         if not match:
             return str(type_str)
 
@@ -11114,6 +11117,7 @@ class VulkanSPIRVCodeGen:
             type_str = str(type_name)
 
         type_str = self.normalize_generic_vector_type(type_str)
+        type_str = self.normalize_hlsl_matrix_type(type_str)
 
         array_type = self.split_outer_array_type(type_str)
         if array_type is not None:

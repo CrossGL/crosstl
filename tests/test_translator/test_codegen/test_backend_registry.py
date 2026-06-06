@@ -154,6 +154,16 @@ def test_source_registry_recognizes_compound_glsl_extension_strings(extension):
     assert SOURCE_REGISTRY.get_by_extension(extension).name == "opengl"
 
 
+@pytest.mark.parametrize("extension", (".hlsl", ".hlsli", ".fx", ".fxh"))
+def test_source_registry_recognizes_directx_real_world_extensions(extension):
+    register_default_sources()
+
+    assert SOURCE_REGISTRY.get_by_extension(extension).name == "directx"
+    assert (
+        SOURCE_REGISTRY.get_by_extension(f"shader{extension.upper()}").name == "directx"
+    )
+
+
 def test_each_backend_has_codegen_tests():
     backend_files = [name.lower() for name in _backend_test_files()]
     missing = []

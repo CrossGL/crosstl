@@ -339,7 +339,7 @@ def register_default_sources() -> None:
     _register(
         SourceSpec(
             name="directx",
-            extensions=(".hlsl",),
+            extensions=(".hlsl", ".hlsli", ".fx", ".fxh"),
             load_lexer_parser=_load_directx,
             reverse_codegen_factory=_reverse_directx,
             aliases=("hlsl", "dx"),
