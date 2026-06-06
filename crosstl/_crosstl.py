@@ -1421,6 +1421,11 @@ def _format_project_report_inspection(payload):
             include_zero=False,
         ),
         _format_count_rollup(
+            "Source maps by variant",
+            summary.get("sourceMapsByVariant"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
             "Source remaps by target",
             summary.get("sourceRemapsByTarget"),
             include_zero=False,
@@ -1428,6 +1433,11 @@ def _format_project_report_inspection(payload):
         _format_count_rollup(
             "Source remaps by source backend",
             summary.get("sourceRemapsBySourceBackend"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Source remaps by variant",
+            summary.get("sourceRemapsByVariant"),
             include_zero=False,
         ),
         _format_count_rollup(

@@ -271,8 +271,9 @@ Project reports are JSON documents with:
   unit source backend, unit file extension, skipped reason, skipped file
   extension, unit source override, skipped source override, artifact source
   backend, variant, target backend, source-map granularity, source-map target,
-  source-map source backend, include dependency kind, include dependency
-  status, include dependency resolution source, diagnostic code
+  source-map source backend, source-map variant, source-remap target,
+  source-remap source backend, source-remap variant, include dependency kind,
+  include dependency status, include dependency resolution source, diagnostic code
   (``diagnosticsByCode``), and missing capability (``missingCapabilityCounts``).
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, source hashes, and source
@@ -358,8 +359,9 @@ Project reports are JSON documents with:
   rollup checks,
   artifact matrix emitted/translated/failed/missing/extra/completion count and
   target/variant rollup checks,
-  full-report source-map granularity, target, and source-backend rollup checks,
-  source-remap target and source-backend rollup checks,
+  full-report source-map granularity, target, source-backend, and variant
+  rollup checks,
+  source-remap target, source-backend, and variant rollup checks,
   source hash checks, failed artifact error metadata checks, translated artifact
   error metadata rejection, required artifact provenance and provenance value
   checks, failed artifact generated metadata rejection, required translated

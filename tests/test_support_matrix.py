@@ -628,6 +628,12 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "single file-level source-map mapping" in backend_support["notes"]
         assert "source-map summary rollups" in backend_support["notes"]
+        assert "source-map summary rollups including variant rollups" in (
+            backend_support["notes"]
+        )
+        assert "source-remap summary rollups including variant rollups" in (
+            backend_support["notes"]
+        )
         assert "artifact provenance summary rollups" in backend_support["notes"]
         assert "compiler-compatible source-remap sidecar semantics" in (
             backend_support["notes"]

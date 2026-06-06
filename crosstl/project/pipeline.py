@@ -675,6 +675,20 @@ def _source_map_counts_by_source_backend(
     return dict(sorted(counts.items()))
 
 
+def _source_map_counts_by_variant(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for artifact in artifacts:
+        if not isinstance(artifact.get("sourceMap"), Mapping):
+            continue
+        variant = artifact.get("variant")
+        if not _is_non_empty_string(variant):
+            continue
+        counts[variant] = counts.get(variant, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _source_remap_counts_by_target(
     artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, int]:
@@ -698,6 +712,20 @@ def _source_remap_counts_by_source_backend(
         source_backend = artifact.get("sourceBackend")
         key = source_backend if _is_non_empty_string(source_backend) else "unknown"
         counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _source_remap_counts_by_variant(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for artifact in artifacts:
+        if not isinstance(artifact.get("sourceRemap"), Mapping):
+            continue
+        variant = artifact.get("variant")
+        if not _is_non_empty_string(variant):
+            continue
+        counts[variant] = counts.get(variant, 0) + 1
     return dict(sorted(counts.items()))
 
 
@@ -909,11 +937,13 @@ def _source_map_rollups(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any
         "sourceMapsByGranularity": _source_map_counts_by_granularity(artifacts),
         "sourceMapsByTarget": _source_map_counts_by_target(artifacts),
         "sourceMapsBySourceBackend": _source_map_counts_by_source_backend(artifacts),
+        "sourceMapsByVariant": _source_map_counts_by_variant(artifacts),
         "sourceRemapCount": _source_remap_count(artifacts),
         "sourceRemapsByTarget": _source_remap_counts_by_target(artifacts),
         "sourceRemapsBySourceBackend": _source_remap_counts_by_source_backend(
             artifacts
         ),
+        "sourceRemapsByVariant": _source_remap_counts_by_variant(artifacts),
     }
 
 
@@ -4146,8 +4176,10 @@ def _inspection_source_map_summary(summary: Any) -> dict[str, Any]:
         "sourceMapsByGranularity",
         "sourceMapsByTarget",
         "sourceMapsBySourceBackend",
+        "sourceMapsByVariant",
         "sourceRemapsByTarget",
         "sourceRemapsBySourceBackend",
+        "sourceRemapsByVariant",
     ):
         value = summary.get(field_name)
         if isinstance(value, Mapping):
@@ -7206,6 +7238,15 @@ def _summary_contract_reasons(
                 "artifact source maps",
             )
         )
+        if "sourceMapsByVariant" in summary:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "summary.sourceMapsByVariant",
+                    summary.get("sourceMapsByVariant"),
+                    source_map_rollups["sourceMapsByVariant"],
+                    "artifact source maps",
+                )
+            )
         reasons.extend(
             _count_field_contract_reasons(
                 "summary.sourceRemapCount",
@@ -7230,6 +7271,15 @@ def _summary_contract_reasons(
                 "artifact source remaps",
             )
         )
+        if "sourceRemapsByVariant" in summary:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "summary.sourceRemapsByVariant",
+                    summary.get("sourceRemapsByVariant"),
+                    source_map_rollups["sourceRemapsByVariant"],
+                    "artifact source remaps",
+                )
+            )
     if isinstance(diagnostics, list):
         reasons.extend(
             _diagnostic_counts_contract_reasons(

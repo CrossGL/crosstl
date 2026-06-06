@@ -2643,6 +2643,7 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["summary"]["sourceRemapCount"] == 0
     assert payload["summary"]["sourceRemapsByTarget"] == {}
     assert payload["summary"]["sourceRemapsBySourceBackend"] == {}
+    assert payload["summary"]["sourceRemapsByVariant"] == {}
     assert payload["migration"]["nonGoals"] == [
         "automatic runtime API migration",
         "application build-system rewrites",
@@ -2718,9 +2719,11 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
     assert payload["summary"]["sourceMapsByGranularity"] == {"file": 1}
     assert payload["summary"]["sourceMapsByTarget"] == {"cgl": 1}
     assert payload["summary"]["sourceMapsBySourceBackend"] == {"cgl": 1}
+    assert payload["summary"]["sourceMapsByVariant"] == {}
     assert payload["summary"]["sourceRemapCount"] == 1
     assert payload["summary"]["sourceRemapsByTarget"] == {"cgl": 1}
     assert payload["summary"]["sourceRemapsBySourceBackend"] == {"cgl": 1}
+    assert payload["summary"]["sourceRemapsByVariant"] == {}
     assert source_map["schemaVersion"] == 1
     assert source_map["kind"] == "crosstl-artifact-source-map"
     assert source_map["mappingGranularity"] == "file"
@@ -2757,6 +2760,89 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
             }
         ],
     }
+
+
+def test_translate_project_reports_source_maps_and_remaps_by_variant(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.variants.debug]
+            MODE = "debug"
+
+            [project.variants.release]
+            MODE = "release"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_shader(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, include_paths, defines
+        Path(save_shader).write_text("// translated\n", encoding="utf-8")
+        return "// translated\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_shader)
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert validation["success"] is True
+    assert payload["summary"]["sourceMapCount"] == 2
+    assert payload["summary"]["sourceMapsByVariant"] == {
+        "debug": 1,
+        "release": 1,
+    }
+    assert payload["summary"]["sourceRemapCount"] == 2
+    assert payload["summary"]["sourceRemapsByVariant"] == {
+        "debug": 1,
+        "release": 1,
+    }
+    assert inspection["sourceMaps"]["sourceMapsByVariant"] == {
+        "debug": 1,
+        "release": 1,
+    }
+    assert inspection["sourceMaps"]["sourceRemapsByVariant"] == {
+        "debug": 1,
+        "release": 1,
+    }
+    assert result.returncode == 0
+    assert "Source maps by variant: debug=1, release=1" in result.stdout
+    assert "Source remaps by variant: debug=1, release=1" in result.stdout
 
 
 def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
@@ -6645,9 +6731,11 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     "sourceMapsByGranularity": {"line": 1},
                     "sourceMapsByTarget": {"metal": 1},
                     "sourceMapsBySourceBackend": {"unknown": 1},
+                    "sourceMapsByVariant": {"debug": 1},
                     "sourceRemapCount": 1,
                     "sourceRemapsByTarget": {"cgl": 1},
                     "sourceRemapsBySourceBackend": {"cgl": 1},
+                    "sourceRemapsByVariant": {"debug": 1},
                     "artifactProvenanceByPipeline": {"manual-copy": 1},
                     "artifactProvenanceByIntermediate": {"crossgl": 1},
                 },
@@ -6749,6 +6837,9 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     assert "summary.sourceMapsBySourceBackend must match artifact source maps" in (
         diagnostic["message"]
     )
+    assert "summary.sourceMapsByVariant must match artifact source maps" in (
+        diagnostic["message"]
+    )
     assert "summary.sourceRemapCount must match artifact source remaps" in (
         diagnostic["message"]
     )
@@ -6756,6 +6847,9 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
         diagnostic["message"]
     )
     assert "summary.sourceRemapsBySourceBackend must match artifact source remaps" in (
+        diagnostic["message"]
+    )
+    assert "summary.sourceRemapsByVariant must match artifact source remaps" in (
         diagnostic["message"]
     )
     assert "diagnosticCounts must match diagnostics" in diagnostic["message"]
@@ -8460,8 +8554,10 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "sourceMapsByGranularity": {"file": 1},
         "sourceMapsByTarget": {"cgl": 1},
         "sourceMapsBySourceBackend": {"cgl": 1},
+        "sourceMapsByVariant": {},
         "sourceRemapsByTarget": {"cgl": 1},
         "sourceRemapsBySourceBackend": {"cgl": 1},
+        "sourceRemapsByVariant": {},
     }
     assert payload["artifactProvenance"] == {
         "available": True,
@@ -8704,8 +8800,10 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "sourceMapsByGranularity": {"file": 1},
         "sourceMapsByTarget": {"cgl": 1},
         "sourceMapsBySourceBackend": {"cgl": 1},
+        "sourceMapsByVariant": {},
         "sourceRemapsByTarget": {"cgl": 1},
         "sourceRemapsBySourceBackend": {"cgl": 1},
+        "sourceRemapsByVariant": {},
     }
     assert payload["artifactProvenance"] == {
         "available": True,
