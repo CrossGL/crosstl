@@ -311,7 +311,10 @@ def test_project_include_resolution_documents_status_reporting():
         )
         assert "include-path processing status" in backend_support["notes"]
         assert "source frontend support metadata" in backend_support["notes"]
-        assert "status, source-backend, and variant rollups" in backend_support["notes"]
+        assert (
+            "include-path processing rollups by status, source backend, and variant"
+            in backend_support["notes"]
+        )
         assert "forged artifact include-path processing metadata" in (
             backend_support["notes"]
         )

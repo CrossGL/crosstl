@@ -1418,6 +1418,10 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
     }
     assert result.returncode == 0
     assert "Include path processing: not-supported=1" in result.stdout
+    assert (
+        "Include path processing by source backend: cgl=(not-supported=1)"
+        in result.stdout
+    )
     assert "Include path processing issues:" in result.stdout
     assert (
         f"- shaders/simple.cgl -> opengl at {artifact_path}: "
@@ -1603,6 +1607,10 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "Include path processing by variant: "
         "debug=(not-requested=1), release=(not-requested=1)"
     ) in result.stdout
+    assert (
+        "Include path processing by source backend: cgl=(not-requested=2)"
+        in result.stdout
+    )
     assert [artifact["path"] for artifact in payload["artifacts"]] == [
         "translated/opengl/debug/simple.glsl",
         "translated/opengl/release/simple.glsl",
@@ -9386,6 +9394,10 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert "Define processing: not-requested=1" in result.stdout
     assert "Define processing by source backend: cgl=(not-requested=1)" in result.stdout
     assert "Include path processing: not-requested=1" in result.stdout
+    assert (
+        "Include path processing by source backend: cgl=(not-requested=1)"
+        in result.stdout
+    )
     assert "Source maps by granularity: file=1" in result.stdout
     assert "Source maps by target: cgl=1" in result.stdout
     assert "Source maps by source backend: cgl=1" in result.stdout

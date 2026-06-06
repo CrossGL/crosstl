@@ -201,10 +201,10 @@ reading every artifact record.
 They also record ``includePathProcessing`` metadata so active include-directory
 paths can be distinguished from include paths that were not requested or could
 not be consumed by the selected source frontend. Include-path processing
-summaries also roll up by named variant when variants are configured. Report
-inspection includes sampled artifacts whose active include paths could not be
-forwarded, so the affected source, target, and frontend are visible without
-reading every artifact record.
+summaries and text reports also roll up by source backend and by named variant
+when variants are configured. Report inspection includes sampled artifacts
+whose active include paths could not be forwarded, so the affected source,
+target, and frontend are visible without reading every artifact record.
 During scan, project reports also record ``#include`` directives discovered in
 translation units. Each dependency record keeps the include target, local,
 system, or dynamic kind, line and column, and a status of ``resolved``,
