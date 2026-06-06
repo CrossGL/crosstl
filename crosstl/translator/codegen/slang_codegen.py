@@ -1200,6 +1200,7 @@ class SlangCodeGen:
         compare_calls = {
             "textureCompare",
             "textureCompareLod",
+            "textureCompareLodOffset",
             "textureCompareGrad",
             "textureCompareOffset",
             "textureGatherCompare",
@@ -12652,6 +12653,7 @@ class SlangCodeGen:
         if func_name in {
             "textureCompare",
             "textureCompareLod",
+            "textureCompareLodOffset",
             "textureCompareGrad",
             "textureCompareOffset",
         }:
@@ -13576,6 +13578,27 @@ class SlangCodeGen:
             lod = self.generate_expression(extra_args[0])
             return self.slang_texture_method_call(
                 texture_name, "SampleCmpLevel", args, coord, compare, lod
+            )
+
+        if func_name == "textureCompareLodOffset":
+            if len(extra_args) != 2:
+                return self.unsupported_texture_compare_call(
+                    func_name, "requires lod and offset arguments"
+                )
+            lod_reason = self.scalar_numeric_texture_argument_unsupported_reason(
+                extra_args[0], "lod argument"
+            )
+            if lod_reason:
+                return self.unsupported_texture_compare_call(func_name, lod_reason)
+            offset_reason = self.shadow_compare_offset_rank_unsupported_reason(
+                args[0], extra_args[1]
+            )
+            if offset_reason:
+                return self.unsupported_texture_compare_call(func_name, offset_reason)
+            lod = self.generate_expression(extra_args[0])
+            offset = self.generate_expression(extra_args[1])
+            return self.slang_texture_method_call(
+                texture_name, "SampleCmpLevel", args, coord, compare, lod, offset
             )
 
         if len(extra_args) != 2:

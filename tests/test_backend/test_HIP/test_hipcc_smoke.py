@@ -2872,8 +2872,8 @@ def test_native_hip_module_occupancy_launch_parses_and_compiles_if_available(
     ) in crossgl
     assert (
         "// HIP cooperative kernel launch: "
-        "function: ptr<void>(occupancy_kernel), grid: vec3<u32>(1), "
-        "block: vec3<u32>(block_size), params: kernel_params, "
+        "function: ptr<void>(occupancy_kernel), grid: vec3<u32>(1, 1, 1), "
+        "block: vec3<u32>(block_size, 1, 1), params: kernel_params, "
         "shared memory: 0, stream: stream"
     ) in crossgl
     assert "// HIP module unload: module" in crossgl

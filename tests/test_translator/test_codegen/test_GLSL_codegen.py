@@ -6739,6 +6739,36 @@ def test_vertex_integer_struct_outputs_are_flat_qualified():
     assert "layer = 1;" in generated_code
 
 
+def test_glsl_vertex_struct_output_uses_builtin_cull_distance():
+    shader = """
+    shader VertexCullDistanceBuiltin {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            float cull[1] @ gl_CullDistance;
+        };
+
+        vertex {
+            VSOutput main(vec3 position @ POSITION) {
+                VSOutput output;
+                output.position = vec4(position, 1.0);
+                output.cull[0] = position.x;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "vertex"
+    )
+
+    assert "layout(location = 0) in vec3 position;" in generated_code
+    assert "gl_Position = vec4(position, 1.0);" in generated_code
+    assert "gl_CullDistance[0] = position.x;" in generated_code
+    assert "out float cull[1];" not in generated_code
+    assert "cull[0] = position.x;" not in generated_code
+
+
 def test_vertex_struct_constructor_return_lowers_to_flattened_stage_variables():
     shader = """
     shader VertexStructConstructorReturn {

@@ -4269,6 +4269,9 @@ class CudaToCrossGLConverter:
         ):
             return self.visit(raw_args[0].operand)
 
+        if len(raw_args) == 1:
+            return f"(*{formatted_args[0]})"
+
         args_text = ", ".join(formatted_args)
         return (
             f"(/* cuda load cache intrinsic {function_name}({args_text}) "

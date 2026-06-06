@@ -1627,6 +1627,37 @@ def test_codegen_lowers_combined_threadgroup_barrier_flags_from_blender_builtin(
     ) in metal
 
 
+def test_codegen_lowers_simdgroup_barrier_from_apple_silicon_sync_sample():
+    # Reduced from Apple's WWDC20 "Bring your Metal app to Apple silicon Macs"
+    # threadgroup synchronization sample.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void kernelMain(uint tid [[thread_index_in_threadgroup]],
+                           uint simd_size [[threads_per_simdgroup]],
+                           device uint* res [[buffer(0)]]) {
+        threadgroup uint buf[64];
+        buf[tid] = initBuffer(tid);
+
+        if (simd_size == 64u)
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+        else
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        uint index = (tid < 32) ? tid + 32 : tid - 32;
+        res[tid] = buf[tid] + buf[index];
+    }
+    """
+    crossgl = convert(code)
+
+    assert crossgl.count("workgroupBarrier();") == 2
+    assert "simdgroup_barrier" not in crossgl
+    assert "threadgroup_barrier" not in crossgl
+    assert "mem_flags" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_scoped_variable_template_expression_from_mlx_gemv_masked():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx

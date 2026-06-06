@@ -2127,6 +2127,7 @@ class HLSLCodeGen:
                 )
                 semantic_attr = self.map_semantic(semantic)
                 interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
+                precise_prefix = self.hlsl_precise_modifier_prefix(member)
                 tess_factor_declaration = self.hlsl_tess_factor_member_declaration(
                     declaration_type,
                     member.name,
@@ -2136,7 +2137,7 @@ class HLSLCodeGen:
                     code += f"    {tess_factor_declaration} {semantic_attr};\n"
                 else:
                     declaration = format_c_style_array_declaration(
-                        f"{interpolation_prefix}{declaration_type}",
+                        f"{interpolation_prefix}{precise_prefix}{declaration_type}",
                         member.name,
                     )
                     code += f"    {declaration}{semantic_attr};\n"
@@ -2196,6 +2197,7 @@ class HLSLCodeGen:
             )
             semantic_attr = self.map_semantic(semantic)
             interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
+            precise_prefix = self.hlsl_precise_modifier_prefix(member)
             tess_factor_declaration = self.hlsl_tess_factor_member_declaration(
                 member_type,
                 member.name,
@@ -2207,13 +2209,13 @@ class HLSLCodeGen:
 
             if array_syntax is None:
                 declaration = format_c_style_array_declaration(
-                    f"{interpolation_prefix}{member_type}",
+                    f"{interpolation_prefix}{precise_prefix}{member_type}",
                     member.name,
                 )
                 code += f"    {declaration}{semantic_attr};\n"
             else:
                 code += (
-                    f"    {interpolation_prefix}{member_type} "
+                    f"    {interpolation_prefix}{precise_prefix}{member_type} "
                     f"{member.name}{array_syntax}{semantic_attr};\n"
                 )
         code += "};\n"
@@ -3254,6 +3256,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             raw_return_type = "void"
             return_type = "void"
         self.current_function_return_type = raw_return_type
+        declaration_return_type = (
+            f"{self.hlsl_precise_modifier_prefix(func)}{return_type}"
+        )
         self.validate_hlsl_local_groupshared_declarations(func)
         self.validate_hlsl_nonuniform_resource_index_calls(func)
         parameter_diagnostics = self.glsl_buffer_block_parameter_diagnostics(
@@ -3303,7 +3308,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             function_name = self.hlsl_function_declaration_name(func, entry_name)
             return_semantic_attr = self.map_semantic(return_semantic)
             code += (
-                f"{return_type} {function_name}({params_str})"
+                f"{declaration_return_type} {function_name}({params_str})"
                 f"{return_semantic_attr};\n\n"
             )
             self.current_function_return_type = previous_function_return_type
@@ -3359,7 +3364,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             code += wave_size_attribute
             code += waveops_helper_lanes_attribute
             function_name = entry_name or shader_map[effective_shader_type]
-            code += f"{return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
+            code += f"{declaration_return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
         else:
             shader_attr = shader_attr_map.get(effective_shader_type)
             self.validate_hlsl_stage_requirements(func, effective_shader_type)
@@ -3374,7 +3379,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 code += f'[shader("{shader_attr}")]\n'
             function_name = self.hlsl_function_declaration_name(func, entry_name)
             return_semantic_attr = self.map_semantic(return_semantic)
-            code += f"{return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
+            code += f"{declaration_return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -3767,9 +3772,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             rendered.append("groupshared")
         if "buffer" in qualifiers:
             rendered.append("static")
+        if self.hlsl_has_precise_modifier(node):
+            rendered.append("precise")
         if "const" in qualifiers:
             rendered.append("const")
         return f"{' '.join(rendered)} " if rendered else ""
+
+    def hlsl_has_precise_modifier(self, node):
+        qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
+        if "precise" in qualifiers:
+            return True
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() == "precise":
+                return True
+        return False
+
+    def hlsl_precise_modifier_prefix(self, node):
+        return "precise " if self.hlsl_has_precise_modifier(node) else ""
+
+    def is_hlsl_declaration_metadata_attribute(self, attr):
+        return str(getattr(attr, "name", "")).lower() in {"precise"}
 
     def hlsl_canonical_compile_time_type_text(self, type_text):
         type_text = str(type_text)
@@ -8083,6 +8105,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def apply_hlsl_parameter_qualifiers(self, param_type, parameter):
         qualifiers = self.hlsl_parameter_qualifiers(parameter)
+        if self.hlsl_has_precise_modifier(parameter):
+            qualifiers.append("precise")
         if not qualifiers:
             return param_type
         return f"{' '.join(qualifiers)} {param_type}"
@@ -16983,8 +17007,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return ""
 
     def semantic_from_node(self, node):
-        if hasattr(node, "semantic"):
-            return node.semantic
+        semantic = getattr(node, "semantic", None)
+        if semantic is not None:
+            return semantic
         if not hasattr(node, "attributes"):
             return None
         for attr in node.attributes:
@@ -16999,6 +17024,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 or self.hlsl_mesh_payload_parameter_attribute_name(attr)
                 or self.is_hlsl_resource_array_size_marker(node, attr)
                 or self.hlsl_root_signature_attribute(attr)
+                or self.is_hlsl_declaration_metadata_attribute(attr)
             ):
                 continue
             if hasattr(attr, "name"):
@@ -17031,6 +17057,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.hlsl_mesh_parameter_role_attribute_name(attr)
                 or self.hlsl_mesh_payload_parameter_attribute_name(attr)
+                or self.is_hlsl_declaration_metadata_attribute(attr)
             ):
                 continue
             location_semantic = self.hlsl_location_return_semantic(attr)
@@ -17055,6 +17082,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 or self.is_rasterizer_ordered_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.is_hlsl_resource_array_size_marker(node, attr)
+                or self.is_hlsl_declaration_metadata_attribute(attr)
             ):
                 continue
             if hasattr(attr, "name"):

@@ -14632,6 +14632,62 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
     assert "textureGatherCompare" not in generated_code
 
 
+def test_shadow_compare_lod_offset_emits_slang_sample_cmp_level_offset():
+    code = """
+    shader Resources {
+        sampler compareSampler;
+        sampler2dshadow shadowMap;
+        sampler2darrayshadow shadowLayers;
+
+        compute {
+            float compareLodOffset(
+                sampler2DShadow tex,
+                sampler2DArrayShadow layers,
+                sampler compareState,
+                vec2 uv,
+                vec3 uvLayer,
+                float depth,
+                float lod,
+                ivec2 offset
+            ) {
+                float direct = textureCompareLodOffset(
+                    tex,
+                    uv,
+                    depth,
+                    lod,
+                    offset
+                );
+                float explicitSampler = textureCompareLodOffset(
+                    layers,
+                    compareState,
+                    uvLayer,
+                    depth,
+                    lod,
+                    offset
+                );
+                return direct + explicitSampler;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2DShadow tex" in generated_code
+    assert "Texture2DArray<float> layers" in generated_code
+    assert "SamplerComparisonState compareState" in generated_code
+    assert (
+        "float direct = tex.SampleCmpLevel(uv, depth, lod, offset);" in generated_code
+    )
+    assert (
+        "float explicitSampler = layers.SampleCmpLevel("
+        "compareState, uvLayer, depth, lod, offset);" in generated_code
+    )
+    assert "textureCompareLodOffset(" not in generated_code
+
+
 def test_shadow_compare_builtins_validate_target_result_types():
     code = """
     shader InvalidShadowCompareTargets {

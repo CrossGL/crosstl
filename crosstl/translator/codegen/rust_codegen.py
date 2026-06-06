@@ -4033,7 +4033,7 @@ class RustCodeGen:
         elif shader_type == "fragment":
             code += self.generate_rust_stage_attribute("fragment_shader")
         elif shader_type == "compute":
-            code += self.generate_rust_stage_attribute("compute_shader")
+            code += self.generate_rust_compute_stage_attribute(func)
         elif shader_type == "geometry":
             code += self.generate_rust_geometry_stage_comments(func, param_list)
         elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
@@ -4114,6 +4114,38 @@ class RustCodeGen:
     def generate_rust_stage_attribute(self, attribute_name):
         """Render a host-compatible Rust shader stage attribute."""
         return f'#[cfg_attr(feature = "crossgl_gpu", {attribute_name})]\n'
+
+    def generate_rust_compute_stage_attribute(self, func):
+        """Render a Rust GPU compute entry attribute, including workgroup size."""
+        numthreads = self.rust_compute_stage_numthreads(func)
+        if numthreads is None:
+            return self.generate_rust_stage_attribute("compute_shader")
+        threads = ", ".join(numthreads)
+        return (
+            '#[cfg_attr(feature = "crossgl_gpu", '
+            f"spirv(compute(threads({threads}))))]\n"
+        )
+
+    def rust_compute_stage_numthreads(self, func):
+        """Return CrossGL compute @numthreads dimensions for rust-gpu."""
+        arguments = self.rust_stage_attribute_arguments(func, "numthreads")
+        if not arguments:
+            return None
+        if len(arguments) > 3:
+            raise ValueError(
+                "Rust compute stage numthreads requires at most three arguments"
+            )
+        values = [self.attribute_argument_text(arg) for arg in arguments]
+        for index, argument in enumerate(arguments):
+            value = self.literal_int_value(argument)
+            if value is not None and value <= 0:
+                raise ValueError(
+                    f"Rust compute stage numthreads value {index + 1} "
+                    "must be positive"
+                )
+        while len(values) < 3:
+            values.append("1")
+        return tuple(values[:3])
 
     def function_reference_return_lifetime(self, func, return_type, param_types):
         if self.reference_type_parts_for_type(return_type) is None:

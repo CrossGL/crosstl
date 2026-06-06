@@ -25824,6 +25824,31 @@ def test_rust_top_level_constants_and_compute_builtins_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_compute_numthreads_emits_spirv_threads_attribute(tmp_path):
+    # rust-gpu documents compute dimensions as
+    # #[spirv(compute(threads(...)))].
+    # Source: https://rust-gpu.github.io/rust-gpu/book/attributes.html
+    code = """
+    shader RustComputeNumthreads {
+        compute {
+            void main() @numthreads(8, 4, 2) {
+                uint localX = gl_LocalInvocationID.x;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        '#[cfg_attr(feature = "crossgl_gpu", ' "spirv(compute(threads(8, 4, 2))))]"
+    ) in generated_code
+    assert '#[cfg_attr(feature = "crossgl_gpu", compute_shader)]' not in generated_code
+    assert "let localX: u32 = local_invocation_id().x;" in generated_code
+    assert "gl_LocalInvocationID" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_rust_subgroup_builtin_expressions_lower_to_helpers(tmp_path):
     code = """
     shader RustSubgroupBuiltinExpressions {
