@@ -2344,10 +2344,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def cuda_compute_builtin_expression(self, role, component=None):
         """Return the CUDA expression for a CrossGL compute built-in role."""
-        local_index = (
-            "(threadIdx.z * blockDim.y * blockDim.x + "
-            "threadIdx.y * blockDim.x + threadIdx.x)"
-        )
+        local_index = self.cuda_thread_block_linear_index_expression()
         component_expressions = {
             "global_invocation_id": {
                 "x": "(blockIdx.x * blockDim.x + threadIdx.x)",
@@ -2399,6 +2396,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     return f"{constructor}({values})"
             return None
         return "make_uint3({x}, {y}, {z})".format(**role_components)
+
+    def cuda_thread_block_linear_index_expression(self):
+        """Return CUDA's row-major linear thread ID within the current block."""
+        return (
+            "(threadIdx.z * blockDim.y * blockDim.x + "
+            "threadIdx.y * blockDim.x + threadIdx.x)"
+        )
+
+    def cuda_warp_lane_index_expression(self):
+        """Return the lane index for the current thread in its CUDA warp."""
+        return (
+            f"({self.cuda_thread_block_linear_index_expression()} " "& (warpSize - 1))"
+        )
 
     def cuda_compute_builtin_role_for_name(self, name):
         """Return the compute built-in role represented by a source identifier."""
@@ -3444,9 +3454,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if operation == "WaveGetLaneCount":
             return "warpSize"
         if operation == "WaveGetLaneIndex":
-            return "(threadIdx.x & (warpSize - 1))"
+            return self.cuda_warp_lane_index_expression()
         if operation == "WaveIsFirstLane":
-            return "((threadIdx.x & (warpSize - 1)) == 0)"
+            return f"({self.cuda_warp_lane_index_expression()} == 0)"
 
         diagnostic = self.cuda_wave_operation_diagnostic(operation, raw_args)
         if diagnostic is not None:
@@ -3744,8 +3754,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return f"    return __shfl_xor_sync(__activemask(), value, {lane_mask});\n"
 
         if operation == "QuadReadLaneAt":
+            lane_index = self.cuda_warp_lane_index_expression()
             return (
-                "    uint lane_index = (threadIdx.x & (warpSize - 1));\n"
+                f"    uint lane_index = {lane_index};\n"
                 "    uint source_lane = (lane_index & ~3u) | (lane & 3u);\n"
                 "    return __shfl_sync(\n"
                 "        __activemask(), value, static_cast<int>(source_lane));\n"
@@ -3788,9 +3799,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         identity = self.wave_identity_expression(operation, result_type)
         combine_running = self.wave_combine_expression(operation, "running", "other")
         combine_result = self.wave_combine_expression(operation, "result", "other")
+        lane_index = self.cuda_warp_lane_index_expression()
         return (
             "    unsigned int mask = __activemask();\n"
-            "    uint lane_index = (threadIdx.x & (warpSize - 1));\n"
+            f"    uint lane_index = {lane_index};\n"
             f"    {result_type} running = value;\n"
             f"    {result_type} result = {identity};\n"
             "    for (int offset = 1; offset < warpSize; offset <<= 1) {\n"
@@ -3804,9 +3816,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
 
     def wave_prefix_count_bits_helper_body(self):
+        lane_index = self.cuda_warp_lane_index_expression()
         return (
             "    unsigned int mask = __activemask();\n"
-            "    uint lane_index = (threadIdx.x & (warpSize - 1));\n"
+            f"    uint lane_index = {lane_index};\n"
             "    unsigned int bits = __ballot_sync(mask, predicate);\n"
             "    unsigned int lower_mask =\n"
             "        lane_index == 0u ? 0u : ((1u << lane_index) - 1u);\n"
@@ -3829,10 +3842,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def wave_multi_prefix_helper_body(self, operation, result_type):
         identity = self.wave_identity_expression(operation, result_type)
         combine = self.wave_combine_expression(operation, "result", "other")
+        lane_index = self.cuda_warp_lane_index_expression()
         return (
             "    unsigned int active = __activemask();\n"
             "    unsigned int partition = mask.x & active;\n"
-            "    uint lane_index = (threadIdx.x & (warpSize - 1));\n"
+            f"    uint lane_index = {lane_index};\n"
             f"    {result_type} result = {identity};\n"
             "    for (int candidate = 0; candidate < warpSize; ++candidate) {\n"
             "        auto other = __shfl_sync(active, value, candidate);\n"
@@ -3845,10 +3859,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
 
     def wave_multi_prefix_count_bits_helper_body(self):
+        lane_index = self.cuda_warp_lane_index_expression()
         return (
             "    unsigned int active = __activemask();\n"
             "    unsigned int partition = mask.x & active;\n"
-            "    uint lane_index = (threadIdx.x & (warpSize - 1));\n"
+            f"    uint lane_index = {lane_index};\n"
             "    unsigned int bits = __ballot_sync(active, predicate);\n"
             "    unsigned int lower_mask =\n"
             "        lane_index == 0u ? 0u : ((1u << lane_index) - 1u);\n"

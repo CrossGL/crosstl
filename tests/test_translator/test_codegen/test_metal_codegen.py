@@ -358,6 +358,36 @@ def test_metal_common_math_builtins_qualify_when_local_names_shadow_them():
     assert "float3 unit = normalize(value);" not in generated_code
 
 
+def test_metal_faceforward_builtin_qualifies_when_local_name_shadows_it():
+    shader = """
+    shader MetalFaceforwardTargetShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                vec3 normal = normalize(vec3(0.0, 1.0, 0.0));
+                vec3 incident = normalize(vec3(float(tid.x) - 2.0, -1.0, 0.25));
+                vec3 geometric = normalize(vec3(0.0, 1.0, 0.5));
+                float faceforward = 1.0;
+                vec3 oriented = faceforward(normal, incident, geometric);
+                float lighting = dot(oriented, normal);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float faceforward = 1.0;" in generated_code
+    assert (
+        "float3 oriented = metal::faceforward(normal, incident, geometric);"
+        in generated_code
+    )
+    assert "float3 oriented = faceforward(normal, incident, geometric);" not in (
+        generated_code
+    )
+
+
 def test_metal_saturate_builtin_qualifies_when_local_name_shadows_it():
     shader = """
     shader MetalSaturateTargetShadow {

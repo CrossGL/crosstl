@@ -13088,7 +13088,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "TextureCubeArray": 4,
             }.get(shape_type)
 
-        return texture_resource_dimension_descriptor(
+        descriptor = texture_resource_dimension_descriptor(
             texture_type,
             sampling,
             coordinate_dimension=coordinate_dimension,
@@ -13097,12 +13097,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             query_lod_coordinate_dimension=query_lod_coordinate_dimension,
             is_multisample=is_multisample,
         )
+        if sampling.get("compare_offset") and offset_dimension is not None:
+            descriptor["compare_offset_dimension"] = offset_dimension
+            descriptor["compare_lod_offset_dimension"] = offset_dimension
+            descriptor["compare_grad_offset_dimension"] = offset_dimension
+        return descriptor
 
     def resource_coordinate_dimension(self, texture_type):
         return self.texture_dimension_descriptor(texture_type)["coordinate_dimension"]
 
     def resource_offset_dimension(self, func_name, texture_type):
         descriptor = self.texture_dimension_descriptor(texture_type)
+        if (
+            is_texture_compare_offset_operation(func_name)
+            or is_texture_compare_lod_offset_operation(func_name)
+            or is_texture_compare_grad_offset_operation(func_name)
+        ):
+            if descriptor["compare_offset_dimension"] is None:
+                return None
+            return (
+                descriptor["offset_dimension"]
+                if descriptor["offset_dimension"] is not None
+                else descriptor["compare_offset_dimension"]
+            )
         key = texture_resource_offset_dimension_key(
             func_name, collapse_compare_offsets=True
         )
@@ -14639,6 +14656,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "TextureCubeArray",
         }
         offset_types = {"Texture2D", "Texture2DArray"}
+        compare_offset_types = {
+            "Texture1D",
+            "Texture1DArray",
+            "Texture2D",
+            "Texture2DArray",
+        }
         sample_offset_types = {
             "",
             "Texture1D",
@@ -14652,7 +14675,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "gather": texture_type in gather_types,
             "gather_offset": texture_type in offset_types,
             "sample_offset": texture_type in sample_offset_types,
-            "compare_offset": texture_type in offset_types,
+            "compare_offset": texture_type in compare_offset_types,
             "gather_compare_offset": texture_type in offset_types,
         }
 
@@ -15343,7 +15366,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.unsupported_texture_gather_compare_call(func_name, count_error)
         if not self.texture_gather_compare_offset_supported(texture_type):
             return self.unsupported_texture_gather_compare_call(
-                func_name, texture_compare_offset_capability_error("DirectX")
+                func_name, texture_gather_offset_capability_error()
             )
         offset = self.generate_expression(extra_args[1])
         return f"{texture_name}.GatherCmp({sampler_name}, {coord}, {compare}, {offset})"

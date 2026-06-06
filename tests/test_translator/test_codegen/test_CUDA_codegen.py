@@ -1134,9 +1134,13 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
-        assert "uint lane = (threadIdx.x & (warpSize - 1));" in cuda_code
+        lane_index = (
+            "((threadIdx.z * blockDim.y * blockDim.x + "
+            "threadIdx.y * blockDim.x + threadIdx.x) & (warpSize - 1))"
+        )
+        assert f"uint lane = {lane_index};" in cuda_code
         assert "uint count = warpSize;" in cuda_code
-        assert "bool first = ((threadIdx.x & (warpSize - 1)) == 0);" in cuda_code
+        assert f"bool first = ({lane_index} == 0);" in cuda_code
         assert (
             "__device__ inline uint cgl_cuda_wave_active_sum_uint_uint(uint value)"
             in cuda_code
@@ -1162,6 +1166,35 @@ class TestCudaCodeGen:
         )
         assert "WaveOpNode(" not in cuda_code
         assert "Unsupported CUDA wave intrinsic" not in cuda_code
+
+    def test_wave_lane_index_uses_cuda_linear_thread_id_for_multidimensional_blocks(
+        self,
+    ):
+        source_code = """
+        shader CudaMultidimensionalWaveLane {
+            compute {
+                void main() @numthreads(8, 4, 1) {
+                    uint lane = WaveGetLaneIndex();
+                    bool first = WaveIsFirstLane();
+                    uint prefix = WavePrefixCountBits(first);
+                    uint quad = QuadReadLaneAt(lane, 1u);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        lane_index = (
+            "((threadIdx.z * blockDim.y * blockDim.x + "
+            "threadIdx.y * blockDim.x + threadIdx.x) & (warpSize - 1))"
+        )
+
+        assert f"uint lane = {lane_index};" in cuda_code
+        assert f"bool first = ({lane_index} == 0);" in cuda_code
+        assert f"uint lane_index = {lane_index};" in cuda_code
+        assert "uint lane = (threadIdx.x & (warpSize - 1));" not in cuda_code
+        assert "uint lane_index = (threadIdx.x & (warpSize - 1));" not in cuda_code
+        assert "bool first = ((threadIdx.x & (warpSize - 1)) == 0);" not in cuda_code
 
     def test_wave_match_count_quad_and_multi_prefix_lower_to_cuda_helpers(self):
         source_code = """

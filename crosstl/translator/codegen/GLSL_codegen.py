@@ -9519,7 +9519,7 @@ class GLSLCodeGen:
         return None
 
     def generate_mul_call(self, func_name, args):
-        if func_name != "mul":
+        if func_name != "mul" or func_name in self.function_return_types:
             return None
         if len(args) != 2:
             raise ValueError("OpenGL mul alias requires 2 arguments")

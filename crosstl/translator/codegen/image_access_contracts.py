@@ -1838,7 +1838,7 @@ def texture_compare_offset_capability_error(backend_name):
     """Return the backend-specific unsupported compare-offset diagnostic."""
     return {
         "GLSL": "offsets require 2D or 2D-array shadow samplers",
-        "DirectX": "offsets require 2D or 2D-array textures",
+        "DirectX": "offsets require 1D, 1D-array, 2D, or 2D-array textures",
         "Metal": "offsets require 2D or 2D-array depth textures",
     }[backend_name]
 

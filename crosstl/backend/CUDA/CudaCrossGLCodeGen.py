@@ -4297,20 +4297,48 @@ class CudaToCrossGLConverter:
                 return f"(WaveActiveAllTrue({predicate}) ? 1 : 0)"
             return f"WaveActiveBallot({predicate}).x"
 
-        if function_name == "__shfl_sync":
+        if function_name in {
+            "__shfl_sync",
+            "__shfl_up_sync",
+            "__shfl_down_sync",
+            "__shfl_xor_sync",
+        }:
             if (
                 len(args) not in {3, 4}
                 or not self.is_full_or_active_warp_mask(args[0])
-                or (len(args) == 4 and not self.is_full_warp_width(args[3]))
+                or not self.is_full_warp_shuffle_width(args[3:] or None)
             ):
                 return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
-            return f"WaveReadLaneAt({args[1]}, {args[2]})"
+            value, lane_or_delta = args[1], args[2]
+            if function_name == "__shfl_sync":
+                return f"WaveReadLaneAt({value}, {lane_or_delta})"
+            if function_name == "__shfl_up_sync":
+                return (
+                    f"((WaveGetLaneIndex() >= ({lane_or_delta})) ? "
+                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({lane_or_delta}))) "
+                    f": {value})"
+                )
+            if function_name == "__shfl_down_sync":
+                return (
+                    f"(((WaveGetLaneIndex() + ({lane_or_delta})) < 32) ? "
+                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({lane_or_delta}))) "
+                    f": {value})"
+                )
+            return (
+                f"WaveReadLaneAt({value}, " f"(WaveGetLaneIndex() ^ ({lane_or_delta})))"
+            )
 
-        if function_name == "__reduce_add_sync":
-            if len(args) != 2:
-                return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
-            if self.is_full_or_active_warp_mask(args[0]):
-                return f"WaveActiveSum({args[1]})"
+        reduce_map = {
+            "__reduce_add_sync": "WaveActiveSum",
+            "__reduce_min_sync": "WaveActiveMin",
+            "__reduce_max_sync": "WaveActiveMax",
+            "__reduce_and_sync": "WaveActiveBitAnd",
+            "__reduce_or_sync": "WaveActiveBitOr",
+            "__reduce_xor_sync": "WaveActiveBitXor",
+        }
+        if function_name in reduce_map:
+            if len(args) == 2 and self.is_full_or_active_warp_mask(args[0]):
+                return f"{reduce_map[function_name]}({args[1]})"
             return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
 
         if function_name in {
@@ -4321,13 +4349,17 @@ class CudaToCrossGLConverter:
             "__shfl_up",
             "__shfl_down",
             "__shfl_xor",
-            "__shfl_up_sync",
-            "__shfl_down_sync",
-            "__shfl_xor_sync",
         }:
             return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
 
         return None
+
+    def is_full_warp_shuffle_width(self, width_args):
+        if not width_args:
+            return True
+        if len(width_args) != 1:
+            return False
+        return self.is_full_warp_width(width_args[0])
 
     def is_full_or_active_warp_mask(self, mask):
         normalized = self.normalize_warp_mask_expression(mask)
@@ -4347,7 +4379,7 @@ class CudaToCrossGLConverter:
 
     def is_full_warp_width(self, width):
         normalized = self.normalize_warp_mask_expression(width)
-        return normalized in {"32", "32u", "warpsize"}
+        return normalized in {"32", "32u", "warpsize", "warp_size", "warp_full_width"}
 
     def normalize_warp_mask_expression(self, mask):
         text = str(mask).strip()

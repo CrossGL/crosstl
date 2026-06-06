@@ -757,6 +757,10 @@ class MetalToCrossGLConverter:
             return None
 
         option = method_args[compare_arg_count]
+        unsupported_option = self.unsupported_texture_compare_lod_option(obj, option)
+        if unsupported_option is not None:
+            return unsupported_option
+
         level_arg = self.unwrap_texture_option_argument(option, "level")
         if level_arg is not option:
             lod = self.generate_expression(level_arg, is_main)
@@ -793,6 +797,17 @@ class MetalToCrossGLConverter:
             return f"textureCompareOffset({obj}, {', '.join(compare_args + [offset])})"
 
         return None
+
+    def unsupported_texture_compare_lod_option(self, obj, option):
+        if not isinstance(option, FunctionCallNode):
+            return None
+        option_name = self.unscoped_function_name(option.name)
+        if option_name not in {"bias", "min_lod_clamp"}:
+            return None
+        return (
+            "0.0 /* unsupported Metal depth compare lod option: "
+            f"{option_name} on {obj} */"
+        )
 
     def is_multisample_resource_type(self, mapped_type):
         return bool(mapped_type and "MS" in str(mapped_type))

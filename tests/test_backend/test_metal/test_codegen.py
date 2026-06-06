@@ -820,6 +820,34 @@ def test_codegen_texture_sample_compare_array_options_roundtrip():
     )
 
 
+def test_codegen_depth_array_sample_compare_bias_option_from_msl_spec_is_diagnostic():
+    # Provenance: Apple Metal Shading Language Specification, section 6.13.10
+    # "2D depth texture array", version 2025-10-23. The documented overload is
+    # sample_compare(sampler, float2 coord, uint array, float compare, lod_options).
+    code = """
+    float sampleBiasedShadow(depth2d_array<float> shadowMap,
+                             sampler shadowSampler,
+                             float2 uv,
+                             uint layer,
+                             float compare,
+                             float lodBias) {
+        return shadowMap.sample_compare(
+            shadowSampler, uv, layer, compare, bias(lodBias));
+    }
+    """
+    crossgl = convert(code)
+
+    assert (
+        "0.0 /* unsupported Metal depth compare lod option: bias on shadowMap */"
+        in crossgl
+    )
+    assert "textureCompare(shadowMap, shadowSampler, uv, layer, compare" not in crossgl
+    assert "bias(lodBias)" not in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "return 0.0;" in metal
+
+
 def test_codegen_texture_sample_bias_and_gradient_options_roundtrip():
     code = """
     float4 sampleOptions(texture2d<float> tex,

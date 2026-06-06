@@ -916,12 +916,81 @@ class TestCudaCodeGen:
             "supported in CrossGL */ 0"
         ) in result
         assert (
-            "/* cuda warp intrinsic __shfl_down_sync(0xffffffff, value, 1) "
-            "not directly supported in CrossGL */ 0"
+            "(((WaveGetLaneIndex() + (1)) < 32) ? "
+            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value)"
         ) in result
         assert "__activemask()" not in result
         assert "__ballot_sync(0xffffffff, pred)" not in result
         assert "__shfl_sync(0xffffffff, value, lane)" not in result
+        assert "__shfl_down_sync(0xffffffff, value, 1)" not in result
+
+    def test_cuda_docs_full_warp_shuffle_sync_variants_convert(self):
+        # Source: NVIDIA CUDA C++ Programming Guide, warp shuffle functions.
+        code = """
+        __device__ int shuffle_variants(int value, int lane, int delta, int mask) {
+            int direct = __shfl_sync(0xffffffff, value, lane);
+            int up = __shfl_up_sync(0xffffffff, value, delta);
+            int down = __shfl_down_sync(0xffffffff, value, delta, warpSize);
+            int xored = __shfl_xor_sync(0xffffffff, value, mask, 32);
+            return direct + up + down + xored;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "WaveReadLaneAt(value, lane)" in result
+        assert (
+            "(WaveGetLaneIndex() >= (delta)) ? "
+            "WaveReadLaneAt(value, (WaveGetLaneIndex() - (delta))) : value"
+        ) in result
+        assert (
+            "((WaveGetLaneIndex() + (delta)) < 32) ? "
+            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
+        ) in result
+        assert "WaveReadLaneAt(value, (WaveGetLaneIndex() ^ (mask)))" in result
+        assert "cuda warp intrinsic __shfl" not in result
+        assert "__shfl_" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_cuda_docs_full_warp_reduce_sync_variants_convert(self):
+        # Source: NVIDIA CUDA C++ Programming Guide, warp reduce functions.
+        code = """
+        __device__ unsigned int reduce_variants(unsigned int value, unsigned int mask) {
+            unsigned int sum = __reduce_add_sync(0xffffffffu, value);
+            unsigned int minv = __reduce_min_sync(0xffffffffu, value);
+            unsigned int maxv = __reduce_max_sync(0xffffffffu, value);
+            unsigned int andv = __reduce_and_sync(0xffffffffu, value);
+            unsigned int orv = __reduce_or_sync(0xffffffffu, value);
+            unsigned int xorv = __reduce_xor_sync(0xffffffffu, value);
+            unsigned int unsupported = __reduce_max_sync(mask, value);
+            return sum + minv + maxv + andv + orv + xorv + unsupported;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "WaveActiveSum(value)" in result
+        assert "WaveActiveMin(value)" in result
+        assert "WaveActiveMax(value)" in result
+        assert "WaveActiveBitAnd(value)" in result
+        assert "WaveActiveBitOr(value)" in result
+        assert "WaveActiveBitXor(value)" in result
+        assert (
+            "/* cuda warp intrinsic __reduce_max_sync(mask, value) not directly "
+            "supported in CrossGL */ 0"
+        ) in result
+        assert "__reduce_add_sync(0xffffffffu, value)" not in result
+        assert "__reduce_min_sync(0xffffffffu, value)" not in result
+        assert "__reduce_max_sync(0xffffffffu, value)" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_cooperative_groups_thread_block_sync_converts(self):
         code = """

@@ -3805,6 +3805,26 @@ class TestHipCodeGen:
         assert "gl_NumWorkGroups" not in hip_code
         assert "gl_WorkGroupSize" not in hip_code
 
+    def test_compute_numthreads_emits_hip_launch_bounds_from_rocm_docs(self):
+        source_code = """
+        shader HipLaunchBounds {
+            compute {
+                void main() @numthreads(16, 8, 2) {
+                    uint x = gl_GlobalInvocationID.x;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__global__ void __launch_bounds__(256) compute_main()" in hip_code
+        assert "unsigned int x = (blockIdx.x * blockDim.x + threadIdx.x);" in hip_code
+
     def test_direct_hlsl_compute_vector_builtins_emit_hip_vectors(self):
         ast = ShaderNode(
             name="DirectHlslBuiltins",
