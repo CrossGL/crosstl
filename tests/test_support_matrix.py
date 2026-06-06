@@ -258,9 +258,10 @@ def test_project_report_inspection_documents_rollups():
         ) in backend_support["evidence"]
         assert "source-override" in backend_support["notes"]
         assert "skipped source-override" in backend_support["notes"]
-        assert "migration scope, non-goals, action counts, actions" in (
-            backend_support["notes"]
-        )
+        assert (
+            "migration scope, non-goals, action count and kind, severity, and "
+            "target rollups, actions"
+        ) in backend_support["notes"]
 
 
 def test_project_migration_actions_are_first_class_support_feature():
@@ -278,6 +279,10 @@ def test_project_migration_actions_are_first_class_support_feature():
     for backend_support in feature["support"].values():
         assert backend_support["status"] == "supported"
         assert "noncanonical or duplicate action targets" in backend_support["notes"]
+        assert "action count and kind, severity, and target rollups" in (
+            backend_support["notes"]
+        )
+        assert "altered action rollups" in backend_support["notes"]
         assert "shader/kernel source translation from host runtime APIs" in (
             backend_support["notes"]
         )
@@ -712,8 +717,8 @@ def test_project_validation_hooks_document_migration_contract_checks():
 
     for backend_support in feature["support"].values():
         assert (
-            "migration scope, non-goals, action kinds, and canonical target "
-            "declarations"
+            "migration scope, non-goals, action count and kind, severity, and "
+            "target rollups, and canonical target declarations"
         ) in backend_support["notes"]
         assert "unit source hash checks" in backend_support["notes"]
         assert "canonical source backend declarations" in backend_support["notes"]

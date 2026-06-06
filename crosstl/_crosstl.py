@@ -1811,6 +1811,37 @@ def _format_project_report_inspection(payload):
     migration = payload.get("migration")
     actions = migration.get("actions", []) if isinstance(migration, Mapping) else []
     if actions:
+        for line in (
+            _format_count_rollup(
+                "Migration actions by kind",
+                (
+                    migration.get("actionsByKind")
+                    if isinstance(migration, Mapping)
+                    else {}
+                ),
+                include_zero=False,
+            ),
+            _format_count_rollup(
+                "Migration actions by severity",
+                (
+                    migration.get("actionsBySeverity")
+                    if isinstance(migration, Mapping)
+                    else {}
+                ),
+                include_zero=False,
+            ),
+            _format_count_rollup(
+                "Migration actions by target",
+                (
+                    migration.get("actionsByTarget")
+                    if isinstance(migration, Mapping)
+                    else {}
+                ),
+                include_zero=False,
+            ),
+        ):
+            if line:
+                lines.append(line)
         lines.append("Migration actions:")
         for action in actions:
             if not isinstance(action, Mapping):

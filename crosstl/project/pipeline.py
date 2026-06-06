@@ -1009,6 +1009,56 @@ def _include_path_processing_rollups(
     }
 
 
+def _migration_action_counts_by_kind(actions: Sequence[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for action in actions:
+        if not isinstance(action, Mapping):
+            continue
+        kind = action.get("kind")
+        if not _is_non_empty_string(kind):
+            continue
+        counts[kind] = counts.get(kind, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _migration_action_counts_by_severity(actions: Sequence[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for action in actions:
+        if not isinstance(action, Mapping):
+            continue
+        severity = action.get("severity")
+        if not _is_non_empty_string(severity):
+            continue
+        counts[severity] = counts.get(severity, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _migration_action_counts_by_target(actions: Sequence[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for action in actions:
+        if not isinstance(action, Mapping):
+            continue
+        targets = action.get("targets")
+        if not isinstance(targets, Sequence) or isinstance(
+            targets, (str, bytes, bytearray)
+        ):
+            continue
+        for target in targets:
+            if not _is_non_empty_string(target):
+                continue
+            counts[target] = counts.get(target, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _migration_action_rollups(actions: Sequence[Any]) -> dict[str, Any]:
+    return {
+        "actionCount": len(actions),
+        "actionsByKind": _migration_action_counts_by_kind(actions),
+        "actionsBySeverity": _migration_action_counts_by_severity(actions),
+        "actionsByTarget": _migration_action_counts_by_target(actions),
+    }
+
+
 def _source_map_rollups(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         **_source_map_counts(artifacts),
@@ -2157,6 +2207,7 @@ class ProjectPortabilityReport:
             "migration": {
                 "scope": REPORT_MIGRATION_SCOPE,
                 "nonGoals": list(REPORT_MIGRATION_NON_GOALS),
+                **_migration_action_rollups(self.migration_actions),
                 "actions": list(self.migration_actions),
             },
         }
@@ -3726,7 +3777,26 @@ def inspect_project_report(
                 if isinstance(migration.get("nonGoals"), list)
                 else []
             ),
-            "actionCount": len(actions),
+            "actionCount": (
+                migration.get("actionCount")
+                if _is_non_negative_int(migration.get("actionCount"))
+                else len(actions)
+            ),
+            "actionsByKind": (
+                dict(migration.get("actionsByKind", {}))
+                if isinstance(migration.get("actionsByKind"), Mapping)
+                else _migration_action_counts_by_kind(actions)
+            ),
+            "actionsBySeverity": (
+                dict(migration.get("actionsBySeverity", {}))
+                if isinstance(migration.get("actionsBySeverity"), Mapping)
+                else _migration_action_counts_by_severity(actions)
+            ),
+            "actionsByTarget": (
+                dict(migration.get("actionsByTarget", {}))
+                if isinstance(migration.get("actionsByTarget"), Mapping)
+                else _migration_action_counts_by_target(actions)
+            ),
             "actions": actions,
         }
 
@@ -7148,6 +7218,26 @@ def _migration_contract_reasons(
                                 f"{prefix}.targets must be listed in project.targets"
                             )
                             break
+        rollups = _migration_action_rollups(actions)
+        if "actionCount" in migration:
+            reasons.extend(
+                _count_field_contract_reasons(
+                    "migration.actionCount",
+                    migration.get("actionCount"),
+                    rollups["actionCount"],
+                    "migration.actions",
+                )
+            )
+        for field_name in ("actionsByKind", "actionsBySeverity", "actionsByTarget"):
+            if field_name in migration:
+                reasons.extend(
+                    _mapping_field_contract_reasons(
+                        f"migration.{field_name}",
+                        migration.get(field_name),
+                        rollups[field_name],
+                        "migration.actions",
+                    )
+                )
     return reasons
 
 

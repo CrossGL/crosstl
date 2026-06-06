@@ -398,8 +398,9 @@ Project reports are JSON documents with:
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. The report records documented non-goals for runtime API
   migration, build-system rewrites, and backend framework integration. Each
-  action has a documented kind, severity, message, and target list. Scan-only
-  reports include supported requested targets when translation units are
-  present. Translation reports scope ``manual-runtime-integration`` to targets
-  that produced translated artifacts, covering host runtime API, resource
-  binding, build script, and backend integration review.
+  action has a documented kind, severity, message, and target list, plus
+  action count and kind, severity, and target rollups. Scan-only reports
+  include supported requested targets when translation units are present.
+  Translation reports scope ``manual-runtime-integration`` to targets that
+  produced translated artifacts, covering host runtime API, resource binding,
+  build script, and backend integration review.

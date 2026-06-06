@@ -401,6 +401,10 @@ def test_scan_report_records_documented_migration_actions(tmp_path):
     payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
 
     assert payload["migration"]["scope"] == "shader-kernel-translation"
+    assert payload["migration"]["actionCount"] == 1
+    assert payload["migration"]["actionsByKind"] == {"manual-runtime-integration": 1}
+    assert payload["migration"]["actionsBySeverity"] == {"note": 1}
+    assert payload["migration"]["actionsByTarget"] == {"opengl": 1}
     assert payload["migration"]["actions"] == [
         {
             "kind": "manual-runtime-integration",
@@ -6933,6 +6937,10 @@ def test_validate_project_report_rejects_malformed_migration_actions(tmp_path):
                 "migration": {
                     "scope": "runtime-porting",
                     "nonGoals": "runtime migration",
+                    "actionCount": "3",
+                    "actionsByKind": [],
+                    "actionsBySeverity": {"note": 2},
+                    "actionsByTarget": {"opengl": 2},
                     "actions": [
                         {
                             "kind": "",
@@ -6964,6 +6972,16 @@ def test_validate_project_report_rejects_malformed_migration_actions(tmp_path):
         diagnostic["message"]
     )
     assert "migration.nonGoals must be a list of strings" in diagnostic["message"]
+    assert "migration.actionCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "migration.actionsByKind must be an object" in diagnostic["message"]
+    assert "migration.actionsBySeverity must match migration.actions" in (
+        diagnostic["message"]
+    )
+    assert "migration.actionsByTarget must match migration.actions" in (
+        diagnostic["message"]
+    )
     assert "migration.actions[0].kind must be a string" in diagnostic["message"]
     assert "migration.actions[0].message must be a string" in diagnostic["message"]
     assert "migration.actions[0].severity must be note, warning, or error" in (
@@ -8749,6 +8767,9 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "backend framework integration",
     ]
     assert payload["migration"]["actionCount"] == 1
+    assert payload["migration"]["actionsByKind"] == {"manual-runtime-integration": 1}
+    assert payload["migration"]["actionsBySeverity"] == {"note": 1}
+    assert payload["migration"]["actionsByTarget"] == {"cgl": 1}
     assert payload["migration"]["actions"] == [
         {
             "kind": "manual-runtime-integration",
@@ -8930,6 +8951,9 @@ def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):
     )
 
     assert result.returncode == 0
+    assert "Migration actions by kind: manual-runtime-integration=1" in result.stdout
+    assert "Migration actions by severity: note=1" in result.stdout
+    assert "Migration actions by target: cgl=1" in result.stdout
     assert "Migration actions:" in result.stdout
     assert "- manual-runtime-integration:" in result.stdout
     assert "CrossTL translated shader/kernel source artifacts only" in result.stdout
