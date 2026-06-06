@@ -119,8 +119,8 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
 
 Report inspection includes validation status, invalid/unavailable report status,
 project counts, project configuration path and counts, failed artifacts with
-variant labels when present,
-diagnostic code and missing-capability rollups, validation diagnostic-code,
+variant labels when present, diagnostic code and missing-capability rollups,
+validation diagnostic-code,
 missing-capability, and artifact target and variant rollups, report
 source-backend, file-extension, and artifact target rollups, source-map count,
 granularity, target, and source-backend rollups, artifact matrix completion

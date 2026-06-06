@@ -711,6 +711,44 @@ def _format_artifact_matrix_summary(artifact_matrix):
     )
 
 
+def _format_artifact_identity_line(artifact):
+    if not isinstance(artifact, Mapping):
+        return None
+
+    source = artifact.get("source")
+    target = artifact.get("target")
+    path = artifact.get("path")
+    if not all(isinstance(value, str) and value for value in (source, target, path)):
+        return None
+
+    variant = artifact.get("variant")
+    variant_label = (
+        f"(variant: {variant}) " if isinstance(variant, str) and variant else ""
+    )
+    return f"- {source} -> {target} {variant_label}at {path}"
+
+
+def _format_artifact_sample_lines(label, artifacts, truncated_count):
+    if not isinstance(artifacts, list) or not artifacts:
+        return []
+
+    lines = [f"{label}:"]
+    for artifact in artifacts:
+        line = _format_artifact_identity_line(artifact)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_external_corpus_accounting(summary):
     if not isinstance(summary, Mapping):
         return None
@@ -894,9 +932,25 @@ def _format_project_report_inspection(payload):
     source_maps = _format_source_map_counts(summary)
     if source_maps:
         lines.append(source_maps)
-    artifact_matrix = _format_artifact_matrix_summary(payload.get("artifactMatrix"))
+    artifact_matrix_payload = payload.get("artifactMatrix")
+    artifact_matrix = _format_artifact_matrix_summary(artifact_matrix_payload)
     if artifact_matrix:
         lines.append(artifact_matrix)
+    if isinstance(artifact_matrix_payload, Mapping):
+        lines.extend(
+            _format_artifact_sample_lines(
+                "Artifact matrix missing artifacts",
+                artifact_matrix_payload.get("missingArtifacts"),
+                artifact_matrix_payload.get("truncatedMissingArtifactCount"),
+            )
+        )
+        lines.extend(
+            _format_artifact_sample_lines(
+                "Artifact matrix extra artifacts",
+                artifact_matrix_payload.get("extraArtifacts"),
+                artifact_matrix_payload.get("truncatedExtraArtifactCount"),
+            )
+        )
     for line in (
         _format_count_rollup(
             "Source maps by granularity",
@@ -1113,16 +1167,9 @@ def _format_project_report_inspection(payload):
     if failed_artifacts:
         lines.append("Failed artifacts:")
         for artifact in failed_artifacts:
-            if not isinstance(artifact, Mapping):
+            description = _format_artifact_identity_line(artifact)
+            if description is None:
                 continue
-            variant = artifact.get("variant")
-            variant_label = (
-                f"(variant: {variant}) " if isinstance(variant, str) and variant else ""
-            )
-            description = (
-                f"- {artifact.get('source')} -> {artifact.get('target')} "
-                f"{variant_label}at {artifact.get('path')}"
-            )
             if artifact.get("error"):
                 description = f"{description}: {artifact.get('error')}"
             else:

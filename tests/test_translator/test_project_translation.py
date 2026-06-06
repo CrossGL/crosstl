@@ -7897,6 +7897,10 @@ def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps(tmp_path):
         "Artifact matrix: 2 emitted of 2 expected "
         "(2 translated, 0 failed, 1 missing, 1 extra; variants=none)"
     ) in result.stdout
+    assert "Artifact matrix missing artifacts:" in result.stdout
+    assert "- second.cgl -> cgl at out/cgl/second.cgl" in result.stdout
+    assert "Artifact matrix extra artifacts:" in result.stdout
+    assert "- second.cgl -> cgl at out/cgl/wrong.cgl" in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_report_rollups(tmp_path):
