@@ -1373,8 +1373,11 @@ class SlangToCrossGLConverter:
                 value = self.generate_expression(expr.args[0], is_main)
                 value = self.maybe_parenthesize_expression(expr.args[0], value)
                 return f"(1.0 / {value})"
+            generic_type_name = self.map_generic_vector_or_matrix_type(function_name)
             if not is_hlsl_namespace_builtin and expr.name in self.user_function_names:
                 name = self.format_function_name(expr.name)
+            elif generic_type_name:
+                name = generic_type_name
             elif function_name in self.type_map and function_name[:1].islower():
                 name = self.map_type(function_name)
             else:
@@ -1498,12 +1501,72 @@ class SlangToCrossGLConverter:
             while slang_type.endswith("*"):
                 pointer_suffix += "*"
                 slang_type = slang_type[:-1].strip()
+            generic_vector_or_matrix = self.map_generic_vector_or_matrix_type(
+                slang_type
+            )
+            if generic_vector_or_matrix:
+                return f"{generic_vector_or_matrix}{pointer_suffix}"
             base_type = slang_type.split("<", 1)[0].strip()
             mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
             return f"{mapped_type}{pointer_suffix}"
         return slang_type
+
+    def map_generic_vector_or_matrix_type(self, slang_type):
+        base_type = str(slang_type).split("<", 1)[0].strip()
+        if base_type == "vector":
+            return self.map_generic_vector_type(slang_type)
+        if base_type == "matrix":
+            return self.map_generic_matrix_type(slang_type)
+        return None
+
+    def map_generic_vector_type(self, slang_type):
+        args = self.generic_type_arguments(slang_type)
+        if len(args) != 2:
+            return None
+
+        scalar_type = args[0].strip()
+        vector_size = args[1].strip()
+        if vector_size not in {"1", "2", "3", "4"}:
+            return None
+
+        if vector_size == "1":
+            return self.type_map.get(scalar_type, scalar_type)
+
+        vector_prefixes = {
+            "float": "vec",
+            "int": "ivec",
+            "uint": "uvec",
+            "bool": "bvec",
+            "double": "dvec",
+        }
+        prefix = vector_prefixes.get(scalar_type)
+        if prefix is None:
+            return None
+        return f"{prefix}{vector_size}"
+
+    def map_generic_matrix_type(self, slang_type):
+        args = self.generic_type_arguments(slang_type)
+        if len(args) != 3:
+            return None
+
+        scalar_type = args[0].strip()
+        rows = args[1].strip()
+        columns = args[2].strip()
+        if rows not in {"1", "2", "3", "4"} or columns not in {"1", "2", "3", "4"}:
+            return None
+        if rows != columns:
+            return None
+
+        matrix_prefixes = {
+            "float": "mat",
+            "double": "dmat",
+        }
+        prefix = matrix_prefixes.get(scalar_type)
+        if prefix is None:
+            return None
+        return f"{prefix}{rows}"
 
     def map_parameter_type(self, slang_type):
         """Map Slang parameter wrapper types to CrossGL value/resource types."""

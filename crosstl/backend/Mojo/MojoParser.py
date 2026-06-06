@@ -1652,6 +1652,7 @@ class MojoParser:
             "ASSIGN_SHIFT_LEFT",
             "ASSIGN_SHIFT_RIGHT",
             "ASSIGN_MOD",
+            "WALRUS",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])

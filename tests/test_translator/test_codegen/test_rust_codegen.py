@@ -25852,6 +25852,40 @@ def test_rust_swizzle_assignments_emit_component_writes(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_plain_struct_constructor_calls_lower_to_new_and_compile(tmp_path):
+    code = """
+    shader RustStructAggregateCalls {
+        struct Material {
+            vec3 albedo;
+            float roughness;
+        };
+
+        struct Surface {
+            Material material;
+            vec4 clip;
+        };
+
+        Material makeMaterial(vec3 albedo, int roughnessBucket) {
+            return Material(albedo, float(roughnessBucket));
+        }
+
+        Surface makeSurface(vec3 normal) {
+            Material material = Material(normal, 1.0);
+            return Surface(material, vec4(normal, material.roughness));
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return Material::new(albedo, (roughnessBucket as f32));" in generated_code
+    assert "let material: Material = Material::new(normal, 1.0);" in generated_code
+    assert "return Surface::new(material, Vec4::<f32>::new(" in generated_code
+    assert "return Material(albedo" not in generated_code
+    assert "return Surface(material" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_rust_matrix_scalar_and_resize_constructors_compile(tmp_path):
     code = """
     shader RustMatrixConstructors {

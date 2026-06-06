@@ -499,6 +499,26 @@ def test_rust_gpu_spirv_entry_point_name_drives_stage_name():
     assert "vertex vertex_body {" not in result
 
 
+def test_rust_gpu_cfg_attr_spirv_metadata_codegen():
+    code = """
+    use spirv_std::spirv;
+
+    #[cfg_attr(target_arch = "spirv", rust_gpu::spirv(compute(threads(64), entry_point_name = "wrapped_main")))]
+    pub fn shader_body(
+        #[cfg_attr(target_arch = "spirv", rust_gpu::spirv(global_invocation_id))] id: UVec3,
+        #[cfg_attr(target_arch = "spirv", rust_gpu::spirv(storage_buffer, descriptor_set = 0, binding = 1))] values: &mut [u32],
+    ) {}
+    """
+
+    result = parse_and_generate(code)
+
+    assert "compute wrapped_main {" in result
+    assert "void main(uvec3 id @ gl_GlobalInvocationID" in result
+    assert "uint values[] @ set(0) @ binding(1)" in result
+    assert "@numthreads(64, 1, 1)" in result
+    assert "void shader_body(" not in result
+
+
 def test_rust_gpu_ray_payload_spirv_attributes_codegen_from_release_notes():
     # Reduced from EmbarkStudios/rust-gpu v0.5 release notes ray-tracing example:
     # https://github.com/EmbarkStudios/rust-gpu/releases/tag/v0.5.0

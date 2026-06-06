@@ -6448,7 +6448,7 @@ class RustCodeGen:
         args,
         move_counts=None,
     ):
-        type_name = self.struct_new_call_type_name(func_name)
+        type_name = self.struct_constructor_call_type_name(func_name)
         if type_name is None:
             return None
 
@@ -6990,7 +6990,7 @@ class RustCodeGen:
         if self.enum_variant_call_info(func_name) is not None:
             return args
 
-        type_name = self.struct_new_call_type_name(func_name)
+        type_name = self.struct_constructor_call_type_name(func_name)
         if type_name is not None and self.resolve_struct_positional_member_types(
             type_name
         ):
@@ -8536,6 +8536,13 @@ class RustCodeGen:
             if enum_variant is not None:
                 return enum_variant
 
+            struct_constructor = self.generate_struct_new_call_with_typed_args(
+                func_name,
+                args,
+            )
+            if struct_constructor is not None:
+                return struct_constructor
+
             if func_name == "mix" and len(args) == 3:
                 bool_mix = self.generate_bool_mix_expression(args)
                 if bool_mix is not None:
@@ -10043,6 +10050,9 @@ class RustCodeGen:
         if enum_variant is not None:
             return enum_variant
 
+        if self.is_user_defined_function(func_name):
+            return None
+
         struct_constructor = self.generate_struct_new_call_with_typed_args(
             func_name,
             args,
@@ -10072,7 +10082,7 @@ class RustCodeGen:
         )
 
     def generate_struct_new_call_with_typed_args(self, func_name, args):
-        type_name = self.struct_new_call_type_name(func_name)
+        type_name = self.struct_constructor_call_type_name(func_name)
         if type_name is None:
             return None
 
@@ -10111,6 +10121,20 @@ class RustCodeGen:
 
         type_name = func_name[: -len("::new")]
         return type_name.replace("::<", "<", 1)
+
+    def struct_constructor_call_type_name(self, func_name):
+        type_name = self.struct_new_call_type_name(func_name)
+        if type_name is not None:
+            return type_name
+
+        type_name = self.normalize_turbofish_type_name(func_name)
+        if (
+            not isinstance(type_name, str)
+            or "::" in type_name
+            or not self.resolve_struct_positional_member_types(type_name)
+        ):
+            return None
+        return type_name
 
     def struct_new_call_path(self, type_name):
         rust_type = self.map_type(type_name)

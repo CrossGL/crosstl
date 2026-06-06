@@ -140,6 +140,37 @@ def test_struct():
         pytest.fail("Slang struct codegen not implemented.")
 
 
+def test_interpolation_qualifiers_do_not_replace_slang_semantics():
+    # Slang/HLSL support interpolation modifiers such as nointerpolation on
+    # shader IO; they are qualifiers, not semantics.
+    code = """
+    shader SlangInterpolation {
+        struct FSInput {
+            nointerpolation vec4 color : COLOR0;
+            linear_noperspective_centroid vec2 uv : TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(flat FSInput input : TEXCOORD0) : SV_Target {
+                return input.color;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "nointerpolation float4 color : COLOR0;" in generated_code
+    assert "linear noperspective centroid float2 uv : TEXCOORD0;" in generated_code
+    assert "float4 main(nointerpolation FSInput input : TEXCOORD0) : SV_Target" in (
+        generated_code
+    )
+    assert "float4 color : nointerpolation;" not in generated_code
+    assert "float2 uv : linear_noperspective_centroid;" not in generated_code
+
+
 def test_basic_shader():
     code = """
     shader main {

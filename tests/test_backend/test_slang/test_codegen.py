@@ -2466,6 +2466,36 @@ def test_local_matrix_constructor_declaration_codegen():
     assert "mat4 model = mat4(1.0);" in generated_code
 
 
+def test_generic_vector_and_matrix_type_codegen_from_language_reference():
+    # Source: Slang Language Reference, Vector and Matrix Types.
+    code = """
+    struct GenericTypes {
+        vector<float, 3> normal;
+        matrix<float, 4, 4> transform;
+    };
+
+    void main() {
+        matrix<float, 4, 4> model = matrix<float, 4, 4>(1.0);
+        vector<int, 4> indices = vector<int, 4>(1, 2, 3, 4);
+        vector<uint, 2> packed = vector<uint, 2>(0, 1);
+        vector<bool, 3> mask = vector<bool, 3>(true, false, true);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec3 normal;" in generated_code
+    assert "mat4 transform;" in generated_code
+    assert "mat4 model = mat4(1.0);" in generated_code
+    assert "ivec4 indices = ivec4(1, 2, 3, 4);" in generated_code
+    assert "uvec2 packed = uvec2(0, 1);" in generated_code
+    assert "bvec3 mask = bvec3(true, false, true);" in generated_code
+    assert "vector<" not in generated_code
+    assert "matrix<" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_else_codegen():
     code = """
     [shader("vertex")]

@@ -798,6 +798,14 @@ class VulkanParser:
                 }
             elif result_id and opcode == "OpTypeSampler":
                 types[result_id] = {"kind": "sampler", "name": "sampler"}
+            elif result_id and opcode in {
+                "OpTypeAccelerationStructureKHR",
+                "OpTypeAccelerationStructureNV",
+            }:
+                types[result_id] = {
+                    "kind": "acceleration_structure",
+                    "name": "accelerationStructureEXT",
+                }
             elif result_id and opcode == "OpTypePointer" and len(operands) >= 2:
                 types[result_id] = {
                     "kind": "pointer",
