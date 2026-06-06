@@ -1331,8 +1331,29 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
 
     report = translate_project(load_project_config(repo))
     payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    artifact_path = payload["artifacts"][0]["path"]
 
     assert captured_include_paths == [[str(include_dir.resolve())]]
+    assert validation["success"] is True
     assert payload["artifacts"][0]["includePathProcessing"] == {
         "status": "not-supported",
         "frontend": "lexer",
@@ -1343,6 +1364,32 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
     assert payload["summary"]["includePathProcessingBySourceBackend"] == {
         "cgl": {"not-supported": 1}
     }
+    assert inspection["includePathProcessing"] == {
+        "available": True,
+        "byStatus": {"not-supported": 1},
+        "bySourceBackend": {"cgl": {"not-supported": 1}},
+        "notSupportedArtifactCount": 1,
+        "truncatedNotSupportedArtifactCount": 0,
+        "notSupportedArtifacts": [
+            {
+                "source": "shaders/simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "opengl",
+                "path": artifact_path,
+                "status": "not-supported",
+                "frontend": "lexer",
+                "supportsIncludePaths": False,
+                "includePathCount": 1,
+            }
+        ],
+    }
+    assert result.returncode == 0
+    assert "Include path processing: not-supported=1" in result.stdout
+    assert "Include path processing issues:" in result.stdout
+    assert (
+        f"- shaders/simple.cgl -> opengl at {artifact_path}: "
+        "1 include path not forwarded by cgl lexer frontend"
+    ) in result.stdout
     assert payload["project"]["includeDirs"] == [
         "includes",
         "missing-includes",
@@ -8310,6 +8357,9 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "available": True,
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
+        "notSupportedArtifactCount": 0,
+        "truncatedNotSupportedArtifactCount": 0,
+        "notSupportedArtifacts": [],
     }
     assert payload["artifactMatrix"] == {
         "available": True,

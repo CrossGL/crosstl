@@ -942,6 +942,61 @@ def _format_define_processing_issue_lines(define_processing):
     return lines
 
 
+def _format_include_path_processing_issue_line(artifact):
+    line = _format_artifact_identity_line(artifact)
+    if not line:
+        return None
+
+    include_path_count = artifact.get("includePathCount")
+    if (
+        not isinstance(include_path_count, int)
+        or isinstance(include_path_count, bool)
+        or include_path_count <= 0
+    ):
+        return None
+
+    source_backend = artifact.get("sourceBackend")
+    source_backend_label = (
+        f" by {source_backend}"
+        if isinstance(source_backend, str) and source_backend
+        else ""
+    )
+    frontend = artifact.get("frontend")
+    frontend_label = (
+        f" {frontend} frontend" if isinstance(frontend, str) and frontend else ""
+    )
+    include_path_label = "include path" if include_path_count == 1 else "include paths"
+    return (
+        f"{line}: {include_path_count} {include_path_label} not forwarded"
+        f"{source_backend_label}{frontend_label}"
+    )
+
+
+def _format_include_path_processing_issue_lines(include_path_processing):
+    if not isinstance(include_path_processing, Mapping):
+        return []
+    artifacts = include_path_processing.get("notSupportedArtifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return []
+
+    lines = ["Include path processing issues:"]
+    for artifact in artifacts:
+        line = _format_include_path_processing_issue_line(artifact)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = include_path_processing.get("truncatedNotSupportedArtifactCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_include_dependency_issue_line(dependency):
     if not isinstance(dependency, Mapping):
         return None
@@ -1199,6 +1254,11 @@ def _format_project_report_inspection(payload):
     )
     if include_path_processing:
         lines.append(include_path_processing)
+    lines.extend(
+        _format_include_path_processing_issue_lines(
+            payload.get("includePathProcessing")
+        )
+    )
     artifact_matrix_payload = payload.get("artifactMatrix")
     artifact_matrix = _format_artifact_matrix_summary(artifact_matrix_payload)
     if artifact_matrix:
