@@ -12,7 +12,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from importlib import metadata as importlib_metadata
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
@@ -27,6 +27,7 @@ from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default
 REPORT_KIND = "crosstl-project-portability-report"
 REPORT_INSPECTION_KIND = "crosstl-project-report-inspection"
 REPORT_SCHEMA_VERSION = 1
+SOURCE_REMAP_SCHEMA_VERSION = 1
 REPORT_GENERATOR_PIPELINE = "project-porting"
 REPORT_ARTIFACT_PROVENANCE_PIPELINES = ("single-file-translate",)
 REPORT_ARTIFACT_PROVENANCE_INTERMEDIATES = ("crossgl",)
@@ -542,6 +543,10 @@ def _source_map_counts(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, int]
     }
 
 
+def _source_remap_count(artifacts: Sequence[Mapping[str, Any]]) -> int:
+    return sum(1 for artifact in artifacts if artifact.get("sourceRemap"))
+
+
 def _source_map_counts_by_granularity(
     artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, int]:
@@ -582,12 +587,43 @@ def _source_map_counts_by_source_backend(
     return dict(sorted(counts.items()))
 
 
+def _source_remap_counts_by_target(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for artifact in artifacts:
+        if not isinstance(artifact.get("sourceRemap"), Mapping):
+            continue
+        target = artifact.get("target")
+        key = target if _is_non_empty_string(target) else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _source_remap_counts_by_source_backend(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for artifact in artifacts:
+        if not isinstance(artifact.get("sourceRemap"), Mapping):
+            continue
+        source_backend = artifact.get("sourceBackend")
+        key = source_backend if _is_non_empty_string(source_backend) else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _source_map_rollups(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         **_source_map_counts(artifacts),
         "sourceMapsByGranularity": _source_map_counts_by_granularity(artifacts),
         "sourceMapsByTarget": _source_map_counts_by_target(artifacts),
         "sourceMapsBySourceBackend": _source_map_counts_by_source_backend(artifacts),
+        "sourceRemapCount": _source_remap_count(artifacts),
+        "sourceRemapsByTarget": _source_remap_counts_by_target(artifacts),
+        "sourceRemapsBySourceBackend": _source_remap_counts_by_source_backend(
+            artifacts
+        ),
     }
 
 
@@ -2029,6 +2065,55 @@ def _artifact_source_map(
     }
 
 
+def _is_crossgl_target(target: str) -> bool:
+    return _normalized_targets([target])[0] in CROSSL_TARGETS
+
+
+def _source_remap_report_path(artifact_path: str) -> str:
+    path = PurePosixPath(artifact_path.replace("\\", "/"))
+    return path.with_name(f"{path.stem}.source-remap.json").as_posix()
+
+
+def _source_remap_path(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.stem}.source-remap.json")
+
+
+def _source_remap_payload(source_map: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schemaVersion": SOURCE_REMAP_SCHEMA_VERSION,
+        "generatedFile": source_map["generated"]["file"],
+        "mappings": [
+            {
+                "generated": dict(source_map["generated"]),
+                "original": dict(source_map["source"]),
+            }
+        ],
+    }
+
+
+def _write_source_remap_sidecar(path: Path, payload: Mapping[str, Any]) -> None:
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _artifact_source_remap(
+    config: ProjectConfig,
+    target: str,
+    artifact_path: str,
+    remap_path: Path,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": SOURCE_REMAP_SCHEMA_VERSION,
+        "path": _artifact_report_path(remap_path, config),
+        "target": target,
+        "generatedFile": artifact_path,
+        "mappingGranularity": "file",
+        "hash": _source_hash(remap_path),
+    }
+
+
 def _runtime_migration_targets(
     units: Sequence[ProjectTranslationUnit],
     targets: Sequence[str],
@@ -2174,11 +2259,24 @@ def translate_project(
                     artifact["sourceMap"] = _artifact_source_map(
                         config, unit, target, output_path
                     )
+                    if _is_crossgl_target(target):
+                        remap_path = _source_remap_path(output_path)
+                        remap_payload = _source_remap_payload(artifact["sourceMap"])
+                        _write_source_remap_sidecar(remap_path, remap_payload)
+                        artifact["sourceRemap"] = _artifact_source_remap(
+                            config,
+                            target,
+                            artifact["path"],
+                            remap_path,
+                        )
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
                     # unit does not hide the rest of the repository's migration state.
                     artifact["status"] = "failed"
                     artifact["error"] = str(exc)
+                    artifact.pop("generatedHash", None)
+                    artifact.pop("sourceMap", None)
+                    artifact.pop("sourceRemap", None)
                     diagnostics.append(
                         ProjectDiagnostic(
                             severity="error",
@@ -2335,6 +2433,101 @@ def _validation_artifact_status_by_variant(
     return {variant: counts[variant] for variant in sorted(counts)}
 
 
+def _source_remap_validation_diagnostics(
+    artifact: Mapping[str, Any], config: ProjectConfig
+) -> list[ProjectDiagnostic]:
+    if artifact.get("status") != "translated":
+        return []
+
+    source_remap = artifact.get("sourceRemap")
+    if not isinstance(source_remap, Mapping):
+        return []
+
+    remap_path = _resolve_report_path(config, source_remap["path"])
+    if not _is_relative_to(remap_path, config.root):
+        return [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.validate.source-remap-outside-project",
+                message=(
+                    "Source remap path resolves outside the repository: "
+                    f"{source_remap['path']}"
+                ),
+                location=SourceLocation(file=str(artifact["source"])),
+                target=str(artifact["target"]),
+                missing_capabilities=["source.provenance"],
+            )
+        ]
+
+    if not remap_path.exists():
+        return [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.validate.missing-source-remap",
+                message=(
+                    "Expected source remap sidecar is missing: "
+                    f"{source_remap['path']}"
+                ),
+                location=SourceLocation(file=str(artifact["source"])),
+                target=str(artifact["target"]),
+                missing_capabilities=["source.provenance"],
+            )
+        ]
+
+    diagnostics = []
+    if not _hash_matches_report(_source_hash(remap_path), source_remap["hash"]):
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.validate.source-remap-hash-mismatch",
+                message=(
+                    "Source remap sidecar hash does not match report: "
+                    f"{source_remap['path']}"
+                ),
+                location=SourceLocation(file=str(artifact["source"])),
+                target=str(artifact["target"]),
+                missing_capabilities=["source.provenance"],
+            )
+        )
+
+    try:
+        remap_payload = json.loads(remap_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.validate.source-remap-invalid",
+                message=(
+                    "Source remap sidecar is not valid JSON: "
+                    f"{source_remap['path']}: {exc}"
+                ),
+                location=SourceLocation(file=str(artifact["source"])),
+                target=str(artifact["target"]),
+                missing_capabilities=["source.provenance"],
+            )
+        )
+        return diagnostics
+
+    source_map = artifact.get("sourceMap")
+    if isinstance(source_map, Mapping):
+        expected_payload = _source_remap_payload(source_map)
+        if remap_payload != expected_payload:
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.validate.source-remap-mismatch",
+                    message=(
+                        "Source remap sidecar does not match artifact source map: "
+                        f"{source_remap['path']}"
+                    ),
+                    location=SourceLocation(file=str(artifact["source"])),
+                    target=str(artifact["target"]),
+                    missing_capabilities=["source.provenance"],
+                )
+            )
+    return diagnostics
+
+
 def _validate_artifacts(
     artifacts: Sequence[Mapping[str, Any]],
     targets: Sequence[str],
@@ -2437,6 +2630,7 @@ def _validate_artifacts(
             else "not-applicable"
         )
         generated_hash = artifact.get("generatedHash")
+        source_remap_diagnostics: list[ProjectDiagnostic] = []
         if artifact.get("status") == "translated":
             if not artifact_inside_project:
                 generated_hash_status = "outside-project"
@@ -2461,6 +2655,10 @@ def _validate_artifacts(
                     )
                 else:
                     generated_hash_status = "ok"
+            source_remap_diagnostics = _source_remap_validation_diagnostics(
+                artifact, config
+            )
+            diagnostics.extend(source_remap_diagnostics)
         if artifact.get("status") == "failed":
             error = str(artifact.get("error", "")).strip()
             message = (
@@ -2490,6 +2688,7 @@ def _validate_artifacts(
                 and artifact.get("status") == "translated"
                 and source_hash_status in {"ok", "not-recorded"}
                 and generated_hash_status in {"ok", "not-recorded"}
+                and not source_remap_diagnostics
                 else "failed"
             ),
             "sourceHashStatus": source_hash_status,
@@ -3079,10 +3278,19 @@ def _inspection_source_map_summary(summary: Any) -> dict[str, Any]:
         "fileLevelSourceMapCount": file_level_count,
         "fineGrainedSourceMapCount": fine_grained_count,
     }
+    source_remap_count = summary.get("sourceRemapCount")
+    if (
+        isinstance(source_remap_count, int)
+        and not isinstance(source_remap_count, bool)
+        and source_remap_count >= 0
+    ):
+        payload["sourceRemapCount"] = source_remap_count
     for field_name in (
         "sourceMapsByGranularity",
         "sourceMapsByTarget",
         "sourceMapsBySourceBackend",
+        "sourceRemapsByTarget",
+        "sourceRemapsBySourceBackend",
     ):
         value = summary.get(field_name)
         if isinstance(value, Mapping):
@@ -5868,6 +6076,30 @@ def _summary_contract_reasons(
                 "artifact source maps",
             )
         )
+        reasons.extend(
+            _count_field_contract_reasons(
+                "summary.sourceRemapCount",
+                summary.get("sourceRemapCount"),
+                source_map_rollups["sourceRemapCount"],
+                "artifact source remaps",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.sourceRemapsByTarget",
+                summary.get("sourceRemapsByTarget"),
+                source_map_rollups["sourceRemapsByTarget"],
+                "artifact source remaps",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.sourceRemapsBySourceBackend",
+                summary.get("sourceRemapsBySourceBackend"),
+                source_map_rollups["sourceRemapsBySourceBackend"],
+                "artifact source remaps",
+            )
+        )
     if isinstance(diagnostics, list):
         reasons.extend(
             _diagnostic_counts_contract_reasons(
@@ -6021,6 +6253,53 @@ def _source_map_contract_reasons(
             )
 
     reasons.extend(_source_map_anchor_reasons(index, source_map, artifact))
+    return reasons
+
+
+def _source_remap_contract_reasons(
+    index: int, artifact: Mapping[str, Any], *, required: bool = False
+) -> list[str]:
+    if "sourceRemap" not in artifact:
+        if required:
+            return [f"artifacts[{index}].sourceRemap must be an object"]
+        return []
+
+    prefix = f"artifacts[{index}].sourceRemap"
+    source_remap = artifact.get("sourceRemap")
+    if not isinstance(source_remap, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    if source_remap.get("schemaVersion") != SOURCE_REMAP_SCHEMA_VERSION:
+        reasons.append(f"{prefix}.schemaVersion must be 1")
+
+    path = source_remap.get("path")
+    if not _is_non_empty_string(path):
+        reasons.append(f"{prefix}.path must be a string")
+    elif not _is_repository_relative_report_path(path):
+        reasons.append(f"{prefix}.path must be repository-relative")
+
+    artifact_path = artifact.get("path")
+    if _is_non_empty_string(path) and _is_non_empty_string(artifact_path):
+        expected_path = _source_remap_report_path(artifact_path)
+        if path != expected_path:
+            reasons.append(f"{prefix}.path must match artifacts[{index}].path")
+
+    target = source_remap.get("target")
+    if not _is_non_empty_string(target):
+        reasons.append(f"{prefix}.target must be a string")
+    elif _is_non_empty_string(artifact.get("target")) and target != artifact["target"]:
+        reasons.append(f"{prefix}.target must match artifacts[{index}].target")
+
+    generated_file = source_remap.get("generatedFile")
+    if not _is_non_empty_string(generated_file):
+        reasons.append(f"{prefix}.generatedFile must be a string")
+    elif _is_non_empty_string(artifact_path) and generated_file != artifact_path:
+        reasons.append(f"{prefix}.generatedFile must match artifacts[{index}].path")
+
+    if source_remap.get("mappingGranularity") != "file":
+        reasons.append(f"{prefix}.mappingGranularity must be file")
+    reasons.extend(_hash_contract_reasons(f"{prefix}.hash", source_remap.get("hash")))
     return reasons
 
 
@@ -6280,6 +6559,11 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"artifacts[{index}].sourceMap must be omitted "
                         "for failed artifacts"
                     )
+                if "sourceRemap" in artifact:
+                    reasons.append(
+                        f"artifacts[{index}].sourceRemap must be omitted "
+                        "for failed artifacts"
+                    )
             if "variant" in artifact:
                 if not _is_non_empty_string(variant):
                     reasons.append(f"artifacts[{index}].variant must be a string")
@@ -6344,6 +6628,18 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     index,
                     artifact,
                     required=has_summary and status == "translated",
+                )
+            )
+            reasons.extend(
+                _source_remap_contract_reasons(
+                    index,
+                    artifact,
+                    required=(
+                        has_summary
+                        and status == "translated"
+                        and _is_non_empty_string(target)
+                        and _is_crossgl_target(target)
+                    ),
                 )
             )
         if (

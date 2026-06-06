@@ -283,7 +283,12 @@ Project reports are JSON documents with:
   maps to match the project-level defines merged with the artifact variant's
   define overrides.
   Successful artifact records in full reports must include file-level
-  source-map anchors.
+  source-map anchors. Generated CrossGL artifacts also include a
+  compiler-compatible ``source-remap`` sidecar with a file-level
+  generated/original mapping for compiler ``--source-remap`` consumers. The
+  report records the sidecar path, hash, generated-file identity, and summary
+  rollups by target and source backend. The project pipeline does not claim
+  fine-grained source-map coverage yet.
   Artifact provenance records the
   ``single-file-translate`` pipeline and uses ``crossgl`` as the intermediate
   marker only when both source and target backends route through the CrossGL
@@ -323,12 +328,14 @@ Project reports are JSON documents with:
   checks, full-report artifact matrix coverage and artifact define map checks,
   artifact matrix emitted/translated/failed/missing/extra/completion count checks,
   full-report source-map granularity, target, and source-backend rollup checks,
+  source-remap target and source-backend rollup checks,
   source hash checks, failed artifact error metadata checks, translated artifact
   error metadata rejection, required artifact provenance and provenance value
   checks, failed artifact generated metadata rejection, required translated
-  artifact source maps, source-map
+  artifact source maps, required CrossGL artifact source remaps, source-map
   record shape, non-empty mapping list, single file-level mapping, span
-  consistency, and anchor consistency checks, external
+  consistency, anchor consistency, source-remap metadata shape, sidecar hash,
+  and sidecar content checks, external
   corpus record, per-entry artifact count, and summary checks, summary
   consistency checks, migration action shape and target declaration checks,
   preserved diagnostic shape, repository-relative file path, span consistency,

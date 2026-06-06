@@ -674,6 +674,20 @@ def _format_source_map_counts(summary):
     )
 
 
+def _format_source_remap_counts(summary):
+    if not isinstance(summary, Mapping):
+        return None
+
+    source_remap_count = summary.get("sourceRemapCount")
+    if (
+        not isinstance(source_remap_count, int)
+        or isinstance(source_remap_count, bool)
+        or source_remap_count < 0
+    ):
+        return None
+    return f"Source remaps: {source_remap_count}"
+
+
 def _format_artifact_matrix_summary(artifact_matrix):
     if not isinstance(artifact_matrix, Mapping):
         return None
@@ -932,6 +946,9 @@ def _format_project_report_inspection(payload):
     source_maps = _format_source_map_counts(summary)
     if source_maps:
         lines.append(source_maps)
+    source_remaps = _format_source_remap_counts(summary)
+    if source_remaps:
+        lines.append(source_remaps)
     artifact_matrix_payload = payload.get("artifactMatrix")
     artifact_matrix = _format_artifact_matrix_summary(artifact_matrix_payload)
     if artifact_matrix:
@@ -965,6 +982,16 @@ def _format_project_report_inspection(payload):
         _format_count_rollup(
             "Source maps by source backend",
             summary.get("sourceMapsBySourceBackend"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Source remaps by target",
+            summary.get("sourceRemapsByTarget"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Source remaps by source backend",
+            summary.get("sourceRemapsBySourceBackend"),
             include_zero=False,
         ),
     ):

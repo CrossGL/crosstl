@@ -2083,6 +2083,10 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["artifacts"][0]["generatedHash"] == project_pipeline._source_hash(
         output
     )
+    assert "sourceRemap" not in payload["artifacts"][0]
+    assert payload["summary"]["sourceRemapCount"] == 0
+    assert payload["summary"]["sourceRemapsByTarget"] == {}
+    assert payload["summary"]["sourceRemapsBySourceBackend"] == {}
     assert payload["migration"]["nonGoals"] == [
         "automatic runtime API migration",
         "application build-system rewrites",
@@ -2106,6 +2110,9 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
     assert payload["summary"]["sourceMapsByGranularity"] == {"file": 1}
     assert payload["summary"]["sourceMapsByTarget"] == {"cgl": 1}
     assert payload["summary"]["sourceMapsBySourceBackend"] == {"cgl": 1}
+    assert payload["summary"]["sourceRemapCount"] == 1
+    assert payload["summary"]["sourceRemapsByTarget"] == {"cgl": 1}
+    assert payload["summary"]["sourceRemapsBySourceBackend"] == {"cgl": 1}
     assert source_map["schemaVersion"] == 1
     assert source_map["kind"] == "crosstl-artifact-source-map"
     assert source_map["mappingGranularity"] == "file"
@@ -2120,6 +2127,27 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
             "generated": source_map["generated"],
         }
     ]
+    source_remap = artifact["sourceRemap"]
+    source_remap_path = repo / source_remap["path"]
+    source_remap_payload = json.loads(source_remap_path.read_text(encoding="utf-8"))
+    assert source_remap == {
+        "schemaVersion": 1,
+        "path": "out/cgl/simple.source-remap.json",
+        "target": "cgl",
+        "generatedFile": "out/cgl/simple.cgl",
+        "mappingGranularity": "file",
+        "hash": project_pipeline._source_hash(source_remap_path),
+    }
+    assert source_remap_payload == {
+        "schemaVersion": 1,
+        "generatedFile": source_map["generated"]["file"],
+        "mappings": [
+            {
+                "generated": source_map["generated"],
+                "original": source_map["source"],
+            }
+        ],
+    }
 
 
 def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
@@ -5049,14 +5077,18 @@ def test_validate_project_report_rejects_failed_artifacts_without_source_hash(
     artifact.pop("sourceHash")
     artifact.pop("generatedHash")
     artifact.pop("sourceMap")
+    artifact.pop("sourceRemap")
     payload["summary"]["translatedCount"] = 0
     payload["summary"]["failedCount"] = 1
     payload["summary"]["artifactsByTarget"]["cgl"]["translatedCount"] = 0
     payload["summary"]["artifactsByTarget"]["cgl"]["failedCount"] = 1
     payload["summary"]["sourceMapCount"] = 0
+    payload["summary"]["sourceRemapCount"] = 0
     payload["summary"]["sourceMapsByGranularity"] = {}
     payload["summary"]["sourceMapsByTarget"] = {}
     payload["summary"]["sourceMapsBySourceBackend"] = {}
+    payload["summary"]["sourceRemapsByTarget"] = {}
+    payload["summary"]["sourceRemapsBySourceBackend"] = {}
     report_path = repo / "out" / "failed-artifact-missing-source-hash-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -5099,6 +5131,10 @@ def test_validate_project_report_rejects_failed_artifacts_with_generated_metadat
     )
     assert (
         "artifacts[0].sourceMap must be omitted for failed artifacts"
+        in diagnostic["message"]
+    )
+    assert (
+        "artifacts[0].sourceRemap must be omitted for failed artifacts"
         in diagnostic["message"]
     )
 
@@ -5776,6 +5812,124 @@ def test_validate_project_report_rejects_current_translated_artifacts_without_so
     assert "artifacts[0].sourceMap must be an object" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_current_crossgl_artifacts_without_source_remaps(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["artifacts"][0].pop("sourceRemap")
+    payload["summary"]["sourceRemapCount"] = 0
+    payload["summary"]["sourceRemapsByTarget"] = {}
+    payload["summary"]["sourceRemapsBySourceBackend"] = {}
+    report_path = repo / "out" / "missing-source-remap-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].sourceRemap must be an object" in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_malformed_source_remap_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["artifacts"][0]["sourceRemap"] = {
+        "schemaVersion": 2,
+        "path": "out/cgl/wrong.source-remap.json",
+        "target": "opengl",
+        "generatedFile": "out/cgl/wrong.cgl",
+        "mappingGranularity": "line",
+        "hash": {"algorithm": "md5", "value": "not-a-sha"},
+    }
+    report_path = repo / "out" / "malformed-source-remap-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].sourceRemap.schemaVersion must be 1" in (diagnostic["message"])
+    assert "artifacts[0].sourceRemap.path must match artifacts[0].path" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].sourceRemap.target must match artifacts[0].target" in (
+        diagnostic["message"]
+    )
+    assert (
+        "artifacts[0].sourceRemap.generatedFile must match artifacts[0].path"
+        in diagnostic["message"]
+    )
+    assert "artifacts[0].sourceRemap.mappingGranularity must be file" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].sourceRemap.hash.algorithm must be sha256" in (
+        diagnostic["message"]
+    )
+    assert (
+        "artifacts[0].sourceRemap.hash.value must be a lowercase "
+        "64-character hex digest"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_stale_source_remap_sidecar(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    payload = report.to_json()
+    source_remap_path = repo / payload["artifacts"][0]["sourceRemap"]["path"]
+    source_remap_path.write_text("{}\n", encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"]["summary"]["failedCount"] == 1
+    assert validation["diagnosticsByCode"] == {
+        "project.validate.source-remap-hash-mismatch": 1,
+        "project.validate.source-remap-mismatch": 1,
+    }
+
+
+def test_validate_project_report_rejects_source_remap_content_mismatches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    source_remap_path = repo / artifact["sourceRemap"]["path"]
+    source_remap_payload = json.loads(source_remap_path.read_text(encoding="utf-8"))
+    source_remap_payload["generatedFile"] = "out/cgl/other.cgl"
+    source_remap_path.write_text(
+        json.dumps(source_remap_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
+    report_path = repo / "out" / "source-remap-content-mismatch-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"]["summary"]["failedCount"] == 1
+    assert validation["diagnosticsByCode"] == {
+        "project.validate.source-remap-mismatch": 1,
+    }
+
+
 def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -5832,6 +5986,9 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     "sourceMapsByGranularity": {"line": 1},
                     "sourceMapsByTarget": {"metal": 1},
                     "sourceMapsBySourceBackend": {"unknown": 1},
+                    "sourceRemapCount": 1,
+                    "sourceRemapsByTarget": {"cgl": 1},
+                    "sourceRemapsBySourceBackend": {"cgl": 1},
                 },
                 "units": [
                     {
@@ -5922,6 +6079,15 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
         diagnostic["message"]
     )
     assert "summary.sourceMapsBySourceBackend must match artifact source maps" in (
+        diagnostic["message"]
+    )
+    assert "summary.sourceRemapCount must match artifact source remaps" in (
+        diagnostic["message"]
+    )
+    assert "summary.sourceRemapsByTarget must match artifact source remaps" in (
+        diagnostic["message"]
+    )
+    assert "summary.sourceRemapsBySourceBackend must match artifact source remaps" in (
         diagnostic["message"]
     )
     assert "diagnosticCounts must match diagnostics" in diagnostic["message"]
@@ -7549,9 +7715,12 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "sourceMapCount": 1,
         "fileLevelSourceMapCount": 1,
         "fineGrainedSourceMapCount": 0,
+        "sourceRemapCount": 1,
         "sourceMapsByGranularity": {"file": 1},
         "sourceMapsByTarget": {"cgl": 1},
         "sourceMapsBySourceBackend": {"cgl": 1},
+        "sourceRemapsByTarget": {"cgl": 1},
+        "sourceRemapsBySourceBackend": {"cgl": 1},
     }
     assert payload["artifactMatrix"] == {
         "available": True,
@@ -7740,9 +7909,12 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "sourceMapCount": 1,
         "fileLevelSourceMapCount": 1,
         "fineGrainedSourceMapCount": 0,
+        "sourceRemapCount": 1,
         "sourceMapsByGranularity": {"file": 1},
         "sourceMapsByTarget": {"cgl": 1},
         "sourceMapsBySourceBackend": {"cgl": 1},
+        "sourceRemapsByTarget": {"cgl": 1},
+        "sourceRemapsBySourceBackend": {"cgl": 1},
     }
     assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
     assert payload["artifactMatrix"]["emittedArtifactCount"] == 1
@@ -8209,9 +8381,12 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
 
     assert result.returncode == 0
     assert "Source maps: 1 file-level, 0 fine-grained" in result.stdout
+    assert "Source remaps: 1" in result.stdout
     assert "Source maps by granularity: file=1" in result.stdout
     assert "Source maps by target: cgl=1" in result.stdout
     assert "Source maps by source backend: cgl=1" in result.stdout
+    assert "Source remaps by target: cgl=1" in result.stdout
+    assert "Source remaps by source backend: cgl=1" in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_artifact_matrix(tmp_path):
