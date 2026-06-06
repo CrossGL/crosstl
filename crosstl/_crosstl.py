@@ -615,6 +615,29 @@ def _format_project_config_path(project):
     return None
 
 
+def _format_inactive_status_records(label, records):
+    if not isinstance(records, list):
+        return None
+
+    entries = []
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        path = record.get("path")
+        status = record.get("status")
+        if (
+            not isinstance(path, str)
+            or not isinstance(status, str)
+            or status == "active"
+        ):
+            continue
+        entries.append(f"{path or '(empty)'} ({status})")
+
+    if not entries:
+        return None
+    return f"{label}: " + ", ".join(entries)
+
+
 def _format_source_map_counts(summary):
     if not isinstance(summary, Mapping):
         return None
@@ -762,20 +785,35 @@ def _format_project_report_inspection(payload):
     project_config_counts = _format_project_config_counts(project)
     if project_config_counts:
         lines.insert(3, project_config_counts)
+    project_status_lines = []
     source_root_status = _format_count_rollup(
         "Source roots by status",
         project.get("sourceRootStatusCounts"),
         include_zero=False,
     )
     if source_root_status:
-        lines.insert(4, source_root_status)
+        project_status_lines.append(source_root_status)
+    source_root_issues = _format_inactive_status_records(
+        "Source root issues",
+        project.get("sourceRootStatus"),
+    )
+    if source_root_issues:
+        project_status_lines.append(source_root_issues)
     include_dir_status = _format_count_rollup(
         "Include dirs by status",
         project.get("includeDirStatusCounts"),
         include_zero=False,
     )
     if include_dir_status:
-        lines.insert(5 if source_root_status else 4, include_dir_status)
+        project_status_lines.append(include_dir_status)
+    include_dir_issues = _format_inactive_status_records(
+        "Include dir issues",
+        project.get("includeDirStatus"),
+    )
+    if include_dir_issues:
+        project_status_lines.append(include_dir_issues)
+    for offset, line in enumerate(project_status_lines):
+        lines.insert(4 + offset, line)
     project_config_path = _format_project_config_path(project)
     if project_config_path:
         lines.insert(1, project_config_path)

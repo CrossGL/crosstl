@@ -4205,7 +4205,7 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, text inspection identifies inactive source roots by path, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4226,12 +4226,13 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_roots_that_are_not_directories",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_root_status"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, text inspection identifies inactive source roots by path, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4252,12 +4253,13 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_roots_that_are_not_directories",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_root_status"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, text inspection identifies inactive source roots by path, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4278,12 +4280,13 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_roots_that_are_not_directories",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_root_status"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, text inspection identifies inactive source roots by path, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4304,12 +4307,13 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_roots_that_are_not_directories",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_root_status"
           ]
         },
         "cuda": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, text inspection identifies inactive source roots by path, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4330,12 +4334,13 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_roots_that_are_not_directories",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_root_status"
           ]
         },
         "hip": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, text inspection identifies inactive source roots by path, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4356,12 +4361,13 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_roots_that_are_not_directories",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_root_status"
           ]
         },
         "mojo": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, text inspection identifies inactive source roots by path, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4382,12 +4388,13 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_roots_that_are_not_directories",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_root_status"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, text inspection identifies inactive source roots by path, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4408,12 +4415,13 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_roots_that_are_not_directories",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_root_status"
           ]
         },
         "slang": {
           "status": "supported",
-          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, records unsupported explicit includes, reports invalid roots, records source-root status counts, rejects roots that resolve to non-directory paths, and reports non-repository-relative scan patterns including drive-qualified Windows paths without hiding valid units, resolves explicit relative config paths from the repository root, rejects malformed project configuration scalar and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance, text inspection identifies inactive source roots by path, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
@@ -4434,7 +4442,8 @@
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_roots_that_are_not_directories",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_root_status"
           ]
         }
       }
@@ -4447,7 +4456,7 @@
       "support": {
         "directx": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4455,12 +4464,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
           ]
         },
         "opengl": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4468,12 +4478,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
           ]
         },
         "metal": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4481,12 +4492,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
           ]
         },
         "vulkan": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4494,12 +4506,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
           ]
         },
         "cuda": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4507,12 +4520,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
           ]
         },
         "hip": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4520,12 +4534,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
           ]
         },
         "mojo": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4533,12 +4548,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
           ]
         },
         "rust": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4546,12 +4562,13 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
           ]
         },
         "slang": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, and passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4559,7 +4576,8 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
           ]
         }
       }
@@ -5990,7 +6008,7 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6017,7 +6035,7 @@
         },
         "opengl": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6044,7 +6062,7 @@
         },
         "metal": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6071,7 +6089,7 @@
         },
         "vulkan": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6098,7 +6116,7 @@
         },
         "cuda": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6125,7 +6143,7 @@
         },
         "hip": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6152,7 +6170,7 @@
         },
         "mojo": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6179,7 +6197,7 @@
         },
         "rust": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6206,7 +6224,7 @@
         },
         "slang": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus, scan-scope, project-config path, project-config count, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",

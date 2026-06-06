@@ -124,9 +124,10 @@ missing-capability, and artifact target rollups, report source-backend,
 file-extension, and artifact target rollups, source-map count, granularity,
 target, and source-backend rollups, artifact matrix completion counts plus
 sampled missing and extra artifact identities,
-include-directory status counts, diagnostics, configurable diagnostic and
-failed-artifact truncation counts, external corpus rollups, and migration
-actions. ``--format sarif`` emits the inspection diagnostics as SARIF for
+include-directory status counts, inactive source-root and include-directory
+record details, diagnostics, configurable diagnostic and failed-artifact
+truncation counts, external corpus rollups, and migration actions.
+``--format sarif`` emits the inspection diagnostics as SARIF for
 code-scanning workflows. Inspection exits nonzero when validation finds report
 errors.
 

@@ -164,6 +164,9 @@ def test_project_report_inspection_is_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_include_dir_status"
         ) in backend_support["evidence"]
+        assert "inactive source-root and include-directory record details" in (
+            backend_support["notes"]
+        )
 
 
 def test_project_repo_scan_documents_source_root_status():
@@ -181,6 +184,9 @@ def test_project_repo_scan_documents_source_root_status():
         assert "validates skipped source override provenance" in (
             backend_support["notes"]
         )
+        assert "text inspection identifies inactive source roots by path" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_source_roots_that_are_not_directories"
@@ -189,6 +195,10 @@ def test_project_repo_scan_documents_source_root_status():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_inconsistent_skipped_source_"
             "overrides"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_source_root_status"
         ) in backend_support["evidence"]
 
 
@@ -282,6 +292,9 @@ def test_project_include_resolution_documents_status_reporting():
         )
         assert "non-directory paths" in backend_support["notes"]
         assert "only active existing repository-contained resolved paths" in (
+            backend_support["notes"]
+        )
+        assert "text inspection identifies inactive include directories by path" in (
             backend_support["notes"]
         )
         assert (
