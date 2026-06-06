@@ -930,6 +930,31 @@ def test_codegen_texture_sample_namespace_qualified_options_roundtrip():
     assert "tex.sample(samp, uv, min_lod_clamp(firstTailMip))" in metal
 
 
+def test_codegen_msl_relational_namespace_intrinsics_import_to_crossgl():
+    # Reduced from Metal Shading Language Specification table 6.3 relational
+    # functions, where these intrinsics are declared in the metal namespace.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    float classify(float value, float3 values) {
+        bool nanValue = metal::isnan(value);
+        bool infValue = metal::isinf(value);
+        bool finiteValue = metal::isfinite(value);
+        bool3 nanMask = metal::isnan(values);
+        return (nanValue || infValue || !finiteValue || any(nanMask)) ? 1.0 : 0.0;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "bool nanValue = isnan(value);" in crossgl
+    assert "bool infValue = isinf(value);" in crossgl
+    assert "bool finiteValue = isfinite(value);" in crossgl
+    assert "bvec3 nanMask = isnan(values);" in crossgl
+    assert "metal_u3a_u3a" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_multi_declarator_struct_members_from_cxx_msl_headers():
     code = """
     struct KernelParams {

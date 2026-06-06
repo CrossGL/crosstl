@@ -109,6 +109,7 @@ class SlangToCrossGLConverter:
         "GatherBlue": "2",
         "GatherAlpha": "3",
     }
+    GATHER_COMPARE_METHODS = {"GatherCmp"}
     LOD_QUERY_METHOD_COMPONENTS = {
         "CalculateLevelOfDetail": "x",
         "CalculateLevelOfDetailUnclamped": "y",
@@ -2044,6 +2045,7 @@ class SlangToCrossGLConverter:
         if (
             expr.method not in self.SAMPLE_METHOD_MAP
             and expr.method not in self.GATHER_METHOD_COMPONENTS
+            and expr.method not in self.GATHER_COMPARE_METHODS
             and expr.method not in self.LOD_QUERY_METHOD_COMPONENTS
         ):
             return None
@@ -2053,7 +2055,10 @@ class SlangToCrossGLConverter:
         if expr.method in self.LOD_QUERY_METHOD_COMPONENTS:
             return self.generate_texture_lod_query_method_call(expr, obj, is_main)
 
-        texture_func, args = self.crossgl_texture_call_parts(expr, is_main)
+        call_parts = self.crossgl_texture_call_parts(expr, is_main)
+        if call_parts is None:
+            return None
+        texture_func, args = call_parts
         return f"{texture_func}({', '.join([obj] + args)})"
 
     def generate_texture_lod_query_method_call(self, expr, obj, is_main=False):
@@ -2087,6 +2092,9 @@ class SlangToCrossGLConverter:
 
         if expr.method in self.GATHER_METHOD_COMPONENTS:
             return self.crossgl_texture_gather_call_parts(expr, is_main)
+
+        if expr.method in self.GATHER_COMPARE_METHODS:
+            return self.crossgl_texture_gather_compare_call_parts(expr, is_main)
 
         prefix, coord, extra_args = self.split_texture_sample_args(expr, is_main)
         if coord is None:
@@ -2169,6 +2177,18 @@ class SlangToCrossGLConverter:
         if component is not None:
             args.append(component)
         return "textureGather", args
+
+    def crossgl_texture_gather_compare_call_parts(self, expr, is_main=False):
+        prefix, coord, extra_args = self.split_texture_sample_args(expr, is_main)
+        if coord is None or len(extra_args) not in {1, 2}:
+            return None
+
+        compare = extra_args[0]
+        if len(extra_args) == 2:
+            offset = extra_args[1]
+            return "textureGatherCompareOffset", prefix + [coord, compare, offset]
+
+        return "textureGatherCompare", prefix + [coord, compare]
 
     def format_texture_method_args(self, expr, is_main=False):
         if expr.method == "Load":

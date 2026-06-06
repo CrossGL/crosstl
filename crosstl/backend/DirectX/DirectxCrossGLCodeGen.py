@@ -214,7 +214,7 @@ class HLSLToCrossGLConverter:
             "frac": "fract",
             "fmod": "mod",
             "lerp": "mix",
-            "reversebits": "reverseBits",
+            "reversebits": "bitfieldReverse",
             "rsqrt": "inverseSqrt",
             "atan2": "atan",
             "EvaluateAttributeAtSample": "interpolateAtSample",
