@@ -1232,6 +1232,8 @@ class SlangToCrossGLConverter:
             return True
         if not re.match(r"^b\d", register_name):
             return False
+        if getattr(node, "buffer_kind", None) in {"cbuffer", "tbuffer"}:
+            return True
         node_type = getattr(node, "vtype", None)
         if not node_type:
             return False

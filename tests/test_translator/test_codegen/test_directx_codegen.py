@@ -6336,6 +6336,31 @@ def test_hlsl_bit_count_lowers_to_countbits_intrinsic():
     assert "uint countbits = tid.x;" not in generated_code
 
 
+def test_hlsl_bitfield_reverse_lowers_to_reversebits_intrinsic():
+    shader = """
+    shader HlslBitfieldReverseBuiltinLowering {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uvec3 mask = uvec3(tid.x, tid.y, tid.z);
+                let reversed = bitfieldReverse(mask);
+                uint reversebits = tid.x;
+                let scalar = bitfieldReverse(tid.y) + reversebits;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # Microsoft HLSL exposes reversebits(value) for unsigned integer operands.
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/reversebits
+    assert "uint3 reversed = reversebits(mask);" in generated_code
+    assert "uint reversebits_ = tid.x;" in generated_code
+    assert "uint scalar = (reversebits(tid.y) + reversebits_);" in generated_code
+    assert "bitfieldReverse(" not in generated_code
+    assert "uint reversebits = tid.x;" not in generated_code
+
+
 def test_hlsl_first_bit_builtins_lower_to_native_intrinsics():
     shader = """
     shader HlslFirstBitBuiltinLowering {
@@ -6370,6 +6395,28 @@ def test_hlsl_first_bit_builtins_lower_to_native_intrinsics():
     assert "findMSB(" not in generated_code
     assert "uint firstbitlow = tid.x;" not in generated_code
     assert "uint firstbithigh = tid.y;" not in generated_code
+
+
+def test_hlsl_user_defined_bitfield_reverse_name_is_not_lowered():
+    shader = """
+    shader HlslUserBitfieldReverseName {
+        uint bitfieldReverse(uint value) {
+            return value + 3u;
+        }
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint adjusted = bitfieldReverse(tid.x);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint bitfieldReverse(uint value)" in generated_code
+    assert "uint adjusted = bitfieldReverse(tid.x);" in generated_code
+    assert "reversebits(" not in generated_code
 
 
 def test_hlsl_user_defined_first_bit_names_are_not_lowered():

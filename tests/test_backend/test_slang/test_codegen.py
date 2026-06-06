@@ -1722,7 +1722,7 @@ def test_bound_cbuffer_codegen():
     generated_code = generate_code(ast)
 
     assert ast.cbuffers[0].register == "b0"
-    assert "cbuffer Camera" in generated_code
+    assert "cbuffer Camera @register(b0)" in generated_code
     assert "mat4 viewProj;" in generated_code
     assert "vec4 tint[2];" in generated_code
     assert "float weights[];" in generated_code
@@ -1741,8 +1741,32 @@ def test_vulkan_attributes_on_cbuffer_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "cbuffer Camera @set(1) @binding(0) @push_constant {" in generated_code
+    assert (
+        "cbuffer Camera @set(1) @binding(0) @push_constant @register(b0) {"
+        in generated_code
+    )
     assert "mat4 viewProj;" in generated_code
+
+
+def test_official_shader_parameter_cbuffer_register_space_codegen():
+    # Source: Slang shader parameter docs show vk::binding and register markup
+    # together on a cbuffer declaration.
+    code = """
+    [[vk::binding(2, 9)]]
+    cbuffer CSMUniforms : register(b0, space9)
+    {
+        float4 shadowCascadeDistances;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "cbuffer CSMUniforms @set(9) @binding(2) @register(b0, space9) {"
+        in generated_code
+    )
+    assert "vec4 shadowCascadeDistances;" in generated_code
 
 
 def test_global_resource_array_codegen():

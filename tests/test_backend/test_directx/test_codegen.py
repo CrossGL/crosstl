@@ -2528,6 +2528,28 @@ def test_codegen_byte_address_vector_method_mapping():
     assert "buffer_store4(" not in regenerated_hlsl
 
 
+def test_codegen_rwbyteaddressbuffer_interlocked_add_from_microsoft_docs():
+    # Source: Microsoft RWByteAddressBuffer::InterlockedAdd docs.
+    code = textwrap.dedent("""
+        RWByteAddressBuffer rawBytes : register(u1);
+
+        void main(uint offset : TEXCOORD0) {
+            rawBytes.InterlockedAdd(offset, 1u);
+            uint original;
+            rawBytes.InterlockedAdd(offset + 4u, 2u, original);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "RWByteAddressBuffer rawBytes;" in crossgl
+    assert "@ register(u1)" in crossgl
+    assert "atomicAdd(rawBytes, offset, 1);" in crossgl
+    assert "original = atomicAdd(rawBytes, offset + 4, 2);" in crossgl
+    assert ".InterlockedAdd(" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_byte_address_status_loads_do_not_become_texture_fetches():
     code = textwrap.dedent("""
         ByteAddressBuffer rawInput : register(t0);
@@ -3230,6 +3252,20 @@ def test_codegen_texture_method_descriptors():
         "buffer_when_max_args": None,
         "resource": "buffer",
         "operation": "store",
+    }
+    assert converter.resource_method_descriptor(
+        "InterlockedAdd", 3, "RWByteAddressBuffer"
+    ) == {
+        "member": "InterlockedAdd",
+        "function": "atomicAdd",
+        "texture_function": None,
+        "buffer_function": "atomicAdd",
+        "component": None,
+        "usage": None,
+        "buffer_when_max_args": None,
+        "resource": "buffer",
+        "operation": "atomic_add",
+        "byte_address_atomic": True,
     }
     assert converter.resource_method_descriptor("Append", 1)["operation"] == "append"
     assert converter.resource_method_descriptor("Consume", 0)["operation"] == "consume"

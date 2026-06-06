@@ -2533,6 +2533,27 @@ def test_parse_typed_resource_method_calls():
     assert "Store<uint>" in members
 
 
+def test_parse_rwbyteaddressbuffer_interlocked_add_from_microsoft_docs():
+    code = """
+    RWByteAddressBuffer rawBytes : register(u1);
+
+    void main(uint offset : TEXCOORD0) {
+        uint original;
+        rawBytes.InterlockedAdd(offset, 1u, original);
+    }
+    """
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    members = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert "InterlockedAdd" in members
+
+
 def test_parse_upstream_default_parameter_value():
     ast = parse_code("""
     float4 ToRGBM(float3 rgb, float PeakValue = 255.0 / 16.0) {

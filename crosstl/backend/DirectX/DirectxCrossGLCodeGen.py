@@ -245,6 +245,9 @@ class HLSLToCrossGLConverter:
             "InterlockedExchange": "atomicExchange",
             "InterlockedCompareExchange": "atomicCompareExchange",
         }
+        self.byte_address_interlocked_method_map = {
+            "InterlockedAdd": "atomicAdd",
+        }
         self.texture_method_map = {
             "Sample": "texture",
             "SampleLevel": "textureLod",
@@ -945,6 +948,24 @@ class HLSLToCrossGLConverter:
                 descriptor["dropped_parameters"] = ["status output"]
             return descriptor
 
+        if (
+            member in self.byte_address_interlocked_method_map
+            and self.is_byte_address_buffer_type(resource_type)
+            and arg_count in {2, 3}
+        ):
+            return {
+                "member": member,
+                "function": self.byte_address_interlocked_method_map[member],
+                "texture_function": None,
+                "buffer_function": self.byte_address_interlocked_method_map[member],
+                "component": None,
+                "usage": None,
+                "buffer_when_max_args": None,
+                "resource": "buffer",
+                "operation": "atomic_add",
+                "byte_address_atomic": True,
+            }
+
         if member in self.buffer_method_map:
             return {
                 "member": member,
@@ -1016,6 +1037,26 @@ class HLSLToCrossGLConverter:
         if descriptor["component"] is not None:
             method_args.append(descriptor["component"])
         return method_args
+
+    def byte_address_atomic_method_expression(
+        self, obj, rendered_args, descriptor, raw_args=None, is_main=False
+    ):
+        if not descriptor.get("byte_address_atomic") or len(rendered_args) < 2:
+            return None
+
+        offset, value = rendered_args[:2]
+        atomic_call = f"{descriptor['function']}({obj}, {offset}, {value})"
+        if len(rendered_args) >= 3:
+            original = self.generate_without_storage_index_lowering(
+                (
+                    (raw_args or [])[2]
+                    if raw_args and len(raw_args) >= 3
+                    else rendered_args[2]
+                ),
+                is_main,
+            )
+            return f"{original} = {atomic_call}"
+        return atomic_call
 
     def texture_gather_compare_red_offsets_expression(self, obj, rendered_args):
         sampler, coord, compare, *offset_args = rendered_args[:7]
@@ -3378,7 +3419,12 @@ class HLSLToCrossGLConverter:
                     descriptor = self.refine_texture_load_status_descriptor(
                         method_member, expr.args, descriptor
                     )
-                    if descriptor.get("fallback_expression") is not None:
+                    byte_address_atomic = self.byte_address_atomic_method_expression(
+                        obj, rendered_args, descriptor, expr.args, is_main
+                    )
+                    if byte_address_atomic is not None:
+                        call = byte_address_atomic
+                    elif descriptor.get("fallback_expression") is not None:
                         call = descriptor["fallback_expression"]
                     else:
                         method_args = self.resource_method_arguments(

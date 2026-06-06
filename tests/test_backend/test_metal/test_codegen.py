@@ -2806,6 +2806,46 @@ def test_codegen_function_table_call_and_icb_methods():
     assert parse_crossgl(result) is not None
 
 
+def test_codegen_visible_function_table_using_signature_alias_from_apple_wwdc():
+    # Apple WWDC20 uses function-signature aliases to keep visible function table
+    # declarations readable.
+    # https://developer.apple.com/videos/play/wwdc2020/10013/
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Light { uint index; };
+    struct Lighting { float3 color; };
+    struct Material { uint index; };
+    struct TriangleIntersectionData { float3 normal; };
+
+    using LightingFunction = Lighting(Light, TriangleIntersectionData);
+    using MaterialFunction = float3(Material, Lighting, TriangleIntersectionData);
+
+    kernel void shade(
+        visible_function_table<LightingFunction> lightingFunctions [[buffer(1)]],
+        visible_function_table<MaterialFunction> materialFunctions [[buffer(2)]],
+        device float3* output [[buffer(3)]],
+        uint tid [[thread_position_in_grid]]) {
+        Light light;
+        Material material;
+        TriangleIntersectionData triangleIntersection;
+        Lighting lighting = lightingFunctions[light.index](light, triangleIntersection);
+        output[tid] = materialFunctions[material.index](
+            material, lighting, triangleIntersection);
+    }
+    """
+    result = convert(code)
+
+    assert "visible_function_table lightingFunctions @buffer(1)" in result
+    assert "visible_function_table materialFunctions @buffer(2)" in result
+    assert "lightingFunctions[light.index](light, triangleIntersection)" in result
+    assert "materialFunctions[material.index]" in result
+    assert "typedef Lighting LightingFunction;" not in result
+    assert "typedef vec3 MaterialFunction;" not in result
+    assert parse_crossgl(result) is not None
+
+
 def test_codegen_icb_extended_methods():
     code = """
     #include <metal_stdlib>

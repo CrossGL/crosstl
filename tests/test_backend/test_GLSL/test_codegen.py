@@ -156,6 +156,28 @@ def test_codegen_vertex_roundtrip():
         assert name in output
 
 
+def test_codegen_layout_qualifier_with_newline_before_parens_from_glsl_grammar():
+    # GLSL 4.60 layout-qualifier is "layout ( ... )"; newlines are whitespace.
+    code = textwrap.dedent("""
+        #version 450 core
+
+        layout
+        (location = 0) in vec3 position;
+
+        void main()
+        {
+            gl_Position = vec4(position, 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "vec3 position @location(0);" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "layout(location = 0) in vec3 position;" in glsl
+
+
 def test_codegen_fragment_roundtrip():
     output = assert_roundtrip(FRAGMENT_GLSL, "fragment", ShaderStage.FRAGMENT)
     lowered = output.lower()

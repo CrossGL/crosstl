@@ -1633,6 +1633,48 @@ def test_parse_function_table_call_and_icb_methods():
     parse_ok(code)
 
 
+def test_parse_visible_function_table_using_signature_alias_from_apple_wwdc():
+    # Apple WWDC20 "Get to know Metal function pointers" uses function-signature
+    # aliases before passing them to visible_function_table<T>.
+    # https://developer.apple.com/videos/play/wwdc2020/10013/
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Light { uint index; };
+    struct Lighting { float3 color; };
+    struct Material { uint index; };
+    struct TriangleIntersectionData { float3 normal; };
+
+    using LightingFunction = Lighting(Light, TriangleIntersectionData);
+    using MaterialFunction = float3(Material, Lighting, TriangleIntersectionData);
+
+    kernel void shade(
+        visible_function_table<LightingFunction> lightingFunctions [[buffer(1)]],
+        visible_function_table<MaterialFunction> materialFunctions [[buffer(2)]],
+        device float3* output [[buffer(3)]],
+        uint tid [[thread_position_in_grid]]) {
+        Light light;
+        Material material;
+        TriangleIntersectionData triangleIntersection;
+        Lighting lighting = lightingFunctions[light.index](light, triangleIntersection);
+        output[tid] = materialFunctions[material.index](
+            material, lighting, triangleIntersection);
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [alias.name for alias in ast.typedefs] == [
+        "LightingFunction",
+        "MaterialFunction",
+    ]
+    assert [alias.alias_type for alias in ast.typedefs] == ["Lighting", "float3"]
+    assert all(getattr(alias, "is_function_type", False) for alias in ast.typedefs)
+    params = ast.functions[0].params
+    assert params[0].vtype == "visible_function_table<LightingFunction>"
+    assert params[1].vtype == "visible_function_table<MaterialFunction>"
+
+
 def test_parse_icb_extended_methods():
     code = """
     #include <metal_stdlib>
