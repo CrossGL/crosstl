@@ -466,15 +466,22 @@ def test_project_batch_translation_documents_artifact_matrix_rollups():
     feature = features["project.batch_translation"]
 
     for backend_support in feature["support"].values():
-        assert backend_support["status"] == "partial"
+        assert backend_support["status"] == "supported"
         assert "artifact matrix emitted, translated, failed, missing, extra" in (
             backend_support["notes"]
         )
-        assert "target and variant completion rollups" in backend_support["notes"]
-        assert "unit-target-variant batch" in backend_support["notes"]
+        assert "target and variant rollups" in backend_support["notes"]
+        assert (
+            "real translator coverage for multiple units, all supported target "
+            "backends, and variants"
+        ) in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_records_artifact_matrix_metadata"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_batches_real_units_targets_and_variants"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

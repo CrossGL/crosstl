@@ -1735,6 +1735,111 @@ def test_translate_project_records_artifact_matrix_metadata(tmp_path, monkeypatc
     }
 
 
+def test_translate_project_batches_real_units_targets_and_variants(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    targets = (
+        "cuda",
+        "directx",
+        "hip",
+        "metal",
+        "mojo",
+        "opengl",
+        "rust",
+        "slang",
+        "vulkan",
+    )
+    variants = ("debug", "release")
+    units = ("shaders/first.cgl", "shaders/second.cgl")
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "first.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (shader_dir / "second.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            source_roots = ["shaders"]
+            targets = [{", ".join(json.dumps(target) for target in targets)}]
+            output_dir = "translated"
+
+            [project.variants.debug]
+            MODE = "debug"
+
+            [project.variants.release]
+            MODE = "release"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    def complete_row(expected_count):
+        return {
+            "expectedArtifactCount": expected_count,
+            "emittedArtifactCount": expected_count,
+            "translatedCount": expected_count,
+            "failedCount": 0,
+            "missingArtifactCount": 0,
+            "extraArtifactCount": 0,
+            "complete": True,
+        }
+
+    def expected_path(source, target, variant):
+        extension = project_pipeline._artifact_target_extension(target)
+        return (
+            Path("translated")
+            .joinpath(target, variant, Path(source).with_suffix(extension))
+            .as_posix()
+        )
+
+    expected_artifacts = {
+        (source, target, variant, expected_path(source, target, variant))
+        for source in units
+        for target in targets
+        for variant in variants
+    }
+
+    assert validation["success"] is True
+    assert payload["summary"]["artifactCount"] == 36
+    assert payload["summary"]["translatedCount"] == 36
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["artifactMatrix"] == {
+        "unitCount": 2,
+        "targetCount": 9,
+        "variantCount": 2,
+        "variantMode": "named",
+        "expectedArtifactCount": 36,
+        "emittedArtifactCount": 36,
+        "translatedCount": 36,
+        "failedCount": 0,
+        "identityCoverageAvailable": True,
+        "missingArtifactCount": 0,
+        "extraArtifactCount": 0,
+        "complete": True,
+        "statusByTarget": {
+            target: complete_row(len(units) * len(variants)) for target in targets
+        },
+        "statusByVariant": {
+            variant: complete_row(len(units) * len(targets)) for variant in variants
+        },
+    }
+    assert {
+        (
+            artifact["source"],
+            artifact["target"],
+            artifact["variant"],
+            artifact["path"],
+        )
+        for artifact in payload["artifacts"]
+    } == expected_artifacts
+    assert all(
+        (repo / artifact_path).is_file() for *_, artifact_path in expected_artifacts
+    )
+
+
 def test_validate_project_report_rejects_artifacts_with_undeclared_variants(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
