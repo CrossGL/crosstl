@@ -456,10 +456,29 @@ def test_high_index_vertex_stream_semantics_codegen_matches_hlsl_mesh_layouts():
     cgl_translator.parse(generated_code)
 
 
-def test_uppercase_passthrough_hlsl_system_semantics_codegen_canonicalizes_names():
+def test_common_hlsl_system_semantics_codegen_maps_to_crossgl_builtins_case_insensitive():
     code = """
+    [shader("vertex")]
+    float4 vertexMain(uint vertexId : SV_VERTEXID,
+                      uint instanceId : sv_instanceid) : SV_Position
+    {
+        return float4(0.0);
+    }
+
+    [shader("fragment")]
+    float4 fragmentMain(bool frontFace : SV_ISFRONTFACE,
+                        uint sampleIndex : sv_sampleindex,
+                        uint coverage : SV_COVERAGE,
+                        uint primitiveId : SV_PRIMITIVEID) : SV_Target0
+    {
+        return float4(1.0);
+    }
+
     [shader("compute")]
-    void main(uint3 tid : SV_DISPATCHTHREADID, uint gid : SV_GROUPINDEX)
+    void computeMain(uint3 dispatchId : SV_DISPATCHTHREADID,
+                     uint3 groupThreadId : sv_groupthreadid,
+                     uint3 groupId : Sv_GroupId,
+                     uint groupIndex : SV_GROUPINDEX)
     {
         return;
     }
@@ -469,9 +488,25 @@ def test_uppercase_passthrough_hlsl_system_semantics_codegen_canonicalizes_names
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "uvec3 tid @ SV_DispatchThreadID" in generated_code
-    assert "uint gid @ SV_GroupIndex" in generated_code
+    assert "uint vertexId @ gl_VertexID" in generated_code
+    assert "uint instanceId @ gl_InstanceID" in generated_code
+    assert "bool frontFace @ gl_FrontFacing" in generated_code
+    assert "uint sampleIndex @ gl_SampleID" in generated_code
+    assert "uint coverage @ gl_SampleMask" in generated_code
+    assert "uint primitiveId @ gl_PrimitiveID" in generated_code
+    assert "uvec3 dispatchId @ gl_GlobalInvocationID" in generated_code
+    assert "uvec3 groupThreadId @ gl_LocalInvocationID" in generated_code
+    assert "uvec3 groupId @ gl_WorkGroupID" in generated_code
+    assert "uint groupIndex @ gl_LocalInvocationIndex" in generated_code
+    assert "@ SV_VERTEXID" not in generated_code
+    assert "@ sv_instanceid" not in generated_code
+    assert "@ SV_ISFRONTFACE" not in generated_code
+    assert "@ sv_sampleindex" not in generated_code
+    assert "@ SV_COVERAGE" not in generated_code
+    assert "@ SV_PRIMITIVEID" not in generated_code
     assert "@ SV_DISPATCHTHREADID" not in generated_code
+    assert "@ sv_groupthreadid" not in generated_code
+    assert "@ Sv_GroupId" not in generated_code
     assert "@ SV_GROUPINDEX" not in generated_code
     cgl_translator.parse(generated_code)
 
@@ -1359,7 +1394,7 @@ def test_top_level_attribute_list_before_shader_function_codegen():
             "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;"
             in generated_code
         )
-        assert "void main(uvec3 tid @ SV_DispatchThreadID)" in generated_code
+        assert "void main(uvec3 tid @ gl_GlobalInvocationID)" in generated_code
         assert "return;" in generated_code
     except SyntaxError:
         pytest.fail(
@@ -1385,7 +1420,7 @@ def test_attribute_list_after_shader_function_codegen():
             "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;"
             in generated_code
         )
-        assert "void main(uvec3 tid @ SV_DispatchThreadID)" in generated_code
+        assert "void main(uvec3 tid @ gl_GlobalInvocationID)" in generated_code
         assert "return;" in generated_code
     except SyntaxError:
         pytest.fail(
@@ -1428,7 +1463,7 @@ def test_modern_slang_compute_attributes_codegen():
         "layout(local_size_x = 4, local_size_y = 2, local_size_z = 1) in;"
         in generated_code
     )
-    assert "void main(uvec3 tid @ SV_DispatchThreadID)" in generated_code
+    assert "void main(uvec3 tid @ gl_GlobalInvocationID)" in generated_code
 
 
 def test_generic_resource_global_codegen():
@@ -2808,7 +2843,7 @@ def test_generic_struct_member_and_uniform_parameter_codegen_from_official_sampl
         in generated_code
     )
     assert "StructuredBuffer<float4> lookupTable;" in generated_code
-    assert "uvec3 threadID @ SV_DispatchThreadID" in generated_code
+    assert "uvec3 threadID @ gl_GlobalInvocationID" in generated_code
     assert "sampler2D inputImage" in generated_code
     assert "image2D outputImage" in generated_code
     assert "ImageProcessingOptions options" in generated_code

@@ -1046,12 +1046,16 @@ def test_external_hip_kittens_fast_exp_vector_codegen_reparse():
 
 def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
     # HIP math API documents CUDA-compatible single-precision intrinsics such
-    # as __fdividef and __saturatef.
+    # as __fdividef, rounded arithmetic aliases, and __saturatef.
     source = """
-    __device__ float normalized_weight(float weight, float normalizer) {
+    __device__ float normalized_weight(float weight, float normalizer, float bias) {
         float scaled = __fdividef(weight, normalizer);
         float rounded = __fdiv_rn(weight, normalizer);
-        return __saturatef(scaled + rounded);
+        float adjusted = __fadd_rd(scaled, bias);
+        float centered = __fsub_rz(adjusted, rounded);
+        float product = __fmul_ru(centered, __fadd_rn(weight, bias));
+        float reciprocal = __frcp_rn(__fadd_rz(normalizer, 1.0f));
+        return __saturatef(__fmul_rn(product, reciprocal));
     }
     """
 
@@ -1060,11 +1064,30 @@ def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
 
     assert body[0].value.name == "__fdividef"
     assert body[1].value.name == "__fdiv_rn"
-    assert body[2].value.name == "__saturatef"
+    assert body[2].value.name == "__fadd_rd"
+    assert body[3].value.name == "__fsub_rz"
+    assert body[4].value.name == "__fmul_ru"
+    assert body[5].value.name == "__frcp_rn"
+    assert body[6].value.name == "__saturatef"
     assert "var scaled: f32 = (weight / normalizer);" in crossgl
     assert "var rounded: f32 = (weight / normalizer);" in crossgl
-    assert "return clamp((scaled + rounded), 0.0f, 1.0f);" in crossgl
-    for raw_name in ("__fdividef", "__fdiv_rn", "__saturatef"):
+    assert "var adjusted: f32 = (scaled + bias);" in crossgl
+    assert "var centered: f32 = (adjusted - rounded);" in crossgl
+    assert "var product: f32 = (centered * (weight + bias));" in crossgl
+    assert "var reciprocal: f32 = (1.0f / (normalizer + 1.0f));" in crossgl
+    assert "return clamp((product * reciprocal), 0.0f, 1.0f);" in crossgl
+    for raw_name in (
+        "__fdividef",
+        "__fdiv_rn",
+        "__fadd_rd",
+        "__fadd_rn",
+        "__fadd_rz",
+        "__fsub_rz",
+        "__fmul_ru",
+        "__fmul_rn",
+        "__frcp_rn",
+        "__saturatef",
+    ):
         assert raw_name not in crossgl
 
 

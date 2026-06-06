@@ -3995,6 +3995,14 @@ class RustToCrossGLConverter:
             return f"{method_name}({obj}, {args[0]})"
 
         if (
+            method_name == "dot_into_vec"
+            and len(args) == 1
+            and mapped_receiver_type in self.VECTOR_COMPONENT_COUNTS
+            and mapped_receiver_type.startswith("vec")
+        ):
+            return f"{mapped_receiver_type}(dot({obj}, {args[0]}))"
+
+        if (
             method_name == "distance"
             and len(args) == 1
             and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS

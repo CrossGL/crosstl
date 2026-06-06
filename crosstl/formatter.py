@@ -68,6 +68,14 @@ class CodeFormatter:
             ".geometry",
             ".tese",
             ".tesc",
+            ".mesh",
+            ".task",
+            ".rgen",
+            ".rint",
+            ".rahit",
+            ".rchit",
+            ".rmiss",
+            ".rcall",
         ]:
             return ShaderLanguage.GLSL
         elif ext in [".metal", ".msl"]:

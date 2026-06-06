@@ -48,6 +48,14 @@ class TestCodeFormatter:
         assert formatter.detect_language("shader.compute") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.gsh") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.geometry") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.mesh") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.task") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.rgen") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.rint") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.rahit") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.rchit") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.rmiss") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.rcall") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.metal") == ShaderLanguage.METAL
         assert formatter.detect_language("shader.msl") == ShaderLanguage.METAL
         assert formatter.detect_language("shader.spvasm") == ShaderLanguage.SPIRV

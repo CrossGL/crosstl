@@ -166,6 +166,23 @@ def test_codegen_attribute_mapping():
     assert re.search(r"gl_VertexID", result)
 
 
+def test_codegen_fragment_front_facing_attribute_uses_parseable_crossgl_builtin():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment float4 fragment_main(bool isFrontFace [[front_facing]]) {
+        return isFrontFace ? float4(1.0) : float4(0.0);
+    }
+    """
+    result = convert(code)
+
+    assert "bool isFrontFace @gl_FrontFacing" in result
+    assert "@gl_IsFrontFace" not in result
+    assert "@front_facing" not in result
+    assert parse_crossgl(result) is not None
+
+
 def test_codegen_type_mapping_vectors_and_matrices():
     code = """
     #include <metal_stdlib>
