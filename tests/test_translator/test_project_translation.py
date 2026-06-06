@@ -4327,6 +4327,35 @@ def test_validate_project_report_rejects_invalid_project_config_paths(tmp_path):
         assert expected_message in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_unexpected_generated_metadata_fields(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = translate_project(load_project_config(repo)).to_json()
+    payload["generator"]["unexpected"] = "metadata"
+    payload["project"]["unexpected"] = "metadata"
+    report_path = repo / "unexpected-generated-metadata-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "generator.unexpected is not allowed" in diagnostic["message"]
+    assert "project.unexpected is not allowed" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_empty_project_mapping_keys(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

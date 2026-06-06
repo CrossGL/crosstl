@@ -28,6 +28,35 @@ REPORT_KIND = "crosstl-project-portability-report"
 REPORT_INSPECTION_KIND = "crosstl-project-report-inspection"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
+REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
+REPORT_PROJECT_FIELDS = frozenset(
+    (
+        "root",
+        "config",
+        "sourceRoots",
+        "sourceRootCount",
+        "sourceRootStatus",
+        "sourceRootStatusCounts",
+        "includePatterns",
+        "includePatternCount",
+        "excludePatterns",
+        "excludePatternCount",
+        "targets",
+        "outputDir",
+        "sourceOverrides",
+        "sourceOverrideCount",
+        "includeDirs",
+        "includeDirCount",
+        "includeDirStatus",
+        "includeDirStatusCounts",
+        "defines",
+        "defineCount",
+        "variants",
+        "variantCount",
+        "variantDefineCounts",
+        "externalCorpusManifest",
+    )
+)
 SOURCE_MAP_SPAN_FIELDS = (
     "file",
     "line",
@@ -7177,7 +7206,11 @@ def _optional_project_field(
 def _project_metadata_contract_reasons(
     project: Mapping[str, Any], *, require_full_metadata: bool
 ) -> list[str]:
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons("project", project, REPORT_PROJECT_FIELDS)
+        if require_full_metadata
+        else []
+    )
     if _optional_project_field(project, "config", required=require_full_metadata):
         config_path = project.get("config")
         if config_path is not None and not isinstance(config_path, str):
@@ -7361,7 +7394,13 @@ def _generator_contract_reasons(
     if not isinstance(generator, Mapping):
         return ["generator must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            "generator", generator, REPORT_GENERATOR_FIELDS
+        )
+        if require_generator
+        else []
+    )
     if not _is_non_empty_string(generator.get("name")):
         reasons.append("generator.name must be a string")
     if generator.get("pipeline") != REPORT_GENERATOR_PIPELINE:
