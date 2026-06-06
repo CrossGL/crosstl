@@ -3978,6 +3978,19 @@ class RustToCrossGLConverter:
         if method_name == "normalize" and not args:
             return f"normalize({obj})"
 
+        mapped_receiver_type = self.map_type(receiver_type)
+        if (
+            method_name == "normalize_or_zero"
+            and not args
+            and mapped_receiver_type in self.VECTOR_COMPONENT_COUNTS
+            and mapped_receiver_type.startswith("vec")
+        ):
+            zero, _ = self.vector_zero_one_literals(mapped_receiver_type)
+            return (
+                f"((length({obj}) > 0.0) ? normalize({obj}) : "
+                f"{mapped_receiver_type}({zero}))"
+            )
+
         if method_name in {"dot", "cross"} and len(args) == 1:
             return f"{method_name}({obj}, {args[0]})"
 

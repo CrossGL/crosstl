@@ -1598,6 +1598,37 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_NON_32BIT_INTEGER_IMAGE_FAMILY_ASSEMBLY = """
+; Reduced from SPIR-V explicit integer-width image declarations.
+; Preserved i16/u16 sampled types should still select signed integer resources.
+OpCapability Shader
+OpCapability Int16
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpName %short_tex "shortTex"
+OpName %signed_storage "signedStorage"
+OpDecorate %short_tex DescriptorSet 0
+OpDecorate %short_tex Binding 0
+OpDecorate %signed_storage DescriptorSet 0
+OpDecorate %signed_storage Binding 1
+OpDecorate %signed_storage NonReadable
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%short = OpTypeInt 16 1
+%ushort = OpTypeInt 16 0
+%sampled_image = OpTypeImage %ushort 2D 0 0 0 1 Unknown
+%combined = OpTypeSampledImage %sampled_image
+%storage_image = OpTypeImage %short 2D 0 0 0 2 R16i
+%ptr_sampled = OpTypePointer UniformConstant %combined
+%ptr_storage = OpTypePointer UniformConstant %storage_image
+%short_tex = OpVariable %ptr_sampled UniformConstant
+%signed_storage = OpVariable %ptr_storage UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_SAMPLED_IMAGE_FETCH_ASSEMBLY = """
 ; Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
 ; Test/baseResults/web.separate.frag.out OpSampledImage and
@@ -4266,6 +4297,22 @@ def test_spirv_assembly_storage_image_format_codegen():
         in generated_code
     )
     assert "%storage_image" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_non_32bit_integer_images_preserve_resource_family_codegen_reparse():
+    tokens = tokenize_code(SPIRV_NON_32BIT_INTEGER_IMAGE_FAMILY_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "usampler2D shortTex @set(0) @binding(0);" in generated_code
+    assert (
+        "RWTexture2D<int> signedStorage @set(0) @binding(1) @r16i @writeonly;"
+        in generated_code
+    )
+    assert "Texture2D shortTex" not in generated_code
+    assert "RWTexture2D signedStorage" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

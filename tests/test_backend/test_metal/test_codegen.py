@@ -1727,6 +1727,35 @@ def test_codegen_color_attribute_with_format():
     assert "gl_FragColor" in result
 
 
+@pytest.mark.parametrize("depth_mode", ["less", "greater"])
+def test_codegen_fragment_output_attributes_canonicalize_high_mrt_and_depth_modes(
+    depth_mode,
+):
+    code = f"""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Out {{
+        float4 color [[color(7, rgba16float)]];
+        float depth [[depth({depth_mode})]];
+    }};
+
+    fragment Out fragment_main() {{
+        Out out;
+        out.color = float4(1.0, 0.0, 0.0, 1.0);
+        out.depth = 0.5;
+        return out;
+    }}
+    """
+    result = convert(code)
+
+    assert "vec4 color @gl_FragColor7;" in result
+    assert "float depth @gl_FragDepth;" in result
+    assert "@color(7" not in result
+    assert f"@depth({depth_mode})" not in result
+    assert parse_crossgl(result) is not None
+
+
 def test_codegen_texture_read_write_and_compare():
     code = """
     #include <metal_stdlib>

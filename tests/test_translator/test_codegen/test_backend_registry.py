@@ -225,6 +225,26 @@ def test_source_registry_known_unsupported_extensions_raise_clear_diagnostic(
         SOURCE_REGISTRY.get_by_extension(f"shader{extension}")
 
 
+@pytest.mark.parametrize(
+    ("filename", "message"),
+    (
+        ("shader.wgsl.json", WGSL_SOURCE_UNSUPPORTED_MESSAGE),
+        ("shader.spv.json", BINARY_SPIRV_UNSUPPORTED_MESSAGE),
+        ("shader.metallib.json", METAL_BINARY_UNSUPPORTED_MESSAGE),
+        ("shader.dxil.json", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
+        ("shader.fatbin.json", CUDA_ARTIFACT_UNSUPPORTED_MESSAGE),
+        ("shader.hsaco.json", HIP_ARTIFACT_UNSUPPORTED_MESSAGE),
+    ),
+)
+def test_source_registry_compound_artifact_extensions_raise_clear_diagnostic(
+    filename, message
+):
+    register_default_sources()
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        SOURCE_REGISTRY.get_by_extension(filename)
+
+
 @pytest.mark.parametrize("extension", (".metal", ".msl"))
 def test_source_registry_recognizes_metal_real_world_extensions(extension):
     register_default_sources()

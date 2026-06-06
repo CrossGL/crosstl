@@ -1348,6 +1348,21 @@ def test_rust_gpu_glam_length_recip_method_codegen_reparse():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_glam_normalize_or_zero_method_codegen_reparse():
+    # glam exposes a zero-safe normalization method used in shader vector math.
+    code = """
+    fn safe_normal(normal: Vec3<f32>) -> Vec3<f32> {
+        normal.normalize_or_zero()
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "return ((length(normal) > 0.0) ? normalize(normal) : vec3(0.0));" in result
+    assert ".normalize_or_zero(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_reduce_shader_inferred_cast_target_codegen():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

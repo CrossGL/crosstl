@@ -4778,13 +4778,21 @@ class VulkanParser:
         if base_name is None:
             return None
 
+        sampled_family = self.spirv_image_sampled_type_family(sampled_type)
         if sampled == "2":
-            prefix = {"int": "i", "uint": "u"}.get(sampled_type, "")
+            prefix = {"int": "i", "uint": "u"}.get(sampled_family, "")
             return f"{prefix}image{base_name}"
 
-        prefix = {"int": "i", "uint": "u"}.get(sampled_type, "")
+        prefix = {"int": "i", "uint": "u"}.get(sampled_family, "")
         suffix = "Shadow" if depth == "1" and not prefix else ""
         return f"{prefix}sampler{base_name}{suffix}"
+
+    def spirv_image_sampled_type_family(self, sampled_type):
+        if sampled_type in {"int", "i8", "i16", "i64"}:
+            return "int"
+        if sampled_type in {"uint", "u8", "u16", "u64"}:
+            return "uint"
+        return sampled_type
 
     def spirv_image_base_type_name(self, dim, arrayed, multisampled):
         if dim == "Buffer":
