@@ -3010,9 +3010,10 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
     assert source_map["target"] == "cgl"
     assert source_map["source"]["file"] == "simple.cgl"
     assert source_map["generated"]["file"] == "out/cgl/simple.cgl"
-    generated_text = (repo / artifact["path"]).read_text(encoding="utf-8")
-    assert source_map["source"]["length"] == len(SIMPLE_CROSSL)
-    assert source_map["generated"]["length"] == len(generated_text)
+    assert source_map["source"]["length"] == len((repo / "simple.cgl").read_bytes())
+    assert source_map["generated"]["length"] == len(
+        (repo / artifact["path"]).read_bytes()
+    )
     assert source_map["mappings"] == [
         {
             "source": source_map["source"],
@@ -3052,8 +3053,9 @@ def test_file_level_source_map_spans_use_utf8_byte_offsets(tmp_path):
     span = project_pipeline._file_span(source_path, "simple.cgl").to_json()
 
     assert span["file"] == "simple.cgl"
-    assert span["length"] == len(source_text.encode("utf-8"))
-    assert span["endOffset"] == len(source_text.encode("utf-8"))
+    source_bytes = source_path.read_bytes()
+    assert span["length"] == len(source_bytes)
+    assert span["endOffset"] == len(source_bytes)
     assert span["endOffset"] > len(source_text)
 
 
