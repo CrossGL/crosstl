@@ -18762,6 +18762,64 @@ def test_vector_min_max_builtins_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr + "\n\n" + generated_code
 
 
+def _vector_clamp_builtin_source():
+    return """
+    vec3 clampBounds(vec3 color, vec3 floorValue, vec3 ceilingValue) {
+        vec3 shaped = clamp(color, floorValue, ceilingValue);
+        return clamp(shaped, 0.0, 1.0);
+    }
+    """
+
+
+def test_vector_clamp_builtin_emits_vector_bound_overloads():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_vector_clamp_builtin_source()))
+    )
+
+    assert (
+        "fn clamp(value: SIMD[DType.float32, 4], "
+        "min_value: SIMD[DType.float32, 4], "
+        "max_value: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn clamp(value: SIMD[DType.float32, 4], min_value: Float32, "
+        "max_value: Float32) -> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "var shaped: SIMD[DType.float32, 4] = "
+        "clamp(color, floorValue, ceilingValue)" in generated_code
+    )
+    assert "return clamp(shaped, Float32(0.0), Float32(1.0))" in generated_code
+
+
+def test_vector_clamp_vector_bounds_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_vector_clamp_builtin_source()))
+    )
+    generated_code += """
+fn main():
+    var color = SIMD[DType.float32, 4]((-1.0), 0.5, 3.0, 0.0)
+    var floorValue = SIMD[DType.float32, 4](0.0, 0.25, 0.0, 0.0)
+    var ceilingValue = SIMD[DType.float32, 4](1.0, 0.75, 2.0, 0.0)
+    print(clampBounds(color, floorValue, ceilingValue))
+"""
+
+    source_path = tmp_path / "vector_clamp_vector_bounds.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr + "\n\n" + generated_code
+    assert "[0.0, 0.5, 1.0, 0.0]" in result.stdout
+
+
 def test_round_even_builtin_lowers_to_mojo_helper():
     code = """
     shader NumericGuards {

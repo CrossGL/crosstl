@@ -8016,6 +8016,8 @@ class SlangCodeGen:
 
     def vector_component_type(self, type_name):
         mapped_type = self.convert_type(type_name)
+        if not isinstance(mapped_type, str):
+            return None
         if mapped_type.startswith("double"):
             return "double"
         if mapped_type.startswith("half"):

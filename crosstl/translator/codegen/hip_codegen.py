@@ -179,6 +179,20 @@ HIP_UNSUPPORTED_FP16_VECTOR_TYPES = {
     "half4",
 }
 
+HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES = {
+    "uint",
+    "i8",
+    "u8",
+    "i16",
+    "u16",
+    "i32",
+    "u32",
+    "i64",
+    "u64",
+    "f32",
+    "f64",
+}
+
 
 class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
     """Emit HIP source from the shared CrossGL translator AST."""
@@ -3715,10 +3729,27 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if half_constructor is not None:
             return half_constructor
 
+        scalar_alias_constructor = self.hip_scalar_alias_constructor_expression(
+            constructor_type, rendered_args
+        )
+        if scalar_alias_constructor is not None:
+            return scalar_alias_constructor
+
         mapped_type = self.map_type(constructor_type) if constructor_type else ""
         if not mapped_type:
             return "{" + ", ".join(rendered_args) + "}"
         return f"{mapped_type}{{{', '.join(rendered_args)}}}"
+
+    def hip_scalar_alias_constructor_expression(self, constructor_type, args):
+        """Lower shader scalar aliases to valid HIP/C++ casts."""
+        if constructor_type not in HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES:
+            return None
+        if len(args) > 1:
+            return None
+
+        mapped_type = self.map_type(constructor_type)
+        value = args[0] if args else "0"
+        return f"static_cast<{mapped_type}>({value})"
 
     def hip_half_constructor_expression(self, constructor_type, raw_args, args):
         """Lower CrossGL FP16 constructors to HIP's documented half intrinsics."""
@@ -3813,6 +3844,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return self.generate_mesh_task_call_expression(func_name, raw_args, args)
 
         is_user_function = self.is_user_defined_function(func_name)
+        if not is_user_function:
+            scalar_alias_constructor = self.hip_scalar_alias_constructor_expression(
+                func_name, args
+            )
+            if scalar_alias_constructor is not None:
+                return scalar_alias_constructor
         if not is_user_function:
             warp_sync_builtin_call = self.generate_warp_sync_builtin_call(
                 func_name, raw_args, args
@@ -9148,14 +9185,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             func_name = getattr(function_expr, "name", function_expr)
             if self.is_user_defined_function(func_name):
                 return self.function_return_types.get(func_name)
+            raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
+            if func_name in HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES and len(raw_args) <= 1:
+                return func_name
             if func_name in HIP_WAVE_OP_ARITIES:
                 return self.wave_result_type(
                     func_name,
-                    getattr(node, "arguments", getattr(node, "args", [])) or [],
+                    raw_args,
                 )
             if func_name == "ReportHit":
                 return "bool"
-            raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
             if (
                 func_name in {"inverseSqrt", "rsqrt"}
                 and raw_args
@@ -9209,9 +9248,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if member_type is not None:
                 return member_type
         if isinstance(node, ConstructorNode):
-            return infer_enum_constructor_type(
-                self, node
-            ) or infer_struct_constructor_type(self, node)
+            constructor_type = self.type_name_string(
+                getattr(node, "constructor_type", getattr(node, "vtype", None))
+            )
+            return (
+                infer_enum_constructor_type(self, node)
+                or infer_struct_constructor_type(self, node)
+                or (
+                    constructor_type
+                    if constructor_type in HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES
+                    else None
+                )
+            )
         if isinstance(node, MatchNode):
             return infer_match_expression_result_type(self, node)
         return super().expression_result_type(node)
