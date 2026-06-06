@@ -2322,6 +2322,31 @@ def test_parse_typename_qualified_threadgroup_type_from_mlx_gemv():
     assert variable.qualifiers == ["threadgroup"]
 
 
+def test_parse_multi_declarator_struct_members_from_cxx_msl_headers():
+    code = """
+    struct KernelParams {
+        float scale = 1.0, bias = 0.0;
+        uint2 extent, stride;
+        device float* values, fallback;
+    };
+    """
+    ast = parse_ok(code)
+    members = ast.structs[0].members
+
+    assert [(member.vtype, member.name) for member in members] == [
+        ("float", "scale"),
+        ("float", "bias"),
+        ("uint2", "extent"),
+        ("uint2", "stride"),
+        ("float*", "values"),
+        ("float", "fallback"),
+    ]
+    assert members[0].default_value == "1.0"
+    assert members[1].default_value == "0.0"
+    assert members[4].qualifiers == ["device"]
+    assert members[5].qualifiers == ["device"]
+
+
 def test_parse_union_declaration_from_mlx_random():
     code = """
     union rbits {

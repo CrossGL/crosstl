@@ -1347,6 +1347,26 @@ def test_codegen_template_style_vector_matrix_types_and_constructors():
     parse_crossgl(output)
 
 
+def test_codegen_template_style_64_bit_integer_vectors_preserve_width():
+    hlsl = textwrap.dedent("""
+        vector<uint64_t, 4> MakeOffsets(vector<int64_t, 2> delta) {
+            vector<uint64_t, 4> offsets = vector<uint64_t, 4>(1ull, 2ull, 3ull, 4ull);
+            return offsets;
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "uint64_t4 MakeOffsets(int64_t2 delta)" in output
+    assert "uint64_t4 offsets = uint64_t4(1, 2, 3, 4);" in output
+    assert "vec4" not in output
+    assert "ivec2" not in output
+
+    hlsl_roundtrip = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+    assert "uint64_t4 MakeOffsets(int64_t2 delta)" in hlsl_roundtrip
+    assert "uint64_t4 offsets = uint64_t4(1, 2, 3, 4);" in hlsl_roundtrip
+
+
 def test_codegen_signedness_prefixed_int1_aliases_from_microsoft_docs_reparse():
     # Sources: Microsoft Learn HLSL vector and scalar type docs.
     # URLs:

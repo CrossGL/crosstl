@@ -82,9 +82,30 @@ class HipToCrossGLConverter:
         "ulonglong3": "vec3<u64>",
         "ulonglong4": "vec4<u64>",
     }
+    VECTOR1_TYPE_MAPPING = {
+        "char1": "i8",
+        "uchar1": "u8",
+        "short1": "i16",
+        "ushort1": "u16",
+        "int1": "i32",
+        "uint1": "u32",
+        "long1": "i64",
+        "ulong1": "u64",
+        "longlong1": "i64",
+        "ulonglong1": "u64",
+        "float1": "f32",
+        "double1": "f64",
+    }
     VECTOR_CONSTRUCTOR_MAPPING = {
+        **VECTOR1_TYPE_MAPPING,
         **VECTOR_TYPE_MAPPING,
-        **{f"make_{name}": mapped for name, mapped in VECTOR_TYPE_MAPPING.items()},
+        **{
+            f"make_{name}": mapped
+            for name, mapped in {
+                **VECTOR1_TYPE_MAPPING,
+                **VECTOR_TYPE_MAPPING,
+            }.items()
+        },
     }
     HIP_TEXTURE_TYPE_MAPPING = {
         "1": "sampler1D",
@@ -245,6 +266,7 @@ class HipToCrossGLConverter:
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
+        self.vector1_name_scopes = [{}]
         self.user_function_names = set()
         self.global_resource_object_type_hints = {}
         self.resource_object_hint_scopes = []
@@ -266,6 +288,7 @@ class HipToCrossGLConverter:
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
+        self.vector1_name_scopes = [{}]
         self.user_function_names = self.collect_user_function_names(ast_node)
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
@@ -538,6 +561,7 @@ class HipToCrossGLConverter:
 
     def push_variable_type_scope(self):
         self.variable_type_scopes.append({})
+        self.push_vector1_name_scope()
         self.device_property_source_scopes.append({})
         self.device_attribute_source_scopes.append({})
         self.device_query_source_scopes.append({})
@@ -546,6 +570,7 @@ class HipToCrossGLConverter:
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
             self.variable_type_scopes.pop()
+        self.pop_vector1_name_scope()
         if len(self.device_property_source_scopes) > 1:
             self.device_property_source_scopes.pop()
         if len(self.device_attribute_source_scopes) > 1:
@@ -571,6 +596,36 @@ class HipToCrossGLConverter:
             if name in scope:
                 return scope[name]
         return None
+
+    def push_vector1_name_scope(self):
+        self.vector1_name_scopes.append({})
+
+    def pop_vector1_name_scope(self):
+        if len(self.vector1_name_scopes) > 1:
+            self.vector1_name_scopes.pop()
+
+    def register_vector1_name(self, name, type_name):
+        if not name:
+            return
+        if not self.vector1_name_scopes:
+            self.vector1_name_scopes.append({})
+        self.vector1_name_scopes[-1][name] = (
+            self.hip_vector1_scalar_type(type_name) is not None
+        )
+
+    def is_vector1_name(self, name):
+        if not isinstance(name, str):
+            return False
+        for scope in reversed(self.vector1_name_scopes):
+            if name in scope:
+                return scope[name]
+        return False
+
+    def hip_vector1_scalar_type(self, type_name):
+        type_name = self.strip_type_qualifiers(type_name)
+        if "*" in type_name or self.has_array_suffix(type_name):
+            return None
+        return self.VECTOR1_TYPE_MAPPING.get(type_name)
 
     def register_device_property_source(self, name, device_id):
         if not name or device_id is None:
@@ -4042,6 +4097,7 @@ class HipToCrossGLConverter:
             var_type = self.convert_hip_variable_type_to_crossgl(
                 getattr(stmt, "vtype", "int"), stmt.name
             )
+            self.register_vector1_name(stmt.name, getattr(stmt, "vtype", "int"))
             self.register_variable_type(stmt.name, var_type)
             if hasattr(stmt, "value") and stmt.value:
                 value = self.visit(stmt.value)
@@ -4140,6 +4196,7 @@ class HipToCrossGLConverter:
                         raw_type, param_name
                     )
                     output_name = self.register_identifier_name(param_name)
+                    self.register_vector1_name(param_name, raw_type)
                     self.register_variable_type(param_name, param_type)
                     params.append(f"{param_type} {output_name}")
 
@@ -4224,6 +4281,7 @@ class HipToCrossGLConverter:
                             raw_type, param_name
                         )
                         output_name = self.register_identifier_name(param_name)
+                        self.register_vector1_name(param_name, raw_type)
                         self.register_variable_type(param_name, param_type)
                         params.append(f"{param_type} {output_name}")
 
@@ -4327,6 +4385,7 @@ class HipToCrossGLConverter:
         )
         qualifiers = set(getattr(node, "qualifiers", []) or [])
 
+        self.register_vector1_name(raw_name, getattr(node, "vtype", "int"))
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(raw_name, getattr(node, "vtype", "int"))
         self.register_variable_type(raw_name, var_type)
@@ -5839,6 +5898,8 @@ class HipToCrossGLConverter:
 
         obj = self.visit(node.object)
         operator = "->" if getattr(node, "is_pointer", False) else "."
+        if node.member == "x" and operator == "." and self.is_vector1_name(node.object):
+            return obj
         return f"{obj}{operator}{node.member}"
 
     def format_hip_device_property_member_read(self, node):
@@ -6319,6 +6380,7 @@ class HipToCrossGLConverter:
             "hipTextureObject_t": "sampler",
             "hipSurfaceObject_t": "image2D",
             # HIP vector types
+            **self.VECTOR1_TYPE_MAPPING,
             **self.VECTOR_TYPE_MAPPING,
             "dim3": "vec3<u32>",
         }

@@ -1261,12 +1261,17 @@ def test_parse_glslang_invariant_builtin_list_fixture():
     )
 
     ast = parse_glsl(fixture.code, fixture.shader_type)
+    attribute = next(var for var in ast.io_variables if var.name == "attv4")
     redeclarations = [
         var
         for var in ast.global_variables
         if var.name in {"gl_Position", "gl_PointSize"}
     ]
 
+    assert attribute.vtype == "vec4"
+    assert attribute.qualifiers == ["attribute"]
+    assert attribute.io_type == "IN"
+    assert not any(var.name == "attv4" for var in ast.global_variables)
     assert [var.name for var in redeclarations] == ["gl_Position", "gl_PointSize"]
     assert [var.vtype for var in redeclarations] == ["", ""]
     assert [var.qualifiers for var in redeclarations] == [
@@ -1743,6 +1748,12 @@ def test_codegen_glslang_invariant_builtin_list_fixture_snippet():
 
     crossgl = generate_crossgl(fixture.code, fixture.shader_type)
 
+    assert "struct VertexInput" in crossgl
+    assert "vec4 attv4;" in crossgl
+    assert "VertexOutput main(VertexInput input)" in crossgl
+    assert "vec4 attv4;\n\n    vertex" not in crossgl
+    assert "output.centTexCoord = input.attv4.xy;" in crossgl
+    assert "output.gl_Position = input.attv4;" in crossgl
     assert "vec4 gl_Position @invariant @ gl_Position;" in crossgl
     assert "float gl_PointSize @invariant @ gl_PointSize;" in crossgl
     assert " gl_Position @invariant;" not in crossgl

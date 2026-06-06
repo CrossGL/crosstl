@@ -291,6 +291,38 @@ def test_external_rocm_convolution_std_array_template_extent_codegen():
     assert "fn convolution(" in crossgl
 
 
+def test_external_hip_one_component_vectors_codegen_reparse():
+    # HIP exposes CUDA-compatible one-component vector types through
+    # hip_vector_types.h; they should lower to scalar CrossGL values.
+    source = """
+    struct Pair {
+        float x;
+    };
+
+    float unpack(Pair pair, float1 packed) {
+        float1 local = make_float1(2.0f);
+        int1 count(3);
+        return pair.x + packed.x + local.x + count.x;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    function = ast.statements[1]
+
+    assert function.params[1]["type"] == "float1"
+    assert isinstance(function.body[0], VariableNode)
+    assert function.body[0].vtype == "float1"
+    assert isinstance(function.body[0].value, FunctionCallNode)
+    assert function.body[0].value.name == "make_float1"
+    assert "f32 unpack(Pair pair, f32 packed)" in crossgl
+    assert "var local: f32 = f32(2.0f);" in crossgl
+    assert "var count: i32 = i32(3);" in crossgl
+    assert "pair.x" in crossgl
+    assert "packed.x" not in crossgl
+    assert "local.x" not in crossgl
+    assert "count.x" not in crossgl
+
+
 def test_external_rocm_inline_assembly_kernel_codegen_reparse():
     source = """
     __global__ void matrix_transpose_kernel(float* out,

@@ -765,12 +765,12 @@ class GLSLParser:
                 global_variables.append(var)
 
     def is_io_qualifier_set(self, qualifiers):
-        return bool({"in", "out", "inout", "varying"} & set(qualifiers))
+        return bool({"in", "out", "inout", "attribute", "varying"} & set(qualifiers))
 
     def apply_variable_io_type(self, var, qualifiers):
         if "inout" in qualifiers:
             var.io_type = "INOUT"
-        elif "in" in qualifiers:
+        elif "in" in qualifiers or "attribute" in qualifiers:
             var.io_type = "IN"
         elif "out" in qualifiers:
             var.io_type = "OUT"
