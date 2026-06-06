@@ -6949,8 +6949,17 @@ def test_validate_project_report_rejects_stale_source_remap_sidecar(tmp_path):
     assert validation["validation"]["summary"]["failedCount"] == 1
     assert validation["diagnosticsByCode"] == {
         "project.validate.source-remap-hash-mismatch": 1,
+        "project.validate.source-remap-invalid": 1,
         "project.validate.source-remap-mismatch": 1,
     }
+    diagnostic = next(
+        diagnostic
+        for diagnostic in validation["diagnostics"]
+        if diagnostic["code"] == "project.validate.source-remap-invalid"
+    )
+    assert "$.schemaVersion must be 1" in diagnostic["message"]
+    assert "$.generatedFile must be a string" in diagnostic["message"]
+    assert "$.mappings must be a list" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_source_remap_content_mismatches(tmp_path):

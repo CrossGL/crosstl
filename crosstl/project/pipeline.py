@@ -3427,22 +3427,21 @@ def _source_remap_validation_diagnostics(
         )
         return diagnostics
 
-    if source_remap_hash_matches:
-        semantic_reasons = _compiler_source_remap_payload_reasons(remap_payload)
-        if semantic_reasons:
-            diagnostics.append(
-                ProjectDiagnostic(
-                    severity="error",
-                    code="project.validate.source-remap-invalid",
-                    message=(
-                        "Source remap sidecar is not compiler-compatible: "
-                        f"{source_remap['path']}: {'; '.join(semantic_reasons)}"
-                    ),
-                    location=SourceLocation(file=str(artifact["source"])),
-                    target=str(artifact["target"]),
-                    missing_capabilities=["source.provenance"],
-                )
+    semantic_reasons = _compiler_source_remap_payload_reasons(remap_payload)
+    if semantic_reasons:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.validate.source-remap-invalid",
+                message=(
+                    "Source remap sidecar is not compiler-compatible: "
+                    f"{source_remap['path']}: {'; '.join(semantic_reasons)}"
+                ),
+                location=SourceLocation(file=str(artifact["source"])),
+                target=str(artifact["target"]),
+                missing_capabilities=["source.provenance"],
             )
+        )
 
     source_map = artifact.get("sourceMap")
     if isinstance(source_map, Mapping):
