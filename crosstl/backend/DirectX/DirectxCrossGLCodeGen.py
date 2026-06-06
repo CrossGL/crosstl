@@ -3650,6 +3650,8 @@ class HLSLToCrossGLConverter:
         scalar = self.canonical_composite_type(scalar_type)
         if components == 1:
             return self.map_type(scalar)
+        if scalar in {"int64_t", "uint64_t"}:
+            return f"{scalar}{components}"
         prefixes = {
             "float": "vec",
             "half": "f16vec",

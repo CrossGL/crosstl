@@ -346,6 +346,7 @@ class MetalCodeGen:
         "acos",
         "asin",
         "atan",
+        "atan2",
         "ceil",
         "clamp",
         "cos",
@@ -7360,6 +7361,18 @@ class MetalCodeGen:
                     else "mix"
                 )
                 return f"{mix_name}({args})"
+            if (
+                func_name == "atan"
+                and len(expr.args) == 2
+                and func_name not in self.user_function_names
+            ):
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                atan2_name = (
+                    "metal::atan2"
+                    if self.metal_function_name_is_shadowed("atan2")
+                    else "atan2"
+                )
+                return f"{atan2_name}({args})"
             if (
                 func_name in {"inverseSqrt", "inversesqrt"}
                 and len(expr.args) == 1

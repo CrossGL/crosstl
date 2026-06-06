@@ -1827,7 +1827,6 @@ class MetalParser:
                 default_value = self.parse_expression()
             elif self.current_token[0] == "LBRACE":
                 default_value = self.parse_initializer_list()
-            self.eat("SEMICOLON")
             var_node = VariableNode(
                 member_type, var_name, qualifiers=qualifiers, attributes=attributes
             )
@@ -1836,6 +1835,48 @@ class MetalParser:
             var_node.alignas = member_alignas
             var_node.default_value = default_value
             members.append(var_node)
+            if self.current_token[0] == "COMMA":
+                members.extend(
+                    self.parse_remaining_struct_member_declarations(
+                        self.base_type_for_remaining_declarators(vtype),
+                        qualifiers,
+                        member_alignas,
+                    )
+                )
+                continue
+            self.eat("SEMICOLON")
+        return members
+
+    def parse_remaining_struct_member_declarations(
+        self, vtype, qualifiers, alignas_specs
+    ):
+        members = []
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+            member_type = self.apply_declarator_type_suffix(vtype, type_suffix)
+            attributes = self.parse_attributes()
+            array_sizes.extend(self.parse_declarator_array_sizes())
+            default_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_value = self.parse_expression()
+            elif self.current_token[0] == "LBRACE":
+                default_value = self.parse_initializer_list()
+
+            var_node = VariableNode(
+                member_type,
+                name,
+                qualifiers=list(qualifiers),
+                attributes=attributes,
+            )
+            var_node.array_sizes = array_sizes
+            self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
+            var_node.alignas = list(alignas_specs)
+            var_node.default_value = default_value
+            members.append(var_node)
+
+        self.eat("SEMICOLON")
         return members
 
     def is_nested_aggregate_declaration_start(self):

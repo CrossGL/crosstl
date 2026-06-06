@@ -425,6 +425,81 @@ def test_metal_user_defined_frac_and_lerp_functions_are_preserved():
     assert "mix(" not in generated_code
 
 
+def test_metal_two_argument_atan_lowers_to_msl_atan2():
+    shader = """
+    shader MetalAtan2 {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float angle = atan(float(tid.y), float(tid.x));
+                float slope = atan(float(tid.y));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert (
+        "__attribute__((unused)) float angle = "
+        "atan2(float(tid.y), float(tid.x));" in generated_code
+    )
+    assert "__attribute__((unused)) float slope = atan(float(tid.y));" in generated_code
+    assert "atan(float(tid.y), float(tid.x))" not in generated_code
+
+
+def test_metal_two_argument_atan_qualifies_atan2_when_local_name_shadows_it():
+    shader = """
+    shader MetalAtan2TargetShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float atan2 = 0.0;
+                float angle = atan(float(tid.y), float(tid.x));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float atan2 = 0.0;" in generated_code
+    assert (
+        "__attribute__((unused)) float angle = "
+        "metal::atan2(float(tid.y), float(tid.x));" in generated_code
+    )
+    assert "float angle = atan2(float(tid.y), float(tid.x));" not in generated_code
+
+
+def test_metal_user_defined_two_argument_atan_is_preserved():
+    shader = """
+    shader MetalUserAtan {
+        compute {
+            float atan(float y, float x) {
+                return y + x;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float angle = atan(float(tid.y), float(tid.x));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float atan(float y, float x)" in generated_code
+    assert (
+        "__attribute__((unused)) float angle = "
+        "atan(float(tid.y), float(tid.x));" in generated_code
+    )
+    assert "atan2(" not in generated_code
+
+
 def test_metal_glsl_bitcast_builtins_lower_to_as_type():
     shader = """
     shader MetalBitcasts {

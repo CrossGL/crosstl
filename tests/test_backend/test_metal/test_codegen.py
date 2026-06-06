@@ -880,6 +880,28 @@ def test_codegen_texture_sample_namespace_qualified_options_roundtrip():
     assert "tex.sample(samp, uv, min_lod_clamp(firstTailMip))" in metal
 
 
+def test_codegen_multi_declarator_struct_members_from_cxx_msl_headers():
+    code = """
+    struct KernelParams {
+        float scale = 1.0, bias = 0.0;
+        uint2 extent, stride;
+    };
+
+    float2 apply(KernelParams params) {
+        return float2(params.scale, params.bias)
+            + float2(params.extent.x, params.stride.y);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "float scale;" in crossgl
+    assert "float bias;" in crossgl
+    assert "uvec2 extent;" in crossgl
+    assert "uvec2 stride;" in crossgl
+    assert "vec2 apply(KernelParams params)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_texture_sample_offset_options_roundtrip():
     code = """
     float4 sampleOffsetOptions(texture2d<float> tex,
