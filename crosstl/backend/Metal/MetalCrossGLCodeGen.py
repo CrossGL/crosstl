@@ -161,6 +161,10 @@ class MetalToCrossGLConverter:
         "tan",
         "tanh",
     }
+    metal_bit_intrinsics = {
+        "popcount": "bitCount",
+        "reverse_bits": "bitfieldReverse",
+    }
 
     def __init__(self):
         self.rt_qualifiers = {
@@ -940,6 +944,12 @@ class MetalToCrossGLConverter:
             if isinstance(alias, TypeAliasNode)
         }
         self.prepare_texture_usage(ast)
+        functions = getattr(ast, "functions", []) or []
+        self.user_function_names = {
+            function.name
+            for function in functions
+            if isinstance(function, FunctionNode) and function.name
+        }
         code = ""
         includes = getattr(ast, "includes", []) or []
         for inc in includes:
@@ -1102,7 +1112,6 @@ class MetalToCrossGLConverter:
                     code += f"    {decl};\n"
             code += "\n"
 
-        functions = getattr(ast, "functions", []) or []
         for f in functions:
             qualifier = getattr(f, "qualifier", None)
             if qualifier == "vertex":
@@ -1191,6 +1200,7 @@ class MetalToCrossGLConverter:
         self.global_structured_buffer_names = set()
         self.current_structured_buffer_names = set()
         self.global_sampler_names = set()
+        self.user_function_names = set()
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
         self.storage_texture_declaration_ids = (
@@ -1948,6 +1958,9 @@ class MetalToCrossGLConverter:
             metal_type_constructor = self.map_metal_type_constructor_name(name)
             if metal_type_constructor is not None:
                 return metal_type_constructor
+            metal_bit_name = self.map_metal_bit_function_name(name)
+            if metal_bit_name is not None:
+                return metal_bit_name
             metal_math_name = self.map_metal_math_function_name(name)
             if metal_math_name is not None:
                 return metal_math_name
@@ -1962,6 +1975,14 @@ class MetalToCrossGLConverter:
         if target_type.startswith("int") or mapped_type.startswith("ivec"):
             return "asint"
         return name
+
+    def map_metal_bit_function_name(self, name):
+        text = str(name)
+        if text.startswith("metal::"):
+            return self.metal_bit_intrinsics.get(text.split("::")[-1])
+        if text in self.user_function_names:
+            return None
+        return self.metal_bit_intrinsics.get(text)
 
     def map_metal_type_constructor_name(self, name):
         text = str(name)

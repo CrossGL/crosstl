@@ -247,6 +247,13 @@ class HLSLToCrossGLConverter:
         }
         self.byte_address_interlocked_method_map = {
             "InterlockedAdd": "atomicAdd",
+            "InterlockedAnd": "atomicAnd",
+            "InterlockedOr": "atomicOr",
+            "InterlockedXor": "atomicXor",
+            "InterlockedMin": "atomicMin",
+            "InterlockedMax": "atomicMax",
+            "InterlockedExchange": "atomicExchange",
+            "InterlockedCompareExchange": "atomicCompareExchange",
         }
         self.texture_method_map = {
             "Sample": "texture",
@@ -948,11 +955,20 @@ class HLSLToCrossGLConverter:
                 descriptor["dropped_parameters"] = ["status output"]
             return descriptor
 
+        byte_address_interlocked_args = (
+            {4} if member == "InterlockedCompareExchange" else {2, 3}
+        )
         if (
             member in self.byte_address_interlocked_method_map
             and self.is_byte_address_buffer_type(resource_type)
-            and arg_count in {2, 3}
+            and arg_count in byte_address_interlocked_args
         ):
+            if member == "InterlockedCompareExchange":
+                byte_address_operation = "atomic_compare_exchange"
+            elif member == "InterlockedAdd":
+                byte_address_operation = "atomic_add"
+            else:
+                byte_address_operation = "atomic"
             return {
                 "member": member,
                 "function": self.byte_address_interlocked_method_map[member],
@@ -962,7 +978,7 @@ class HLSLToCrossGLConverter:
                 "usage": None,
                 "buffer_when_max_args": None,
                 "resource": "buffer",
-                "operation": "atomic_add",
+                "operation": byte_address_operation,
                 "byte_address_atomic": True,
             }
 
@@ -1043,6 +1059,23 @@ class HLSLToCrossGLConverter:
     ):
         if not descriptor.get("byte_address_atomic") or len(rendered_args) < 2:
             return None
+
+        if descriptor.get("operation") == "atomic_compare_exchange":
+            if len(rendered_args) < 4:
+                return None
+            offset, compare, value = rendered_args[:3]
+            atomic_call = (
+                f"{descriptor['function']}({obj}, {offset}, {compare}, {value})"
+            )
+            original = self.generate_without_storage_index_lowering(
+                (
+                    (raw_args or [])[3]
+                    if raw_args and len(raw_args) >= 4
+                    else rendered_args[3]
+                ),
+                is_main,
+            )
+            return f"{original} = {atomic_call}"
 
         offset, value = rendered_args[:2]
         atomic_call = f"{descriptor['function']}({obj}, {offset}, {value})"

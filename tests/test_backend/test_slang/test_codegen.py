@@ -1708,6 +1708,26 @@ def test_vulkan_binding_attribute_global_resource_codegen():
     assert "sampler linearSampler @binding(2);" in generated_code
 
 
+def test_vulkan_stage_location_attributes_codegen_from_spirv_docs():
+    # Source: Slang SPIR-V target docs list vk::location and vk::index
+    # as Vulkan layout attributes for global stage variables.
+    code = """
+    [[vk::location(0)]]
+    in float4 vColor;
+
+    [[vk::location(1)]]
+    [[vk::index(0)]]
+    out float4 fragColor;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 vColor @input @location(0);" in generated_code
+    assert "vec4 fragColor @output @location(1) @index(0);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_bound_cbuffer_codegen():
     code = """
     cbuffer Camera : register(b0) {

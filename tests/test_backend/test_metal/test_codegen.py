@@ -1609,6 +1609,52 @@ def test_codegen_lowers_as_type_float_template_call():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_lowers_msl_bit_builtins_from_apple_spec():
+    # Apple Metal Shading Language Specification, "Integer Functions":
+    # popcount(T x), reverse_bits(T x).
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    uint4 bitOps(uint4 mask, uint value) {
+        uint4 counts = popcount(mask);
+        uint reversed = metal::reverse_bits(value);
+        return counts + uint4(reversed);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "uvec4 counts = bitCount(mask);" in crossgl
+    assert "uint reversed = bitfieldReverse(value);" in crossgl
+    assert "popcount" not in crossgl
+    assert "reverse_bits" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_user_defined_bit_builtin_names():
+    code = """
+    uint popcount(uint value) {
+        return value + 1;
+    }
+
+    uint reverse_bits(uint value) {
+        return value + 2;
+    }
+
+    uint callUserHelpers(uint value) {
+        return popcount(value) + reverse_bits(value);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "uint popcount(uint value)" in crossgl
+    assert "uint reverse_bits(uint value)" in crossgl
+    assert "return popcount(value) + reverse_bits(value);" in crossgl
+    assert "bitCount" not in crossgl
+    assert "bitfieldReverse" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_lowers_static_cast_from_apple_compute_sample():
     code = """
     kernel void process(uint2 gid [[thread_position_in_grid]]) {

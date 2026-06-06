@@ -1214,6 +1214,145 @@ class TestHipCodeGen:
         assert "__float_as_int(value)" not in hip_code
         assert "float nativeName = 1.0;" not in hip_code
 
+    def test_integer_bit_builtins_lower_to_hip_intrinsics(self):
+        source_code = """
+        shader HipIntegerBitBuiltins {
+            compute {
+                void main(uint3 tid @ gl_GlobalInvocationID) {
+                    uvec3 mask = uvec3(tid.x, tid.y, tid.z);
+                    int3 signedMask = int3(tid.x, tid.y, tid.z);
+
+                    uvec3 counts = bitCount(mask);
+                    uvec3 signedCounts = bitCount(signedMask);
+                    uvec3 reversed = bitfieldReverse(mask);
+                    int3 signedReversed = bitfieldReverse(signedMask);
+                    uvec3 lowBits = findLSB(mask);
+                    uvec3 highBits = findMSB(mask);
+                    int3 signedHighBits = findMSB(signedMask);
+                    uint aliasCount = countbits(tid.x);
+                    uint aliasReverse = reversebits(tid.y);
+                    uint aliasLow = firstbitlow(tid.z);
+                    uint aliasHigh = firstbithigh(tid.x);
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "__device__ inline uint3 cgl_uint3_bitCount(uint3 value)" in hip_code
+        assert (
+            "return make_uint3(__popc(value.x), __popc(value.y), __popc(value.z));"
+            in (hip_code)
+        )
+        assert "__device__ inline uint3 cgl_int3_bitCount(int3 value)" in hip_code
+        assert "__popc(static_cast<unsigned int>(value.x))" in hip_code
+        assert (
+            "__device__ inline uint3 cgl_uint3_bitfieldReverse(uint3 value)" in hip_code
+        )
+        assert "__device__ inline int3 cgl_int3_bitfieldReverse(int3 value)" in hip_code
+        assert "static_cast<int>(__brev(static_cast<unsigned int>(value.x)))" in (
+            hip_code
+        )
+        assert "__device__ inline uint3 cgl_uint3_findLSB(uint3 value)" in hip_code
+        assert "__device__ inline uint3 cgl_uint3_findMSB(uint3 value)" in hip_code
+        assert "__device__ inline int3 cgl_int3_findMSB(int3 value)" in hip_code
+        assert "(31 - __clz(~(value.x)))" in hip_code
+
+        assert "uint3 counts = cgl_uint3_bitCount(mask);" in hip_code
+        assert "uint3 signedCounts = cgl_int3_bitCount(signedMask);" in hip_code
+        assert "uint3 reversed = cgl_uint3_bitfieldReverse(mask);" in hip_code
+        assert "int3 signedReversed = cgl_int3_bitfieldReverse(signedMask);" in hip_code
+        assert "uint3 lowBits = cgl_uint3_findLSB(mask);" in hip_code
+        assert "uint3 highBits = cgl_uint3_findMSB(mask);" in hip_code
+        assert "int3 signedHighBits = cgl_int3_findMSB(signedMask);" in hip_code
+        assert "unsigned int aliasCount = __popc(" in hip_code
+        assert "unsigned int aliasReverse = __brev(" in hip_code
+        assert "unsigned int aliasLow = (__ffs(" in hip_code
+        assert "unsigned int aliasHigh = ((" in hip_code
+        assert "__clz(" in hip_code
+        assert "= bitCount(" not in hip_code
+        assert "= bitfieldReverse(" not in hip_code
+        assert "= findLSB(" not in hip_code
+        assert "= findMSB(" not in hip_code
+        assert "countbits(" not in hip_code
+        assert "reversebits(" not in hip_code
+        assert "firstbitlow(" not in hip_code
+        assert "firstbithigh(" not in hip_code
+
+    def test_user_defined_integer_bit_builtin_names_are_preserved(self):
+        source_code = """
+        shader HipUserIntegerBitNames {
+            uint bitCount(uint value) {
+                return value + 7u;
+            }
+
+            uint countbits(uint value) {
+                return value + 8u;
+            }
+
+            uint bitfieldReverse(uint value) {
+                return value + 9u;
+            }
+
+            uint reversebits(uint value) {
+                return value + 10u;
+            }
+
+            uint findLSB(uint value) {
+                return value + 11u;
+            }
+
+            uint firstbitlow(uint value) {
+                return value + 12u;
+            }
+
+            uint findMSB(uint value) {
+                return value + 13u;
+            }
+
+            uint firstbithigh(uint value) {
+                return value + 14u;
+            }
+
+            compute {
+                void main(uint3 tid @ gl_GlobalInvocationID) {
+                    uint a = bitCount(tid.x);
+                    uint b = countbits(tid.y);
+                    uint c = bitfieldReverse(tid.z);
+                    uint d = reversebits(tid.x);
+                    uint e = findLSB(tid.y);
+                    uint f = firstbitlow(tid.z);
+                    uint g = findMSB(tid.x);
+                    uint h = firstbithigh(tid.y);
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "__device__ unsigned int bitCount(unsigned int value)" in hip_code
+        assert "__device__ unsigned int countbits(unsigned int value)" in hip_code
+        assert "__device__ unsigned int bitfieldReverse(unsigned int value)" in hip_code
+        assert "__device__ unsigned int reversebits(unsigned int value)" in hip_code
+        assert "__device__ unsigned int findLSB(unsigned int value)" in hip_code
+        assert "__device__ unsigned int firstbitlow(unsigned int value)" in hip_code
+        assert "__device__ unsigned int findMSB(unsigned int value)" in hip_code
+        assert "__device__ unsigned int firstbithigh(unsigned int value)" in hip_code
+        assert "unsigned int a = bitCount(" in hip_code
+        assert "unsigned int b = countbits(" in hip_code
+        assert "unsigned int c = bitfieldReverse(" in hip_code
+        assert "unsigned int d = reversebits(" in hip_code
+        assert "unsigned int e = findLSB(" in hip_code
+        assert "unsigned int f = firstbitlow(" in hip_code
+        assert "unsigned int g = findMSB(" in hip_code
+        assert "unsigned int h = firstbithigh(" in hip_code
+        assert "__popc(" not in hip_code
+        assert "__brev(" not in hip_code
+        assert "__ffs(" not in hip_code
+        assert "__clz(" not in hip_code
+
     def test_user_defined_rsqrt_function_is_not_lowered_to_hip_builtin(self):
         source_code = """
         shader TestShader {

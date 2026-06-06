@@ -1160,11 +1160,21 @@ class SlangToCrossGLConverter:
             metadata.append(text)
 
         for qualifier in getattr(node, "qualifiers", []) or []:
+            qualifier_name = str(qualifier).strip().lower()
+            if qualifier_name == "in":
+                append_metadata("stage_io", "@input")
+            elif qualifier_name == "out":
+                append_metadata("stage_io", "@output")
+
             for name, value in self.layout_metadata_entries(qualifier):
                 if name in {"set", "group"} and value:
                     append_metadata("set", f"@set({value})")
                 elif name == "binding" and value:
                     append_metadata("binding", f"@binding({value})")
+                elif name == "location" and value:
+                    append_metadata("location", f"@location({value})")
+                elif name == "index" and value:
+                    append_metadata("index", f"@index({value})")
                 elif name == "push_constant":
                     append_metadata("push_constant", "@push_constant")
 
@@ -1175,6 +1185,10 @@ class SlangToCrossGLConverter:
                 if len(arguments) > 1:
                     append_metadata("set", f"@set({arguments[1]})")
                 append_metadata("binding", f"@binding({arguments[0]})")
+            elif name == "vk::location" and arguments:
+                append_metadata("location", f"@location({arguments[0]})")
+            elif name == "vk::index" and arguments:
+                append_metadata("index", f"@index({arguments[0]})")
             elif name == "vk::push_constant":
                 append_metadata("push_constant", "@push_constant")
 

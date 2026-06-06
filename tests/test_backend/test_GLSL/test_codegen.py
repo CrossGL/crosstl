@@ -1157,6 +1157,40 @@ def test_codegen_subroutine_metadata_from_khronos_shader_subroutine():
     parse_crossgl(crossgl)
 
 
+def test_codegen_subroutine_type_list_with_newlines_from_khronos_syntax():
+    # Khronos GLSL 4.60 subroutine examples use subroutine(typeName) as a
+    # qualifier; newlines are whitespace between the qualifier tokens.
+    code = textwrap.dedent("""
+        #version 400 core
+        subroutine vec4 ColorFunc(vec3 color);
+
+        subroutine
+        (
+            ColorFunc
+        )
+        vec4 redColor(vec3 color)
+        {
+            return vec4(color.r, 0.0, 0.0, 1.0);
+        }
+
+        subroutine uniform ColorFunc materialColor;
+        out vec4 outColor;
+
+        void main()
+        {
+            outColor = materialColor(vec3(1.0));
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "@subroutine vec4 ColorFunc(vec3 color)" in crossgl
+    assert "@subroutine(ColorFunc) vec4 redColor(vec3 color)" in crossgl
+    assert "ColorFunc materialColor @subroutine;" in crossgl
+    assert "outColor = materialColor(vec3(1.0));" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_nonuniform_ext_qualifier_from_glslang_is_preserved():
     # Reduced from KhronosGroup/glslang Test/spv.nonuniform.frag.
     code = textwrap.dedent("""

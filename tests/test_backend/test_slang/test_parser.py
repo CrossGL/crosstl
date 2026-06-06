@@ -2371,6 +2371,41 @@ def test_vulkan_attributes_on_cbuffer_parsing():
     assert cbuffer.members[0].name == "viewProj"
 
 
+def test_vulkan_stage_location_attributes_parse_from_spirv_docs():
+    # Source: Slang SPIR-V target docs list vk::location and vk::index
+    # as Vulkan layout attributes for global stage variables.
+    code = """
+    [[vk::location(0)]]
+    in float4 vColor;
+
+    [[vk::location(1)]]
+    [[vk::index(0)]]
+    out float4 fragColor;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert [
+        (var.vtype, var.name, var.qualifiers, var.attributes) for var in ast.global_vars
+    ] == [
+        (
+            "float4",
+            "vColor",
+            ["in"],
+            [{"name": "vk::location", "arguments": ["0"]}],
+        ),
+        (
+            "float4",
+            "fragColor",
+            ["out"],
+            [
+                {"name": "vk::location", "arguments": ["1"]},
+                {"name": "vk::index", "arguments": ["0"]},
+            ],
+        ),
+    ]
+
+
 def test_official_shader_parameter_cbuffer_register_space_parsing():
     # Source: Slang shader parameter docs show vk::binding and register markup
     # together on a cbuffer declaration.

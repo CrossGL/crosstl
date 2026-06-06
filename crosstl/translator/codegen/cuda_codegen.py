@@ -117,6 +117,13 @@ CUDA_BITCAST_FUNCTION_TARGETS = {
     "asuint": "uint",
 }
 
+CUDA_INTEGER_BIT_FUNCTION_ALIASES = {
+    "countbits": "bitCount",
+    "reversebits": "bitfieldReverse",
+    "firstbitlow": "findLSB",
+    "firstbithigh": "findMSB",
+}
+
 CUDA_UNSUPPORTED_FP16_VECTOR_TYPES = {
     "vec3<f16>",
     "vec4<f16>",
@@ -3144,6 +3151,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if bitcast_call is not None:
                 return bitcast_call
 
+            integer_bit_call = self.generate_cuda_integer_bit_call(
+                func_name, raw_args, args
+            )
+            if integer_bit_call is not None:
+                return integer_bit_call
+
             warp_sync_call = self.generate_warp_sync_builtin_call(
                 func_name, raw_args, args
             )
@@ -3276,6 +3289,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             func_name, func_name
         )
 
+    def normalize_cuda_integer_bit_function(self, func_name):
+        return CUDA_INTEGER_BIT_FUNCTION_ALIASES.get(func_name, func_name)
+
     def cuda_bitcast_result_type(self, func_name, raw_args):
         target_component = CUDA_BITCAST_FUNCTION_TARGETS.get(func_name)
         if (
@@ -3322,6 +3338,135 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             target_component,
             args[0],
         )
+
+    def cuda_integer_bit_result_type(self, func_name, raw_args):
+        original_func_name = func_name
+        func_name = self.normalize_cuda_integer_bit_function(func_name)
+        if func_name not in {
+            "bitCount",
+            "bitfieldReverse",
+            "findLSB",
+            "findMSB",
+        } or self.is_user_defined_function(original_func_name):
+            return None
+
+        if len(raw_args or []) != 1:
+            return "uint"
+
+        source_type = self.expression_result_type(raw_args[0])
+        source_info = self.vector_type_info(source_type)
+        if source_info is not None:
+            if source_info["component_type"] not in {"int", "uint"}:
+                return self.vector_type_for_components(
+                    "uint",
+                    len(source_info["components"]),
+                )
+            if func_name == "bitCount":
+                return self.vector_type_for_components(
+                    "uint",
+                    len(source_info["components"]),
+                )
+            return source_type
+
+        source_component = self.scalar_component_type(source_type)
+        if source_component in {"int", "uint"}:
+            return "uint" if func_name == "bitCount" else source_component
+        return "uint"
+
+    def generate_cuda_integer_bit_call(self, func_name, raw_args, args):
+        result_type = self.cuda_integer_bit_result_type(func_name, raw_args)
+        if result_type is None:
+            return None
+        if len(raw_args or []) != 1 or len(args) != 1:
+            return None
+
+        operation = self.normalize_cuda_integer_bit_function(func_name)
+        source_type = self.expression_result_type(raw_args[0])
+        source_info = self.vector_type_info(source_type)
+        result_info = self.vector_type_info(result_type)
+        if source_info is not None:
+            if result_info is None or source_info["component_type"] not in {
+                "int",
+                "uint",
+            }:
+                return None
+            helper_name = self.require_cuda_integer_bit_vector_helper(
+                operation,
+                source_info,
+                result_info,
+            )
+            return f"{helper_name}({args[0]})"
+
+        source_component = self.scalar_component_type(source_type)
+        if source_component not in {"int", "uint", None}:
+            return None
+        return self.format_cuda_integer_bit_component(
+            operation,
+            args[0],
+            source_component,
+            self.scalar_component_type(result_type),
+        )
+
+    def require_cuda_integer_bit_vector_helper(
+        self,
+        operation,
+        source_info,
+        result_info,
+    ):
+        helper_name = self.sanitize_helper_name(
+            f"cgl_{source_info['type']}_{operation}"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        components = [
+            self.format_cuda_integer_bit_component(
+                operation,
+                f"value.{component}",
+                source_info["component_type"],
+                result_info["component_type"],
+            )
+            for component in source_info["components"]
+        ]
+        helper = (
+            f"__device__ inline {result_info['type']} {helper_name}"
+            f"({source_info['type']} value)\n"
+            "{\n"
+            f"    return {result_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_cuda_integer_bit_component(
+        self,
+        operation,
+        value,
+        source_component=None,
+        result_component=None,
+    ):
+        unsigned_value = (
+            f"static_cast<unsigned int>({value})"
+            if source_component == "int"
+            else value
+        )
+        if operation == "bitCount":
+            return f"__popc({unsigned_value})"
+        if operation == "bitfieldReverse":
+            reversed_value = f"__brev({unsigned_value})"
+            if result_component == "int":
+                return f"static_cast<int>({reversed_value})"
+            return reversed_value
+        if operation == "findLSB":
+            return f"(__ffs({value}) - 1)"
+        if operation == "findMSB":
+            if source_component == "int":
+                return (
+                    f"(({value}) < 0 ? (31 - __clz(~({value}))) : "
+                    f"(({value}) == 0 ? -1 : (31 - __clz({value}))))"
+                )
+            return f"(({value}) == 0 ? -1 : (31 - __clz({value})))"
+        return f"{operation}({value})"
 
     def require_cuda_vector_bitcast_helper(self, source_info, result_info):
         helper_name = self.sanitize_helper_name(
@@ -6991,6 +7136,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             bitcast_result_type = self.cuda_bitcast_result_type(func_name, raw_args)
             if bitcast_result_type is not None:
                 return bitcast_result_type
+            integer_bit_result_type = self.cuda_integer_bit_result_type(
+                func_name,
+                raw_args,
+            )
+            if integer_bit_result_type is not None:
+                return integer_bit_result_type
             if func_name in {"fma", "mad"}:
                 cached_type = getattr(node, "expression_type", None) or getattr(
                     node, "vtype", None
