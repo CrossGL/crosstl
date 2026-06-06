@@ -2202,38 +2202,120 @@ class SlangToCrossGLConverter:
         if self.is_multisample_resource_base(base_type):
             return None
 
-        if vector_type in {"int4", "uint4"}:
-            if base_type != "Texture3D" or len(vector_args) != 4:
-                return None
-            coord_type = "ivec3" if vector_type == "int4" else "uvec3"
-            x = self.generate_expression(vector_args[0], is_main)
-            y = self.generate_expression(vector_args[1], is_main)
-            z = self.generate_expression(vector_args[2], is_main)
-            mip = self.generate_expression(vector_args[3], is_main)
-            return [f"{coord_type}({x}, {y}, {z})", mip]
-
-        if vector_type in {"int2", "uint2"}:
-            base_type = str(resource_type or "").strip().split("<", 1)[0].strip()
-            if base_type != "Texture1D" or len(vector_args) != 2:
-                return None
-            coord = self.generate_expression(vector_args[0], is_main)
-            mip = self.generate_expression(vector_args[1], is_main)
-            return [coord, mip]
-
-        if vector_type not in {"int3", "uint3"}:
+        layout = self.texture_load_vector_layout(base_type)
+        if layout is None:
             return None
 
-        if len(vector_args) == 2:
-            return [self.generate_expression(item, is_main) for item in vector_args]
+        expected_vector_size, coord_rank = layout
+        if vector_type is None:
+            vector_type = self.expression_type(arg)
 
-        if len(vector_args) == 3:
-            coord_type = "ivec2" if vector_type == "int3" else "uvec2"
-            x = self.generate_expression(vector_args[0], is_main)
-            y = self.generate_expression(vector_args[1], is_main)
-            mip = self.generate_expression(vector_args[2], is_main)
-            return [f"{coord_type}({x}, {y})", mip]
+        vector_kind = self.texture_load_vector_kind(vector_type, expected_vector_size)
+        if vector_kind is None:
+            return None
+
+        if vector_args is None:
+            rendered = self.generate_expression(arg, is_main)
+            return [
+                self.texture_load_swizzle(rendered, coord_rank),
+                f"{rendered}.{self.texture_load_mip_component(coord_rank)}",
+            ]
+
+        return self.split_texture_load_constructor_args(
+            vector_kind, vector_args, coord_rank, is_main
+        )
+
+    def texture_load_vector_layout(self, resource_base):
+        return {
+            "Texture1D": (2, 1),
+            "Sampler1D": (2, 1),
+            "Texture1DArray": (3, 2),
+            "Sampler1DArray": (3, 2),
+            "Texture2D": (3, 2),
+            "Sampler2D": (3, 2),
+            "Texture2DArray": (4, 3),
+            "Sampler2DArray": (4, 3),
+            "Texture3D": (4, 3),
+            "Sampler3D": (4, 3),
+        }.get(resource_base)
+
+    def texture_load_vector_kind(self, vector_type, expected_size):
+        if not vector_type:
+            return None
+        vector_type = str(vector_type).strip()
+        if vector_type == f"int{expected_size}":
+            return "int"
+        if vector_type == f"uint{expected_size}":
+            return "uint"
+        return None
+
+    def split_texture_load_constructor_args(
+        self, vector_kind, vector_args, coord_rank, is_main=False
+    ):
+        if len(vector_args) == coord_rank + 1:
+            components = [
+                self.generate_expression(component, is_main)
+                for component in vector_args[:coord_rank]
+            ]
+            mip = self.generate_expression(vector_args[-1], is_main)
+            return [
+                self.texture_load_coord_from_components(
+                    vector_kind, coord_rank, components
+                ),
+                mip,
+            ]
+
+        if len(vector_args) == 2:
+            coord_arg = vector_args[0]
+            if self.expression_vector_rank(coord_arg) == coord_rank:
+                coord = self.generate_expression(coord_arg, is_main)
+                mip = self.generate_expression(vector_args[1], is_main)
+                return [coord, mip]
+
+        if len(vector_args) == 3 and coord_rank == 3:
+            prefix_arg = vector_args[0]
+            if self.expression_vector_rank(prefix_arg) == 2:
+                prefix = self.generate_expression(prefix_arg, is_main)
+                layer_or_depth = self.generate_expression(vector_args[1], is_main)
+                mip = self.generate_expression(vector_args[2], is_main)
+                coord = self.texture_load_coord_from_components(
+                    vector_kind, coord_rank, [prefix, layer_or_depth]
+                )
+                return [coord, mip]
 
         return None
+
+    def texture_load_coord_from_components(self, vector_kind, coord_rank, components):
+        if coord_rank == 1:
+            return components[0]
+        coord_type = f"{'i' if vector_kind == 'int' else 'u'}vec{coord_rank}"
+        return f"{coord_type}({', '.join(components)})"
+
+    def expression_vector_rank(self, expr):
+        type_name = None
+        if isinstance(expr, VectorConstructorNode):
+            type_name = expr.type_name
+        elif isinstance(expr, FunctionCallNode):
+            type_name = expr.name
+        else:
+            type_name = self.expression_type(expr)
+        if not type_name:
+            return None
+        match = re.fullmatch(r"(?:u?int|float|double|bool)([2-4])", str(type_name))
+        if match:
+            return int(match.group(1))
+        return None
+
+    def texture_load_swizzle(self, value, coord_rank):
+        if coord_rank == 1:
+            return f"{value}.x"
+        return f"{value}.{self.texture_load_components(coord_rank)}"
+
+    def texture_load_mip_component(self, coord_rank):
+        return self.texture_load_components(coord_rank + 1)[-1]
+
+    def texture_load_components(self, count):
+        return "xyzw"[:count]
 
     def is_multisample_resource_base(self, resource_base):
         return resource_base in {

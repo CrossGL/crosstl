@@ -254,6 +254,7 @@ class GLSLToCrossGLConverter:
         "gl_CullDistance": "float",
     }
     VERTEX_BUILTIN_ARRAY_OUTPUTS = {"gl_ClipDistance", "gl_CullDistance"}
+    BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     DEFAULT_SHADER_TYPE = "vertex"
 
     def __init__(self, shader_type="vertex"):
@@ -1454,6 +1455,64 @@ class GLSLToCrossGLConverter:
 
         return f"{' '.join(attributes)} " if attributes else ""
 
+    def structs_for_crossgl_output(self, structs):
+        structs = list(structs or [])
+        builtin_counts = {}
+        for struct in structs:
+            if self.is_builtin_interface_block_struct(struct):
+                builtin_counts[struct.name] = builtin_counts.get(struct.name, 0) + 1
+
+        duplicate_builtin_names = {
+            name for name, count in builtin_counts.items() if count > 1
+        }
+        if not duplicate_builtin_names:
+            return structs
+
+        selected = {}
+        selected_index = {}
+        output = []
+        for struct in structs:
+            if (
+                self.is_builtin_interface_block_struct(struct)
+                and struct.name in duplicate_builtin_names
+            ):
+                if struct.name not in selected:
+                    selected[struct.name] = struct
+                    selected_index[struct.name] = len(output)
+                    output.append(struct)
+                    continue
+
+                if self.builtin_interface_block_priority(
+                    struct
+                ) > self.builtin_interface_block_priority(selected[struct.name]):
+                    selected[struct.name] = struct
+                    output[selected_index[struct.name]] = struct
+                continue
+
+            output.append(struct)
+
+        return output
+
+    def is_builtin_interface_block_struct(self, node):
+        if getattr(node, "name", None) not in self.BUILTIN_INTERFACE_BLOCK_NAMES:
+            return False
+        return self.is_graphics_interface_block_struct(node)
+
+    def builtin_interface_block_priority(self, node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "interface_qualifiers", []) or []
+        }
+        has_layout = bool(getattr(node, "interface_layout", None)) or any(
+            getattr(member, "layout", None)
+            for member in getattr(node, "members", []) or []
+        )
+        return (
+            has_layout,
+            "out" in qualifiers or "inout" in qualifiers,
+            not bool(getattr(node, "interface_instance_name", None)),
+        )
+
     def generate(self, ast):
         if ast is None:
             return "// Empty shader"
@@ -1590,7 +1649,7 @@ class GLSLToCrossGLConverter:
         result += "shader main {\n"
 
         # Generate struct definitions
-        for struct in node.structs:
+        for struct in self.structs_for_crossgl_output(node.structs):
             if struct.name in self.converted_ssbo_struct_names:
                 continue
             if self.is_push_constant_interface_block_struct(struct):

@@ -358,6 +358,33 @@ def test_metal_common_math_builtins_qualify_when_local_names_shadow_them():
     assert "float3 unit = normalize(value);" not in generated_code
 
 
+def test_metal_saturate_builtin_qualifies_when_local_name_shadows_it():
+    shader = """
+    shader MetalSaturateTargetShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float lighting = float(tid.x) - 1.0;
+                float saturate = 0.5;
+                float clamped = saturate(lighting);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float saturate = 0.5;" in generated_code
+    assert (
+        "__attribute__((unused)) float clamped = metal::saturate(lighting);"
+        in generated_code
+    )
+    assert "__attribute__((unused)) float clamped = saturate(lighting);" not in (
+        generated_code
+    )
+
+
 def test_metal_user_defined_stdlib_function_names_are_preserved():
     shader = """
     shader MetalUserStdlibNames {

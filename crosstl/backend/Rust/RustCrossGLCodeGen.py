@@ -495,6 +495,7 @@ class RustToCrossGLConverter:
             "isnan": "isnan",
             "isinf": "isinf",
             "isfinite": "isfinite",
+            "kill": "discard",
             "any": "any",
             "all": "all",
             "less_than": "lessThan",

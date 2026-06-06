@@ -40,6 +40,29 @@ void main() {
 """
 
 
+GEOMETRY_GL_PERVERTEX_REDECLARATION_GLSL = """
+#version 450 core
+layout(triangles) in;
+layout(triangle_strip, max_vertices = 3) out;
+
+in gl_PerVertex {
+    vec4 gl_Position;
+} gl_in[];
+
+out gl_PerVertex {
+    vec4 gl_Position;
+};
+
+void main() {
+    for (int i = 0; i < 3; i++) {
+        gl_Position = gl_in[i].gl_Position;
+        EmitVertex();
+    }
+    EndPrimitive();
+}
+"""
+
+
 def parse_glsl(code: str, shader_type: str):
     tokens = GLSLLexer(code).tokenize()
     return GLSLParser(tokens, shader_type).parse()
@@ -99,6 +122,20 @@ def test_codegen_geometry_layout_roundtrip_preserves_adjacency_and_invocations()
     assert "layout(lines_adjacency, invocations = 2) in;" in glsl
     assert "layout(triangle_strip, max_vertices = 6) out;" in glsl
     assert "return output;" not in glsl
+
+
+def test_codegen_geometry_builtin_gl_pervertex_redeclarations_roundtrip():
+    # Reduced from Khronos GLSL 4.60.8 section 7.5, which documents
+    # redeclaring the built-in gl_PerVertex block.
+    crossgl = generate_crossgl(GEOMETRY_GL_PERVERTEX_REDECLARATION_GLSL, "geometry")
+
+    assert crossgl.count("struct gl_PerVertex") == 1
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert glsl.count("gl_PerVertex") == 1
+    assert "gl_Position = gl_in[i].gl_Position;" in glsl
+    assert "EmitVertex();" in glsl
 
 
 if __name__ == "__main__":

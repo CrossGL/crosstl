@@ -945,6 +945,34 @@ def test_rust_gpu_glam_vec3a_constructor_codegen_from_depth_sample_compiletest()
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_arch_kill_codegen_from_spirv_std_docs():
+    # Reduced from spirv_std::arch::kill docs.rs source. The function is
+    # documented as fragment-shader discard / OpKill.
+    code = """
+    use spirv_std::arch::kill;
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main_fs(alpha: f32, output: &mut Vec4) {
+        if alpha < 0.5 {
+            spirv_std::arch::kill();
+        }
+        if alpha == 0.0 {
+            kill();
+        }
+        *output = Vec4::ONE;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "fragment main_fs {" in result
+    assert result.count("discard();") == 2
+    assert "spirv_std::arch::kill();" not in result
+    assert "kill();" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_sampled_image_generic_type_drives_resource_parameter():
     code = """
     use spirv_std::{spirv, Image};

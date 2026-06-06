@@ -2113,6 +2113,39 @@ def test_texture2dms_array_load_sample_index_preserves_array_coord_codegen():
     cgl_translator.parse(generated_code)
 
 
+def test_array_and_3d_texture_load_split_packed_location_mip_codegen():
+    code = """
+    Texture1DArray<float4> strip;
+    Texture2DArray<float4> atlas;
+    Texture3D<float4> volume;
+
+    float4 main(int3 stripLocation, int4 atlasLocation, int4 volumeLocation,
+                int2 pixel, int layer, int mip) {
+        return strip.Load(stripLocation)
+            + atlas.Load(atlasLocation)
+            + atlas.Load(int4(pixel, layer, mip))
+            + volume.Load(volumeLocation)
+            + volume.Load(int4(int3(pixel.x, pixel.y, layer), mip));
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler1DArray strip;" in generated_code
+    assert "sampler2DArray atlas;" in generated_code
+    assert "sampler3D volume;" in generated_code
+    assert "texelFetch(strip, stripLocation.xy, stripLocation.z)" in generated_code
+    assert "texelFetch(atlas, atlasLocation.xyz, atlasLocation.w)" in generated_code
+    assert "texelFetch(atlas, ivec3(pixel, layer), mip)" in generated_code
+    assert "texelFetch(volume, volumeLocation.xyz, volumeLocation.w)" in generated_code
+    assert "texelFetch(volume, ivec3(pixel.x, pixel.y, layer), mip)" in generated_code
+    assert "strip.Load" not in generated_code
+    assert "atlas.Load" not in generated_code
+    assert "volume.Load" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_structured_buffer_load_method_codegen_from_core_module_docs():
     # Source: shader-slang/slang stdlib docs for StructuredBuffer<T,L>.Load
     # and RWStructuredBuffer<T,L>.Load define the single-index Load overload.

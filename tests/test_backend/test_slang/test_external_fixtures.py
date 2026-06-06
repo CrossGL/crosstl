@@ -388,9 +388,12 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "sampler2DArray tex;",
-            "texelFetch(tex, ivec4(int(tid.x), int(tid.y), 0, 0))",
+            "texelFetch(tex, ivec3(int(tid.x), int(tid.y), 0), 0)",
         ],
-        "not_contains": ["tex.Load"],
+        "not_contains": [
+            "tex.Load",
+            "ivec4(int(tid.x), int(tid.y), 0, 0)",
+        ],
     },
     {
         "id": "slang_texture3d_load_int4",

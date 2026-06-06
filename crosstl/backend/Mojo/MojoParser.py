@@ -1986,6 +1986,7 @@ class MojoParser:
     def parse_dict_literal(self):
         self.eat("LBRACE")
         entries = []
+        elements = []
         self.skip_layout_tokens()
 
         if self.current_token[0] == "RBRACE":
@@ -1999,25 +2000,30 @@ class MojoParser:
             finally:
                 self.expression_layout_depth -= 1
             self.skip_layout_tokens()
-            if self.current_token[0] != "COLON":
-                raise SyntaxError(
-                    f"Expected COLON in Mojo dictionary display, got {self.current_token[0]}"
-                )
-            self.eat("COLON")
-            self.skip_layout_tokens()
-            self.expression_layout_depth += 1
-            try:
-                value = self.parse_expression()
-            finally:
-                self.expression_layout_depth -= 1
-            self.skip_layout_tokens()
 
-            if not entries and self.current_token[0] == "FOR":
-                comprehension = self.parse_dict_comprehension(key, value)
-                self.eat("RBRACE")
-                return self.parse_postfix_suffixes(comprehension)
+            if self.current_token[0] == "COLON":
+                if elements:
+                    raise SyntaxError("Cannot mix Mojo dictionary and braced elements")
+                self.eat("COLON")
+                self.skip_layout_tokens()
+                self.expression_layout_depth += 1
+                try:
+                    value = self.parse_expression()
+                finally:
+                    self.expression_layout_depth -= 1
+                self.skip_layout_tokens()
 
-            entries.append((key, value))
+                if not entries and self.current_token[0] == "FOR":
+                    comprehension = self.parse_dict_comprehension(key, value)
+                    self.eat("RBRACE")
+                    return self.parse_postfix_suffixes(comprehension)
+
+                entries.append((key, value))
+            else:
+                if entries:
+                    raise SyntaxError("Cannot mix Mojo dictionary and braced elements")
+                elements.append(key)
+
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
                 self.skip_layout_tokens()
@@ -2029,7 +2035,9 @@ class MojoParser:
                 )
 
         self.eat("RBRACE")
-        return self.parse_postfix_suffixes(DictLiteralNode(entries))
+        if entries:
+            return self.parse_postfix_suffixes(DictLiteralNode(entries))
+        return self.parse_postfix_suffixes(BracedLiteralNode(elements))
 
     def parse_list_comprehension(self, expression):
         clauses = self.parse_comprehension_clauses()

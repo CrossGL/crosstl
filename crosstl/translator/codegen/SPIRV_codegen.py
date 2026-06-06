@@ -6490,6 +6490,10 @@ class VulkanSPIRVCodeGen:
 
         array_type = self.register_array_type(member_type, element_count)
         variable_name = f"_CrossGLMesh_{role}_{member_name}"
+        if not builtin:
+            self.validate_user_defined_interface_type(
+                array_type, "Output", variable_name
+            )
         variable = self.create_variable(array_type, "Output", variable_name)
         if builtin:
             self.decorations.append(f"OpDecorate %{variable.id} BuiltIn {builtin}")
@@ -10805,6 +10809,7 @@ class VulkanSPIRVCodeGen:
         interface_node = node
         if interface_node is None:
             interface_node = VariableNode(name, type_id.type.base_type)
+        self.validate_user_defined_interface_type(type_id, storage_class, name)
         preferred_location = self.entry_point_interface_location(
             semantic, storage_class, node, member_index
         )
@@ -10894,6 +10899,56 @@ class VulkanSPIRVCodeGen:
     def interface_type_requires_flat(self, type_id: SpirvId) -> bool:
         component_type = self.scalar_or_vector_component_type(type_id.type)
         return self.normalize_primitive_name(component_type) in {"int", "uint", "bool"}
+
+    def interface_type_contains_bool(
+        self, type_id: Optional[SpirvId], seen=None
+    ) -> bool:
+        if type_id is None:
+            return False
+        if seen is None:
+            seen = set()
+        if type_id.id in seen:
+            return False
+        seen.add(type_id.id)
+
+        type_name = type_id.type.base_type
+        if self.normalize_primitive_name(type_name) == "bool":
+            return True
+
+        vector_info = self.vector_component_type_and_count(type_name)
+        if vector_info is not None:
+            component_type, _ = vector_info
+            return self.normalize_primitive_name(component_type) == "bool"
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            return self.interface_type_contains_bool(element_type, seen)
+
+        members = self.current_struct_members.get(type_name)
+        if members is not None:
+            return any(
+                self.interface_type_contains_bool(member_type, seen)
+                for member_type, _ in members
+            )
+
+        return False
+
+    def validate_user_defined_interface_type(
+        self, type_id: SpirvId, storage_class: str, name: Optional[str]
+    ):
+        if storage_class not in {"Input", "Output"}:
+            return
+        if not self.interface_type_contains_bool(type_id):
+            return
+
+        direction = storage_class.lower()
+        variable_name = f" '{name}'" if name else ""
+        raise ValueError(
+            f"Unsupported user-defined SPIR-V {direction} variable{variable_name}; "
+            "Vulkan requires Input/Output OpTypeBool interfaces to use BuiltIn, "
+            "so use int or uint for location-decorated boolean shader IO"
+        )
 
     def store_entry_point_return_value(self, value: SpirvId) -> bool:
         outputs = self.current_entry_point_return_outputs
@@ -13910,6 +13965,7 @@ class VulkanSPIRVCodeGen:
         preferred_location: Optional[int] = None,
     ):
         self.require_capability("Tessellation")
+        self.validate_user_defined_interface_type(type_id, storage_class, name)
         variable = self.create_variable(type_id, storage_class, name)
         location = self.global_interface_location(
             source_node, storage_class, preferred_location, patch=True
@@ -14072,6 +14128,9 @@ class VulkanSPIRVCodeGen:
             element_type, patch_info["control_points"]
         )
         storage_class = patch_info["storage_class"]
+        self.validate_user_defined_interface_type(
+            array_type, storage_class, patch_info["name"]
+        )
         variable = self.create_variable(array_type, storage_class, patch_info["name"])
         location = self.global_interface_location(
             param,
@@ -19274,6 +19333,7 @@ class VulkanSPIRVCodeGen:
         self, name: str, type_id: SpirvId, location: int, binding: int
     ) -> SpirvId:
         """Register an input variable with location decoration."""
+        self.validate_user_defined_interface_type(type_id, "Input", name)
         ptr_type = self.register_pointer_type(type_id, "Input")
 
         id_value = self.get_id()
@@ -19293,6 +19353,7 @@ class VulkanSPIRVCodeGen:
         self, name: str, type_id: SpirvId, location: int, binding: int
     ) -> SpirvId:
         """Register an output variable with location decoration."""
+        self.validate_user_defined_interface_type(type_id, "Output", name)
         ptr_type = self.register_pointer_type(type_id, "Output")
 
         id_value = self.get_id()

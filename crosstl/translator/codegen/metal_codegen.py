@@ -386,6 +386,7 @@ class MetalCodeGen:
         "refract",
         "round",
         "rsqrt",
+        "saturate",
         "sign",
         "sin",
         "smoothstep",
@@ -6272,7 +6273,7 @@ class MetalCodeGen:
             bitcast_result_type = self.metal_bitcast_result_type(func_name, args)
             if bitcast_result_type is not None:
                 return bitcast_result_type
-            if func_name in {"mix", "clamp", "min", "max"} and args:
+            if func_name in {"mix", "clamp", "min", "max", "saturate"} and args:
                 return self.expression_result_type(args[0])
             if is_resource_size_query_operation(func_name) and args:
                 texture_type = self.texture_argument_resource_type(args[0])
