@@ -4356,6 +4356,59 @@ def test_validate_project_report_rejects_unexpected_generated_metadata_fields(
     assert "project.unexpected is not allowed" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_unexpected_generated_validation_fields(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(
+        repo, targets=["opengl"], output_dir="out", validate=True
+    ).to_json()
+    validation_payload = payload["validation"]
+    validation_artifact = validation_payload["artifacts"][0]
+    validation_payload["unexpected"] = "metadata"
+    validation_payload["summary"]["unexpected"] = "metadata"
+    validation_payload["toolchains"][0]["unexpected"] = "metadata"
+    validation_payload["toolchains"][0]["tools"][0]["unexpected"] = "metadata"
+    validation_artifact["unexpected"] = "metadata"
+    validation_payload["toolchainRuns"] = [
+        {
+            "source": validation_artifact["source"],
+            "sourceBackend": validation_artifact["sourceBackend"],
+            "target": validation_artifact["target"],
+            "path": validation_artifact["path"],
+            "command": ["glslangValidator"],
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "",
+            "stderr": "",
+            "unexpected": "metadata",
+        }
+    ]
+    report_path = repo / "out" / "unexpected-generated-validation-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "validation.unexpected is not allowed" in diagnostic["message"]
+    assert "validation.summary.unexpected is not allowed" in diagnostic["message"]
+    assert "validation.toolchains[0].unexpected is not allowed" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchains[0].tools[0].unexpected is not allowed" in (
+        diagnostic["message"]
+    )
+    assert "validation.artifacts[0].unexpected is not allowed" in diagnostic["message"]
+    assert "validation.toolchainRuns[0].unexpected is not allowed" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_empty_project_mapping_keys(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

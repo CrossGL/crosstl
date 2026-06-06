@@ -57,6 +57,49 @@ REPORT_PROJECT_FIELDS = frozenset(
         "externalCorpusManifest",
     )
 )
+VALIDATION_FIELDS = frozenset(("toolchains", "artifacts", "summary", "toolchainRuns"))
+VALIDATION_TOOLCHAIN_FIELDS = frozenset(("target", "status", "tools", "message"))
+VALIDATION_TOOL_FIELDS = frozenset(("name", "path", "available"))
+VALIDATION_ARTIFACT_FIELDS = frozenset(
+    (
+        "source",
+        "target",
+        "path",
+        "exists",
+        "status",
+        "variant",
+        "sourceBackend",
+        "sourceHashStatus",
+        "generatedHashStatus",
+        "sourceMapStatus",
+        "sourceRemapStatus",
+    )
+)
+VALIDATION_SUMMARY_FIELDS = frozenset(
+    (
+        "artifactCount",
+        "okCount",
+        "failedCount",
+        "sourceHashStatusCounts",
+        "generatedHashStatusCounts",
+        "sourceMapStatusCounts",
+        "sourceRemapStatusCounts",
+    )
+)
+VALIDATION_TOOLCHAIN_RUN_FIELDS = frozenset(
+    (
+        "source",
+        "target",
+        "path",
+        "variant",
+        "sourceBackend",
+        "command",
+        "returncode",
+        "status",
+        "stdout",
+        "stderr",
+    )
+)
 SOURCE_MAP_SPAN_FIELDS = (
     "file",
     "line",
@@ -7416,12 +7459,19 @@ def _tool_status_contract_reasons(
     toolchain: Any,
     *,
     declared_targets: set[str] | None = None,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     prefix = f"validation.toolchains[{index}]"
     if not isinstance(toolchain, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            prefix, toolchain, VALIDATION_TOOLCHAIN_FIELDS
+        )
+        if require_closed_fields
+        else []
+    )
     status = toolchain.get("status")
     status_is_valid = status in {"available", "unavailable", "not-configured"}
     target = toolchain.get("target")
@@ -7448,6 +7498,12 @@ def _tool_status_contract_reasons(
                 reasons.append(f"{tool_prefix} must be an object")
                 tools_are_valid = False
                 continue
+            if require_closed_fields:
+                reasons.extend(
+                    _unsupported_mapping_field_reasons(
+                        tool_prefix, tool, VALIDATION_TOOL_FIELDS
+                    )
+                )
             name = tool.get("name")
             if not _is_non_empty_string(name):
                 reasons.append(f"{tool_prefix}.name must be a string")
@@ -7514,12 +7570,17 @@ def _validation_artifact_contract_reasons(
         Mapping[ArtifactIdentity, DeclaredArtifact] | None
     ) = None,
     require_status_fields: bool = False,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     prefix = f"validation.artifacts[{index}]"
     if not isinstance(artifact, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(prefix, artifact, VALIDATION_ARTIFACT_FIELDS)
+        if require_closed_fields
+        else []
+    )
     for field_name in ("source", "target", "path"):
         if not _is_non_empty_string(artifact.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
@@ -7676,13 +7737,22 @@ def _validation_artifact_contract_reasons(
 
 
 def _validation_summary_contract_reasons(
-    summary: Any, artifact_checks: Sequence[Any]
+    summary: Any,
+    artifact_checks: Sequence[Any],
+    *,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     if not isinstance(summary, Mapping):
         return ["validation.summary must be an object"]
 
     expected = _validation_summary(artifact_checks)
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            "validation.summary", summary, VALIDATION_SUMMARY_FIELDS
+        )
+        if require_closed_fields
+        else []
+    )
     for field_name in ("artifactCount", "okCount", "failedCount"):
         reasons.extend(
             _count_field_contract_reasons(
@@ -7719,12 +7789,17 @@ def _toolchain_run_contract_reasons(
     declared_artifacts_by_identity: (
         Mapping[ArtifactIdentity, DeclaredArtifact] | None
     ) = None,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     prefix = f"validation.toolchainRuns[{index}]"
     if not isinstance(run, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(prefix, run, VALIDATION_TOOLCHAIN_RUN_FIELDS)
+        if require_closed_fields
+        else []
+    )
     for field_name in ("source", "target", "path"):
         if not _is_non_empty_string(run.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
@@ -7820,7 +7895,11 @@ def _validation_contract_reasons(
     if not isinstance(validation, Mapping):
         return ["validation must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons("validation", validation, VALIDATION_FIELDS)
+        if require_validation
+        else []
+    )
     project = report.get("project")
     project_targets = project.get("targets", []) if isinstance(project, Mapping) else []
     project_targets_valid = isinstance(project_targets, list) and all(
@@ -7868,6 +7947,7 @@ def _validation_contract_reasons(
                     index,
                     toolchain,
                     declared_targets=declared_targets,
+                    require_closed_fields=require_validation,
                 )
             )
         reasons.extend(_duplicate_toolchain_target_contract_reasons(toolchains))
@@ -7887,6 +7967,7 @@ def _validation_contract_reasons(
                     declared_artifact_identities=declared_artifact_identities,
                     declared_artifacts_by_identity=declared_artifacts_by_identity,
                     require_status_fields=summarized_validation,
+                    require_closed_fields=require_validation,
                 )
             )
         reasons.extend(
@@ -7914,6 +7995,7 @@ def _validation_contract_reasons(
             _validation_summary_contract_reasons(
                 validation.get("summary"),
                 artifact_checks if isinstance(artifact_checks, list) else [],
+                require_closed_fields=require_validation,
             )
         )
 
@@ -7931,6 +8013,7 @@ def _validation_contract_reasons(
                         declared_variants=declared_variants,
                         declared_artifact_identities=declared_artifact_identities,
                         declared_artifacts_by_identity=declared_artifacts_by_identity,
+                        require_closed_fields=require_validation,
                     )
                 )
             reasons.extend(
