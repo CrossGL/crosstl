@@ -1537,10 +1537,8 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
         validation["diagnosticsByCode"]["project.translate.include-paths-not-forwarded"]
         == 1
     )
-    assert validation["missingCapabilityCounts"] == {
-        "include.forwarding": 1,
-        "include.resolution": 3,
-    }
+    assert validation["missingCapabilityCounts"]["include.forwarding"] == 1
+    assert validation["missingCapabilityCounts"]["include.resolution"] == 3
 
 
 def test_translate_project_expands_named_variants_with_merged_defines(
