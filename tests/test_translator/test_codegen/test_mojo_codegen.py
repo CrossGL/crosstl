@@ -18812,6 +18812,38 @@ def test_inverse_sqrt_alias_lowers_to_mojo_rsqrt():
     assert "inverseSqrt(" not in generated_code
 
 
+def test_inverse_sqrt_aliases_feed_mojo_reinterpret_helpers():
+    code = """
+    shader NumericAliases {
+        compute {
+            void main() {
+                float x = 4.0;
+                vec3 v = vec3(4.0, 9.0, 16.0);
+
+                uint scalarR = asuint(rsqrt(x));
+                uint scalarI = floatBitsToUint(inverseSqrt(x));
+                uvec3 vectorR = asuint(rsqrt(v));
+                uvec3 vectorI = floatBitsToUint(inverseSqrt(v));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn asuint(value: Float32) -> UInt32:" in generated_code
+    assert (
+        "fn asuint(value: SIMD[DType.float32, 4]) -> SIMD[DType.uint32, 4]:"
+        in generated_code
+    )
+    assert "var scalarR: UInt32 = asuint(rsqrt(x))" in generated_code
+    assert "var scalarI: UInt32 = asuint(rsqrt(x))" in generated_code
+    assert "var vectorR: SIMD[DType.uint32, 4] = asuint(rsqrt(v))" in generated_code
+    assert "var vectorI: SIMD[DType.uint32, 4] = asuint(rsqrt(v))" in generated_code
+    assert "floatBitsToUint(" not in generated_code
+    assert "inverseSqrt(" not in generated_code
+
+
 def test_user_defined_inverse_sqrt_function_is_not_lowered_to_rsqrt():
     code = """
     shader NumericAliases {

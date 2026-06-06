@@ -974,6 +974,13 @@ class HLSLParser:
             attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             qualifiers = self.parse_qualifiers()
+            if self.is_constructor_or_destructor_member(name):
+                methods.append(
+                    self.parse_constructor_or_destructor_member(
+                        name, qualifiers=qualifiers, attributes=attributes
+                    )
+                )
+                continue
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
                     name,
@@ -1065,6 +1072,15 @@ class HLSLParser:
             member_attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
+            if self.is_constructor_or_destructor_member(nested_name):
+                nested_methods.append(
+                    self.parse_constructor_or_destructor_member(
+                        nested_name,
+                        qualifiers=member_qualifiers,
+                        attributes=member_attributes,
+                    )
+                )
+                continue
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
                     nested_name or parent_name,
@@ -1260,6 +1276,15 @@ class HLSLParser:
             attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
+            if self.is_constructor_or_destructor_member(explicit_name):
+                methods.append(
+                    self.parse_constructor_or_destructor_member(
+                        explicit_name,
+                        qualifiers=member_qualifiers,
+                        attributes=attributes,
+                    )
+                )
+                continue
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
                     explicit_name or "AnonymousStruct",
@@ -1313,6 +1338,102 @@ class HLSLParser:
         alias.qualifiers = qualifiers
         alias.array_sizes = array_sizes
         return alias
+
+    def is_constructor_or_destructor_member(self, struct_name):
+        if not struct_name:
+            return False
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == struct_name
+            and self.peek()[0] == "LPAREN"
+        ):
+            return True
+        return (
+            self.current_token[0] == "BITWISE_NOT"
+            and self.peek()[0] == "IDENTIFIER"
+            and self.peek()[1] == struct_name
+            and self.peek(2)[0] == "LPAREN"
+        )
+
+    def parse_constructor_or_destructor_member(
+        self, struct_name, qualifiers=None, attributes=None
+    ):
+        qualifiers = qualifiers or []
+        attributes = attributes or []
+        is_destructor = self.current_token[0] == "BITWISE_NOT"
+
+        if is_destructor:
+            self.eat("BITWISE_NOT")
+            name = f"~{self.parse_identifier()}"
+        else:
+            name = self.parse_identifier()
+
+        params = self.parse_parameters()
+        qualifiers = qualifiers + self.parse_trailing_function_qualifiers()
+        if self.current_token[0] == "COLON":
+            self.skip_constructor_initializer_list()
+
+        is_prototype = False
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            body = []
+            is_prototype = True
+        else:
+            body = self.parse_block()
+
+        function = FunctionNode(
+            return_type="",
+            name=name,
+            params=params,
+            body=body,
+            qualifiers=qualifiers,
+            attributes=attributes,
+        )
+        function.is_constructor = not is_destructor
+        function.is_destructor = is_destructor
+        function.is_prototype = is_prototype
+        return function
+
+    def skip_constructor_initializer_list(self):
+        self.eat("COLON")
+        while self.current_token[0] not in {"LBRACE", "SEMICOLON", "EOF"}:
+            self.skip_constructor_initializer_entry()
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            break
+
+    def skip_constructor_initializer_entry(self):
+        while self.current_token[0] not in {
+            "LPAREN",
+            "LBRACE",
+            "COMMA",
+            "SEMICOLON",
+            "EOF",
+        }:
+            if self.current_token[0] == "LESS_THAN":
+                self.skip_template_argument_list()
+                continue
+            self.eat(self.current_token[0])
+
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_delimiter_block("LPAREN", "RPAREN")
+        elif self.current_token[0] == "LBRACE":
+            self.skip_balanced_brace_block()
+
+    def skip_balanced_delimiter_block(self, open_token, close_token):
+        self.eat(open_token)
+        depth = 1
+        while depth > 0 and self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == open_token:
+                depth += 1
+            elif token_type == close_token:
+                depth -= 1
+            self.eat(token_type)
+
+        if depth != 0:
+            raise SyntaxError(f"Unterminated {open_token} block")
 
     def parse_cbuffer(self, attributes=None):
         buffer_kind = self.current_token[1]

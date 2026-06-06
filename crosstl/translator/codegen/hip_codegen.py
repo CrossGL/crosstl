@@ -411,6 +411,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "inverseSqrt": "rsqrtf",
             "rsqrt": "rsqrtf",
             "pow": "powf",
+            "fma": "fmaf",
+            "mad": "fmaf",
             "abs": "fabsf",
             "floor": "floorf",
             "ceil": "ceilf",
@@ -676,6 +678,22 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.insert_helper_functions()
 
         return "\n".join(self.code_lines)
+
+    def fused_multiply_add_result_type(self, raw_args):
+        if len(raw_args) != 3:
+            return None
+
+        scalar_result_type = None
+        for raw_arg in raw_args:
+            arg_type = self.expression_result_type(raw_arg)
+            if self.vector_type_info(arg_type) is not None:
+                return arg_type
+            component_type = self.scalar_component_type(arg_type)
+            if component_type == "double":
+                scalar_result_type = "double"
+            elif component_type == "float" and scalar_result_type is None:
+                scalar_result_type = "float"
+        return scalar_result_type
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-compilable HIP code."""
@@ -3763,6 +3781,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 atan2_call = self.generate_atan2_call(raw_args, args)
                 if atan2_call is not None:
                     return atan2_call
+        elif func_name in {"fma", "mad"}:
+            if len(args) == 3:
+                result_type = self.fused_multiply_add_result_type(raw_args)
+                fma_call = self.generate_fused_multiply_add_call(raw_args, args)
+                if fma_call is not None:
+                    if result_type is not None:
+                        node.expression_type = result_type
+                    return fma_call
         elif func_name in {"dot", "cross", "length", "normalize"}:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
@@ -4797,6 +4823,124 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def format_mix_component(self, left, right, factor):
         return f"({left} + (({right} - {left}) * {factor}))"
+
+    def generate_fused_multiply_add_call(self, raw_args, args):
+        vector_infos = [
+            self.vector_type_info(self.expression_result_type(raw_arg))
+            for raw_arg in raw_args
+        ]
+        vector_info = next((info for info in vector_infos if info is not None), None)
+        if vector_info is None:
+            scalar_type = self.fused_multiply_add_scalar_type(raw_args)
+            if scalar_type is None:
+                return None
+            return self.format_fused_multiply_add_component(
+                scalar_type,
+                args[0],
+                args[1],
+                args[2],
+            )
+
+        if vector_info["component_type"] not in {"float", "double"}:
+            return None
+        for info in vector_infos:
+            if info is None:
+                continue
+            if (
+                len(info["components"]) != len(vector_info["components"])
+                or info["component_type"] != vector_info["component_type"]
+            ):
+                return None
+
+        component_count = len(vector_info["components"])
+        pieces = []
+        for raw_arg, arg_expr, info in zip(raw_args, args, vector_infos):
+            if info is None and not self.compatible_fma_scalar(
+                raw_arg, vector_info["component_type"]
+            ):
+                return None
+            pieces.append(
+                self.vector_operation_piece(
+                    raw_arg,
+                    arg_expr,
+                    info,
+                    component_count,
+                    vector_info["component_type"],
+                )
+            )
+
+        helper_name = self.require_vector_fused_multiply_add_helper(
+            vector_info,
+            pieces,
+        )
+        return f"{helper_name}({', '.join(piece['arg_expr'] for piece in pieces)})"
+
+    def fused_multiply_add_scalar_type(self, raw_args):
+        component_types = []
+        for raw_arg in raw_args:
+            arg_type = self.expression_result_type(raw_arg)
+            if self.vector_type_info(arg_type) is not None:
+                return None
+            component_type = self.scalar_component_type(arg_type)
+            if component_type not in {"float", "double", None}:
+                return None
+            component_types.append(component_type)
+        return "double" if "double" in component_types else "float"
+
+    def compatible_fma_scalar(self, raw_arg, vector_component_type):
+        component_type = self.scalar_component_type(
+            self.expression_result_type(raw_arg)
+        )
+        if component_type is None:
+            return True
+        if component_type in {"int", "uint"}:
+            return True
+        return component_type == vector_component_type
+
+    def require_vector_fused_multiply_add_helper(self, vector_info, pieces):
+        signature = "_".join(
+            self.vector_constructor_piece_signature(piece) for piece in pieces
+        )
+        helper_name = self.sanitize_helper_name(
+            f"cgl_{vector_info['type']}_fma_{signature}"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        params = [
+            f"{piece['param_type']} arg{index}" for index, piece in enumerate(pieces)
+        ]
+        component_args = []
+        for component in vector_info["components"]:
+            multiply_left = self.vector_operation_piece_param_expr(
+                pieces[0], 0, component
+            )
+            multiply_right = self.vector_operation_piece_param_expr(
+                pieces[1], 1, component
+            )
+            addend = self.vector_operation_piece_param_expr(pieces[2], 2, component)
+            component_args.append(
+                self.format_fused_multiply_add_component(
+                    vector_info["component_type"],
+                    multiply_left,
+                    multiply_right,
+                    addend,
+                )
+            )
+
+        helper = (
+            f"__device__ inline {vector_info['type']} {helper_name}"
+            f"({', '.join(params)})\n"
+            "{\n"
+            f"    return {vector_info['constructor']}({', '.join(component_args)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_fused_multiply_add_component(self, scalar_type, left, right, addend):
+        target = "fma" if scalar_type == "double" else "fmaf"
+        return f"{target}({left}, {right}, {addend})"
 
     def generate_atan2_call(self, raw_args, args):
         y_type = self.expression_result_type(raw_args[0])
@@ -8886,6 +9030,13 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             bitcast_result_type = self.hip_bitcast_result_type(func_name, raw_args)
             if bitcast_result_type is not None:
                 return bitcast_result_type
+            if func_name in {"fma", "mad"}:
+                cached_type = getattr(node, "expression_type", None) or getattr(
+                    node, "vtype", None
+                )
+                if cached_type is not None:
+                    return cached_type
+                return self.fused_multiply_add_result_type(raw_args)
             if (
                 func_name == "lerp"
                 and len(raw_args) == 3

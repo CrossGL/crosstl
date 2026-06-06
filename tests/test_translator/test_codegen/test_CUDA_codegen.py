@@ -796,6 +796,47 @@ class TestCudaCodeGen:
         assert "float adjusted = lerp(0.0, 1.0, 0.25);" in cuda_code
         assert "float adjusted = (0.0 + ((1.0 - 0.0) * 0.25));" not in cuda_code
 
+    def test_user_defined_builtin_name_result_type_is_not_reinferred_as_cuda_builtin(
+        self,
+    ):
+        source_code = """
+        shader TestShader {
+            compute {
+                float mix(vec3 x, vec3 y, float t) {
+                    return x.x + y.x + t;
+                }
+
+                float fma(vec3 x, vec3 y, vec3 z) {
+                    return x.x + y.x + z.x;
+                }
+
+                void main() {
+                    vec3 a = vec3(1.0, 2.0, 3.0);
+                    vec3 b = vec3(4.0, 5.0, 6.0);
+                    vec3 c = vec3(7.0, 8.0, 9.0);
+                    float wrappedMix = fract(mix(a, b, 0.25));
+                    float wrappedFma = fract(fma(a, b, c));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float mix(float3 x, float3 y, float t)" in cuda_code
+        assert "__device__ float fma(float3 x, float3 y, float3 z)" in cuda_code
+        assert "float wrappedMix = cgl_fract_float(mix(a, b, 0.25));" in cuda_code
+        assert "float wrappedFma = cgl_fract_float(fma(a, b, c));" in cuda_code
+        assert "float wrappedMix = cgl_float3_fract(mix(a, b, 0.25));" not in cuda_code
+        assert "float wrappedFma = cgl_float3_fract(fma(a, b, c));" not in cuda_code
+        assert (
+            "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz(a, b, c)" not in cuda_code
+        )
+
     def test_user_defined_fma_and_mad_functions_are_not_lowered_to_cuda_builtins(
         self,
     ):

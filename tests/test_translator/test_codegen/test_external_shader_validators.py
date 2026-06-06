@@ -1636,6 +1636,24 @@ float4 ps_main() : SV_Target {
 }
 """
 
+DXC_STYLE_STRUCT_CONSTRUCTOR_HLSL = """
+struct MaterialSample {
+    float roughness;
+    float3 normal;
+
+    MaterialSample(float value, float3 n) : roughness(value), normal(n) {}
+
+    ~MaterialSample() {
+        roughness = 0.0;
+    }
+};
+
+float4 ps_main(float3 n : NORMAL) : SV_Target {
+    MaterialSample sample = MaterialSample(0.5, n);
+    return float4(sample.normal * sample.roughness, 1);
+}
+"""
+
 
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
@@ -1833,6 +1851,14 @@ def test_pmfx_style_effect_metadata_blocks_import_to_parseable_crossgl():
 
     assert "vec4 ps_main() @ gl_FragColor" in crossgl
     assert "return vec4(1, 1, 1, 1);" in crossgl
+
+
+def test_dxc_style_struct_constructors_import_to_parseable_crossgl():
+    crossgl = _hlsl_to_crossgl(DXC_STYLE_STRUCT_CONSTRUCTOR_HLSL)
+
+    assert "struct MaterialSample" in crossgl
+    assert "MaterialSample sample = MaterialSample(0.5, n);" in crossgl
+    assert "return vec4(sample.normal * sample.roughness, 1);" in crossgl
 
 
 def test_generated_hlsl_fragment_compiles_with_dxc(tmp_path):

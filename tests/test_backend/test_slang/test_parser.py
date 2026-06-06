@@ -3585,14 +3585,18 @@ def test_interpolation_modifiers_from_vulkan_samples_parse_as_qualifiers():
         float4 Pos : SV_POSITION;
         nointerpolation uint TextureIndex;
         nointerpolation float4 Color;
+        linear centroid float2 Uv : TEXCOORD0;
+        sample float4 CoverageColor : COLOR1;
     };
 
     [shader("fragment")]
     float4 main(
         VSOutput input,
-        noperspective float3 baryCoordsAffine : SV_Barycentrics)
+        noperspective float3 baryCoordsAffine : SV_Barycentrics,
+        centroid noperspective float2 baryCoordsNoPerspective : TEXCOORD1,
+        linear sample float4 perSampleColor : COLOR2)
     {
-        return input.Color + float4(baryCoordsAffine, 1.0);
+        return input.Color + perSampleColor + float4(baryCoordsAffine, 1.0);
     }
     """
 
@@ -3605,8 +3609,16 @@ def test_interpolation_modifiers_from_vulkan_samples_parse_as_qualifiers():
     assert output.members[1].vtype == "uint"
     assert output.members[2].qualifiers == ["nointerpolation"]
     assert output.members[2].vtype == "float4"
+    assert output.members[3].qualifiers == ["linear", "centroid"]
+    assert output.members[3].vtype == "float2"
+    assert output.members[4].qualifiers == ["sample"]
+    assert output.members[4].vtype == "float4"
     assert main.params[1].qualifiers == ["noperspective"]
     assert main.params[1].vtype == "float3"
+    assert main.params[2].qualifiers == ["centroid", "noperspective"]
+    assert main.params[2].vtype == "float2"
+    assert main.params[3].qualifiers == ["linear", "sample"]
+    assert main.params[3].vtype == "float4"
 
 
 def test_flat_interpolation_outputs_from_libretro_shaders_parse_as_qualifiers():

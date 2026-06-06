@@ -3008,6 +3008,34 @@ def test_parse_struct_operator_methods_from_dxc_intrinsics_tests():
     assert struct.methods[0].return_type == "Vector"
 
 
+def test_parse_struct_constructors_and_destructors_from_dxc_style_helpers():
+    ast = parse_code("""
+        struct MaterialSample {
+            float roughness;
+            float3 normal;
+
+            MaterialSample(float value, float3 n) : roughness(value), normal(n) {}
+
+            ~MaterialSample() {
+                roughness = 0.0;
+            }
+        };
+    """)
+
+    struct = ast.structs[0]
+    constructor, destructor = struct.methods
+
+    assert [member.name for member in struct.members] == ["roughness", "normal"]
+    assert constructor.name == "MaterialSample"
+    assert constructor.return_type == ""
+    assert constructor.is_constructor is True
+    assert [param.name for param in constructor.params] == ["value", "n"]
+    assert constructor.body == []
+    assert destructor.name == "~MaterialSample"
+    assert destructor.is_destructor is True
+    assert isinstance(destructor.body[0], AssignmentNode)
+
+
 def test_parse_struct_bitfield_members_from_dxc_swizzle_fixture():
     ast = parse_code("""
         struct MyStruct

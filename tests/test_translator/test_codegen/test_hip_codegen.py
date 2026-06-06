@@ -2502,6 +2502,69 @@ class TestHipCodeGen:
         assert "float3 a = atan2f(" not in hip_code
         assert "double2 da = atan2f(" not in hip_code
 
+    def test_fma_and_mad_aliases_lower_to_hip_fused_multiply_add(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float x = 2.0;
+                    float y = 3.0;
+                    float z = 4.0;
+                    float fused = fma(x, y, z);
+                    float multiplyAdd = mad(x, y, z);
+
+                    double dx = 2.0;
+                    double dy = 3.0;
+                    double dz = 4.0;
+                    double preciseFused = fma(dx, dy, dz);
+                    double preciseMad = mad(dx, dy, dz);
+
+                    vec3 vx = vec3(1.0, 2.0, 3.0);
+                    vec3 vy = vec3(4.0, 5.0, 6.0);
+                    vec3 vz = vec3(7.0, 8.0, 9.0);
+                    vec3 vectorFused = fma(vx, vy, vz);
+                    vec3 scalarMiddle = mad(vx, 2.0, vz);
+                    vec3 nested = fract(fma(vx, vy, vz));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float fused = fmaf(x, y, z);" in hip_code
+        assert "float multiplyAdd = fmaf(x, y, z);" in hip_code
+        assert "double preciseFused = fma(dx, dy, dz);" in hip_code
+        assert "double preciseMad = fma(dx, dy, dz);" in hip_code
+        assert (
+            "__device__ inline float3 "
+            "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz" in hip_code
+        )
+        assert (
+            "return make_float3(fmaf(arg0.x, arg1.x, arg2.x), "
+            "fmaf(arg0.y, arg1.y, arg2.y), "
+            "fmaf(arg0.z, arg1.z, arg2.z));" in hip_code
+        )
+        assert (
+            "float3 vectorFused = "
+            "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz(vx, vy, vz);" in hip_code
+        )
+        assert (
+            "float3 scalarMiddle = "
+            "cgl_float3_fma_float3_xyz_float_float3_xyz(vx, 2.0, vz);" in hip_code
+        )
+        assert (
+            "float3 nested = cgl_float3_fract("
+            "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz(vx, vy, vz));" in hip_code
+        )
+        assert "float3 vectorFused = fma(vx, vy, vz);" not in hip_code
+        assert "float3 scalarMiddle = mad(vx, 2.0, vz);" not in hip_code
+        assert " = mad(" not in hip_code
+
     def test_sign_builtin_lowers_to_hip_expressions(self):
         source_code = """
         shader TestShader {

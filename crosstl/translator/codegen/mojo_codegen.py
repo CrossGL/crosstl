@@ -13717,6 +13717,8 @@ class MojoCodeGen:
                 return "float"
             if func_name == "normalize" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"inversesqrt", "inverseSqrt", "rsqrt"} and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
             if func_name in {"mix", "lerp"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name in {"degrees", "radians"} and expr.args:

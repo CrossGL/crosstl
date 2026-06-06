@@ -170,6 +170,9 @@ MESH_STORAGE_QUALIFIERS = {
     "taskPayloadSharedNV",
     "taskNV",
 }
+MESH_STORAGE_QUALIFIERS_LOWER = {
+    qualifier.lower() for qualifier in MESH_STORAGE_QUALIFIERS
+}
 
 VULKAN_MEMORY_MODEL_QUALIFIERS = {
     "workgroupcoherent",
@@ -327,6 +330,29 @@ FRAGMENT_BUILTINS = {
     "gl_SamplePosition",
     "gl_SampleMask",
     "gl_SampleMaskIn",
+}
+FRAGMENT_OUTPUT_LAYOUT_QUALIFIERS = {"location", "index", "component"}
+FRAGMENT_OUTPUT_TYPES = {
+    "float",
+    "double",
+    "int",
+    "uint",
+    "bool",
+    "vec2",
+    "vec3",
+    "vec4",
+    "ivec2",
+    "ivec3",
+    "ivec4",
+    "uvec2",
+    "uvec3",
+    "uvec4",
+    "bvec2",
+    "bvec3",
+    "bvec4",
+    "dvec2",
+    "dvec3",
+    "dvec4",
 }
 VERTEX_BUILTINS = {
     "gl_VertexID",
@@ -596,6 +622,10 @@ class GLSLParser:
             return "fragment"
         if identifiers & VERTEX_BUILTINS or "gl_Position" in identifiers:
             return "vertex"
+
+        io_shader_type = self.infer_shader_type_from_io_variables(shader)
+        if io_shader_type:
+            return io_shader_type
         return "vertex"
 
     def infer_shader_type_from_pragmas(self, preprocessor):
@@ -642,6 +672,29 @@ class GLSLParser:
         if saw_geometry_input_layout:
             return "geometry"
         return None
+
+    def infer_shader_type_from_io_variables(self, shader):
+        for var in getattr(shader, "io_variables", []) or []:
+            if self.is_fragment_output_candidate(var):
+                return "fragment"
+        return None
+
+    def is_fragment_output_candidate(self, var):
+        qualifiers = {str(qualifier).lower() for qualifier in var.qualifiers or []}
+        if "out" not in qualifiers:
+            return False
+        if qualifiers & (MESH_STORAGE_QUALIFIERS_LOWER | {"patch"}):
+            return False
+
+        layout = getattr(var, "layout", None) or {}
+        layout_keys = {str(key).lower() for key in layout}
+        if any(key.startswith("blend_support") for key in layout_keys):
+            return True
+        if not layout_keys & FRAGMENT_OUTPUT_LAYOUT_QUALIFIERS:
+            return False
+
+        vtype = str(getattr(var, "vtype", "")).lower()
+        return vtype in FRAGMENT_OUTPUT_TYPES
 
     def collect_shader_identifiers(self, shader):
         identifiers = set()

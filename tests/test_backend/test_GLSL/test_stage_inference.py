@@ -171,6 +171,27 @@ def reverse_plain_glsl(source: str):
             ],
             id="glslc-pragma-shader-stage-fragment",
         ),
+        pytest.param(
+            """
+            #version 450
+            #extension GL_ARB_separate_shader_objects : enable
+            layout(location = 0) in vec2 uv;
+            layout(location = 0) out vec4 outColor;
+
+            void main() {
+                outColor = vec4(uv, 0.0, 1.0);
+            }
+            """,
+            "fragment",
+            ShaderStage.FRAGMENT,
+            [
+                "fragment {",
+                "#extension GL_ARB_separate_shader_objects : enable",
+                "vec4 main(FragmentInput input) @location(0) @ outColor",
+                "outColor = vec4(input.uv, 0.0, 1.0);",
+            ],
+            id="vulkan-fragment-output-location-infers-fragment",
+        ),
     ],
 )
 def test_plain_glsl_registry_infers_stage_from_real_world_snippets(
@@ -186,3 +207,23 @@ def test_plain_glsl_registry_infers_stage_from_real_world_snippets(
     assert ShaderStage.VERTEX not in parsed.stages
     for expected in expected_crossgl:
         assert expected in crossgl
+
+
+def test_plain_glsl_registry_keeps_vertex_output_varying_when_position_is_written():
+    source = """
+    #version 450
+    layout(location = 0) in vec3 position;
+    layout(location = 0) out vec2 uv;
+
+    void main() {
+        uv = position.xy;
+        gl_Position = vec4(position, 1.0);
+    }
+    """
+
+    ast, crossgl, parsed = reverse_plain_glsl(source)
+
+    assert ast.shader_type == "vertex"
+    assert ShaderStage.VERTEX in parsed.stages
+    assert "vertex {" in crossgl
+    assert "VertexOutput main(VertexInput input)" in crossgl
