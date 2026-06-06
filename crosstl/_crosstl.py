@@ -1029,6 +1029,62 @@ def _format_include_dependency_issue_line(dependency):
     return f"- {location}: {status}{kind_label} include {include}"
 
 
+def _format_resolved_include_dependency_line(dependency):
+    if not isinstance(dependency, Mapping):
+        return None
+
+    include = dependency.get("include")
+    resolved_path = dependency.get("resolvedPath")
+    if not isinstance(include, str) or not include:
+        return None
+    if not isinstance(resolved_path, str) or not resolved_path:
+        return None
+
+    source = dependency.get("source")
+    location = source if isinstance(source, str) and source else "(unknown)"
+    line = dependency.get("line")
+    column = dependency.get("column")
+    if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+        location += f":{line}"
+        if isinstance(column, int) and not isinstance(column, bool) and column > 0:
+            location += f":{column}"
+
+    kind = dependency.get("kind")
+    kind_label = f" {kind}" if isinstance(kind, str) and kind else ""
+    resolved_from = dependency.get("resolvedFrom")
+    source_label = (
+        f" ({resolved_from})"
+        if isinstance(resolved_from, str) and resolved_from
+        else ""
+    )
+    return f"- {location}: resolved{kind_label} include {include} -> {resolved_path}{source_label}"
+
+
+def _format_resolved_include_dependency_lines(include_dependencies):
+    if not isinstance(include_dependencies, Mapping):
+        return []
+    dependencies = include_dependencies.get("resolvedDependencies")
+    if not isinstance(dependencies, list) or not dependencies:
+        return []
+
+    lines = ["Resolved include dependencies:"]
+    for dependency in dependencies:
+        line = _format_resolved_include_dependency_line(dependency)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = include_dependencies.get("truncatedResolvedDependencyCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_include_dependency_issue_lines(include_dependencies):
     if not isinstance(include_dependencies, Mapping):
         return []
@@ -1371,6 +1427,9 @@ def _format_project_report_inspection(payload):
     )
     if include_dependencies_by_kind:
         lines.append(include_dependencies_by_kind)
+    lines.extend(
+        _format_resolved_include_dependency_lines(payload.get("includeDependencies"))
+    )
     lines.extend(
         _format_include_dependency_issue_lines(payload.get("includeDependencies"))
     )

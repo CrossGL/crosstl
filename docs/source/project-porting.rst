@@ -210,6 +210,9 @@ system includes are recorded without warning because they often refer to SDK or
 toolchain headers. Missing local includes, dynamic include expressions, and
 include paths that resolve outside the repository emit structured
 ``include.resolution`` diagnostics.
+Report inspection samples both resolved include dependencies and unresolved
+include issues, including the source location, include kind, resolved path, and
+resolution source where available.
 ``output_dir`` must resolve inside the repository root; paths that escape the
 repository are reported as configuration diagnostics and artifacts are not
 written. When named variants are configured, project translation emits one
@@ -366,7 +369,7 @@ Project reports are JSON documents with:
   status consistency checks,
   include dependency record shape and include dependency summary consistency,
   current include dependency status, resolved-path, resolved-hash, and
-  resolution-source checks,
+  resolution-source checks, resolved and unresolved include inspection samples,
   artifact source, source-backend,
   target, variant, and source-relative output layout declaration checks,
   translated artifact existence checks, escaped output directory and

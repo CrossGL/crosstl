@@ -321,6 +321,9 @@ def test_project_include_resolution_documents_status_reporting():
         assert "include dependency and include-path processing rollups" in (
             backend_support["notes"]
         )
+        assert "resolved and unresolved include dependency samples" in (
+            backend_support["notes"]
+        )
         assert "unresolved include dependency samples" in backend_support["notes"]
         assert "not-supported include-path processing artifact samples" in (
             backend_support["notes"]

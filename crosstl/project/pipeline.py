@@ -3940,6 +3940,10 @@ def _inspection_include_dependency_sample(
         value = dependency.get(field_name)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             sample[field_name] = value
+    for field_name in ("resolvedPath", "resolvedFrom"):
+        value = dependency.get(field_name)
+        if _is_non_empty_string(value):
+            sample[field_name] = value
     return {key: value for key, value in sample.items() if value is not None}
 
 
@@ -3962,6 +3966,7 @@ def _inspection_include_dependency_summary(
     ):
         return {"available": False}
 
+    resolved_dependencies = []
     unresolved_dependencies = []
     for unit in _record_sequence(units):
         if not isinstance(unit, Mapping):
@@ -3972,7 +3977,16 @@ def _inspection_include_dependency_summary(
         for dependency in dependencies:
             if not isinstance(dependency, Mapping):
                 continue
-            if dependency.get("status") not in {
+            status = dependency.get("status")
+            if status == "resolved":
+                sample = _inspection_include_dependency_sample(
+                    unit.get("path"),
+                    dependency,
+                )
+                if sample:
+                    resolved_dependencies.append(sample)
+                continue
+            if status not in {
                 "dynamic",
                 "missing",
                 "outside-project",
@@ -3990,6 +4004,14 @@ def _inspection_include_dependency_summary(
         "dependencyCount": dependency_count,
         "byStatus": dict(by_status),
         "byKind": dict(by_kind),
+        "resolvedDependencyCount": len(resolved_dependencies),
+        "truncatedResolvedDependencyCount": max(
+            0,
+            len(resolved_dependencies) - INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT,
+        ),
+        "resolvedDependencies": resolved_dependencies[
+            :INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT
+        ],
         "unresolvedDependencyCount": len(unresolved_dependencies),
         "truncatedUnresolvedDependencyCount": max(
             0,

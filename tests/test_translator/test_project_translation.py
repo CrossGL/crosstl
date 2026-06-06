@@ -8419,6 +8419,9 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "dependencyCount": 0,
         "byStatus": {},
         "byKind": {},
+        "resolvedDependencyCount": 0,
+        "truncatedResolvedDependencyCount": 0,
+        "resolvedDependencies": [],
         "unresolvedDependencyCount": 0,
         "truncatedUnresolvedDependencyCount": 0,
         "unresolvedDependencies": [],
@@ -8950,6 +8953,11 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     assert result.returncode == 0
     assert "Include dependencies by status: missing=1, resolved=1" in result.stdout
     assert "Include dependencies by kind: local=1, system=1" in result.stdout
+    assert "Resolved include dependencies:" in result.stdout
+    assert (
+        "- main.frag:2:1: resolved system include shared.inc -> "
+        "includes/shared.inc (include-dir)"
+    ) in result.stdout
     assert "Include dependency issues:" in result.stdout
     assert "- main.frag:3:1: missing local include missing.inc" in result.stdout
 
@@ -8959,6 +8967,20 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
         "dependencyCount": 2,
         "byStatus": {"missing": 1, "resolved": 1},
         "byKind": {"local": 1, "system": 1},
+        "resolvedDependencyCount": 1,
+        "truncatedResolvedDependencyCount": 0,
+        "resolvedDependencies": [
+            {
+                "source": "main.frag",
+                "include": "shared.inc",
+                "status": "resolved",
+                "kind": "system",
+                "line": 2,
+                "column": 1,
+                "resolvedPath": "includes/shared.inc",
+                "resolvedFrom": "include-dir",
+            }
+        ],
         "unresolvedDependencyCount": 1,
         "truncatedUnresolvedDependencyCount": 0,
         "unresolvedDependencies": [
