@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 888
+        "test_count": 891
       },
       "translator_codegen": {
         "exists": true,
@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 891
+        "test_count": 893
       },
       "translator_codegen": {
         "exists": true,
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 674
+        "test_count": 675
       },
       "translator_codegen": {
         "exists": true,
@@ -697,7 +697,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 727
+        "test_count": 729
       },
       "translator_codegen": {
         "exists": true,
@@ -925,7 +925,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 845
+        "test_count": 847
       },
       "translator_codegen": {
         "exists": true,

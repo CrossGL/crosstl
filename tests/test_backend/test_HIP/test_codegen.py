@@ -943,6 +943,63 @@ class TestHipCodeGen:
         assert "workgroupBarrier();" in result
         assert "__threadfence" not in result
 
+    def test_rocm_docs_device_timer_functions_emit_reparseable_diagnostic(self):
+        # Source: ROCm HIP C++ language extensions, Timer functions.
+        # URL: https://rocm.docs.amd.com/projects/HIP/en/docs-7.0.1/how-to/hip_cpp_language_extensions.html#timer-functions
+        code = """
+        __global__ void profile(unsigned long long* out) {
+            int local_cycles = clock();
+            unsigned long long cycles = clock64();
+            unsigned long long wall = wall_clock64();
+            out[threadIdx.x] = cycles + wall + local_cycles;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var local_cycles: i32 = (/* HIP device timer clock() "
+            "not directly supported in CrossGL */ 0);"
+        ) in result
+        assert (
+            "var cycles: u64 = (/* HIP device timer clock64() "
+            "not directly supported in CrossGL */ 0);"
+        ) in result
+        assert (
+            "var wall: u64 = (/* HIP device timer wall_clock64() "
+            "not directly supported in CrossGL */ 0);"
+        ) in result
+        assert "clock();" not in result
+        assert "clock64();" not in result
+        assert "wall_clock64();" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_user_defined_timer_named_function_is_preserved(self):
+        code = """
+        __device__ unsigned long long clock64(unsigned long long value) {
+            return value + 1ull;
+        }
+        __global__ void kernel(unsigned long long* out) {
+            out[threadIdx.x] = clock64(threadIdx.x);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "u64 clock64(u64 value)" in result
+        assert (
+            "out[gl_LocalInvocationID.x] = clock64(gl_LocalInvocationID.x);" in result
+        )
+        assert "HIP device timer clock64" not in result
+
     def test_syncwarp_mask_emits_explicit_diagnostic(self):
         code = """
         __global__ void sync(unsigned int mask) {

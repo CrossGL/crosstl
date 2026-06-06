@@ -4498,7 +4498,61 @@ class CudaToCrossGLConverter:
         if mapped_name is not None and len(args) == 1:
             return f"{mapped_name}({args[0]})"
 
+        integer_conversion = self.format_cuda_float_to_integer_conversion_intrinsic(
+            function_name, args
+        )
+        if integer_conversion is not None:
+            return integer_conversion
+
         return None
+
+    def format_cuda_float_to_integer_conversion_intrinsic(self, function_name, args):
+        if len(args) != 1:
+            return None
+
+        conversion_intrinsics = {
+            "__float2int_rd": ("i32", "floor"),
+            "__float2int_rn": ("i32", "round"),
+            "__float2int_ru": ("i32", "ceil"),
+            "__float2int_rz": ("i32", None),
+            "__float2uint_rd": ("u32", "floor"),
+            "__float2uint_rn": ("u32", "round"),
+            "__float2uint_ru": ("u32", "ceil"),
+            "__float2uint_rz": ("u32", None),
+            "__float2ll_rd": ("i64", "floor"),
+            "__float2ll_rn": ("i64", "round"),
+            "__float2ll_ru": ("i64", "ceil"),
+            "__float2ll_rz": ("i64", None),
+            "__float2ull_rd": ("u64", "floor"),
+            "__float2ull_rn": ("u64", "round"),
+            "__float2ull_ru": ("u64", "ceil"),
+            "__float2ull_rz": ("u64", None),
+            "__double2int_rd": ("i32", "floor"),
+            "__double2int_rn": ("i32", "round"),
+            "__double2int_ru": ("i32", "ceil"),
+            "__double2int_rz": ("i32", None),
+            "__double2uint_rd": ("u32", "floor"),
+            "__double2uint_rn": ("u32", "round"),
+            "__double2uint_ru": ("u32", "ceil"),
+            "__double2uint_rz": ("u32", None),
+            "__double2ll_rd": ("i64", "floor"),
+            "__double2ll_rn": ("i64", "round"),
+            "__double2ll_ru": ("i64", "ceil"),
+            "__double2ll_rz": ("i64", None),
+            "__double2ull_rd": ("u64", "floor"),
+            "__double2ull_rn": ("u64", "round"),
+            "__double2ull_ru": ("u64", "ceil"),
+            "__double2ull_rz": ("u64", None),
+        }
+        conversion = conversion_intrinsics.get(function_name)
+        if conversion is None:
+            return None
+
+        target_type, rounding_function = conversion
+        value = args[0]
+        if rounding_function is None:
+            return f"{target_type}({value})"
+        return f"{target_type}({rounding_function}({value}))"
 
     def format_cuda_integer_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):

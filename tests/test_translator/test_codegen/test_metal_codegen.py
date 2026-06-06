@@ -658,6 +658,123 @@ def test_metal_hlsl_as_bitcast_aliases_lower_to_as_type():
     assert "asfloat(" not in generated_code
 
 
+def test_metal_integer_bit_builtins_lower_to_msl_intrinsics():
+    shader = """
+    shader MetalIntegerBitBuiltins {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uvec3 mask = uvec3(tid.x, tid.y, tid.z);
+                ivec3 signedMask = ivec3(int(tid.x), int(tid.y), int(tid.z));
+                uvec3 counts = bitCount(mask);
+                ivec3 signedCounts = bitCount(signedMask);
+                uvec3 reversed = bitfieldReverse(mask);
+                ivec3 signedReversed = bitfieldReverse(signedMask);
+                uint aliasCount = countbits(tid.x);
+                uint aliasReverse = reversebits(tid.y);
+                uint total = counts.x + reversed.y + aliasCount + aliasReverse
+                    + uint(signedCounts.z + signedReversed.x);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "uint3 counts = popcount(mask);" in generated_code
+    assert "int3 signedCounts = popcount(signedMask);" in generated_code
+    assert "uint3 reversed = reverse_bits(mask);" in generated_code
+    assert "int3 signedReversed = reverse_bits(signedMask);" in generated_code
+    assert "uint aliasCount = popcount(tid.x);" in generated_code
+    assert "uint aliasReverse = reverse_bits(tid.y);" in generated_code
+    assert "bitCount(" not in generated_code
+    assert "bitfieldReverse(" not in generated_code
+    assert "countbits(" not in generated_code
+    assert "reversebits(" not in generated_code
+
+
+def test_metal_user_defined_integer_bit_function_names_are_preserved():
+    shader = """
+    shader MetalUserIntegerBitNames {
+        compute {
+            uint bitCount(uint value) {
+                return value + 1u;
+            }
+
+            uint bitfieldReverse(uint value) {
+                return value + 2u;
+            }
+
+            uint countbits(uint value) {
+                return value + 3u;
+            }
+
+            uint reversebits(uint value) {
+                return value + 4u;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint count = bitCount(tid.x);
+                uint reversed = bitfieldReverse(tid.y);
+                uint aliasCount = countbits(tid.z);
+                uint aliasReverse = reversebits(count + reversed + aliasCount);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "uint bitCount(uint value)" in generated_code
+    assert "uint bitfieldReverse(uint value)" in generated_code
+    assert "uint countbits(uint value)" in generated_code
+    assert "uint reversebits(uint value)" in generated_code
+    assert "uint count = bitCount(tid.x);" in generated_code
+    assert "uint reversed = bitfieldReverse(tid.y);" in generated_code
+    assert "uint aliasCount = countbits(tid.z);" in generated_code
+    assert (
+        "uint aliasReverse = reversebits(count + reversed + aliasCount);"
+        in generated_code
+    )
+    assert "popcount(" not in generated_code
+    assert "reverse_bits(" not in generated_code
+
+
+def test_metal_integer_bit_intrinsics_use_namespace_when_shadowed():
+    shader = """
+    shader MetalShadowedIntegerBitTargets {
+        compute {
+            uint popcount(uint value) {
+                return value + 1u;
+            }
+
+            uint reverse_bits(uint value) {
+                return value + 2u;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint count = bitCount(tid.x);
+                uint reversed = bitfieldReverse(tid.y);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "uint popcount(uint value)" in generated_code
+    assert "uint reverse_bits(uint value)" in generated_code
+    assert "uint count = metal::popcount(tid.x);" in generated_code
+    assert "uint reversed = metal::reverse_bits(tid.y);" in generated_code
+    assert "uint count = popcount(tid.x);" not in generated_code
+    assert "uint reversed = reverse_bits(tid.y);" not in generated_code
+
+
 def test_metal_user_defined_bitcast_function_names_are_preserved():
     shader = """
     shader MetalUserBitcastNames {

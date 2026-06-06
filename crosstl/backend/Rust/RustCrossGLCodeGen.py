@@ -64,6 +64,8 @@ class RustToCrossGLConverter:
         "is_nan": "isnan",
         "is_infinite": "isinf",
         "is_finite": "isfinite",
+        "count_ones": "bitCount",
+        "reverse_bits": "bitfieldReverse",
     }
     SCALAR_ONE_ARG_METHOD_MAP = {
         "min": "min",

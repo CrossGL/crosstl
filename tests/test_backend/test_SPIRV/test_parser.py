@@ -1776,6 +1776,35 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_NUMERIC_GLSL_STD450_SQRT_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/GLSL.std.450.html
+; Source enum: KhronosGroup/SPIRV-Headers include/spirv/unified1/GLSL.std.450.h.
+; Reduced from OpExtInst binary form where GLSLstd450Sqrt has instruction number 31.
+OpCapability Shader
+%std450 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %output_value
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %output_value "outputValue"
+OpDecorate %input_value Location 0
+OpDecorate %output_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_float = OpTypePointer Output %float
+%input_value = OpVariable %ptr_input_float Input
+%output_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %input_value
+%root = OpExtInst %float %std450 31 %loaded
+OpStore %output_value %root
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
@@ -2095,6 +2124,18 @@ def test_glslang_web_comp_barrier_instructions_parse():
     assert body[1].args == ["1", "3400"]
     assert body[2].args == ["2", "3400"]
     assert isinstance(body[3], ReturnNode)
+
+
+def test_numeric_glsl_std450_extinst_imports_parse_to_builtin():
+    tokens = tokenize_code(SPIRV_NUMERIC_GLSL_STD450_SQRT_ASSEMBLY)
+    ast = parse_code(tokens)
+    body = ast.functions[0].body
+
+    assert ast.spirv_assembly is True
+    assert isinstance(body[0], AssignmentNode)
+    assert isinstance(body[0].right, FunctionCallNode)
+    assert body[0].right.name == "sqrt"
+    assert body[0].right.args[0].name == "inputValue"
 
 
 def test_spirv_subgroup_broadcast_and_reduce_parse():

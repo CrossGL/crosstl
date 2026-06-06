@@ -4783,6 +4783,10 @@ class HipToCrossGLConverter:
         if self.is_user_defined_function(func_name):
             return f"{func_name}({args_str})"
 
+        timer_intrinsic = self.format_hip_timer_intrinsic_call(func_name, args)
+        if timer_intrinsic is not None:
+            return timer_intrinsic
+
         load_cache_intrinsic = self.format_hip_load_cache_intrinsic_call(
             func_name, raw_args, args
         )
@@ -4839,6 +4843,19 @@ class HipToCrossGLConverter:
             return sync_vote_intrinsic
 
         return None
+
+    def format_hip_timer_intrinsic_call(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
+        if function_name not in {"clock", "clock64", "wall_clock64"}:
+            return None
+
+        args_text = ", ".join(args)
+        return (
+            f"(/* HIP device timer {function_name}({args_text}) "
+            "not directly supported in CrossGL */ 0)"
+        )
 
     def format_hip_load_cache_intrinsic_call(
         self, function_name, raw_args, formatted_args
