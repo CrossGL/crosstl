@@ -2415,8 +2415,9 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
     assert source_map["target"] == "cgl"
     assert source_map["source"]["file"] == "simple.cgl"
     assert source_map["generated"]["file"] == "out/cgl/simple.cgl"
+    generated_text = (repo / artifact["path"]).read_text(encoding="utf-8")
     assert source_map["source"]["length"] == len(SIMPLE_CROSSL)
-    assert source_map["generated"]["length"] == len(SIMPLE_CROSSL)
+    assert source_map["generated"]["length"] == len(generated_text)
     assert source_map["mappings"] == [
         {
             "source": source_map["source"],
